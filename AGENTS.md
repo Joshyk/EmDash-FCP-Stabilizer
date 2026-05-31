@@ -33,6 +33,17 @@ Stabilizer/
 Keep `init.lua` as the CommandPost entry point and keep workflow logic in
 `stabilizer.lua`.
 
+## Test Project
+
+Use this local Final Cut Pro library for manual end-to-end testing:
+
+```text
+/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/test.fcpbundle
+```
+
+It is a shared workspace test fixture, outside this plugin repo. Use it when checking
+the Stabilizer actions against real selected timeline clips in Final Cut Pro.
+
 ## Installed CommandPost Layout
 
 Use a small installed bootstrap at:

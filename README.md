@@ -1,6 +1,6 @@
 # Final Cut Pro Stabilizer
 
-CommandPost plugin for applying two Final Cut Pro stabilization presets to selected
+CommandPost plugin for applying Final Cut Pro stabilization presets to selected
 timeline clips.
 
 ## Actions
@@ -14,6 +14,11 @@ timeline clips.
   - Uses InertiaCam.
   - Lower smoothing so intentional gimbal pans stay alive.
   - Low rolling shutter correction.
+
+- `Stabilizer: Dynamic Auto Scale`
+  - Uses Final Cut Pro's Automatic stabilization method.
+  - Lets Final Cut Pro apply dynamic scaling based on its stabilization analysis.
+  - Leaves Rolling Shutter unchanged.
 
 The actions use Final Cut Pro's built-in Video Inspector controls. Select one or more
 timeline clips, then run an action from CommandPost.

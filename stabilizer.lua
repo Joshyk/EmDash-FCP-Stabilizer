@@ -18,6 +18,8 @@ local ACTION_SHAKE_TITLE = "Stabilizer: Walking Gimbal Shake"
 local ACTION_SHAKE_ID = "stabilizerWalkingGimbalShake"
 local ACTION_PAN_TITLE = "Stabilizer: Walking Gimbal Pan Smooth"
 local ACTION_PAN_ID = "stabilizerWalkingGimbalPanSmooth"
+local ACTION_DYNAMIC_TITLE = "Stabilizer: Dynamic Auto Scale"
+local ACTION_DYNAMIC_ID = "stabilizerDynamicAutoScale"
 local CONTROL_READY_TIMEOUT_SECONDS = 12
 
 local PRESETS = {
@@ -35,6 +37,10 @@ local PRESETS = {
         rollingShutterAmount = "FFRollingShutterAmountLow",
         smoothing = 1.1,
         tripodMode = false,
+    },
+    dynamic = {
+        title = ACTION_DYNAMIC_TITLE,
+        method = "FFStabilizationDynamic",
     },
 }
 
@@ -134,7 +140,6 @@ local function applyPreset(preset)
 
     local video = fcp.inspector.video:show()
     local stabilization = video:stabilization()
-    local rollingShutter = video:rollingShutter()
     local ok, err
 
     stabilization:show()
@@ -190,17 +195,20 @@ local function applyPreset(preset)
         end
     end
 
-    rollingShutter:show()
-    ok, err = setCheckBox(rollingShutter.enabled, true, "Rolling Shutter")
-    if not ok then
-        displayError(preset.title, err)
-        return false
-    end
+    if preset.rollingShutterAmount then
+        local rollingShutter = video:rollingShutter()
+        rollingShutter:show()
+        ok, err = setCheckBox(rollingShutter.enabled, true, "Rolling Shutter")
+        if not ok then
+            displayError(preset.title, err)
+            return false
+        end
 
-    ok, err = setPopup(rollingShutter:amount(), preset.rollingShutterAmount, "Rolling Shutter Amount")
-    if not ok then
-        displayError(preset.title, err)
-        return false
+        ok, err = setPopup(rollingShutter:amount(), preset.rollingShutterAmount, "Rolling Shutter Amount")
+        if not ok then
+            displayError(preset.title, err)
+            return false
+        end
     end
 
     local message = string.format("Applied to %d selected clip(s).", selectedCount)
@@ -219,6 +227,10 @@ end
 
 function mod.applyWalkingGimbalPanSmooth()
     return applyPreset(PRESETS.pan)
+end
+
+function mod.applyDynamicAutoScale()
+    return applyPreset(PRESETS.dynamic)
 end
 
 local function runWithErrorBoundary(title, fn)
@@ -254,6 +266,14 @@ function mod.init(deps)
         end)
         :titled(ACTION_PAN_TITLE)
 
+    deps.fcpxCmds
+        :add(ACTION_DYNAMIC_ID)
+        :groupedBy("video")
+        :whenActivated(function()
+            runWithErrorBoundary(ACTION_DYNAMIC_TITLE, mod.applyDynamicAutoScale)
+        end)
+        :titled(ACTION_DYNAMIC_TITLE)
+
     deps.actionmanager.addHandler("fcpx_stabilizer_walking_gimbal_shake", "fcpx")
         :onChoices(function(choices)
             choices:add(ACTION_SHAKE_TITLE)
@@ -280,6 +300,20 @@ function mod.init(deps)
         end)
         :onActionId(function(action)
             return "stabilizer:" .. ((action and action.id) or ACTION_PAN_ID)
+        end)
+
+    deps.actionmanager.addHandler("fcpx_stabilizer_dynamic_auto_scale", "fcpx")
+        :onChoices(function(choices)
+            choices:add(ACTION_DYNAMIC_TITLE)
+                :subText("Final Cut Pro - Automatic stabilization with dynamic scaling")
+                :params({ id = ACTION_DYNAMIC_ID })
+                :id("stabilizer:" .. ACTION_DYNAMIC_ID)
+        end)
+        :onExecute(function()
+            runWithErrorBoundary(ACTION_DYNAMIC_TITLE, mod.applyDynamicAutoScale)
+        end)
+        :onActionId(function(action)
+            return "stabilizer:" .. ((action and action.id) or ACTION_DYNAMIC_ID)
         end)
 
     return mod

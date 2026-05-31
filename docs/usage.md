@@ -4,6 +4,7 @@
 2. Run one of these CommandPost actions:
    - `Stabilizer: Walking Gimbal Shake`
    - `Stabilizer: Walking Gimbal Pan Smooth`
+   - `Stabilizer: Dynamic Auto Scale`
 3. If Final Cut Pro is still analyzing stabilization, wait for analysis to finish and run
    the action again if the plugin reports disabled controls.
 
@@ -31,3 +32,12 @@ like a tripod.
 - Smoothing: 1.1
 - Tripod Mode: off
 - Rolling Shutter: low
+
+### Dynamic Auto Scale
+
+For footage where Final Cut Pro should choose the stabilization behavior and adjust
+scaling dynamically from its own analysis.
+
+- Stabilization: enabled
+- Method: Automatic
+- Rolling Shutter: unchanged
