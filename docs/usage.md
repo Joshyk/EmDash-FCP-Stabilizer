@@ -9,6 +9,10 @@
 6. If Final Cut Pro is still analyzing stabilization, wait for analysis to finish and run
    the action again if the plugin reports disabled controls.
 
+Development note: CommandPost does not auto reload this repo when Lua or Python files
+change. After a programming update, manually reload or restart CommandPost before running
+the action.
+
 ## Behavior
 
 - The plugin analyzes source-frame motion from the FCPXML media reference.

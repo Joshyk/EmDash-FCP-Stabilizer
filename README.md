@@ -30,3 +30,9 @@ Installed bootstrap path:
 ```text
 /Users/justadev/Library/Application Support/CommandPost/Plugins/Stabilizer/init.lua
 ```
+
+## Development reload
+
+CommandPost does not auto reload this repo when Lua or Python files change. After a
+programming update, manually reload or restart CommandPost before running the action or
+checking runtime version/output.
