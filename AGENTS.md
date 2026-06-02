@@ -55,6 +55,9 @@ Use a small installed bootstrap at:
 The bootstrap should load this repo's `init.lua`. Keep implementation files in the repo,
 not in the installed CommandPost plugin folder.
 
+Do not use a repo source watcher for auto reload. Source edits should take effect only
+after a manual CommandPost reload or restart.
+
 ## Version Visibility
 
 Keep `PLUGIN_VERSION` in `init.lua`, expose it through the returned module as `_version`,
