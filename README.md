@@ -7,9 +7,11 @@ selected timeline clip.
 
 - `Stabilizer: Dynamic Strength Scale`
   - Analyzes the selected clip's source media from an exported FCPXML.
+  - Estimates global motion, fine gimbal jitter, and uneven pan/rotation movement.
   - Keyframes SmoothCam stabilization strength over time.
-  - Keyframes Transform Scale All from the same strength estimate so calmer sections
-    use less scale and shakier sections use more scale to hide stabilization edges.
+  - Keyframes Transform Scale All from the estimated stabilization margin so calmer
+    sections use less scale and shakier sections use more scale to hide stabilization
+    edges.
 
 The action uses Final Cut Pro's built-in Video Inspector controls. Select exactly one
 timeline clip, export an FCPXML for the timeline/project, then run the action from

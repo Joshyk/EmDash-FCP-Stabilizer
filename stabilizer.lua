@@ -23,8 +23,8 @@ local ACTION_ID = "stabilizerDynamicStrengthScale"
 local REPO_DIRECTORY = "/Users/justadev/Developer/EDT/Command-Post-Em_Dash/Stabilizer"
 local ESTIMATOR_SCRIPT = REPO_DIRECTORY .. "/scripts/estimate_stabilization_scale.py"
 local PYTHON_BINARY = os.getenv("STABILIZER_PYTHON") or "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3"
-local DEFAULT_INTERVAL_FRAMES = "15"
-local MAX_SAMPLES = 180
+local DEFAULT_INTERVAL_FRAMES = "10"
+local MAX_SAMPLES = 240
 local CONTROL_READY_TIMEOUT_SECONDS = 12
 local PLAYHEAD_ENTRY_TIMEOUT_SECONDS = 1.0
 local TIMECODE_PROPERTY_MOVE_TIMEOUT_SECONDS = 0.8
@@ -46,6 +46,16 @@ local function fileExists(path)
         return true
     end
     return false
+end
+
+local function pathIsDirectory(path)
+    if not path or path == "" then return false end
+    if hs and hs.fs and hs.fs.attributes then
+        local ok, attributes = pcall(function() return hs.fs.attributes(path) end)
+        return ok and attributes and attributes.mode == "directory"
+    end
+    local ok = os.execute("/bin/test -d " .. shellQuote(path))
+    return ok == true or ok == 0
 end
 
 local function displayError(title, detail)
@@ -109,11 +119,11 @@ local function clipLabel(clip, fallback)
     return fallback or "timeline clip"
 end
 
-local function selectedClipsUI()
+local function selectedClipsUI(includeChildren)
     fcp.timeline:show()
     fcp.timeline.contents:focus()
     local ok, selected = pcall(function()
-        return fcp.timeline.contents:selectedClipsUI(false)
+        return fcp.timeline.contents:selectedClipsUI(includeChildren == true)
     end)
     if ok and type(selected) == "table" then
         return selected
@@ -131,11 +141,50 @@ local function parseTimecodePair(startTC, endTC, frameRate)
     return nil, nil
 end
 
+local function parseTimecodeValue(value, frameRate)
+    if not value or value == "" then return nil end
+    local ok, parsed = pcall(function() return flicks.parse(tostring(value), frameRate) end)
+    return ok and parsed or nil
+end
+
+local function collectTimecodeValues(element, frameRate, result, depth)
+    result = result or {}
+    depth = depth or 0
+    if not element or depth > 3 then return result end
+
+    local value = elementAttribute(element, "AXValue")
+    local parsed = parseTimecodeValue(value, frameRate)
+    if parsed then
+        result[#result + 1] = { text = tostring(value), flicks = parsed }
+    end
+
+    local children = elementAttribute(element, "AXChildren")
+    if type(children) == "table" then
+        for _, child in ipairs(children) do
+            collectTimecodeValues(child, frameRate, result, depth + 1)
+        end
+    end
+    return result
+end
+
 local function clipTimecodeSpan(clip, frameRate)
     local children = elementAttribute(clip, "AXChildren")
     local startTC = children and children[1] and elementAttribute(children[1], "AXValue")
     local endTC = children and children[2] and elementAttribute(children[2], "AXValue")
-    return parseTimecodePair(startTC, endTC, frameRate)
+    local startFlicks, endFlicks = parseTimecodePair(startTC, endTC, frameRate)
+    if startFlicks and endFlicks then
+        return startFlicks, endFlicks, "direct AXChildren[1:2]"
+    end
+
+    local values = collectTimecodeValues(clip, frameRate)
+    for index = 1, #values - 1 do
+        startFlicks = values[index].flicks
+        endFlicks = values[index + 1].flicks
+        if startFlicks and endFlicks and endFlicks > startFlicks then
+            return startFlicks, endFlicks, "AX descendant values"
+        end
+    end
+    return nil, nil, "AX timecode values unavailable"
 end
 
 local function playheadFlicks(frameRate)
@@ -147,6 +196,82 @@ end
 
 local function offsetFrom(startFlicks, seconds)
     return startFlicks + flicks(math.floor((seconds * flicks.perSecond) + 0.5))
+end
+
+local function selectedDurationText()
+    local durationUI = fcp.timeline.toolbar.duration:UI()
+    local value = durationUI and elementAttribute(durationUI, "AXValue")
+    if not value or value == "" then return nil end
+    local selection = tostring(value):match("^%s*([^/／]+)%s*[/／]")
+    return selection or value
+end
+
+local function durationSecondsFromToolbar(frameRate)
+    local text = selectedDurationText()
+    if not text then return nil end
+    text = tostring(text):gsub("%s+", "")
+    local parsed = parseTimecodeValue(text, frameRate)
+    return parsed and parsed:toSeconds() or nil
+end
+
+local function selectOnlyTimelineClip(clip)
+    if not clip then return false end
+    fcp.timeline:show()
+    fcp.timeline.contents:focus()
+    pcall(function() fcp.timeline.contents:selectNone() end)
+    sleep(0.08)
+    local ok = pcall(function() fcp.timeline.contents:selectClip(clip) end)
+    sleep(0.2)
+    if not ok then return false end
+
+    local selected = selectedClipsUI(false)
+    return #selected == 1
+end
+
+local function selectedClipTimelineSpanFromSelection(clip, frameRate, originalTimecode)
+    if not clip then return nil, nil end
+
+    originalTimecode = originalTimecode or fcp.timeline.playhead:timecode()
+    if not selectOnlyTimelineClip(clip) then
+        return nil, nil, "could not reselect the intended timeline clip"
+    end
+
+    local duration = durationSecondsFromToolbar(frameRate)
+    log.wf(
+        "%s: AX timeline span unavailable; deriving selected clip span via Final Cut Pro Set Clip Range.",
+        ACTION_TITLE
+    )
+
+    local setRange = fcp:selectMenu({"Mark", "Set Clip Range"})
+    sleep(0.25)
+    if not setRange then
+        if originalTimecode then
+            pcall(function() fcp.timeline.playhead:timecode(originalTimecode) end)
+        end
+        return nil, nil, "Final Cut Pro did not accept Mark > Set Clip Range"
+    end
+
+    local startFlicks, endFlicks
+    if fcp:selectMenu({"Mark", "Go to", "Range Start"}) then
+        sleep(0.25)
+        startFlicks = playheadFlicks(frameRate)
+    end
+    if fcp:selectMenu({"Mark", "Go to", "Range End"}) then
+        sleep(0.25)
+        endFlicks = playheadFlicks(frameRate)
+    end
+    if startFlicks and not endFlicks and duration then
+        endFlicks = offsetFrom(startFlicks, duration)
+    end
+
+    if originalTimecode then
+        pcall(function() fcp.timeline.playhead:timecode(originalTimecode) end)
+    end
+
+    if startFlicks and endFlicks then
+        return startFlicks, endFlicks, "FCP Set Clip Range"
+    end
+    return nil, nil, "could not derive range start/end from Final Cut Pro"
 end
 
 local function flicksCloseEnough(a, b)
@@ -317,14 +442,17 @@ end
 
 local function resolveFCPXMLPath(path)
     if not path or path == "" then return nil, "No FCPXML file was selected." end
-    if path:match("%.fcpxmld$") then
-        local packageInfoPath = tostring(path) .. "/Info.fcpxml"
+    local normalizedPath = tostring(path):gsub("/+$", "")
+    if normalizedPath:match("%.fcpxmld$") then
+        local packageInfoPath = normalizedPath .. "/Info.fcpxml"
         if fileExists(packageInfoPath) then return packageInfoPath end
-        return nil, "The selected FCPXML package did not contain Info.fcpxml: " .. tostring(path)
-    elseif fileExists(path) then
-        return path
+        return nil, "The selected FCPXML package did not contain Info.fcpxml: " .. normalizedPath
+    elseif pathIsDirectory(normalizedPath) then
+        return nil, "The selected FCPXML path is a directory, not an .fcpxml file or .fcpxmld package: " .. normalizedPath
+    elseif fileExists(normalizedPath) then
+        return normalizedPath
     end
-    return nil, "FCPXML file was not found: " .. tostring(path)
+    return nil, "FCPXML file was not found: " .. normalizedPath
 end
 
 local function chooseFCPXML()
@@ -383,9 +511,11 @@ end
 
 local function intervalFramesPrompt()
     local value = dialog.displayChooseFromList(
-        {"15", "30", "60"},
+        "Choose the stabilizer keyframe interval in frames.",
+        {"5", "10", "15", "30", "60"},
         {DEFAULT_INTERVAL_FRAMES}
     )
+    if value == false then return nil end
     if type(value) == "table" then value = value[1] end
     local frames = tonumber(value or DEFAULT_INTERVAL_FRAMES) or tonumber(DEFAULT_INTERVAL_FRAMES)
     if frames < 1 then frames = tonumber(DEFAULT_INTERVAL_FRAMES) end
@@ -398,14 +528,18 @@ local function selectedClipContext(frameRate)
         return nil, "Select exactly one timeline video clip before running " .. ACTION_TITLE .. "."
     end
 
-    local startFlicks, endFlicks = clipTimecodeSpan(selected[1], frameRate)
+    local startFlicks, endFlicks, spanSource = clipTimecodeSpan(selected[1], frameRate)
     if not startFlicks or not endFlicks then
-        return nil, "Could not read the selected clip's timeline start/end timecode."
+        startFlicks, endFlicks, spanSource = selectedClipTimelineSpanFromSelection(selected[1], frameRate)
+    end
+    if not startFlicks or not endFlicks then
+        return nil, "Could not read the selected clip's timeline start/end timecode: " .. tostring(spanSource)
     end
     local durationSeconds = (endFlicks - startFlicks):toSeconds()
     if durationSeconds <= 0 then
         return nil, "Selected clip duration was not valid."
     end
+    log.df("Selected clip timeline span resolved via %s.", tostring(spanSource))
 
     return {
         clip = selected[1],
@@ -441,19 +575,28 @@ local function applyDynamicSample(video, stabilization, scaleAll, sample)
     if not ok then return false, err end
 
     log.df(
-        "Dynamic sample seconds=%.3f strength=%.3f scale=%.3f translation=%.3f rotation=%.3f scaleSmooth=%.3f",
+        "Dynamic sample seconds=%.3f strength=%.3f gimbal=%.3f panRotation=%.3f scale=%.3f translation=%.3f rotation=%.3f scaleSmooth=%.3f dx=%.3f dy=%.3f residual=%.4f",
         tonumber(sample.timelineSeconds) or 0,
         strength,
+        tonumber(sample.gimbalStrength) or 0,
+        tonumber(sample.panRotationStrength) or 0,
         tonumber(sample.scale) or 100,
         tonumber(sample.translationSmooth) or 0,
         tonumber(sample.rotationSmooth) or 0,
-        tonumber(sample.scaleSmooth) or 0
+        tonumber(sample.scaleSmooth) or 0,
+        tonumber(sample.globalDx) or 0,
+        tonumber(sample.globalDy) or 0,
+        tonumber(sample.residualMotion) or 0
     )
     return true, nil
 end
 
 local function applyDynamicStrengthScale()
     local intervalFrames = intervalFramesPrompt()
+    if not intervalFrames then
+        log.i(ACTION_TITLE .. ": cancelled before interval selection.")
+        return false
+    end
     local fcpxmlPath, fcpxmlErr = chooseFCPXML()
     if not fcpxmlPath then
         displayError(ACTION_TITLE, fcpxmlErr)
@@ -572,7 +715,7 @@ function mod.init(deps)
     deps.actionmanager.addHandler("fcpx_stabilizer_dynamic_strength_scale", "fcpx")
         :onChoices(function(choices)
             choices:add(ACTION_TITLE)
-                :subText("Analyze source motion and keyframe stabilization strength plus Transform Scale")
+                :subText("Analyze gimbal jitter and uneven pan rotation, then keyframe stabilization plus Transform Scale")
                 :params({ id = ACTION_ID })
                 :id("stabilizer:" .. ACTION_ID)
         end)

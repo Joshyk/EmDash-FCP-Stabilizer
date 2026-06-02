@@ -16,11 +16,16 @@ from pathlib import Path
 from typing import Iterable
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SAMPLE_WIDTH = 96
 SAMPLE_HEIGHT = 54
 MIN_SCALE = 100.0
 MAX_SCALE = 112.0
+GLOBAL_SEARCH_RADIUS = 16
+LOCAL_SEARCH_RADIUS = 5
+MIN_MATCH_WIDTH = 18
+MIN_MATCH_HEIGHT = 12
+PAN_VELOCITY_THRESHOLD_PX = 1.25
 
 
 @dataclass
@@ -243,49 +248,204 @@ def mean_abs_diff(previous: bytes, current: bytes) -> float:
     return total / max(1, len(current)) / 255.0
 
 
-def smooth_strengths(strengths: list[float]) -> list[float]:
-    if len(strengths) < 3:
-        return strengths
+def shifted_abs_diff(
+    previous: bytes,
+    current: bytes,
+    dx: int,
+    dy: int,
+    x0: int,
+    y0: int,
+    width: int,
+    height: int,
+    stride: int = 2,
+) -> float:
+    x_start = max(x0, -dx, 0)
+    y_start = max(y0, -dy, 0)
+    x_end = min(x0 + width, SAMPLE_WIDTH - dx, SAMPLE_WIDTH)
+    y_end = min(y0 + height, SAMPLE_HEIGHT - dy, SAMPLE_HEIGHT)
+    if x_end - x_start < MIN_MATCH_WIDTH or y_end - y_start < MIN_MATCH_HEIGHT:
+        return float("inf")
+
+    total = 0
+    count = 0
+    for y in range(y_start, y_end, stride):
+        previous_row = y * SAMPLE_WIDTH
+        current_row = (y + dy) * SAMPLE_WIDTH
+        for x in range(x_start, x_end, stride):
+            total += abs(previous[previous_row + x] - current[current_row + x + dx])
+            count += 1
+    if count == 0:
+        return float("inf")
+    return total / count / 255.0
+
+
+def estimate_shift(
+    previous: bytes,
+    current: bytes,
+    x0: int,
+    y0: int,
+    width: int,
+    height: int,
+    radius: int,
+    center: tuple[int, int] = (0, 0),
+) -> tuple[int, int, float]:
+    center_x, center_y = center
+    best_dx = center_x
+    best_dy = center_y
+    best_score = float("inf")
+    for dy in range(center_y - radius, center_y + radius + 1):
+        for dx in range(center_x - radius, center_x + radius + 1):
+            score = shifted_abs_diff(previous, current, dx, dy, x0, y0, width, height)
+            if score < best_score:
+                best_dx = dx
+                best_dy = dy
+                best_score = score
+    return best_dx, best_dy, best_score
+
+
+def moving_average(values: list[float], radius: int = 2) -> list[float]:
+    if not values:
+        return []
+    averaged = []
+    for index in range(len(values)):
+        start = max(0, index - radius)
+        end = min(len(values), index + radius + 1)
+        window = values[start:end]
+        averaged.append(sum(window) / len(window))
+    return averaged
+
+
+def smooth_values(values: list[float]) -> list[float]:
+    if len(values) < 3:
+        return values
     result = []
-    for index, value in enumerate(strengths):
-        if index == 0 or index == len(strengths) - 1:
+    for index, value in enumerate(values):
+        if index == 0 or index == len(values) - 1:
             result.append(value)
             continue
         total = value * 0.5
         weight = 0.5
         if index > 0:
-            total += strengths[index - 1] * 0.25
+            total += values[index - 1] * 0.25
             weight += 0.25
-        if index + 1 < len(strengths):
-            total += strengths[index + 1] * 0.25
+        if index + 1 < len(values):
+            total += values[index + 1] * 0.25
             weight += 0.25
         result.append(total / weight)
     return result
 
 
-def build_samples(raw_motion: list[float], sample_fps: float, duration: float) -> list[dict]:
-    if not raw_motion:
-        raw_motion = [0.0]
-    low = percentile(raw_motion, 20)
-    high = percentile(raw_motion, 92)
+def normalize_series(values: list[float]) -> list[float]:
+    if not values:
+        return [0.0]
+    low = percentile(values, 20)
+    high = percentile(values, 92)
     if high <= low:
-        high = max(low + 0.01, max(raw_motion))
-    strengths = [clamp((value - low) / (high - low), 0.0, 1.0) for value in raw_motion]
-    strengths = smooth_strengths(strengths)
+        high = max(low + 0.01, max(values))
+    return [clamp((value - low) / (high - low), 0.0, 1.0) for value in values]
+
+
+def pair_motion(previous: bytes, current: bytes) -> dict:
+    raw_motion = mean_abs_diff(previous, current)
+    dx, dy, residual = estimate_shift(
+        previous,
+        current,
+        8,
+        6,
+        SAMPLE_WIDTH - 16,
+        SAMPLE_HEIGHT - 12,
+        GLOBAL_SEARCH_RADIUS,
+    )
+    center = (dx, dy)
+    left = estimate_shift(previous, current, 4, 8, 28, SAMPLE_HEIGHT - 16, LOCAL_SEARCH_RADIUS, center)
+    right = estimate_shift(previous, current, SAMPLE_WIDTH - 32, 8, 28, SAMPLE_HEIGHT - 16, LOCAL_SEARCH_RADIUS, center)
+    top = estimate_shift(previous, current, 12, 4, SAMPLE_WIDTH - 24, 20, LOCAL_SEARCH_RADIUS, center)
+    bottom = estimate_shift(previous, current, 12, SAMPLE_HEIGHT - 24, SAMPLE_WIDTH - 24, 20, LOCAL_SEARCH_RADIUS, center)
+
+    roll_from_vertical = abs(right[1] - left[1]) / max(1, SAMPLE_WIDTH - 32)
+    roll_from_horizontal = abs(bottom[0] - top[0]) / max(1, SAMPLE_HEIGHT - 16)
+    roll_motion = max(roll_from_vertical, roll_from_horizontal)
+
+    return {
+        "rawMotion": raw_motion,
+        "globalDx": float(dx),
+        "globalDy": float(dy),
+        "residualMotion": residual,
+        "rollMotion": roll_motion,
+    }
+
+
+def centered_difference(values: list[float], index: int) -> float:
+    if len(values) < 3:
+        return 0.0
+    previous_index = max(0, index - 1)
+    next_index = min(len(values) - 1, index + 1)
+    return values[index] - ((values[previous_index] + values[next_index]) * 0.5)
+
+
+def build_samples(motions: list[dict], sample_fps: float, duration: float) -> list[dict]:
+    if not motions:
+        motions = [{"rawMotion": 0.0, "globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0}]
+
+    dx_values = [motion["globalDx"] for motion in motions]
+    dy_values = [motion["globalDy"] for motion in motions]
+    raw_values = [motion["rawMotion"] for motion in motions]
+    residual_values = [motion["residualMotion"] for motion in motions]
+    pan_trend = moving_average(dx_values, radius=3)
+
+    gimbal_values = []
+    pan_rotation_values = []
+    scale_values = []
+    for index, motion in enumerate(motions):
+        dx_jitter = centered_difference(dx_values, index)
+        dy_jitter = centered_difference(dy_values, index)
+        gimbal_jitter = math.hypot(dx_jitter, dy_jitter) + (motion["residualMotion"] * 10.0)
+        pan_velocity = abs(pan_trend[index])
+        pan_irregularity = abs(dx_values[index] - pan_trend[index])
+        pan_rotation = motion["rollMotion"] * 80.0
+        if pan_velocity >= PAN_VELOCITY_THRESHOLD_PX:
+            pan_rotation += pan_irregularity * 0.75
+        gimbal_values.append(gimbal_jitter)
+        pan_rotation_values.append(pan_rotation)
+        scale_values.append(max(gimbal_jitter * 0.85, pan_rotation * 0.9, residual_values[index] * 8.0))
+
+    gimbal_strengths = smooth_values(normalize_series(gimbal_values))
+    pan_rotation_strengths = smooth_values(normalize_series(pan_rotation_values))
+    residual_strengths = smooth_values(normalize_series(residual_values))
+    raw_strengths = smooth_values(normalize_series(raw_values))
+    scale_strengths = smooth_values(normalize_series(scale_values))
 
     samples = []
-    for index, strength in enumerate(strengths):
+    for index, motion in enumerate(motions):
         seconds = min(duration, index / sample_fps)
-        scale = MIN_SCALE + (strength * (MAX_SCALE - MIN_SCALE))
+        gimbal_strength = gimbal_strengths[index]
+        pan_rotation_strength = pan_rotation_strengths[index]
+        residual_strength = residual_strengths[index]
+        raw_strength = raw_strengths[index]
+        strength = clamp(
+            max(gimbal_strength * 0.9, pan_rotation_strength, residual_strength * 0.45, raw_strength * 0.25),
+            0.0,
+            1.0,
+        )
+        scale_strength = clamp(max(scale_strengths[index], strength * 0.75), 0.0, 1.0)
+        scale = MIN_SCALE + (scale_strength * (MAX_SCALE - MIN_SCALE))
         samples.append(
             {
                 "timelineSeconds": round(seconds, 6),
-                "rawMotion": round(raw_motion[index], 6),
+                "rawMotion": round(motion["rawMotion"], 6),
+                "globalDx": round(motion["globalDx"], 4),
+                "globalDy": round(motion["globalDy"], 4),
+                "residualMotion": round(motion["residualMotion"], 6),
+                "gimbalJitter": round(gimbal_values[index], 6),
+                "panRotation": round(pan_rotation_values[index], 6),
                 "strength": round(strength, 4),
+                "gimbalStrength": round(gimbal_strength, 4),
+                "panRotationStrength": round(pan_rotation_strength, 4),
+                "scaleStrength": round(scale_strength, 4),
                 "scale": round(scale, 4),
-                "translationSmooth": round(0.45 + (strength * 2.75), 4),
-                "rotationSmooth": round(0.2 + (strength * 1.3), 4),
-                "scaleSmooth": round(0.1 + (strength * 1.1), 4),
+                "translationSmooth": round(0.45 + (gimbal_strength * 2.85), 4),
+                "rotationSmooth": round(0.2 + (pan_rotation_strength * 1.55), 4),
+                "scaleSmooth": round(0.1 + (scale_strength * 1.1), 4),
             }
         )
 
@@ -314,14 +474,16 @@ def estimate(candidate: Candidate, interval_frames: int, max_samples: int, durat
         sample_fps = max_samples / duration
 
     frames = extract_gray_frames(candidate.media_path, float(candidate.source_start), duration, sample_fps)
-    raw_motion = [0.0]
+    motions = [
+        {"rawMotion": 0.0, "globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0}
+    ]
     for index in range(1, len(frames)):
-        raw_motion.append(mean_abs_diff(frames[index - 1], frames[index]))
-    samples = build_samples(raw_motion, sample_fps, duration)
+        motions.append(pair_motion(frames[index - 1], frames[index]))
+    samples = build_samples(motions, sample_fps, duration)
 
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "model": "frame-difference-motion-v1",
+        "model": "global-motion-gimbal-pan-rotation-v2",
         "clipName": candidate.name,
         "assetId": candidate.asset_id,
         "mediaPath": str(candidate.media_path),
@@ -331,7 +493,7 @@ def estimate(candidate: Candidate, interval_frames: int, max_samples: int, durat
         "sampleFps": round(sample_fps, 6),
         "samples": samples,
         "warnings": [
-            "Motion strength is estimated from frame differences; subject movement can increase the scale estimate."
+            "Motion strength is estimated from low-resolution global frame motion; foreground-only movement can still affect the estimate."
         ],
     }
 
