@@ -3,7 +3,7 @@
 --- Entry point for Final Cut Pro stabilization presets.
 
 local IMPLEMENTATION_FILE = "stabilizer.lua"
-local PLUGIN_VERSION = "0.2.0"
+local PLUGIN_VERSION = "0.3.0"
 local LOAD_MARKER = "repo-loader-20260529-v1"
 
 local okLogger, logger = pcall(require, "hs.logger")

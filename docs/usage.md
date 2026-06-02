@@ -1,43 +1,27 @@
 # Usage
 
-1. Select one or more video clips in the Final Cut Pro timeline.
-2. Run one of these CommandPost actions:
-   - `Stabilizer: Walking Gimbal Shake`
-   - `Stabilizer: Walking Gimbal Pan Smooth`
-   - `Stabilizer: Dynamic Auto Scale`
-3. If Final Cut Pro is still analyzing stabilization, wait for analysis to finish and run
+1. Select exactly one video clip in the Final Cut Pro timeline.
+2. Export an FCPXML for the current timeline/project.
+3. Run `Stabilizer: Dynamic Strength Scale`.
+4. Choose a keyframe interval when prompted.
+5. Choose the exported `.fcpxml` or `.fcpxmld` when prompted.
+6. If Final Cut Pro is still analyzing stabilization, wait for analysis to finish and run
    the action again if the plugin reports disabled controls.
 
-## Presets
+## Behavior
 
-### Walking Gimbal Shake
+- The plugin analyzes source-frame changes from the FCPXML media reference.
+- It converts the estimated motion into keyframes for SmoothCam strength controls.
+- It keyframes Transform Scale All from the same strength estimate.
+- Low-motion sections stay close to 100% scale.
+- High-motion sections scale up more to hide edges created by stabilization.
 
-For walking shots where the gimbal removed the big movement but footsteps still create
-bounce or jitter.
+## Controls
 
 - Stabilization: enabled
 - Method: SmoothCam
-- Translation Smooth: 2.4
-- Rotation Smooth: 1.1
-- Scale Smooth: 0.8
-- Rolling Shutter: medium
-
-### Walking Gimbal Pan Smooth
-
-For gimbal walking shots with a pan that should feel smoother without locking the camera
-like a tripod.
-
-- Stabilization: enabled
-- Method: InertiaCam
-- Smoothing: 1.1
-- Tripod Mode: off
-- Rolling Shutter: low
-
-### Dynamic Auto Scale
-
-For footage where Final Cut Pro should choose the stabilization behavior and adjust
-scaling dynamically from its own analysis.
-
-- Stabilization: enabled
-- Method: Automatic
+- Translation Smooth: keyframed from estimated motion
+- Rotation Smooth: keyframed from estimated motion
+- Scale Smooth: keyframed from estimated motion
+- Transform Scale All: keyframed from estimated motion
 - Rolling Shutter: unchanged

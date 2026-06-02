@@ -6,17 +6,16 @@ Always reply to the user in Japanese unless the user explicitly asks for another
 
 ## Project
 
-This directory hosts one CommandPost plugin repo for applying Final Cut Pro stabilization
-presets to selected timeline clips.
+This directory hosts one CommandPost plugin repo for applying a dynamic Final Cut Pro
+stabilization workflow to a selected timeline clip.
 
-Primary actions:
+Primary action:
 
-- `Stabilizer: Walking Gimbal Shake`
-- `Stabilizer: Walking Gimbal Pan Smooth`
+- `Stabilizer: Dynamic Strength Scale`
 
-The plugin uses Final Cut Pro's built-in Video Inspector `Stabilization` and
-`Rolling Shutter` controls. It does not ship a custom video-analysis engine or Motion
-effect.
+The plugin uses Final Cut Pro's built-in Video Inspector `Stabilization` and `Transform`
+controls. It also ships a local Python estimator that reads an exported FCPXML, analyzes
+source-frame motion with `ffmpeg`, and produces stabilization/scale keyframe values.
 
 ## Source Layout
 
@@ -26,12 +25,13 @@ Stabilizer/
   README.md
   init.lua
   stabilizer.lua
+  scripts/
   docs/
   installed_backups/
 ```
 
 Keep `init.lua` as the CommandPost entry point and keep workflow logic in
-`stabilizer.lua`.
+`stabilizer.lua`. Keep source-media analysis helpers in `scripts/`.
 
 ## Test Project
 
@@ -72,7 +72,8 @@ After Lua edits, run:
 
 ```sh
 luac -p init.lua stabilizer.lua
-git diff --check -- init.lua stabilizer.lua AGENTS.md README.md docs/usage.md
+python3 -m py_compile scripts/estimate_stabilization_scale.py
+git diff --check -- init.lua stabilizer.lua scripts/estimate_stabilization_scale.py AGENTS.md README.md docs/usage.md
 ```
 
 If runtime verification is possible, reload CommandPost and query the module version via

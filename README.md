@@ -1,27 +1,19 @@
 # Final Cut Pro Stabilizer
 
-CommandPost plugin for applying Final Cut Pro stabilization presets to selected
-timeline clips.
+CommandPost plugin for applying one dynamic Final Cut Pro stabilization workflow to a
+selected timeline clip.
 
-## Actions
+## Action
 
-- `Stabilizer: Walking Gimbal Shake`
-  - Uses SmoothCam.
-  - Higher translation smoothing for walking bounce and handheld drift.
-  - Medium rolling shutter correction.
+- `Stabilizer: Dynamic Strength Scale`
+  - Analyzes the selected clip's source media from an exported FCPXML.
+  - Keyframes SmoothCam stabilization strength over time.
+  - Keyframes Transform Scale All from the same strength estimate so calmer sections
+    use less scale and shakier sections use more scale to hide stabilization edges.
 
-- `Stabilizer: Walking Gimbal Pan Smooth`
-  - Uses InertiaCam.
-  - Lower smoothing so intentional gimbal pans stay alive.
-  - Low rolling shutter correction.
-
-- `Stabilizer: Dynamic Auto Scale`
-  - Uses Final Cut Pro's Automatic stabilization method.
-  - Lets Final Cut Pro apply dynamic scaling based on its stabilization analysis.
-  - Leaves Rolling Shutter unchanged.
-
-The actions use Final Cut Pro's built-in Video Inspector controls. Select one or more
-timeline clips, then run an action from CommandPost.
+The action uses Final Cut Pro's built-in Video Inspector controls. Select exactly one
+timeline clip, export an FCPXML for the timeline/project, then run the action from
+CommandPost and choose that FCPXML when prompted.
 
 ## Install
 
