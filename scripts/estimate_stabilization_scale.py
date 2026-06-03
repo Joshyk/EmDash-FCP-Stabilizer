@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Estimate dynamic stabilization/scale keyframes from FCPXML-backed media."""
+"""Estimate dynamic stabilization/scale keyframes from selected Final Cut Pro media."""
 
 from __future__ import annotations
 
@@ -16,16 +16,17 @@ from pathlib import Path
 from typing import Iterable
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SAMPLE_WIDTH = 96
 SAMPLE_HEIGHT = 54
 MIN_SCALE = 100.0
-MAX_SCALE = 112.0
+MAX_SCALE = 118.0
 GLOBAL_SEARCH_RADIUS = 16
 LOCAL_SEARCH_RADIUS = 5
 MIN_MATCH_WIDTH = 18
 MIN_MATCH_HEIGHT = 12
 PAN_VELOCITY_THRESHOLD_PX = 1.25
+SMOOTHING_RADIUS = 4
 
 
 @dataclass
@@ -241,6 +242,33 @@ def extract_gray_frames(media_path: Path, source_start: float, duration: float, 
     return [data[index : index + frame_size] for index in range(0, usable, frame_size)]
 
 
+def probe_media_dimensions(media_path: Path) -> tuple[int, int]:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "json",
+        str(media_path),
+    ]
+    proc = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip() or "ffprobe failed")
+    payload = json.loads(proc.stdout.decode("utf-8", "replace"))
+    streams = payload.get("streams") or []
+    if not streams:
+        raise RuntimeError("ffprobe returned no video stream dimensions")
+    width = int(streams[0].get("width") or 0)
+    height = int(streams[0].get("height") or 0)
+    if width <= 0 or height <= 0:
+        raise RuntimeError("ffprobe returned invalid video stream dimensions")
+    return width, height
+
+
 def mean_abs_diff(previous: bytes, current: bytes) -> float:
     total = 0
     for a, b in zip(previous, current):
@@ -315,6 +343,15 @@ def moving_average(values: list[float], radius: int = 2) -> list[float]:
     return averaged
 
 
+def cumulative_sum(values: list[float]) -> list[float]:
+    total = 0.0
+    result = []
+    for value in values:
+        total += value
+        result.append(total)
+    return result
+
+
 def smooth_values(values: list[float]) -> list[float]:
     if len(values) < 3:
         return values
@@ -362,9 +399,10 @@ def pair_motion(previous: bytes, current: bytes) -> dict:
     top = estimate_shift(previous, current, 12, 4, SAMPLE_WIDTH - 24, 20, LOCAL_SEARCH_RADIUS, center)
     bottom = estimate_shift(previous, current, 12, SAMPLE_HEIGHT - 24, SAMPLE_WIDTH - 24, 20, LOCAL_SEARCH_RADIUS, center)
 
-    roll_from_vertical = abs(right[1] - left[1]) / max(1, SAMPLE_WIDTH - 32)
-    roll_from_horizontal = abs(bottom[0] - top[0]) / max(1, SAMPLE_HEIGHT - 16)
-    roll_motion = max(roll_from_vertical, roll_from_horizontal)
+    roll_from_vertical = (right[1] - left[1]) / max(1, SAMPLE_WIDTH - 32)
+    roll_from_horizontal = -(bottom[0] - top[0]) / max(1, SAMPLE_HEIGHT - 16)
+    signed_roll = (roll_from_vertical + roll_from_horizontal) * 0.5
+    roll_motion = max(abs(roll_from_vertical), abs(roll_from_horizontal))
 
     return {
         "rawMotion": raw_motion,
@@ -372,6 +410,7 @@ def pair_motion(previous: bytes, current: bytes) -> dict:
         "globalDy": float(dy),
         "residualMotion": residual,
         "rollMotion": roll_motion,
+        "signedRollMotion": signed_roll,
     }
 
 
@@ -383,14 +422,21 @@ def centered_difference(values: list[float], index: int) -> float:
     return values[index] - ((values[previous_index] + values[next_index]) * 0.5)
 
 
-def build_samples(motions: list[dict], sample_fps: float, duration: float) -> list[dict]:
+def build_samples(motions: list[dict], sample_fps: float, duration: float, media_width: int, media_height: int) -> list[dict]:
     if not motions:
-        motions = [{"rawMotion": 0.0, "globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0}]
+        motions = [{"rawMotion": 0.0, "globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0, "signedRollMotion": 0.0}]
 
     dx_values = [motion["globalDx"] for motion in motions]
     dy_values = [motion["globalDy"] for motion in motions]
     raw_values = [motion["rawMotion"] for motion in motions]
     residual_values = [motion["residualMotion"] for motion in motions]
+    signed_roll_values = [motion.get("signedRollMotion", 0.0) for motion in motions]
+    path_x = cumulative_sum(dx_values)
+    path_y = cumulative_sum(dy_values)
+    path_roll_degrees = [math.degrees(value) for value in cumulative_sum(signed_roll_values)]
+    smooth_x = moving_average(path_x, radius=SMOOTHING_RADIUS)
+    smooth_y = moving_average(path_y, radius=SMOOTHING_RADIUS)
+    smooth_roll = moving_average(path_roll_degrees, radius=SMOOTHING_RADIUS)
     pan_trend = moving_average(dx_values, radius=3)
 
     gimbal_values = []
@@ -429,6 +475,11 @@ def build_samples(motions: list[dict], sample_fps: float, duration: float) -> li
         )
         scale_strength = clamp(max(scale_strengths[index], strength * 0.75), 0.0, 1.0)
         scale = MIN_SCALE + (scale_strength * (MAX_SCALE - MIN_SCALE))
+        compensation_x = -(path_x[index] - smooth_x[index]) * (media_width / SAMPLE_WIDTH)
+        compensation_y = -(path_y[index] - smooth_y[index]) * (media_height / SAMPLE_HEIGHT)
+        compensation_rotation = -(path_roll_degrees[index] - smooth_roll[index])
+        compensation_magnitude = math.hypot(compensation_x / (media_width / 2), compensation_y / (media_height / 2))
+        transform_scale = clamp(max(scale, 100.0 + (compensation_magnitude * 100.0)), MIN_SCALE, MAX_SCALE)
         samples.append(
             {
                 "timelineSeconds": round(seconds, 6),
@@ -438,14 +489,15 @@ def build_samples(motions: list[dict], sample_fps: float, duration: float) -> li
                 "residualMotion": round(motion["residualMotion"], 6),
                 "gimbalJitter": round(gimbal_values[index], 6),
                 "panRotation": round(pan_rotation_values[index], 6),
+                "signedRollMotion": round(motion.get("signedRollMotion", 0.0), 6),
                 "strength": round(strength, 4),
                 "gimbalStrength": round(gimbal_strength, 4),
                 "panRotationStrength": round(pan_rotation_strength, 4),
                 "scaleStrength": round(scale_strength, 4),
-                "scale": round(scale, 4),
-                "translationSmooth": round(0.45 + (gimbal_strength * 2.85), 4),
-                "rotationSmooth": round(0.2 + (pan_rotation_strength * 1.55), 4),
-                "scaleSmooth": round(0.1 + (scale_strength * 1.1), 4),
+                "scale": round(transform_scale, 4),
+                "transformX": round(compensation_x, 4),
+                "transformY": round(compensation_y, 4),
+                "transformRotation": round(compensation_rotation, 4),
             }
         )
 
@@ -466,6 +518,7 @@ def estimate(candidate: Candidate, interval_frames: int, max_samples: int, durat
 
     frame_rate = float(Fraction(1, 1) / candidate.frame_duration)
     duration = min(float(candidate.duration), duration_seconds) if duration_seconds and duration_seconds > 0 else float(candidate.duration)
+    media_width, media_height = probe_media_dimensions(candidate.media_path)
     sample_fps = frame_rate / interval_frames
     if sample_fps <= 0:
         sample_fps = 2.0
@@ -475,32 +528,40 @@ def estimate(candidate: Candidate, interval_frames: int, max_samples: int, durat
 
     frames = extract_gray_frames(candidate.media_path, float(candidate.source_start), duration, sample_fps)
     motions = [
-        {"rawMotion": 0.0, "globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0}
+        {"rawMotion": 0.0, "globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0, "signedRollMotion": 0.0}
     ]
     for index in range(1, len(frames)):
         motions.append(pair_motion(frames[index - 1], frames[index]))
-    samples = build_samples(motions, sample_fps, duration)
+    samples = build_samples(motions, sample_fps, duration, media_width, media_height)
 
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "model": "global-motion-gimbal-pan-rotation-v2",
+        "model": "transform-keyframe-stabilization-v3",
         "clipName": candidate.name,
         "assetId": candidate.asset_id,
         "mediaPath": str(candidate.media_path),
+        "mediaWidth": media_width,
+        "mediaHeight": media_height,
         "frameRate": round(frame_rate, 6),
         "intervalFrames": interval_frames,
         "durationSeconds": round(duration, 6),
         "sampleFps": round(sample_fps, 6),
         "samples": samples,
         "warnings": [
-            "Motion strength is estimated from low-resolution global frame motion; foreground-only movement can still affect the estimate."
+            "Transform compensation is estimated from low-resolution global frame motion; foreground-only movement can still affect the estimate.",
+            "Final Cut Pro built-in Stabilization is intentionally not used, so crop/scale is controlled only by Transform Scale All.",
         ],
     }
 
 
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fcpxml", required=True, type=Path)
+    parser.add_argument("--fcpxml", type=Path)
+    parser.add_argument("--media-path", type=Path)
+    parser.add_argument("--frame-duration")
+    parser.add_argument("--source-start")
+    parser.add_argument("--duration")
+    parser.add_argument("--clip-name")
     parser.add_argument("--interval-frames", required=True, type=int)
     parser.add_argument("--duration-seconds", type=float)
     parser.add_argument("--max-samples", type=int, default=180)
@@ -510,8 +571,22 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
 def main(argv: Iterable[str]) -> int:
     args = parse_args(argv)
     try:
-        candidates = load_candidates(args.fcpxml)
-        candidate = choose_candidate(candidates, args.duration_seconds)
+        if args.media_path:
+            if not args.frame_duration or not args.duration:
+                raise ValueError("--media-path requires --frame-duration and --duration")
+            candidate = Candidate(
+                name=args.clip_name or args.media_path.name,
+                asset_id="selected-pasteboard",
+                media_path=args.media_path,
+                frame_duration=parse_time(args.frame_duration),
+                duration=parse_time(args.duration),
+                source_start=parse_time(args.source_start, Fraction(0)),
+            )
+        else:
+            if not args.fcpxml:
+                raise ValueError("either --fcpxml or --media-path is required")
+            candidates = load_candidates(args.fcpxml)
+            candidate = choose_candidate(candidates, args.duration_seconds)
         return emit(estimate(candidate, args.interval_frames, args.max_samples, args.duration_seconds))
     except Exception as exc:  # noqa: BLE001 - command-line tool must return JSON errors.
         return fail(str(exc))

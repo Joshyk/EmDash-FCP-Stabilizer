@@ -10,6 +10,12 @@ local dialog = require "cp.dialog"
 local fcp = require "cp.apple.finalcutpro"
 local flicks = require "cp.time.flicks"
 local json = require "cp.json"
+local pasteboard = require "hs.pasteboard"
+local plist = require "cp.plist"
+local archiver = require "cp.plist.archiver"
+local base64 = require "hs.base64"
+local fs = require "hs.fs"
+local tools = require "cp.tools"
 local timer = require "hs.timer"
 local eventtap = require "hs.eventtap"
 
@@ -18,7 +24,7 @@ local usleep = timer.usleep
 
 local mod = {}
 
-local ACTION_TITLE = "Stabilizer: Dynamic Strength Scale"
+local ACTION_TITLE = "Stabilizer: Transform Keyframes"
 local ACTION_ID = "stabilizerDynamicStrengthScale"
 local REPO_DIRECTORY = "/Users/justadev/Developer/EDT/Command-Post-Em_Dash/Stabilizer"
 local ESTIMATOR_SCRIPT = REPO_DIRECTORY .. "/scripts/estimate_stabilization_scale.py"
@@ -26,10 +32,13 @@ local PYTHON_BINARY = os.getenv("STABILIZER_PYTHON") or "/Library/Frameworks/Pyt
 local DEFAULT_INTERVAL_FRAMES = "10"
 local MAX_SAMPLES = 240
 local CONTROL_READY_TIMEOUT_SECONDS = 12
-local PLAYHEAD_ENTRY_TIMEOUT_SECONDS = 1.0
-local TIMECODE_PROPERTY_MOVE_TIMEOUT_SECONDS = 0.8
+local PLAYHEAD_ENTRY_TIMEOUT_SECONDS = 1.4
+local PASTE_TIMECODE_MOVE_TIMEOUT_SECONDS = 1.4
+local FCP_PASTEBOARD_UTI = "com.apple.flexo.proFFPasteboardUTI"
 
 local playheadMovePreferredMethod = nil
+local restorePasteboard
+local withTextPasteboard
 
 local function sleep(seconds)
     usleep((seconds or 0.1) * 1000000)
@@ -48,16 +57,6 @@ local function fileExists(path)
     return false
 end
 
-local function pathIsDirectory(path)
-    if not path or path == "" then return false end
-    if hs and hs.fs and hs.fs.attributes then
-        local ok, attributes = pcall(function() return hs.fs.attributes(path) end)
-        return ok and attributes and attributes.mode == "directory"
-    end
-    local ok = os.execute("/bin/test -d " .. shellQuote(path))
-    return ok == true or ok == 0
-end
-
 local function displayError(title, detail)
     dialog.displayErrorMessage(tostring(title or "Stabilizer") .. "\n\n" .. tostring(detail or ""))
 end
@@ -68,6 +67,33 @@ end
 
 local function trim(value)
     return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function oneLine(value, maxLength)
+    local text = tostring(value or ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    local limit = tonumber(maxLength) or 240
+    if #text > limit then
+        return text:sub(1, limit) .. "..."
+    end
+    return text
+end
+
+local function logStage(stage, message, fields)
+    local parts = {
+        "Stabilizer",
+        tostring(stage or "stage"),
+        tostring(message or ""),
+    }
+    if type(fields) == "table" then
+        for _, field in ipairs(fields) do
+            if type(field) == "table" then
+                parts[#parts + 1] = tostring(field[1]) .. "=" .. tostring(field[2])
+            else
+                parts[#parts + 1] = tostring(field)
+            end
+        end
+    end
+    log.i(table.concat(parts, " | "))
 end
 
 local function elementAttribute(element, attribute)
@@ -131,10 +157,160 @@ local function selectedClipsUI(includeChildren)
     return {}
 end
 
+local function normalizedText(value)
+    return tostring(value or ""):lower():gsub("%s+", " ")
+end
+
+local function elementRole(element)
+    local role = ""
+    pcall(function() role = tostring(element:attributeValue("AXRole") or "") end)
+    return role
+end
+
+local function elementFrame(element)
+    local ok, frame = pcall(function() return element:attributeValue("AXFrame") end)
+    return ok and frame or nil
+end
+
+local function frameArea(frame)
+    if not frame then return 0 end
+    return math.max(0, tonumber(frame.w) or 0) * math.max(0, tonumber(frame.h) or 0)
+end
+
+local function frameOverlapArea(a, b)
+    if not a or not b then return 0 end
+    local overlapW = math.max(0, math.min(a.x + a.w, b.x + b.w) - math.max(a.x, b.x))
+    local overlapH = math.max(0, math.min(a.y + a.h, b.y + b.h) - math.max(a.y, b.y))
+    return overlapW * overlapH
+end
+
+local function isTimelineVideoClip(element)
+    local description = trim(elementAttribute(element, "AXDescription"))
+    return description:find("AV%-Clip:", 1, false) == 1
+end
+
+local function isRecoverableAccessoryElement(element)
+    local text = normalizedText(elementText(element))
+    if text:find("item accessory", 1, true) then return true end
+    if text:find("video animation", 1, true) then return true end
+
+    local role = elementRole(element)
+    return role == "AXGroup" or role == "AXButton"
+end
+
+local function timelineClipElementsMatch(a, b)
+    if not a or not b then return false end
+    if a == b then return true end
+
+    local aFrame = elementFrame(a)
+    local bFrame = elementFrame(b)
+    local overlap = frameOverlapArea(aFrame, bFrame)
+    local smallestArea = math.min(frameArea(aFrame), frameArea(bFrame))
+    if smallestArea <= 0 or (overlap / smallestArea) < 0.75 then
+        return false
+    end
+
+    local aLabel = normalizedText(elementText(a))
+    local bLabel = normalizedText(elementText(b))
+    return aLabel == "" or bLabel == "" or aLabel == bLabel
+end
+
+local function appendUniqueVideoClip(clips, element)
+    if not element or not isTimelineVideoClip(element) then return false end
+    for _, existing in ipairs(clips) do
+        if timelineClipElementsMatch(existing, element) then
+            return false
+        end
+    end
+    clips[#clips + 1] = element
+    return true
+end
+
+local function collectTimelineVideoClipElements(element, results)
+    results = results or {}
+    if not element then return results end
+
+    local children = elementAttribute(element, "AXChildren")
+    if type(children) ~= "table" then return results end
+    for _, child in ipairs(children) do
+        if isTimelineVideoClip(child) then
+            appendUniqueVideoClip(results, child)
+        end
+        collectTimelineVideoClipElements(child, results)
+    end
+    return results
+end
+
+local function recoverVideoClipsFromAccessorySelection(selected)
+    local contentsUI = nil
+    pcall(function() contentsUI = fcp.timeline.contents:UI() end)
+    if not contentsUI then return {} end
+
+    local candidates = collectTimelineVideoClipElements(contentsUI)
+    local recovered = {}
+    for _, selectedElement in ipairs(selected or {}) do
+        if isRecoverableAccessoryElement(selectedElement) then
+            local bestClip = nil
+            local bestArea = 0
+            local bestFrame = nil
+            local selectedFrame = elementFrame(selectedElement)
+            for _, candidate in ipairs(candidates) do
+                local candidateFrame = elementFrame(candidate)
+                local area = frameOverlapArea(selectedFrame, candidateFrame)
+                if area > bestArea then
+                    bestArea = area
+                    bestClip = candidate
+                    bestFrame = candidateFrame
+                end
+            end
+            local smallestArea = math.min(frameArea(selectedFrame), frameArea(bestFrame))
+            local coverage = smallestArea > 0 and (bestArea / smallestArea) or 0
+            if bestClip and coverage >= 0.5 and appendUniqueVideoClip(recovered, bestClip) then
+                log.wf("Recovered selected timeline video clip from accessory selection overlap: %s", clipLabel(bestClip))
+            end
+        end
+    end
+    return recovered
+end
+
+local function selectedTimelineVideoClips()
+    local selected = selectedClipsUI(false)
+    local videoClips = {}
+    for _, element in ipairs(selected) do
+        appendUniqueVideoClip(videoClips, element)
+    end
+    if #videoClips < 1 then
+        for _, recoveredClip in ipairs(recoverVideoClipsFromAccessorySelection(selected)) do
+            appendUniqueVideoClip(videoClips, recoveredClip)
+        end
+    end
+    return videoClips, selected
+end
+
+local function chooseBestVideoClip(candidates)
+    if #candidates == 1 then return candidates[1] end
+    table.sort(candidates, function(a, b)
+        local af = elementFrame(a)
+        local bf = elementFrame(b)
+        local aw = af and tonumber(af.w) or math.huge
+        local bw = bf and tonumber(bf.w) or math.huge
+        return aw < bw
+    end)
+    return candidates[1]
+end
+
+local function timecodeFrameRate(frameRate)
+    local value = tonumber(frameRate) or 30
+    local rounded = math.floor(value + 0.5)
+    if rounded < 1 then return 30 end
+    return rounded
+end
+
 local function parseTimecodePair(startTC, endTC, frameRate)
     if not startTC or not endTC then return nil, nil end
-    local okStart, startFlicks = pcall(function() return flicks.parse(startTC, frameRate) end)
-    local okEnd, endFlicks = pcall(function() return flicks.parse(endTC, frameRate) end)
+    local fps = timecodeFrameRate(frameRate)
+    local okStart, startFlicks = pcall(function() return flicks.parse(startTC, fps) end)
+    local okEnd, endFlicks = pcall(function() return flicks.parse(endTC, fps) end)
     if okStart and okEnd then
         return startFlicks, endFlicks
     end
@@ -143,7 +319,8 @@ end
 
 local function parseTimecodeValue(value, frameRate)
     if not value or value == "" then return nil end
-    local ok, parsed = pcall(function() return flicks.parse(tostring(value), frameRate) end)
+    local fps = timecodeFrameRate(frameRate)
+    local ok, parsed = pcall(function() return flicks.parse(tostring(value), fps) end)
     return ok and parsed or nil
 end
 
@@ -190,7 +367,8 @@ end
 local function playheadFlicks(frameRate)
     local timecode = fcp.timeline.playhead:timecode()
     if not timecode then return nil end
-    local ok, parsed = pcall(function() return flicks.parse(timecode, frameRate) end)
+    local fps = timecodeFrameRate(frameRate)
+    local ok, parsed = pcall(function() return flicks.parse(timecode, fps) end)
     return ok and parsed or nil
 end
 
@@ -224,8 +402,8 @@ local function selectOnlyTimelineClip(clip)
     sleep(0.2)
     if not ok then return false end
 
-    local selected = selectedClipsUI(false)
-    return #selected == 1
+    local videoClips = selectedTimelineVideoClips()
+    return #videoClips == 1 and timelineClipElementsMatch(videoClips[1], clip)
 end
 
 local function selectedClipTimelineSpanFromSelection(clip, frameRate, originalTimecode)
@@ -293,32 +471,40 @@ local function waitForPlayhead(targetFlicks, frameRate, timeoutSeconds)
     return false, current
 end
 
-local function movePlayheadWithTimecodeProperty(targetFlicks, frameRate)
-    local targetTimecode = targetFlicks:toTimecode(frameRate, ":")
-    local ok, err = pcall(function()
-        fcp.timeline.playhead:timecode(targetTimecode)
+local function movePlayheadWithPasteTimecode(targetFlicks, frameRate)
+    local targetTimecode = targetFlicks:toTimecode(timecodeFrameRate(frameRate), ":")
+    local shortcuts = fcp:getCommandShortcuts("PasteTimecode")
+    if type(shortcuts) ~= "table" or #shortcuts == 0 then
+        return false, targetTimecode, "Paste Timecode shortcut is not assigned"
+    end
+
+    local app = fcp:application()
+    local result, detail = withTextPasteboard(targetTimecode, function()
+        local ok, err = pcall(function()
+            shortcuts[1]:trigger(app)
+        end)
+        if not ok then
+            return false, "Paste Timecode shortcut failed: " .. tostring(err)
+        end
+
+        local matched, current = waitForPlayhead(targetFlicks, frameRate, PASTE_TIMECODE_MOVE_TIMEOUT_SECONDS)
+        if matched then
+            return true, current
+        end
+        return false, current
     end)
-    if not ok then
-        return false, targetTimecode, "absolute playhead timecode property failed: " .. tostring(err)
+    if result == true then
+        return true, targetTimecode, "Paste Timecode shortcut", detail
     end
-
-    local matched, current = waitForPlayhead(targetFlicks, frameRate, TIMECODE_PROPERTY_MOVE_TIMEOUT_SECONDS)
-    if matched then
-        return true, targetTimecode, "absolute playhead timecode property", current
+    if type(detail) == "string" then
+        return false, targetTimecode, detail
     end
-    return false, targetTimecode, "absolute playhead timecode property did not reach target", current
-end
-
-local function typeCleanTimecode(timecode, app)
-    local cleanedTimecode = tostring(timecode):gsub(";", ""):gsub(":", "")
-    for character in cleanedTimecode:gmatch(".") do
-        eventtap.keyStroke({}, character, 0, app)
-        sleep(0.01)
-    end
+    return false, targetTimecode, "Paste Timecode shortcut did not reach target", detail
 end
 
 local function movePlayheadWithPlayheadPositionCommand(targetFlicks, frameRate)
-    local targetTimecode = targetFlicks:toTimecode(frameRate, ":")
+    local targetTimecode = targetFlicks:toTimecode(timecodeFrameRate(frameRate), ":")
+    local entryTimecode = targetTimecode:gsub("[;:]", "")
     fcp:launch()
     fcp.timeline:show()
     fcp.timeline.contents:focus()
@@ -332,44 +518,55 @@ local function movePlayheadWithPlayheadPositionCommand(targetFlicks, frameRate)
         eventtap.keyStroke({"ctrl"}, "p", 0, app)
     end
 
-    sleep(0.25)
-    typeCleanTimecode(targetTimecode, app)
-    eventtap.keyStroke({}, "return", 0, app)
+    sleep(0.2)
+    local result, detail = withTextPasteboard(entryTimecode, function()
+        eventtap.keyStroke({"cmd"}, "a", 0, app)
+        sleep(0.03)
+        eventtap.keyStroke({"cmd"}, "v", 0, app)
+        sleep(0.03)
+        eventtap.keyStroke({}, "return", 0, app)
 
-    local matched, current = waitForPlayhead(targetFlicks, frameRate, PLAYHEAD_ENTRY_TIMEOUT_SECONDS)
-    if matched then
-        return true, targetTimecode, "Move Playhead Position", current
+        local matched, current = waitForPlayhead(targetFlicks, frameRate, PLAYHEAD_ENTRY_TIMEOUT_SECONDS)
+        if matched then
+            return true, current
+        end
+        return false, current
+    end)
+    if result == true then
+        return true, targetTimecode, "Move Playhead Position paste entry", detail
     end
-    return false, targetTimecode, "Move Playhead Position did not reach target", current
+    return false, targetTimecode, "Move Playhead Position paste entry did not reach target", detail
 end
 
 local function movePlayheadToFlicks(targetFlicks, frameRate)
-    local targetTimecode = targetFlicks:toTimecode(frameRate, ":")
+    local targetTimecode = targetFlicks:toTimecode(timecodeFrameRate(frameRate), ":")
     local current = playheadFlicks(frameRate)
     if flicksCloseEnough(current, targetFlicks) then
         return true, targetTimecode, "already at target", current
     end
 
-    if playheadMovePreferredMethod == "property" then
-        local moved, timecode, reason, currentAfter = movePlayheadWithTimecodeProperty(targetFlicks, frameRate)
+    if playheadMovePreferredMethod == "pasteTimecode" then
+        local moved, timecode, reason, currentAfter = movePlayheadWithPasteTimecode(targetFlicks, frameRate)
         if moved then return true, timecode, reason, currentAfter end
+        log.df("%s for %s; trying playhead entry.", tostring(reason), tostring(timecode))
         playheadMovePreferredMethod = nil
-    elseif playheadMovePreferredMethod == "command" then
+    elseif playheadMovePreferredMethod == "entry" then
         local moved, timecode, reason, currentAfter = movePlayheadWithPlayheadPositionCommand(targetFlicks, frameRate)
         if moved then return true, timecode, reason, currentAfter end
+        log.df("%s for %s; trying Paste Timecode shortcut.", tostring(reason), tostring(timecode))
         playheadMovePreferredMethod = nil
     end
 
-    local moved, timecode, reason, currentAfter = movePlayheadWithTimecodeProperty(targetFlicks, frameRate)
+    local moved, timecode, reason, currentAfter = movePlayheadWithPasteTimecode(targetFlicks, frameRate)
     if moved then
-        playheadMovePreferredMethod = "property"
+        playheadMovePreferredMethod = "pasteTimecode"
         return true, timecode, reason, currentAfter
     end
     log.df("%s for %s; trying playhead entry.", tostring(reason), tostring(timecode))
 
     moved, timecode, reason, currentAfter = movePlayheadWithPlayheadPositionCommand(targetFlicks, frameRate)
     if moved then
-        playheadMovePreferredMethod = "command"
+        playheadMovePreferredMethod = "entry"
         return true, timecode, reason, currentAfter
     end
 
@@ -430,41 +627,272 @@ local function setNumberRow(row, value, label)
     return true, nil
 end
 
-local function addKeyframe(row, label)
+local function setXYRow(row, xValue, yValue, label)
+    if not waitForEnabled(row, CONTROL_READY_TIMEOUT_SECONDS) then
+        return false, label .. " is not enabled."
+    end
+    row:show()
     local ok, err = pcall(function()
-        row:show():keyframe():addKeyframe()
+        row.x:value(xValue)
+        row.y:value(yValue)
     end)
     if not ok then
-        return false, "Could not add " .. label .. " keyframe: " .. tostring(err)
+        return false, "Could not set " .. label .. ": " .. tostring(err)
     end
     return true, nil
 end
 
-local function resolveFCPXMLPath(path)
-    if not path or path == "" then return nil, "No FCPXML file was selected." end
-    local normalizedPath = tostring(path):gsub("/+$", "")
-    if normalizedPath:match("%.fcpxmld$") then
-        local packageInfoPath = normalizedPath .. "/Info.fcpxml"
-        if fileExists(packageInfoPath) then return packageInfoPath end
-        return nil, "The selected FCPXML package did not contain Info.fcpxml: " .. normalizedPath
-    elseif pathIsDirectory(normalizedPath) then
-        return nil, "The selected FCPXML path is a directory, not an .fcpxml file or .fcpxmld package: " .. normalizedPath
-    elseif fileExists(normalizedPath) then
-        return normalizedPath
-    end
-    return nil, "FCPXML file was not found: " .. normalizedPath
+local function buttonSummary(button)
+    return oneLine(table.concat({
+        tostring(elementAttribute(button, "AXTitle") or ""),
+        tostring(elementAttribute(button, "AXDescription") or ""),
+        tostring(elementAttribute(button, "AXHelp") or ""),
+        tostring(elementAttribute(button, "AXValue") or ""),
+    }, " "), 160)
 end
 
-local function chooseFCPXML()
-    local path = dialog.displayChooseFile("Choose the FCPXML exported from Final Cut Pro.", {"fcpxmld", "fcpxml", "xml"}, os.getenv("HOME") .. "/Documents")
-    local resolvedPath, err = resolveFCPXMLPath(path)
-    if not resolvedPath then
-        return nil, err
+local function rowButtons(row)
+    local children = row and row:children()
+    local buttons = {}
+    if type(children) == "table" then
+        for _, child in ipairs(children) do
+            if elementAttribute(child, "AXRole") == "AXButton" then
+                buttons[#buttons + 1] = child
+            end
+        end
     end
-    return resolvedPath, nil
+    return buttons
 end
 
-local function runEstimator(fcpxmlPath, intervalFrames, durationSeconds)
+local function keyframeButtonForRow(row)
+    for _, button in ipairs(rowButtons(row)) do
+        local summary = normalizedText(buttonSummary(button))
+        if summary:find("keyframe", 1, true)
+            and not summary:find("effect preset", 1, true)
+            and not summary:find("save effects", 1, true)
+        then
+            return button
+        end
+    end
+    return nil
+end
+
+local function pressAXButton(button)
+    local ok, pressed = pcall(function()
+        return button:performAction("AXPress")
+    end)
+    if ok and pressed == true then
+        return true
+    end
+
+    local frame = elementFrame(button)
+    if frame then
+        tools.ninjaMouseClick({
+            x = (tonumber(frame.x) or 0) + ((tonumber(frame.w) or 0) / 2),
+            y = (tonumber(frame.y) or 0) + ((tonumber(frame.h) or 0) / 2),
+        })
+        return true
+    end
+    return false
+end
+
+local function addKeyframe(row, label)
+    row:show()
+    local button = keyframeButtonForRow(row)
+    if not button then
+        local summaries = {}
+        for _, candidate in ipairs(rowButtons(row)) do
+            summaries[#summaries + 1] = buttonSummary(candidate)
+        end
+        return false, "Could not find " .. label .. " keyframe button. Row buttons: " .. table.concat(summaries, " | ")
+    end
+
+    local pressed = pressAXButton(button)
+    if not pressed then
+        return false, "Could not press " .. label .. " keyframe button."
+    end
+    log.df("Added %s keyframe via button: %s", tostring(label), buttonSummary(button))
+    return true, nil
+end
+
+local function parseFCPRange(value)
+    local startValue, durationValue = tostring(value or ""):match("^%{%(([^%)]+)%),%(([^%)]+)%)%}$")
+    if not startValue or not durationValue then
+        return nil, nil
+    end
+    return startValue, durationValue
+end
+
+local function frameDurationFromVideoProps(videoProps)
+    local frd = type(videoProps) == "table" and videoProps.FRD or nil
+    local value = frd and tonumber(frd.value)
+    local timescale = frd and tonumber(frd.timescale)
+    if value and value > 0 and timescale and timescale > 0 then
+        return tostring(math.floor(value + 0.5)) .. "/" .. tostring(math.floor(timescale + 0.5)) .. "s"
+    end
+    return nil
+end
+
+local function mediaForIdentifier(mediaItems, mediaIdentifier)
+    if type(mediaItems) ~= "table" then return nil end
+    if mediaIdentifier then
+        for _, media in ipairs(mediaItems) do
+            if media.mediaIdentifier == mediaIdentifier then
+                return media
+            end
+        end
+    end
+    return mediaItems[1]
+end
+
+local function pathFromFCPBookmark(bookmark)
+    if type(bookmark) ~= "string" or bookmark == "" then return nil end
+    local decoded = base64.decode(bookmark:gsub("%s+", ""))
+    if not decoded then return nil end
+    local ok, path = pcall(function() return fs.pathFromBookmark(decoded) end)
+    if ok and path and path ~= "" then return path end
+    return nil
+end
+
+function restorePasteboard(contents)
+    if type(contents) == "table" and next(contents) ~= nil then
+        pcall(function() pasteboard.writeAllData(contents) end)
+    else
+        pcall(function() pasteboard.clearContents() end)
+    end
+end
+
+function withTextPasteboard(value, fn)
+    local previousPasteboard = nil
+    pcall(function() previousPasteboard = pasteboard.readAllData() end)
+    pcall(function() pasteboard.clearContents() end)
+    pasteboard.setContents(tostring(value or ""))
+
+    local ok, result, extra = pcall(fn)
+    restorePasteboard(previousPasteboard)
+    if not ok then
+        return false, tostring(result)
+    end
+    return result, extra
+end
+
+local function selectedClipPasteboardSource(context)
+    local label = context and context.label or "selected timeline clip"
+    logStage("pasteboard.select.start", "Selecting timeline clip for pasteboard copy.", {
+        { "clip", label },
+    })
+    if not selectOnlyTimelineClip(context and context.clip) then
+        return nil, "Could not select exactly one timeline clip before copying it."
+    end
+    logStage("pasteboard.select.done", "Selected timeline clip for pasteboard copy.", {
+        { "clip", label },
+    })
+
+    local previousPasteboard = nil
+    pcall(function() previousPasteboard = pasteboard.readAllData() end)
+    pcall(function() pasteboard.clearContents() end)
+    logStage("pasteboard.clear", "Cleared pasteboard before Final Cut Pro copy.", {
+        { "clip", label },
+    })
+
+    logStage("pasteboard.copy.start", "Running Final Cut Pro Edit > Copy.", {
+        { "clip", label },
+    })
+    local copyOK = fcp:selectMenu({"Edit", "Copy"})
+    if not copyOK then
+        restorePasteboard(previousPasteboard)
+        return nil, "Final Cut Pro Edit > Copy did not respond for the selected timeline clip."
+    end
+    logStage("pasteboard.copy.done", "Final Cut Pro Edit > Copy completed.", {
+        { "clip", label },
+    })
+
+    local raw = nil
+    local started = timer.secondsSinceEpoch()
+    repeat
+        raw = pasteboard.readDataForUTI(FCP_PASTEBOARD_UTI)
+        if raw then break end
+        sleep(0.1)
+    until timer.secondsSinceEpoch() - started > 3
+
+    restorePasteboard(previousPasteboard)
+    previousPasteboard = nil
+    if not raw then
+        return nil, "Final Cut Pro did not put selected clip data on the pasteboard."
+    end
+    logStage("pasteboard.poll.done", "Received Final Cut Pro selected clip pasteboard data.", {
+        { "clip", label },
+        { "bytes", tostring(type(raw) == "string" and #raw or "unknown") },
+    })
+
+    local pasteboardTable = plist.binaryToTable(raw)
+    if type(pasteboardTable) ~= "table" then
+        return nil, "Could not decode Final Cut Pro selected clip pasteboard plist."
+    end
+    local base64Data = pasteboardTable.ffpasteboardobject
+    local archiveTable, archiveErr = plist.base64ToTable(base64Data)
+    if not archiveTable then
+        return nil, "Could not decode Final Cut Pro selected clip pasteboard data: " .. tostring(archiveErr)
+    end
+    local unarchived = archiver.unarchive(archiveTable)
+    if type(unarchived) ~= "table" then
+        return nil, "Could not unarchive Final Cut Pro selected clip pasteboard data."
+    end
+
+    local info = unarchived.root
+        and unarchived.root.userInfo
+        and unarchived.root.userInfo.copiedItemsPasteboardInfo
+    local collection = info
+        and type(info.nonAudioComponentSources) == "table"
+        and info.nonAudioComponentSources[1]
+        or nil
+    if type(collection) ~= "table" then
+        return nil, "Final Cut Pro pasteboard data did not include the selected video collection."
+    end
+
+    local sourceStart, duration = parseFCPRange(collection.clippedRange)
+    if not sourceStart or not duration then
+        return nil, "Could not read the selected clip range from Final Cut Pro pasteboard data."
+    end
+
+    local frameDuration = frameDurationFromVideoProps(collection.videoProps)
+        or frameDurationFromVideoProps(unarchived.media and unarchived.media[1] and unarchived.media[1].videoProps)
+    if not frameDuration then
+        return nil, "Could not read the selected clip frame duration from Final Cut Pro pasteboard data."
+    end
+
+    local component = type(collection.containedItems) == "table" and collection.containedItems[1] or nil
+    local mediaIdentifier = component and component.media and component.media.mediaIdentifier
+    local media = mediaForIdentifier(unarchived.media, mediaIdentifier)
+    local rep = media and media.originalMediaRep
+    local bookmark = rep
+        and rep.metadata
+        and rep.metadata.FFMediaRep
+        and rep.metadata.FFMediaRep.bookmark
+        or nil
+    local mediaPath = pathFromFCPBookmark(bookmark)
+    if not mediaPath or not fileExists(mediaPath) then
+        return nil, "Could not resolve the selected clip media file from Final Cut Pro pasteboard data."
+    end
+
+    local source = {
+        mediaPath = mediaPath,
+        frameDuration = frameDuration,
+        sourceStart = sourceStart,
+        duration = duration,
+        clipName = collection.displayName or (media and media.displayName) or label,
+    }
+    logStage("pasteboard.source.ready", "Using selected timeline clip pasteboard range for analysis.", {
+        { "clip", oneLine(source.clipName, 120) },
+        { "mediaPath", source.mediaPath },
+        { "sourceStart", source.sourceStart },
+        { "duration", source.duration },
+        { "frameDuration", source.frameDuration },
+    })
+    return source, nil
+end
+
+local function runEstimator(source, intervalFrames, durationSeconds)
     if not fileExists(ESTIMATOR_SCRIPT) then
         return nil, "Estimator script was not found: " .. ESTIMATOR_SCRIPT
     end
@@ -475,7 +903,11 @@ local function runEstimator(fcpxmlPath, intervalFrames, durationSeconds)
     local command = table.concat({
         shellQuote(PYTHON_BINARY),
         shellQuote(ESTIMATOR_SCRIPT),
-        "--fcpxml", shellQuote(fcpxmlPath),
+        "--media-path", shellQuote(source.mediaPath),
+        "--frame-duration", shellQuote(source.frameDuration),
+        "--source-start", shellQuote(source.sourceStart),
+        "--duration", shellQuote(source.duration),
+        "--clip-name", shellQuote(source.clipName or "selected timeline clip"),
         "--interval-frames", tostring(intervalFrames),
         "--duration-seconds", tostring(durationSeconds),
         "--max-samples", tostring(MAX_SAMPLES),
@@ -523,14 +955,28 @@ local function intervalFramesPrompt()
 end
 
 local function selectedClipContext(frameRate)
-    local selected = selectedClipsUI()
-    if #selected ~= 1 then
+    local videoClips, selected = selectedTimelineVideoClips()
+    if #videoClips < 1 then
+        local selectedLabel = selected and selected[1] and clipLabel(selected[1]) or "none"
+        return nil, "Select exactly one timeline video clip before running " .. ACTION_TITLE .. ". Current selection: " .. selectedLabel
+    end
+    if #videoClips > 1 then
+        log.wf(
+            "%s: selectedClipsUI(false) returned %d video clip candidates after filtering; using %s.",
+            ACTION_TITLE,
+            #videoClips,
+            clipLabel(chooseBestVideoClip(videoClips))
+        )
+    end
+
+    local clip = chooseBestVideoClip(videoClips)
+    if not clip then
         return nil, "Select exactly one timeline video clip before running " .. ACTION_TITLE .. "."
     end
 
-    local startFlicks, endFlicks, spanSource = clipTimecodeSpan(selected[1], frameRate)
+    local startFlicks, endFlicks, spanSource = clipTimecodeSpan(clip, frameRate)
     if not startFlicks or not endFlicks then
-        startFlicks, endFlicks, spanSource = selectedClipTimelineSpanFromSelection(selected[1], frameRate)
+        startFlicks, endFlicks, spanSource = selectedClipTimelineSpanFromSelection(clip, frameRate)
     end
     if not startFlicks or not endFlicks then
         return nil, "Could not read the selected clip's timeline start/end timecode: " .. tostring(spanSource)
@@ -542,31 +988,26 @@ local function selectedClipContext(frameRate)
     log.df("Selected clip timeline span resolved via %s.", tostring(spanSource))
 
     return {
-        clip = selected[1],
-        label = clipLabel(selected[1]),
+        clip = clip,
+        label = clipLabel(clip),
         startFlicks = startFlicks,
         endFlicks = endFlicks,
         durationSeconds = durationSeconds,
     }, nil
 end
 
-local function applyDynamicSample(video, stabilization, scaleAll, sample)
+local function applyDynamicSample(transform, position, rotation, scaleAll, sample)
     local ok, err
     local strength = tonumber(sample.strength) or 0
 
-    ok, err = setNumberRow(stabilization:translationSmooth(), sample.translationSmooth, "Translation Smooth")
+    ok, err = setXYRow(position, sample.transformX or 0, sample.transformY or 0, "Transform Position")
     if not ok then return false, err end
-    ok, err = addKeyframe(stabilization:translationSmooth(), "Translation Smooth")
-    if not ok then return false, err end
-
-    ok, err = setNumberRow(stabilization:rotationSmooth(), sample.rotationSmooth, "Rotation Smooth")
-    if not ok then return false, err end
-    ok, err = addKeyframe(stabilization:rotationSmooth(), "Rotation Smooth")
+    ok, err = addKeyframe(position, "Transform Position")
     if not ok then return false, err end
 
-    ok, err = setNumberRow(stabilization:scaleSmooth(), sample.scaleSmooth, "Scale Smooth")
+    ok, err = setNumberRow(rotation, sample.transformRotation or 0, "Transform Rotation")
     if not ok then return false, err end
-    ok, err = addKeyframe(stabilization:scaleSmooth(), "Scale Smooth")
+    ok, err = addKeyframe(rotation, "Transform Rotation")
     if not ok then return false, err end
 
     ok, err = setNumberRow(scaleAll, sample.scale, "Transform Scale All")
@@ -575,15 +1016,15 @@ local function applyDynamicSample(video, stabilization, scaleAll, sample)
     if not ok then return false, err end
 
     log.df(
-        "Dynamic sample seconds=%.3f strength=%.3f gimbal=%.3f panRotation=%.3f scale=%.3f translation=%.3f rotation=%.3f scaleSmooth=%.3f dx=%.3f dy=%.3f residual=%.4f",
+        "Transform sample seconds=%.3f strength=%.3f gimbal=%.3f panRotation=%.3f x=%.3f y=%.3f rotation=%.4f scale=%.3f dx=%.3f dy=%.3f residual=%.4f",
         tonumber(sample.timelineSeconds) or 0,
         strength,
         tonumber(sample.gimbalStrength) or 0,
         tonumber(sample.panRotationStrength) or 0,
+        tonumber(sample.transformX) or 0,
+        tonumber(sample.transformY) or 0,
+        tonumber(sample.transformRotation) or 0,
         tonumber(sample.scale) or 100,
-        tonumber(sample.translationSmooth) or 0,
-        tonumber(sample.rotationSmooth) or 0,
-        tonumber(sample.scaleSmooth) or 0,
         tonumber(sample.globalDx) or 0,
         tonumber(sample.globalDy) or 0,
         tonumber(sample.residualMotion) or 0
@@ -597,11 +1038,6 @@ local function applyDynamicStrengthScale()
         log.i(ACTION_TITLE .. ": cancelled before interval selection.")
         return false
     end
-    local fcpxmlPath, fcpxmlErr = chooseFCPXML()
-    if not fcpxmlPath then
-        displayError(ACTION_TITLE, fcpxmlErr)
-        return false
-    end
 
     local seedFrameRate = 30
     local context, contextErr = selectedClipContext(seedFrameRate)
@@ -610,18 +1046,24 @@ local function applyDynamicStrengthScale()
         return false
     end
 
-    local estimate, estimateErr = runEstimator(fcpxmlPath, intervalFrames, context.durationSeconds)
+    local source, sourceErr = selectedClipPasteboardSource(context)
+    if not source then
+        displayError(ACTION_TITLE, sourceErr)
+        return false
+    end
+
+    local estimate, estimateErr = runEstimator(source, intervalFrames, context.durationSeconds)
     if not estimate then
         displayError(ACTION_TITLE, estimateErr)
         return false
     end
 
     local frameRate = tonumber(estimate.frameRate) or seedFrameRate
-    context, contextErr = selectedClipContext(frameRate)
-    if not context then
-        displayError(ACTION_TITLE, contextErr)
-        return false
-    end
+    logStage("timeline.context.reuse", "Reusing the initially resolved timeline span after pasteboard analysis.", {
+        { "clip", context.label },
+        { "frameRate", tostring(frameRate) },
+        { "durationSeconds", tostring(context.durationSeconds) },
+    })
 
     local originalPlayhead = playheadFlicks(frameRate)
     playheadMovePreferredMethod = nil
@@ -629,23 +1071,26 @@ local function applyDynamicStrengthScale()
     local video = fcp.inspector.video:show()
     local stabilization = video:stabilization()
     local transform = video:transform()
+    local position = transform:position()
+    local rotation = transform:rotation()
     local scaleAll = transform:scaleAll()
     local ok, err
 
     stabilization:show()
-    ok, err = setCheckBox(stabilization.enabled, true, "Stabilization")
-    if not ok then
-        displayError(ACTION_TITLE, err)
-        return false
-    end
-
-    ok, err = setPopup(stabilization:method(), "FFStabilizationUseSmoothCam", "Stabilization Method")
+    ok, err = setCheckBox(stabilization.enabled, false, "Stabilization")
     if not ok then
         displayError(ACTION_TITLE, err)
         return false
     end
 
     transform:show()
+    ok, err = setCheckBox(transform.enabled, true, "Transform")
+    if not ok then
+        displayError(ACTION_TITLE, err)
+        return false
+    end
+    position:show()
+    rotation:show()
     scaleAll:show()
 
     local applied = 0
@@ -659,7 +1104,7 @@ local function applyDynamicStrengthScale()
                 return false
             end
 
-            ok, err = applyDynamicSample(video, stabilization, scaleAll, sample)
+            ok, err = applyDynamicSample(transform, position, rotation, scaleAll, sample)
             if not ok then
                 displayError(ACTION_TITLE, err)
                 return false
@@ -673,7 +1118,7 @@ local function applyDynamicStrengthScale()
         movePlayheadToFlicks(originalPlayhead, frameRate)
     end
 
-    local message = format("Applied %d dynamic strength/scale keyframe point(s) to %s.", applied, context.label)
+    local message = format("Applied %d Transform stabilization keyframe point(s) to %s.", applied, context.label)
     log.i(ACTION_TITLE .. ": " .. message)
     if hs and hs.notify then
         hs.notify.new({ title = ACTION_TITLE, informativeText = message }):send()
@@ -715,7 +1160,7 @@ function mod.init(deps)
     deps.actionmanager.addHandler("fcpx_stabilizer_dynamic_strength_scale", "fcpx")
         :onChoices(function(choices)
             choices:add(ACTION_TITLE)
-                :subText("Analyze gimbal jitter and uneven pan rotation, then keyframe stabilization plus Transform Scale")
+                :subText("Analyze gimbal jitter and uneven pan rotation, then keyframe Transform Position, Rotation, and Scale")
                 :params({ id = ACTION_ID })
                 :id("stabilizer:" .. ACTION_ID)
         end)

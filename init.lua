@@ -3,8 +3,8 @@
 --- Entry point for Final Cut Pro stabilization presets.
 
 local IMPLEMENTATION_FILE = "stabilizer.lua"
-local PLUGIN_VERSION = "0.4.4"
-local LOAD_MARKER = "repo-loader-20260602-no-auto-reload-v1"
+local PLUGIN_VERSION = "0.5.0"
+local LOAD_MARKER = "repo-loader-20260603-transform-keyframes-v1"
 
 local okLogger, logger = pcall(require, "hs.logger")
 local log = okLogger and logger and logger.new("stabLoad") or nil

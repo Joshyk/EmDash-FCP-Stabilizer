@@ -6,16 +6,18 @@ Always reply to the user in Japanese unless the user explicitly asks for another
 
 ## Project
 
-This directory hosts one CommandPost plugin repo for applying a dynamic Final Cut Pro
-stabilization workflow to a selected timeline clip.
+This directory hosts one CommandPost plugin repo for applying a dynamic Transform-keyframe
+stabilization workflow to a selected Final Cut Pro timeline clip.
 
 Primary action:
 
-- `Stabilizer: Dynamic Strength Scale`
+- `Stabilizer: Transform Keyframes`
 
-The plugin uses Final Cut Pro's built-in Video Inspector `Stabilization` and `Transform`
-controls. It also ships a local Python estimator that reads an exported FCPXML, analyzes
-source-frame motion with `ffmpeg`, and produces stabilization/scale keyframe values.
+The plugin intentionally does not use Final Cut Pro's built-in `Stabilization`, because
+that effect applies its own internal crop/scale. It uses Final Cut Pro's `Transform`
+controls instead. A local Python estimator reads the selected clip's pasteboard media
+path/range, analyzes source-frame motion with `ffmpeg`/`ffprobe`, and produces Transform
+Position/Rotation/Scale keyframe values.
 
 ## Source Layout
 
@@ -55,19 +57,12 @@ Use a small installed bootstrap at:
 The bootstrap should load this repo's `init.lua`. Keep implementation files in the repo,
 not in the installed CommandPost plugin folder.
 
-Do not use a repo source watcher for auto reload. Lua, Python, or other programming updates
-should take effect only after a manual CommandPost reload or restart.
+Do not add a repo source watcher.
 
 ## Version Visibility
 
 Keep `PLUGIN_VERSION` in `init.lua`, expose it through the returned module as `_version`,
 and bump it for user-visible behavior changes.
-
-Runtime verification target:
-
-```lua
-cp.plugins.getPluginModule("finalcutpro.stabilizer")._version
-```
 
 ## Verification
 
@@ -78,6 +73,3 @@ luac -p init.lua stabilizer.lua
 python3 -m py_compile scripts/estimate_stabilization_scale.py
 git diff --check -- init.lua stabilizer.lua scripts/estimate_stabilization_scale.py AGENTS.md README.md docs/usage.md
 ```
-
-If runtime verification is possible, reload CommandPost and query the module version via
-`cmdpost`.
