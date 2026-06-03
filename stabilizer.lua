@@ -34,6 +34,7 @@ local PYTHON_BINARY = os.getenv("STABILIZER_PYTHON") or "/Library/Frameworks/Pyt
 local DEFAULT_INTERVAL_FRAMES = "3"
 local MAX_SAMPLES = 240
 local CONTROL_READY_TIMEOUT_SECONDS = 12
+local KEYFRAME_CONFIRM_TIMEOUT_SECONDS = 1.5
 local PLAYHEAD_ENTRY_TIMEOUT_SECONDS = 1.4
 local PASTE_TIMECODE_MOVE_TIMEOUT_SECONDS = 1.4
 local FCP_PASTEBOARD_UTI = "com.apple.flexo.proFFPasteboardUTI"
@@ -734,6 +735,12 @@ local function rowButtons(row)
     return buttons
 end
 
+local function clearRowChildrenCache(row)
+    if row then
+        row._children = nil
+    end
+end
+
 local function allRowButtons(row)
     local buttons = rowButtons(row)
     local ui = nil
@@ -845,11 +852,11 @@ local function clickKeyframeButton(button)
     local frame = elementFrame(button)
     if frame then
         local point = {
-            x = (tonumber(frame.x) or 0) + ((tonumber(frame.w) or 0) / 2),
+            x = (tonumber(frame.x) or 0) + math.max(1, (tonumber(frame.w) or 0) - 5),
             y = (tonumber(frame.y) or 0) + ((tonumber(frame.h) or 0) / 2),
         }
         log.df(
-            "Clicking Transform keyframe button center at x=%.1f y=%.1f frame=%.1f/%.1f/%.1f/%.1f summary=%s",
+            "Clicking Transform keyframe button add target at x=%.1f y=%.1f frame=%.1f/%.1f/%.1f/%.1f summary=%s",
             point.x,
             point.y,
             tonumber(frame.x) or 0,
@@ -858,11 +865,6 @@ local function clickKeyframeButton(button)
             tonumber(frame.h) or 0,
             buttonSummary(button)
         )
-        local okPress, pressed = pcall(function()
-            return button:performAction("AXPress")
-        end)
-        log.df("Transform keyframe button AXPress ok=%s pressed=%s summary=%s", tostring(okPress), tostring(pressed), buttonSummary(button))
-        sleep(0.08)
         tools.ninjaMouseClick({
             x = point.x,
             y = point.y,
@@ -870,6 +872,23 @@ local function clickKeyframeButton(button)
         return true
     end
     return pressAXButton(button)
+end
+
+local function waitForKeyframedControls(row)
+    local deadline = timer.secondsSinceEpoch() + KEYFRAME_CONFIRM_TIMEOUT_SECONDS
+    local state, stateButton
+    repeat
+        clearRowChildrenCache(row)
+        row:show()
+        state, stateButton = keyframeRowState(row)
+        if state == "already" or state == "navigation" then
+            return state, stateButton
+        end
+        sleep(0.12)
+    until timer.secondsSinceEpoch() >= deadline
+    clearRowChildrenCache(row)
+    row:show()
+    return keyframeRowState(row)
 end
 
 local function addKeyframe(row, label)
@@ -889,10 +908,7 @@ local function addKeyframe(row, label)
     if not pressed then
         return false, "Could not press " .. label .. " keyframe button."
     end
-    sleep(0.18)
-    row:show()
-    sleep(0.12)
-    local afterState = keyframeRowState(row)
+    local afterState = waitForKeyframedControls(row)
     if afterState ~= "already" and afterState ~= "navigation" then
         return false, "Pressed " .. label .. " Add Keyframe button but Final Cut Pro did not expose keyframed controls. Button: " .. buttonSummary(button) .. " Row buttons after press: " .. rowButtonSummaries(row)
     end
