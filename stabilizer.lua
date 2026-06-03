@@ -11,6 +11,7 @@ local fcp = require "cp.apple.finalcutpro"
 local flicks = require "cp.time.flicks"
 local json = require "cp.json"
 local pasteboard = require "hs.pasteboard"
+local osascript = require "hs.osascript"
 local plist = require "cp.plist"
 local archiver = require "cp.plist.archiver"
 local base64 = require "hs.base64"
@@ -58,6 +59,12 @@ local function fileExists(path)
         return true
     end
     return false
+end
+
+local function activateFinalCutPro()
+    local ok = osascript.applescript([[tell application id "com.apple.FinalCut" to activate]])
+    sleep(0.3)
+    return ok
 end
 
 local function displayError(title, detail)
@@ -834,6 +841,7 @@ local function pressAXButton(button)
 end
 
 local function clickKeyframeButton(button)
+    activateFinalCutPro()
     local frame = elementFrame(button)
     if frame then
         local point = {
@@ -850,10 +858,15 @@ local function clickKeyframeButton(button)
             tonumber(frame.h) or 0,
             buttonSummary(button)
         )
+        local okPress, pressed = pcall(function()
+            return button:performAction("AXPress")
+        end)
+        log.df("Transform keyframe button AXPress ok=%s pressed=%s summary=%s", tostring(okPress), tostring(pressed), buttonSummary(button))
+        sleep(0.08)
         tools.ninjaMouseClick({
             x = point.x,
             y = point.y,
-        })
+        }, 0.08)
         return true
     end
     return pressAXButton(button)
@@ -877,6 +890,8 @@ local function addKeyframe(row, label)
         return false, "Could not press " .. label .. " keyframe button."
     end
     sleep(0.18)
+    row:show()
+    sleep(0.12)
     local afterState = keyframeRowState(row)
     if afterState ~= "already" and afterState ~= "navigation" then
         return false, "Pressed " .. label .. " Add Keyframe button but Final Cut Pro did not expose keyframed controls. Button: " .. buttonSummary(button) .. " Row buttons after press: " .. rowButtonSummaries(row)
@@ -1284,6 +1299,7 @@ local function applyDynamicStrengthScale()
 
     stage = "prepare inspector"
     progress("Preparing Transform controls", "Opening Video Inspector and enabling Transform.", 0, sampleCount)
+    activateFinalCutPro()
     local video = fcp.inspector.video:show()
     local stabilization = video:stabilization()
     local transform = video:transform()
@@ -1315,6 +1331,7 @@ local function applyDynamicStrengthScale()
     for index, sample in ipairs(estimate.samples) do
         local seconds = tonumber(sample.timelineSeconds) or 0
         if seconds <= context.durationSeconds + 0.05 then
+            activateFinalCutPro()
             if index == 1 and seconds <= 0 then
                 seconds = 1 / frameRate
                 log.i("Offsetting first Transform keyframe by one frame to avoid Final Cut Pro clip-boundary keyframe targeting.")

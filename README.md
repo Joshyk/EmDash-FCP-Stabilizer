@@ -36,3 +36,33 @@ Installed bootstrap path:
 ```text
 /Users/justadev/Library/Application Support/CommandPost/Plugins/Stabilizer/init.lua
 ```
+
+## Development Reload
+
+CommandPost does not auto reload this repo when Lua or Python files change. After a
+programming update, manually reload or restart CommandPost before running the action or
+checking runtime version/output.
+
+CommandPost reload shortcut exists now.
+
+On this machine, run `cpr` or `cmdpost-reload` to request a CommandPost reload quickly. It
+lives at `/usr/local/bin/cmdpost-reload`, with `/usr/local/bin/cpr` symlinked to it.
+
+It calls:
+
+```sh
+/Applications/CommandPost.app/Contents/Frameworks/hs/cmdpost -A -q -t 1 -c 'hs.reload()'
+```
+
+Important: the command returns quickly after requesting reload, but CommandPost itself can
+take tens of seconds before IPC is reachable again. To verify it came back:
+
+```sh
+/Applications/CommandPost.app/Contents/Frameworks/hs/cmdpost -q -t 6 -c 'return hs.application.nameForBundleID("org.latenitefilms.CommandPost")'
+```
+
+Expected output:
+
+```text
+CommandPost
+```
