@@ -17,7 +17,13 @@ The plugin intentionally does not use Final Cut Pro's built-in `Stabilization`, 
 that effect applies its own internal crop/scale. It uses Final Cut Pro's `Transform`
 controls instead. A local Python estimator reads the selected clip's pasteboard media
 path/range, analyzes source-frame motion with `ffmpeg`/`ffprobe`, and produces Transform
-Position/Rotation/Scale keyframe values.
+Position/Rotation/Scale keyframe values. The estimator also detects source-frame black
+strips and folds that correction into Transform Position and Scale keyframes.
+
+The workflow shows progress alerts during selection, pasteboard read, estimator execution,
+and Transform keyframe writing. Keyframe writes must be confirmed by the Transform row
+exposing either Delete/Remove Keyframe or Next/Previous Keyframe controls after the Add
+Keyframe click; otherwise fail clearly with row button diagnostics.
 
 ## Source Layout
 

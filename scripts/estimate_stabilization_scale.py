@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 SAMPLE_WIDTH = 96
 SAMPLE_HEIGHT = 54
 MIN_SCALE = 100.0
@@ -27,6 +27,10 @@ MIN_MATCH_WIDTH = 18
 MIN_MATCH_HEIGHT = 12
 PAN_VELOCITY_THRESHOLD_PX = 1.25
 SMOOTHING_RADIUS = 4
+BLACK_STRIP_LUMA_THRESHOLD = 8
+BLACK_STRIP_MIN_CONTENT_FRACTION = 0.06
+BLACK_STRIP_SCALE_PADDING = 1.01
+SCALE_SMOOTH_SECONDS = 4.0
 
 
 @dataclass
@@ -276,6 +280,58 @@ def mean_abs_diff(previous: bytes, current: bytes) -> float:
     return total / max(1, len(current)) / 255.0
 
 
+def black_strip_metrics(frame: bytes, media_width: int, media_height: int) -> dict:
+    column_min = max(1, int(SAMPLE_HEIGHT * BLACK_STRIP_MIN_CONTENT_FRACTION))
+    row_min = max(1, int(SAMPLE_WIDTH * BLACK_STRIP_MIN_CONTENT_FRACTION))
+
+    content_columns = []
+    for x in range(SAMPLE_WIDTH):
+        count = 0
+        for y in range(SAMPLE_HEIGHT):
+            if frame[(y * SAMPLE_WIDTH) + x] > BLACK_STRIP_LUMA_THRESHOLD:
+                count += 1
+        content_columns.append(count >= column_min)
+
+    content_rows = []
+    for y in range(SAMPLE_HEIGHT):
+        row = frame[y * SAMPLE_WIDTH : (y + 1) * SAMPLE_WIDTH]
+        content_rows.append(sum(1 for value in row if value > BLACK_STRIP_LUMA_THRESHOLD) >= row_min)
+
+    if not any(content_columns) or not any(content_rows):
+        return {
+            "blackStripLeft": 0.0,
+            "blackStripRight": 0.0,
+            "blackStripTop": 0.0,
+            "blackStripBottom": 0.0,
+            "blackStripScale": MIN_SCALE,
+            "blackStripOffsetX": 0.0,
+            "blackStripOffsetY": 0.0,
+        }
+
+    left = next(index for index, has_content in enumerate(content_columns) if has_content)
+    right = SAMPLE_WIDTH - next(index for index, has_content in enumerate(reversed(content_columns)) if has_content)
+    top = next(index for index, has_content in enumerate(content_rows) if has_content)
+    bottom = SAMPLE_HEIGHT - next(index for index, has_content in enumerate(reversed(content_rows)) if has_content)
+
+    content_width = max(1, right - left)
+    content_height = max(1, bottom - top)
+    required_scale = max(SAMPLE_WIDTH / content_width, SAMPLE_HEIGHT / content_height) * 100.0 * BLACK_STRIP_SCALE_PADDING
+    center_x = (left + right) * 0.5
+    center_y = (top + bottom) * 0.5
+    offset_x = -((center_x - (SAMPLE_WIDTH * 0.5)) * (media_width / SAMPLE_WIDTH))
+    offset_y = -((center_y - (SAMPLE_HEIGHT * 0.5)) * (media_height / SAMPLE_HEIGHT))
+
+    return {
+        "blackStripLeft": round(left * (media_width / SAMPLE_WIDTH), 4),
+        "blackStripRight": round((SAMPLE_WIDTH - right) * (media_width / SAMPLE_WIDTH), 4),
+        "blackStripTop": round(top * (media_height / SAMPLE_HEIGHT), 4),
+        "blackStripBottom": round((SAMPLE_HEIGHT - bottom) * (media_height / SAMPLE_HEIGHT), 4),
+        "blackStripScale": round(clamp(required_scale, MIN_SCALE, MAX_SCALE), 4),
+        "blackStripOffsetX": round(offset_x, 4),
+        "blackStripOffsetY": round(offset_y, 4),
+    }
+
+
 def shifted_abs_diff(
     previous: bytes,
     current: bytes,
@@ -341,6 +397,18 @@ def moving_average(values: list[float], radius: int = 2) -> list[float]:
         window = values[start:end]
         averaged.append(sum(window) / len(window))
     return averaged
+
+
+def moving_max(values: list[float], radius: int = 2) -> list[float]:
+    if not values:
+        return []
+    radius = max(0, int(radius))
+    output = []
+    for index in range(len(values)):
+        start = max(0, index - radius)
+        end = min(len(values), index + radius + 1)
+        output.append(max(values[start:end]))
+    return output
 
 
 def cumulative_sum(values: list[float]) -> list[float]:
@@ -422,7 +490,7 @@ def centered_difference(values: list[float], index: int) -> float:
     return values[index] - ((values[previous_index] + values[next_index]) * 0.5)
 
 
-def build_samples(motions: list[dict], sample_fps: float, duration: float, media_width: int, media_height: int) -> list[dict]:
+def build_samples(motions: list[dict], black_metrics: list[dict], sample_fps: float, duration: float, media_width: int, media_height: int) -> list[dict]:
     if not motions:
         motions = [{"rawMotion": 0.0, "globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0, "signedRollMotion": 0.0}]
 
@@ -462,6 +530,7 @@ def build_samples(motions: list[dict], sample_fps: float, duration: float, media
     scale_strengths = smooth_values(normalize_series(scale_values))
 
     samples = []
+    raw_transform_scales = []
     for index, motion in enumerate(motions):
         seconds = min(duration, index / sample_fps)
         gimbal_strength = gimbal_strengths[index]
@@ -478,8 +547,18 @@ def build_samples(motions: list[dict], sample_fps: float, duration: float, media
         compensation_x = -(path_x[index] - smooth_x[index]) * (media_width / SAMPLE_WIDTH)
         compensation_y = -(path_y[index] - smooth_y[index]) * (media_height / SAMPLE_HEIGHT)
         compensation_rotation = -(path_roll_degrees[index] - smooth_roll[index])
-        compensation_magnitude = math.hypot(compensation_x / (media_width / 2), compensation_y / (media_height / 2))
-        transform_scale = clamp(max(scale, 100.0 + (compensation_magnitude * 100.0)), MIN_SCALE, MAX_SCALE)
+        black_metric = black_metrics[index] if index < len(black_metrics) else {}
+        black_strip_scale = float(black_metric.get("blackStripScale", MIN_SCALE))
+        black_strip_offset_x = float(black_metric.get("blackStripOffsetX", 0.0))
+        black_strip_offset_y = float(black_metric.get("blackStripOffsetY", 0.0))
+        transform_x = compensation_x + black_strip_offset_x
+        transform_y = compensation_y + black_strip_offset_y
+        translation_scale = max(
+            100.0 * (1.0 + (2.0 * abs(transform_x) / max(1, media_width))),
+            100.0 * (1.0 + (2.0 * abs(transform_y) / max(1, media_height))),
+        )
+        transform_scale = clamp(max(scale, black_strip_scale, translation_scale), MIN_SCALE, MAX_SCALE)
+        raw_transform_scales.append(transform_scale)
         samples.append(
             {
                 "timelineSeconds": round(seconds, 6),
@@ -494,12 +573,30 @@ def build_samples(motions: list[dict], sample_fps: float, duration: float, media
                 "gimbalStrength": round(gimbal_strength, 4),
                 "panRotationStrength": round(pan_rotation_strength, 4),
                 "scaleStrength": round(scale_strength, 4),
+                "rawScale": round(transform_scale, 4),
                 "scale": round(transform_scale, 4),
-                "transformX": round(compensation_x, 4),
-                "transformY": round(compensation_y, 4),
+                "transformX": round(transform_x, 4),
+                "transformY": round(transform_y, 4),
                 "transformRotation": round(compensation_rotation, 4),
+                "stabilizerTransformX": round(compensation_x, 4),
+                "stabilizerTransformY": round(compensation_y, 4),
+                "blackStripOffsetX": round(black_strip_offset_x, 4),
+                "blackStripOffsetY": round(black_strip_offset_y, 4),
+                "blackStripScale": round(black_strip_scale, 4),
+                "blackStripLeft": black_metric.get("blackStripLeft", 0.0),
+                "blackStripRight": black_metric.get("blackStripRight", 0.0),
+                "blackStripTop": black_metric.get("blackStripTop", 0.0),
+                "blackStripBottom": black_metric.get("blackStripBottom", 0.0),
             }
         )
+
+    scale_smooth_radius = max(1, int(round(sample_fps * SCALE_SMOOTH_SECONDS * 0.5)))
+    scale_envelope = moving_max(raw_transform_scales, radius=scale_smooth_radius)
+    smoothed_scales = moving_average(scale_envelope, radius=scale_smooth_radius)
+    for index, sample in enumerate(samples):
+        raw_scale = raw_transform_scales[index]
+        sample["scale"] = round(clamp(max(raw_scale, smoothed_scales[index]), MIN_SCALE, MAX_SCALE), 4)
+        sample["scaleSmoothSeconds"] = SCALE_SMOOTH_SECONDS
 
     if samples[-1]["timelineSeconds"] < duration - 0.05:
         last = dict(samples[-1])
@@ -527,16 +624,17 @@ def estimate(candidate: Candidate, interval_frames: int, max_samples: int, durat
         sample_fps = max_samples / duration
 
     frames = extract_gray_frames(candidate.media_path, float(candidate.source_start), duration, sample_fps)
+    black_metrics = [black_strip_metrics(frame, media_width, media_height) for frame in frames]
     motions = [
         {"rawMotion": 0.0, "globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0, "signedRollMotion": 0.0}
     ]
     for index in range(1, len(frames)):
         motions.append(pair_motion(frames[index - 1], frames[index]))
-    samples = build_samples(motions, sample_fps, duration, media_width, media_height)
+    samples = build_samples(motions, black_metrics, sample_fps, duration, media_width, media_height)
 
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "model": "transform-keyframe-stabilization-v3",
+        "model": "transform-keyframe-stabilization-v5",
         "clipName": candidate.name,
         "assetId": candidate.asset_id,
         "mediaPath": str(candidate.media_path),
@@ -550,6 +648,8 @@ def estimate(candidate: Candidate, interval_frames: int, max_samples: int, durat
         "warnings": [
             "Transform compensation is estimated from low-resolution global frame motion; foreground-only movement can still affect the estimate.",
             "Final Cut Pro built-in Stabilization is intentionally not used, so crop/scale is controlled only by Transform Scale All.",
+            "Black strip removal is estimated from source media frames; effects that create black after Final Cut Pro rendering may need extra scale tuning.",
+            f"Transform Scale All is smoothed over about {SCALE_SMOOTH_SECONDS:.1f} seconds to avoid visible zoom stepping.",
         ],
     }
 
