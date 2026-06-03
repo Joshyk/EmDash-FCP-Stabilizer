@@ -20,10 +20,12 @@ path/range, analyzes source-frame motion with `ffmpeg`/`ffprobe`, and produces T
 Position/Rotation/Scale keyframe values. The estimator also detects source-frame black
 strips and folds that correction into Transform Position and Scale keyframes.
 
-The workflow shows progress alerts during selection, pasteboard read, estimator execution,
-and Transform keyframe writing. Keyframe writes must be confirmed by the Transform row
-exposing either Delete/Remove Keyframe or Next/Previous Keyframe controls after the Add
-Keyframe click; otherwise fail clearly with row button diagnostics.
+The workflow must not show progress alerts or routine progress logs during selection,
+pasteboard read, estimator execution, or Transform keyframe writing. Keep failure logs and
+user-facing errors clear. Keyframe writes must use CommandPost's official video inspector
+keyframe API for each Transform row before writing values into that keyframe. If Final Cut
+Pro keeps reporting Add Keyframe after the API call, continue AutoWB-style and only surface
+that state when a failure path needs diagnostics.
 
 ## Source Layout
 

@@ -11,17 +11,21 @@ selected Final Cut Pro timeline clip.
   - Detects source-frame black strips and folds the required correction into
     Transform Position and Scale All keyframes.
   - Turns Final Cut Pro's built-in Stabilization off for the selected clip.
-  - Keyframes Transform Position and Rotation to counter estimated camera motion.
+  - Keyframes Transform Position and Rotation to counter estimated camera motion,
+    using sub-pixel translation refinement so small shakes do not collapse to 0.
   - Keyframes Transform Scale All only as much as needed to hide exposed edges.
-  - Shows progress alerts while reading, estimating, and writing Transform keyframes.
+  - Keeps progress alerts and routine progress logs off while processing.
 
 The action uses Final Cut Pro's built-in Transform controls, not Final Cut Pro's
 Stabilization effect. Select exactly one timeline clip, then run the action from
 CommandPost. The plugin does not export or import XML; it uses Final Cut Pro's Edit >
 Copy pasteboard data for the selected clip.
 
-If a Transform keyframe button cannot be confirmed, the action stops with an alert and
-logs the active stage, sample, target timecode, and exposed Final Cut Pro row buttons.
+Transform keyframes are created through CommandPost's official video inspector keyframe
+API before values are written into the keyframe, then confirmed from the Transform row
+controls when Final Cut Pro exposes that state. If Final Cut Pro keeps reporting Add
+Keyframe after the API call, the action logs the unconfirmed state and continues, matching
+the Auto White Balance keyframe writer's behavior.
 
 ## Install
 

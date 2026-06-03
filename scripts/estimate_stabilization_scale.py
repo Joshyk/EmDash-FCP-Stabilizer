@@ -31,6 +31,7 @@ BLACK_STRIP_LUMA_THRESHOLD = 8
 BLACK_STRIP_MIN_CONTENT_FRACTION = 0.06
 BLACK_STRIP_SCALE_PADDING = 1.01
 SCALE_SMOOTH_SECONDS = 4.0
+POSITION_COMPENSATION_GAIN = 1.75
 
 
 @dataclass
@@ -372,8 +373,9 @@ def estimate_shift(
     height: int,
     radius: int,
     center: tuple[int, int] = (0, 0),
-) -> tuple[int, int, float]:
-    center_x, center_y = center
+    refine: bool = False,
+) -> tuple[float, float, float]:
+    center_x, center_y = int(round(center[0])), int(round(center[1]))
     best_dx = center_x
     best_dy = center_y
     best_score = float("inf")
@@ -384,7 +386,24 @@ def estimate_shift(
                 best_dx = dx
                 best_dy = dy
                 best_score = score
-    return best_dx, best_dy, best_score
+    if not refine:
+        return best_dx, best_dy, best_score
+
+    def axis_offset(score_before: float, score_center: float, score_after: float) -> float:
+        if not all(math.isfinite(score) for score in (score_before, score_center, score_after)):
+            return 0.0
+        denominator = score_before - (2.0 * score_center) + score_after
+        if abs(denominator) < 1e-9:
+            return 0.0
+        return clamp(0.5 * (score_before - score_after) / denominator, -0.5, 0.5)
+
+    x_before = shifted_abs_diff(previous, current, best_dx - 1, best_dy, x0, y0, width, height)
+    x_after = shifted_abs_diff(previous, current, best_dx + 1, best_dy, x0, y0, width, height)
+    y_before = shifted_abs_diff(previous, current, best_dx, best_dy - 1, x0, y0, width, height)
+    y_after = shifted_abs_diff(previous, current, best_dx, best_dy + 1, x0, y0, width, height)
+    refined_dx = best_dx + axis_offset(x_before, best_score, x_after)
+    refined_dy = best_dy + axis_offset(y_before, best_score, y_after)
+    return refined_dx, refined_dy, best_score
 
 
 def moving_average(values: list[float], radius: int = 2) -> list[float]:
@@ -460,8 +479,9 @@ def pair_motion(previous: bytes, current: bytes) -> dict:
         SAMPLE_WIDTH - 16,
         SAMPLE_HEIGHT - 12,
         GLOBAL_SEARCH_RADIUS,
+        refine=True,
     )
-    center = (dx, dy)
+    center = (int(round(dx)), int(round(dy)))
     left = estimate_shift(previous, current, 4, 8, 28, SAMPLE_HEIGHT - 16, LOCAL_SEARCH_RADIUS, center)
     right = estimate_shift(previous, current, SAMPLE_WIDTH - 32, 8, 28, SAMPLE_HEIGHT - 16, LOCAL_SEARCH_RADIUS, center)
     top = estimate_shift(previous, current, 12, 4, SAMPLE_WIDTH - 24, 20, LOCAL_SEARCH_RADIUS, center)
@@ -544,8 +564,8 @@ def build_samples(motions: list[dict], black_metrics: list[dict], sample_fps: fl
         )
         scale_strength = clamp(max(scale_strengths[index], strength * 0.75), 0.0, 1.0)
         scale = MIN_SCALE + (scale_strength * (MAX_SCALE - MIN_SCALE))
-        compensation_x = -(path_x[index] - smooth_x[index]) * (media_width / SAMPLE_WIDTH)
-        compensation_y = -(path_y[index] - smooth_y[index]) * (media_height / SAMPLE_HEIGHT)
+        compensation_x = -(path_x[index] - smooth_x[index]) * (media_width / SAMPLE_WIDTH) * POSITION_COMPENSATION_GAIN
+        compensation_y = -(path_y[index] - smooth_y[index]) * (media_height / SAMPLE_HEIGHT) * POSITION_COMPENSATION_GAIN
         compensation_rotation = -(path_roll_degrees[index] - smooth_roll[index])
         black_metric = black_metrics[index] if index < len(black_metrics) else {}
         black_strip_scale = float(black_metric.get("blackStripScale", MIN_SCALE))
@@ -580,6 +600,7 @@ def build_samples(motions: list[dict], black_metrics: list[dict], sample_fps: fl
                 "transformRotation": round(compensation_rotation, 4),
                 "stabilizerTransformX": round(compensation_x, 4),
                 "stabilizerTransformY": round(compensation_y, 4),
+                "positionGain": POSITION_COMPENSATION_GAIN,
                 "blackStripOffsetX": round(black_strip_offset_x, 4),
                 "blackStripOffsetY": round(black_strip_offset_y, 4),
                 "blackStripScale": round(black_strip_scale, 4),
@@ -649,6 +670,7 @@ def estimate(candidate: Candidate, interval_frames: int, max_samples: int, durat
             "Transform compensation is estimated from low-resolution global frame motion; foreground-only movement can still affect the estimate.",
             "Final Cut Pro built-in Stabilization is intentionally not used, so crop/scale is controlled only by Transform Scale All.",
             "Black strip removal is estimated from source media frames; effects that create black after Final Cut Pro rendering may need extra scale tuning.",
+            f"Transform Position uses sub-pixel global motion refinement and a {POSITION_COMPENSATION_GAIN:.2f}x compensation gain.",
             f"Transform Scale All is smoothed over about {SCALE_SMOOTH_SECONDS:.1f} seconds to avoid visible zoom stepping.",
         ],
     }

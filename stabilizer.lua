@@ -16,7 +16,6 @@ local plist = require "cp.plist"
 local archiver = require "cp.plist.archiver"
 local base64 = require "hs.base64"
 local fs = require "hs.fs"
-local tools = require "cp.tools"
 local timer = require "hs.timer"
 local eventtap = require "hs.eventtap"
 local alert = require "hs.alert"
@@ -38,12 +37,10 @@ local KEYFRAME_CONFIRM_TIMEOUT_SECONDS = 1.5
 local PLAYHEAD_ENTRY_TIMEOUT_SECONDS = 1.4
 local PASTE_TIMECODE_MOVE_TIMEOUT_SECONDS = 1.4
 local FCP_PASTEBOARD_UTI = "com.apple.flexo.proFFPasteboardUTI"
-local PROGRESS_ALERT_SECONDS = 1.8
 
 local playheadMovePreferredMethod = nil
 local restorePasteboard
 local withTextPasteboard
-local progressAlertID = nil
 
 local function sleep(seconds)
     usleep((seconds or 0.1) * 1000000)
@@ -76,42 +73,7 @@ local function displayMessage(title, detail)
     dialog.displayAlertMessage(tostring(title or "Stabilizer"), tostring(detail or ""))
 end
 
-local function closeProgressAlert()
-    if progressAlertID and alert and alert.closeSpecific then
-        pcall(function() alert.closeSpecific(progressAlertID, 0) end)
-    end
-    progressAlertID = nil
-end
-
-local function progressLine(title, detail, current, total, startedAt)
-    local parts = { "Stabilizer", tostring(title or "Working") }
-    if startedAt then
-        parts[#parts + 1] = format("Elapsed: %.1fs", timer.secondsSinceEpoch() - startedAt)
-    end
-    if current and total and total > 0 then
-        local percent = math.floor(((current / total) * 100) + 0.5)
-        parts[#parts + 1] = format("%d/%d (%d%%)", current, total, percent)
-    end
-    if detail and detail ~= "" then
-        parts[#parts + 1] = tostring(detail)
-    end
-    return table.concat(parts, "\n")
-end
-
-local function showProgress(title, detail, current, total, startedAt)
-    local text = progressLine(title, detail, current, total, startedAt)
-    log.i("Progress: " .. text:gsub("\n", " | "))
-    if alert and alert.show then
-        closeProgressAlert()
-        local ok, alertID = pcall(function()
-            return alert.show(text, PROGRESS_ALERT_SECONDS)
-        end)
-        if ok then progressAlertID = alertID end
-    end
-end
-
 local function showFailure(title, detail)
-    closeProgressAlert()
     local text = tostring(title or ACTION_TITLE) .. "\n" .. tostring(detail or "")
     log.ef("%s failed: %s", tostring(title or ACTION_TITLE), tostring(detail or ""))
     if alert and alert.show then
@@ -295,6 +257,25 @@ local function collectTimelineVideoClipElements(element, results)
     return results
 end
 
+local function collectSelectedTimelineElements(element, results)
+    results = results or {}
+    if not element then return results end
+
+    local selected = false
+    pcall(function() selected = element:attributeValue("AXSelected") == true end)
+    if selected then
+        results[#results + 1] = element
+    end
+
+    local children = elementAttribute(element, "AXChildren")
+    if type(children) == "table" then
+        for _, child in ipairs(children) do
+            collectSelectedTimelineElements(child, results)
+        end
+    end
+    return results
+end
+
 local function recoverVideoClipsFromAccessorySelection(selected)
     local contentsUI = nil
     pcall(function() contentsUI = fcp.timeline.contents:UI() end)
@@ -327,6 +308,52 @@ local function recoverVideoClipsFromAccessorySelection(selected)
     return recovered
 end
 
+local function recoverVideoClipsFromAXSelectedTimeline()
+    local contentsUI = nil
+    pcall(function() contentsUI = fcp.timeline.contents:UI() end)
+    if not contentsUI then return {} end
+
+    local selectedElements = collectSelectedTimelineElements(contentsUI)
+    if #selectedElements < 1 then return {} end
+
+    log.wf("Scanning %d AXSelected timeline element(s) for selected video clip recovery.", #selectedElements)
+    local recovered = {}
+    for _, element in ipairs(selectedElements) do
+        appendUniqueVideoClip(recovered, element)
+    end
+    for _, recoveredClip in ipairs(recoverVideoClipsFromAccessorySelection(selectedElements)) do
+        appendUniqueVideoClip(recovered, recoveredClip)
+    end
+    return recovered
+end
+
+local function recoverVideoClipsAfterHidingVideoAnimation()
+    log.w("Attempting selected video clip recovery by hiding Video Animation and rereading the timeline selection.")
+    fcp.timeline:show()
+    fcp.timeline.contents:focus()
+    local hidden = fcp:selectMenu({"Clip", "Hide Video Animation"})
+    if not hidden then
+        eventtap.keyStroke({"ctrl"}, "v", 0, fcp:application())
+    end
+    sleep(0.35)
+    fcp.timeline.contents:focus()
+    sleep(0.15)
+
+    local recovered = {}
+    for _, element in ipairs(selectedClipsUI(false)) do
+        appendUniqueVideoClip(recovered, element)
+    end
+    if #recovered < 1 then
+        for _, element in ipairs(selectedClipsUI(true)) do
+            appendUniqueVideoClip(recovered, element)
+        end
+    end
+    if #recovered > 0 then
+        log.wf("Recovered %d selected timeline video clip(s) after hiding Video Animation.", #recovered)
+    end
+    return recovered
+end
+
 local function selectedTimelineVideoClips()
     local selected = selectedClipsUI(false)
     local videoClips = {}
@@ -335,6 +362,21 @@ local function selectedTimelineVideoClips()
     end
     if #videoClips < 1 then
         for _, recoveredClip in ipairs(recoverVideoClipsFromAccessorySelection(selected)) do
+            appendUniqueVideoClip(videoClips, recoveredClip)
+        end
+    end
+    if #videoClips < 1 then
+        for _, element in ipairs(selectedClipsUI(true)) do
+            appendUniqueVideoClip(videoClips, element)
+        end
+    end
+    if #videoClips < 1 then
+        for _, recoveredClip in ipairs(recoverVideoClipsFromAXSelectedTimeline()) do
+            appendUniqueVideoClip(videoClips, recoveredClip)
+        end
+    end
+    if #videoClips < 1 and selected[1] and isRecoverableAccessoryElement(selected[1]) then
+        for _, recoveredClip in ipairs(recoverVideoClipsAfterHidingVideoAnimation()) do
             appendUniqueVideoClip(videoClips, recoveredClip)
         end
     end
@@ -753,61 +795,6 @@ local function allRowButtons(row)
     return buttons
 end
 
-local function keyframeButtonState(button)
-    local summary = normalizedText(buttonSummary(button))
-    if summary:find("parameter menu", 1, true)
-        or summary:find("effect preset", 1, true)
-        or summary:find("save effects", 1, true)
-        or summary:find("reset", 1, true)
-    then
-        return nil
-    end
-    if summary:find("next keyframe", 1, true)
-        or summary:find("previous keyframe", 1, true)
-    then
-        return "navigation"
-    end
-    if summary:find("delete", 1, true)
-        or summary:find("remove", 1, true)
-    then
-        return "already"
-    end
-    if summary:find("add", 1, true)
-        and summary:find("keyframe", 1, true)
-    then
-        return "add"
-    end
-    if summary:find("animation button", 1, true) then
-        return "add"
-    end
-    return nil
-end
-
-local function keyframeRowState(row)
-    local seenNavigation = false
-    for _, button in ipairs(allRowButtons(row)) do
-        local state = keyframeButtonState(button)
-        if state == "already" then
-            return "already", button
-        end
-        if state == "navigation" then
-            seenNavigation = true
-        end
-    end
-    if seenNavigation then
-        return "navigation", nil
-    end
-    return nil, nil
-end
-
-local function addKeyframeButtonForRow(row)
-    for _, button in ipairs(allRowButtons(row)) do
-        local state = keyframeButtonState(button)
-        if state == "add" then return button end
-    end
-    return nil
-end
-
 local function rowButtonSummaries(row)
     local summaries = {}
     for _, candidate in ipairs(allRowButtons(row)) do
@@ -828,92 +815,99 @@ local function rowButtonSummaries(row)
     return table.concat(summaries, " | ")
 end
 
-local function pressAXButton(button)
-    local ok, pressed = pcall(function()
-        return button:performAction("AXPress")
-    end)
-    if ok and pressed == true then
-        return true
-    end
-
-    local frame = elementFrame(button)
-    if frame then
-        tools.ninjaMouseClick({
-            x = (tonumber(frame.x) or 0) + ((tonumber(frame.w) or 0) / 2),
-            y = (tonumber(frame.y) or 0) + ((tonumber(frame.h) or 0) / 2),
-        })
-        return true
-    end
-    return false
+local function setTransformValues(position, rotation, scaleAll, sample)
+    local ok, err
+    ok, err = setXYRow(position, sample.transformX or 0, sample.transformY or 0, "Transform Position")
+    if not ok then return false, err end
+    ok, err = setNumberRow(rotation, sample.transformRotation or 0, "Transform Rotation")
+    if not ok then return false, err end
+    ok, err = setNumberRow(scaleAll, sample.scale, "Transform Scale All")
+    if not ok then return false, err end
+    return true, nil
 end
 
-local function clickKeyframeButton(button)
-    activateFinalCutPro()
-    local frame = elementFrame(button)
-    if frame then
-        local point = {
-            x = (tonumber(frame.x) or 0) + math.max(1, (tonumber(frame.w) or 0) - 5),
-            y = (tonumber(frame.y) or 0) + ((tonumber(frame.h) or 0) / 2),
-        }
-        log.df(
-            "Clicking Transform keyframe button add target at x=%.1f y=%.1f frame=%.1f/%.1f/%.1f/%.1f summary=%s",
-            point.x,
-            point.y,
-            tonumber(frame.x) or 0,
-            tonumber(frame.y) or 0,
-            tonumber(frame.w) or 0,
-            tonumber(frame.h) or 0,
-            buttonSummary(button)
-        )
-        tools.ninjaMouseClick({
-            x = point.x,
-            y = point.y,
-        }, 0.08)
-        return true
-    end
-    return pressAXButton(button)
-end
-
-local function waitForKeyframedControls(row)
-    local deadline = timer.secondsSinceEpoch() + KEYFRAME_CONFIRM_TIMEOUT_SECONDS
-    local state, stateButton
-    repeat
-        clearRowChildrenCache(row)
-        row:show()
-        state, stateButton = keyframeRowState(row)
-        if state == "already" or state == "navigation" then
-            return state, stateButton
+local function transformRowKeyframeState(row)
+    local addButton = nil
+    for _, button in ipairs(allRowButtons(row)) do
+        local text = normalizedText(buttonSummary(button))
+        if not text:find("parameter menu", 1, true) then
+            local hasKeyframeText = text:find("keyframe", 1, true) ~= nil
+            local isAnimationButton = text:find("animation button", 1, true) ~= nil
+            if hasKeyframeText and (text:find("delete", 1, true) or text:find("remove", 1, true)) then
+                return "already", button
+            end
+            if hasKeyframeText and (text:find("next", 1, true) or text:find("previous", 1, true)) then
+                return "navigation", button
+            end
+            if (hasKeyframeText and text:find("add", 1, true)) or isAnimationButton then
+                addButton = button
+            end
         end
-        sleep(0.12)
-    until timer.secondsSinceEpoch() >= deadline
-    clearRowChildrenCache(row)
-    row:show()
-    return keyframeRowState(row)
+    end
+    return addButton and "add" or nil, addButton
 end
 
-local function addKeyframe(row, label)
+local function addTransformRowKeyframe(row, label, targetTimecode)
     row:show()
-    local rowState = keyframeRowState(row)
-    if rowState == "already" or rowState == "navigation" then
-        log.df("%s keyframe controls are already active at the playhead. State: %s", tostring(label), tostring(rowState))
-        return true, rowState
+    local state, button = transformRowKeyframeState(row)
+    if state == "already" then
+        return true, label .. " already has a keyframe at " .. tostring(targetTimecode)
     end
-
-    local button = addKeyframeButtonForRow(row)
-    if not button then
+    if state ~= "add" and state ~= "navigation" then
         return false, "Could not find " .. label .. " Add Keyframe button. Row buttons: " .. rowButtonSummaries(row)
     end
 
-    local pressed = clickKeyframeButton(button)
-    if not pressed then
-        return false, "Could not press " .. label .. " keyframe button."
+    local keyframeControl = nil
+    local controlOK, controlErr = pcall(function()
+        keyframeControl = row:keyframe()
+    end)
+    if not controlOK or not keyframeControl or type(keyframeControl.addKeyframe) ~= "function" then
+        return false, label .. " did not expose CommandPost's official keyframe control: " .. tostring(controlErr) .. ". Row buttons: " .. rowButtonSummaries(row)
     end
-    local afterState = waitForKeyframedControls(row)
-    if afterState ~= "already" and afterState ~= "navigation" then
-        return false, "Pressed " .. label .. " Add Keyframe button but Final Cut Pro did not expose keyframed controls. Button: " .. buttonSummary(button) .. " Row buttons after press: " .. rowButtonSummaries(row)
+
+    activateFinalCutPro()
+    local apiOK, apiErr = pcall(function()
+        keyframeControl:addKeyframe()
+    end)
+    if not apiOK then
+        return false, "Could not add " .. label .. " keyframe via CommandPost official video inspector API: " .. tostring(apiErr) .. ". Row buttons: " .. rowButtonSummaries(row)
     end
-    log.df("Added %s keyframe via Add Keyframe button. Confirmed state: %s Button: %s", tostring(label), tostring(afterState), buttonSummary(button))
-    return true, nil
+
+    local deadline = timer.secondsSinceEpoch() + KEYFRAME_CONFIRM_TIMEOUT_SECONDS
+    repeat
+        clearRowChildrenCache(row)
+        row:show()
+        state = transformRowKeyframeState(row)
+        if state == "already" then
+            return true, label .. " Add Keyframe at " .. tostring(targetTimecode)
+        end
+        sleep(0.12)
+    until timer.secondsSinceEpoch() >= deadline
+
+    return true, "Called CommandPost official " .. label .. " keyframe API at " .. tostring(targetTimecode) .. "; Final Cut Pro kept reporting Add Keyframe, continuing AutoWB-style. Row buttons after API call: " .. rowButtonSummaries(row)
+end
+
+local function applyDynamicSample(transform, position, rotation, scaleAll, sample, targetTimecode)
+    local ok, err
+
+    local reasons = {}
+    ok, err = addTransformRowKeyframe(position, "Transform Position", targetTimecode)
+    if not ok then return false, err end
+    reasons[#reasons + 1] = err
+
+    ok, err = addTransformRowKeyframe(rotation, "Transform Rotation", targetTimecode)
+    if not ok then return false, err end
+    reasons[#reasons + 1] = err
+
+    ok, err = addTransformRowKeyframe(scaleAll, "Transform Scale All", targetTimecode)
+    if not ok then return false, err end
+    reasons[#reasons + 1] = err
+
+    ok, err = setTransformValues(position, rotation, scaleAll, sample)
+    if not ok then
+        return false, tostring(err) .. " after Transform row keyframes at " .. tostring(targetTimecode)
+    end
+    return true, table.concat(reasons, "; ")
 end
 
 local function parseFCPRange(value)
@@ -979,34 +973,19 @@ end
 
 local function selectedClipPasteboardSource(context)
     local label = context and context.label or "selected timeline clip"
-    logStage("pasteboard.select.start", "Selecting timeline clip for pasteboard copy.", {
-        { "clip", label },
-    })
     if not selectOnlyTimelineClip(context and context.clip) then
         return nil, "Could not select exactly one timeline clip before copying it."
     end
-    logStage("pasteboard.select.done", "Selected timeline clip for pasteboard copy.", {
-        { "clip", label },
-    })
 
     local previousPasteboard = nil
     pcall(function() previousPasteboard = pasteboard.readAllData() end)
     pcall(function() pasteboard.clearContents() end)
-    logStage("pasteboard.clear", "Cleared pasteboard before Final Cut Pro copy.", {
-        { "clip", label },
-    })
 
-    logStage("pasteboard.copy.start", "Running Final Cut Pro Edit > Copy.", {
-        { "clip", label },
-    })
     local copyOK = fcp:selectMenu({"Edit", "Copy"})
     if not copyOK then
         restorePasteboard(previousPasteboard)
         return nil, "Final Cut Pro Edit > Copy did not respond for the selected timeline clip."
     end
-    logStage("pasteboard.copy.done", "Final Cut Pro Edit > Copy completed.", {
-        { "clip", label },
-    })
 
     local raw = nil
     local started = timer.secondsSinceEpoch()
@@ -1021,10 +1000,6 @@ local function selectedClipPasteboardSource(context)
     if not raw then
         return nil, "Final Cut Pro did not put selected clip data on the pasteboard."
     end
-    logStage("pasteboard.poll.done", "Received Final Cut Pro selected clip pasteboard data.", {
-        { "clip", label },
-        { "bytes", tostring(type(raw) == "string" and #raw or "unknown") },
-    })
 
     local pasteboardTable = plist.binaryToTable(raw)
     if type(pasteboardTable) ~= "table" then
@@ -1083,13 +1058,6 @@ local function selectedClipPasteboardSource(context)
         duration = duration,
         clipName = collection.displayName or (media and media.displayName) or label,
     }
-    logStage("pasteboard.source.ready", "Using selected timeline clip pasteboard range for analysis.", {
-        { "clip", oneLine(source.clipName, 120) },
-        { "mediaPath", source.mediaPath },
-        { "sourceStart", source.sourceStart },
-        { "duration", source.duration },
-        { "frameDuration", source.frameDuration },
-    })
     return source, nil
 end
 
@@ -1115,7 +1083,6 @@ local function runEstimator(source, intervalFrames, durationSeconds)
         "2>&1",
     }, " ")
 
-    log.i("Running stabilizer estimator: " .. command)
     local output, ok = hs.execute(command, true)
     if not ok then
         local decoded = nil
@@ -1144,14 +1111,19 @@ end
 
 local function intervalFramesPrompt()
     local value = dialog.displayChooseFromList(
-        "Choose the stabilizer keyframe interval in frames: 1,2,3,4,5,6.",
-        {"1", "2", "3", "4", "5", "6"},
+        "Choose the stabilizer keyframe interval in frames: 1,2,3,4.",
+        {"1", "2", "3", "4"},
         {DEFAULT_INTERVAL_FRAMES}
     )
-    if value == false then return nil end
+    if value == false then return nil, "cancelled" end
     if type(value) == "table" then value = value[1] end
-    local frames = tonumber(value or DEFAULT_INTERVAL_FRAMES) or tonumber(DEFAULT_INTERVAL_FRAMES)
-    if frames < 1 then frames = tonumber(DEFAULT_INTERVAL_FRAMES) end
+    if value == nil or value == "" then
+        return nil, "The keyframe interval prompt did not return a selection; stopping before processing."
+    end
+    local frames = tonumber(value)
+    if not frames or frames < 1 or frames > 4 then
+        return nil, "Invalid keyframe interval selection: " .. tostring(value)
+    end
     return math.floor(frames)
 end
 
@@ -1186,8 +1158,6 @@ local function selectedClipContext(frameRate)
     if durationSeconds <= 0 then
         return nil, "Selected clip duration was not valid."
     end
-    log.df("Selected clip timeline span resolved via %s.", tostring(spanSource))
-
     return {
         clip = clip,
         label = clipLabel(clip),
@@ -1197,57 +1167,9 @@ local function selectedClipContext(frameRate)
     }, nil
 end
 
-local function applyDynamicSample(transform, position, rotation, scaleAll, sample)
-    local ok, err
-    local strength = tonumber(sample.strength) or 0
-
-    ok, err = setXYRow(position, sample.transformX or 0, sample.transformY or 0, "Transform Position")
-    if not ok then return false, err end
-    ok, err = addKeyframe(position, "Transform Position")
-    if not ok then return false, err end
-
-    ok, err = setNumberRow(rotation, sample.transformRotation or 0, "Transform Rotation")
-    if not ok then return false, err end
-    ok, err = addKeyframe(rotation, "Transform Rotation")
-    if not ok then return false, err end
-
-    ok, err = setNumberRow(scaleAll, sample.scale, "Transform Scale All")
-    if not ok then return false, err end
-    ok, err = addKeyframe(scaleAll, "Transform Scale All")
-    if not ok then return false, err end
-
-    log.df(
-        "Transform sample seconds=%.3f strength=%.3f gimbal=%.3f panRotation=%.3f x=%.3f y=%.3f rotation=%.4f scale=%.3f rawScale=%.3f scaleSmoothSeconds=%.1f dx=%.3f dy=%.3f residual=%.4f blackScale=%.3f blackOffset=%.3f/%.3f blackEdges=%.1f/%.1f/%.1f/%.1f",
-        tonumber(sample.timelineSeconds) or 0,
-        strength,
-        tonumber(sample.gimbalStrength) or 0,
-        tonumber(sample.panRotationStrength) or 0,
-        tonumber(sample.transformX) or 0,
-        tonumber(sample.transformY) or 0,
-        tonumber(sample.transformRotation) or 0,
-        tonumber(sample.scale) or 100,
-        tonumber(sample.rawScale) or tonumber(sample.scale) or 100,
-        tonumber(sample.scaleSmoothSeconds) or 0,
-        tonumber(sample.globalDx) or 0,
-        tonumber(sample.globalDy) or 0,
-        tonumber(sample.residualMotion) or 0,
-        tonumber(sample.blackStripScale) or 100,
-        tonumber(sample.blackStripOffsetX) or 0,
-        tonumber(sample.blackStripOffsetY) or 0,
-        tonumber(sample.blackStripLeft) or 0,
-        tonumber(sample.blackStripRight) or 0,
-        tonumber(sample.blackStripTop) or 0,
-        tonumber(sample.blackStripBottom) or 0
-    )
-    return true, nil
-end
-
 local function applyDynamicStrengthScale()
     local startedAt = timer.secondsSinceEpoch()
     local stage = "start"
-    local function progress(title, detail, current, total)
-        showProgress(title, detail, current, total, startedAt)
-    end
     local function fail(message, fields)
         logStage("failed", tostring(message), fields or {
             { "stage", stage },
@@ -1259,62 +1181,41 @@ local function applyDynamicStrengthScale()
     end
 
     stage = "interval prompt"
-    progress("Waiting for settings", "Choose keyframe interval: 1,2,3,4,5,6.")
-    local intervalFrames = intervalFramesPrompt()
+    local intervalFrames, intervalErr = intervalFramesPrompt()
     if not intervalFrames then
+        if intervalErr and intervalErr ~= "cancelled" then
+            return fail(intervalErr)
+        end
         log.i(ACTION_TITLE .. ": cancelled before interval selection.")
-        closeProgressAlert()
         return false
     end
-    logStage("settings.done", "Stabilizer settings selected.", {
-        { "intervalFrames", tostring(intervalFrames) },
-    })
 
     stage = "selected clip"
-    progress("Reading selected clip", "Checking Final Cut Pro timeline selection.")
     local seedFrameRate = 30
     local context, contextErr = selectedClipContext(seedFrameRate)
     if not context then
         return fail(contextErr)
     end
-    logStage("clip.context.done", "Selected timeline clip context resolved.", {
-        { "clip", context.label },
-        { "durationSeconds", tostring(context.durationSeconds) },
-    })
 
     stage = "pasteboard source"
-    progress("Reading clip range", "Copying the selected clip metadata from Final Cut Pro.")
     local source, sourceErr = selectedClipPasteboardSource(context)
     if not source then
         return fail(sourceErr)
     end
 
     stage = "estimator"
-    progress("Running estimator", "Analyzing media motion and black-strip scale.")
     local estimate, estimateErr = runEstimator(source, intervalFrames, context.durationSeconds)
     if not estimate then
         return fail(estimateErr)
     end
     local sampleCount = #(estimate.samples or {})
-    logStage("estimator.done", "Estimator samples are ready.", {
-        { "samples", tostring(sampleCount) },
-        { "model", tostring(estimate.model or "") },
-        { "frameRate", tostring(estimate.frameRate or "") },
-        { "sampleFps", tostring(estimate.sampleFps or "") },
-    })
 
     local frameRate = tonumber(estimate.frameRate) or seedFrameRate
-    logStage("timeline.context.reuse", "Reusing the initially resolved timeline span after pasteboard analysis.", {
-        { "clip", context.label },
-        { "frameRate", tostring(frameRate) },
-        { "durationSeconds", tostring(context.durationSeconds) },
-    })
 
     local originalPlayhead = playheadFlicks(frameRate)
     playheadMovePreferredMethod = nil
 
     stage = "prepare inspector"
-    progress("Preparing Transform controls", "Opening Video Inspector and enabling Transform.", 0, sampleCount)
     activateFinalCutPro()
     local video = fcp.inspector.video:show()
     local stabilization = video:stabilization()
@@ -1338,10 +1239,6 @@ local function applyDynamicStrengthScale()
     position:show()
     rotation:show()
     scaleAll:show()
-    logStage("write.controls.ready", "Transform controls are ready.", {
-        { "clip", context.label },
-        { "samples", tostring(sampleCount) },
-    })
 
     local applied = 0
     for index, sample in ipairs(estimate.samples) do
@@ -1350,7 +1247,6 @@ local function applyDynamicStrengthScale()
             activateFinalCutPro()
             if index == 1 and seconds <= 0 then
                 seconds = 1 / frameRate
-                log.i("Offsetting first Transform keyframe by one frame to avoid Final Cut Pro clip-boundary keyframe targeting.")
             end
             stage = "sample " .. tostring(index) .. " move playhead"
             local target = offsetFrom(context.startFlicks, seconds)
@@ -1363,21 +1259,8 @@ local function applyDynamicStrengthScale()
                     { "elapsed", format("%.1fs", timer.secondsSinceEpoch() - startedAt) },
                 })
             end
-            progress(
-                "Writing Transform keyframe " .. tostring(index) .. "/" .. tostring(sampleCount),
-                "At " .. tostring(targetTimecode) .. ".",
-                index,
-                sampleCount
-            )
-            logStage("write.sample.playhead", "Playhead moved for Transform keyframe sample.", {
-                { "clip", context.label },
-                { "sample", tostring(index) .. "/" .. tostring(sampleCount) },
-                { "targetTimecode", tostring(targetTimecode) },
-                { "timelineSeconds", tostring(seconds) },
-            })
-
             stage = "sample " .. tostring(index) .. " write transform"
-            ok, err = applyDynamicSample(transform, position, rotation, scaleAll, sample)
+            ok, err = applyDynamicSample(transform, position, rotation, scaleAll, sample, targetTimecode)
             if not ok then
                 return fail(err, {
                     { "stage", stage },
@@ -1388,25 +1271,17 @@ local function applyDynamicStrengthScale()
                 })
             end
             applied = applied + 1
-            logStage("write.sample.done", "Wrote Transform keyframe sample.", {
-                { "clip", context.label },
-                { "sample", tostring(index) .. "/" .. tostring(sampleCount) },
-                { "targetTimecode", tostring(targetTimecode) },
-                { "applied", tostring(applied) },
-            })
             sleep(0.08)
         end
     end
 
     stage = "restore playhead"
-    progress("Restoring playhead", "Returning to the original timeline position.", applied, sampleCount)
     if originalPlayhead then
         movePlayheadToFlicks(originalPlayhead, frameRate)
     end
 
     local message = format("Applied %d Transform stabilization keyframe point(s) to %s.", applied, context.label)
     log.i(ACTION_TITLE .. ": " .. message)
-    closeProgressAlert()
     if hs and hs.notify then
         hs.notify.new({ title = ACTION_TITLE, informativeText = message }):send()
     else
