@@ -836,10 +836,23 @@ end
 local function clickKeyframeButton(button)
     local frame = elementFrame(button)
     if frame then
-        -- Final Cut Pro exposes Transform keyframe controls as a wide AXButton; the keyframe diamond is on the right.
-        tools.ninjaMouseClick({
-            x = (tonumber(frame.x) or 0) + math.max(1, (tonumber(frame.w) or 0) - 5),
+        local point = {
+            x = (tonumber(frame.x) or 0) + ((tonumber(frame.w) or 0) / 2),
             y = (tonumber(frame.y) or 0) + ((tonumber(frame.h) or 0) / 2),
+        }
+        log.df(
+            "Clicking Transform keyframe button center at x=%.1f y=%.1f frame=%.1f/%.1f/%.1f/%.1f summary=%s",
+            point.x,
+            point.y,
+            tonumber(frame.x) or 0,
+            tonumber(frame.y) or 0,
+            tonumber(frame.w) or 0,
+            tonumber(frame.h) or 0,
+            buttonSummary(button)
+        )
+        tools.ninjaMouseClick({
+            x = point.x,
+            y = point.y,
         })
         return true
     end
