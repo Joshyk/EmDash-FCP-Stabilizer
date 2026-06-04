@@ -51,24 +51,16 @@ install, and PluginKit registration.
   safety, and blur amount from low-resolution source frames requested by FxPlug.
 - It treats Z correction as dynamic scale and yaw/pitch as image-space proxy values, not
   true solved 3D camera orientation.
-- It requests near-frame samples around the render time for fine gimbal jitter, and smooths
-  pan motion with the `Pan Smooth Seconds` text field, defaulting to a 6-second centered
-  window.
-- To prerender the motion analysis, select exactly one timeline video clip in Final Cut Pro
-  and run `Stabilizer: Analyze FxPlug Cache` from CommandPost. It writes:
-
-  ```text
-  ~/Library/Application Support/CommandPost/StabilizerFxPlug/current.json
-  ```
-
-  Keep `Use Prerender Cache` enabled in `Stabilizer Transform` to use that file. Rebuild the
-  cache after changing the clip, source range, or desired smoothing window. If the cache file
-  is missing, the FxPlug uses its live frame-analysis path. The cache action shows a compact
-  progress bar while it decodes media, downsamples frames, analyzes motion on Metal, and
-  writes the cache. The cache generator uses AVFoundation/VideoToolbox for decode and Metal
-  compute for downsampling plus block-matching motion analysis. CPU code only orchestrates
-  sampling and JSON assembly. If Metal or hardware decode cannot start, the action fails
-  visibly instead of silently switching back to the Python CPU estimator.
+- `Analysis Source` selects the native analysis path:
+  `Host Analysis` uses Final Cut Pro's FxPlug analysis infrastructure, and `Live Frames`
+  uses render-time source-frame requests.
+- `Host Analysis` is the long-term primary path. It asks Final Cut Pro to run a forward GPU
+  analysis for the effect, stores low-resolution frame analysis inside the plug-in runtime,
+  and renders from that analyzed frame set. If analysis does not start automatically after
+  applying the effect, click `Start Host Analysis` in the effect inspector.
+- `Live Frames` requests near-frame samples around the render time for fine gimbal jitter,
+  and smooths pan motion with the `Pan Smooth Seconds` text field, defaulting to a 6-second
+  centered window.
 - `Debug Overlay` is normally off. Turn it on only while checking whether the FxPlug runtime
   is producing X/Y/Z/rotation plus yaw/pitch, shear, perspective, and blur diagnostics.
 

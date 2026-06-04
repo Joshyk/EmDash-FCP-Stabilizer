@@ -11,7 +11,17 @@ private enum ParameterID: UInt32 {
     case panSmoothSeconds = 9
     case debugOverlay = 10
     case panSmoothSecondsText = 11
-    case usePrerenderCache = 12
+    case analysisSource = 13
+    case startHostAnalysis = 14
+}
+
+private enum AnalysisSource: Int32 {
+    case hostAnalysis = 1
+    case liveFrames = 2
+
+    static func fromParameterValue(_ value: Int32) -> AnalysisSource {
+        AnalysisSource(rawValue: value) ?? .hostAnalysis
+    }
 }
 
 private struct StabilizerPluginState {
@@ -21,13 +31,14 @@ private struct StabilizerPluginState {
     var rotationStrength: Double
     var panSmoothSeconds: Double
     var debugOverlay: Bool
-    var usePrerenderCache: Bool
-    var prerenderCacheAvailable: Bool
+    var analysisSource: Int32
+    var hostAnalysisFrameCount: Int32
 }
 
 @objc(StabilizerFxPlugPlugIn)
-final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
+final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
     private let apiManager: PROAPIAccessing
+    private let hostAnalysisStore = StabilizerHostAnalysisStore()
 
     required init?(apiManager: PROAPIAccessing) {
         self.apiManager = apiManager
@@ -93,10 +104,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             defaultValue: "6",
             parameterFlags: flags
         )
-        paramAPI.addToggleButton(
-            withName: "Use Prerender Cache",
-            parameterID: ParameterID.usePrerenderCache.rawValue,
-            defaultValue: true,
+        paramAPI.addPopupMenu(
+            withName: "Analysis Source",
+            parameterID: ParameterID.analysisSource.rawValue,
+            defaultValue: UInt32(AnalysisSource.hostAnalysis.rawValue),
+            menuEntries: ["Host Analysis", "Live Frames"],
+            parameterFlags: flags
+        )
+        paramAPI.addPushButton(
+            withName: "Start Host Analysis",
+            parameterID: ParameterID.startHostAnalysis.rawValue,
+            selector: #selector(startHostAnalysis),
             parameterFlags: flags
         )
         paramAPI.addToggleButton(
@@ -127,8 +145,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             rotationStrength: 1.0,
             panSmoothSeconds: 6.0,
             debugOverlay: false,
-            usePrerenderCache: true,
-            prerenderCacheAvailable: false
+            analysisSource: AnalysisSource.hostAnalysis.rawValue,
+            hostAnalysisFrameCount: 0
         )
         paramAPI.getFloatValue(&state.strength, fromParameter: ParameterID.strength.rawValue, at: renderTime)
         var autoStabilize = ObjCBool(state.autoStabilize)
@@ -145,12 +163,48 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
         var debugOverlay = ObjCBool(state.debugOverlay)
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
         state.debugOverlay = debugOverlay.boolValue
-        var usePrerenderCache = ObjCBool(state.usePrerenderCache)
-        paramAPI.getBoolValue(&usePrerenderCache, fromParameter: ParameterID.usePrerenderCache.rawValue, at: renderTime)
-        state.usePrerenderCache = usePrerenderCache.boolValue
-        state.prerenderCacheAvailable = state.usePrerenderCache && StabilizationCacheStore.hasUsableCache()
+        var analysisSource = Int32(state.analysisSource)
+        if paramAPI.getIntValue(&analysisSource, fromParameter: ParameterID.analysisSource.rawValue, at: renderTime) {
+            state.analysisSource = AnalysisSource.fromParameterValue(analysisSource).rawValue
+        }
+        let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
+        state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
+        if state.autoStabilize && AnalysisSource.fromParameterValue(state.analysisSource) == .hostAnalysis {
+            requestHostAnalysisIfNeeded()
+        }
 
         pluginState?.pointee = NSData(bytes: &state, length: MemoryLayout<StabilizerPluginState>.size)
+    }
+
+    @objc(startHostAnalysis)
+    func startHostAnalysis() {
+        hostAnalysisStore.reset()
+        requestHostAnalysisIfNeeded(force: true)
+    }
+
+    private func requestHostAnalysisIfNeeded(force: Bool = false) {
+        guard force || !hostAnalysisStore.hasCompletedAnalysis else {
+            return
+        }
+        guard let analysisAPI = apiManager.api(for: FxAnalysisAPI.self) as? FxAnalysisAPI else {
+            NSLog("StabilizerFxPlug: FxAnalysisAPI is unavailable; Host Analysis cannot start.")
+            return
+        }
+        let analysisState = analysisAPI.analysisStateForEffect()
+        let canStart = analysisState == kFxAnalysisState_NotAnalyzing
+            || analysisState == kFxAnalysisState_AnalysisInterrupted
+            || (force && analysisState == kFxAnalysisState_AnalysisCompleted)
+        guard canStart else {
+            if force {
+                NSLog("StabilizerFxPlug: Host Analysis is already requested or running.")
+            }
+            return
+        }
+        do {
+            try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
+        } catch {
+            NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
+        }
     }
 
     private static func parsePositiveSeconds(_ text: String?) -> Double? {
@@ -182,7 +236,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             requests.append(current)
         }
 
-        if state.autoStabilize && !state.prerenderCacheAvailable {
+        if state.autoStabilize && AnalysisSource.fromParameterValue(state.analysisSource) == .liveFrames {
             let windowSeconds = max(0.1, state.panSmoothSeconds)
             let halfWindow = windowSeconds * 0.5
             let requestTimescale: CMTimeScale = 600
@@ -261,19 +315,29 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             StabilizerVertex2D(position: vector_float2(Float(-outputWidth) / 2.0, Float(outputHeight) / 2.0), textureCoordinate: vector_float2(0.0, 0.0))
         ]
         var viewportSize = simd_uint2(UInt32(outputWidth), UInt32(outputHeight))
+        let analysisSource = AnalysisSource.fromParameterValue(state.analysisSource)
         let autoTransform: StabilizerAutoTransform
         if state.autoStabilize {
-            autoTransform = state.prerenderCacheAvailable
-                ? (StabilizationCacheStore.transform(
-                    at: renderTime,
-                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight))
-                ) ?? .identity)
-                : AutoStabilizationEstimator.estimate(
+            switch analysisSource {
+            case .hostAnalysis:
+                if hostAnalysisStore.hasCompletedAnalysis {
+                    autoTransform = AutoStabilizationEstimator.estimate(
+                        analysisFrames: hostAnalysisStore.framesSnapshot(),
+                        renderTime: renderTime,
+                        outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                        panSmoothSeconds: state.panSmoothSeconds
+                    )
+                } else {
+                    autoTransform = .identity
+                }
+            case .liveFrames:
+                autoTransform = AutoStabilizationEstimator.estimate(
                     sourceImages: sourceImages,
                     renderTime: renderTime,
                     outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
                     panSmoothSeconds: state.panSmoothSeconds
                 )
+            }
         } else {
             autoTransform = .identity
         }
@@ -333,5 +397,96 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         deviceCache.returnCommandQueueToCache(commandQueue: commandQueue)
+    }
+
+    func desiredAnalysisTimeRange(_ desiredRange: UnsafeMutablePointer<CMTimeRange>!, forInputWith inputTimeRange: CMTimeRange) throws {
+        desiredRange?.pointee = inputTimeRange
+    }
+
+    func setupAnalysis(for analysisRange: CMTimeRange, frameDuration: CMTime) throws {
+        hostAnalysisStore.begin(range: analysisRange, frameDuration: frameDuration)
+    }
+
+    func analyzeFrame(_ frame: FxImageTile!, at frameTime: CMTime) throws {
+        guard let frame else {
+            throw NSError(
+                domain: "com.justadev.CommandPostEmDash.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "StabilizerFxPlug host analysis supplied no frame."]
+            )
+        }
+        guard let analysisFrame = AutoStabilizationEstimator.analysisFrame(from: frame, at: frameTime) else {
+            throw NSError(
+                domain: "com.justadev.CommandPostEmDash.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "StabilizerFxPlug could not read the host analysis frame."]
+            )
+        }
+        hostAnalysisStore.append(analysisFrame)
+    }
+
+    func cleanupAnalysis() throws {
+        hostAnalysisStore.finish()
+    }
+}
+
+private final class StabilizerHostAnalysisStore {
+    private let lock = NSLock()
+    private var framesByTimeKey: [Int64: StabilizerAnalysisFrame] = [:]
+    private var activeRange: CMTimeRange = .invalid
+    private var activeFrameDuration: CMTime = .invalid
+    private var finished = false
+
+    var frameCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return framesByTimeKey.count
+    }
+
+    var hasCompletedAnalysis: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished && framesByTimeKey.count >= 3
+    }
+
+    func begin(range: CMTimeRange, frameDuration: CMTime) {
+        lock.lock()
+        framesByTimeKey.removeAll(keepingCapacity: true)
+        activeRange = range
+        activeFrameDuration = frameDuration
+        finished = false
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        framesByTimeKey.removeAll(keepingCapacity: true)
+        activeRange = .invalid
+        activeFrameDuration = .invalid
+        finished = false
+        lock.unlock()
+    }
+
+    func append(_ frame: StabilizerAnalysisFrame) {
+        lock.lock()
+        framesByTimeKey[Self.timeKey(frame.time)] = frame
+        lock.unlock()
+    }
+
+    func finish() {
+        lock.lock()
+        finished = true
+        lock.unlock()
+    }
+
+    func framesSnapshot() -> [StabilizerAnalysisFrame] {
+        lock.lock()
+        let frames = framesByTimeKey.values.sorted { $0.time < $1.time }
+        lock.unlock()
+        return frames
+    }
+
+    private static func timeKey(_ seconds: Double) -> Int64 {
+        Int64((seconds * 600.0).rounded())
     }
 }

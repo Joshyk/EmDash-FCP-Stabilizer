@@ -27,7 +27,7 @@ struct StabilizerAutoTransform {
     )
 }
 
-private struct GrayFrame {
+struct StabilizerAnalysisFrame {
     let time: Double
     let pixels: [UInt8]
     let blurAmount: Float
@@ -63,15 +63,28 @@ enum AutoStabilizationEstimator {
         outputSize: vector_float2,
         panSmoothSeconds: Double
     ) -> StabilizerAutoTransform {
+        let frames = sourceImages
+            .dropFirst()
+            .compactMap { analysisFrame(from: $0) }
+            .sorted { $0.time < $1.time }
+        return estimate(
+            analysisFrames: frames,
+            renderTime: renderTime,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds
+        )
+    }
+
+    static func estimate(
+        analysisFrames frames: [StabilizerAnalysisFrame],
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double
+    ) -> StabilizerAutoTransform {
         let renderSeconds = CMTimeGetSeconds(renderTime)
         guard renderSeconds.isFinite else {
             return .identity
         }
-
-        let frames = sourceImages
-            .dropFirst()
-            .compactMap(grayFrame(from:))
-            .sorted { $0.time < $1.time }
 
         guard frames.count >= 3 else {
             return .identity
@@ -162,11 +175,11 @@ enum AutoStabilizationEstimator {
         )
     }
 
-    private static func grayFrame(from tile: FxImageTile) -> GrayFrame? {
+    static func analysisFrame(from tile: FxImageTile, at frameTime: CMTime? = nil) -> StabilizerAnalysisFrame? {
         guard let surface = tile.ioSurface else {
             return nil
         }
-        let time = CMTimeGetSeconds(tile.mediaTime)
+        let time = CMTimeGetSeconds(frameTime ?? tile.mediaTime)
         guard time.isFinite else {
             return nil
         }
@@ -210,7 +223,7 @@ enum AutoStabilizationEstimator {
                 pixels[(sampleY * sampleWidth) + sampleX] = value
             }
         }
-        return GrayFrame(time: time, pixels: pixels, blurAmount: blurAmount(pixels))
+        return StabilizerAnalysisFrame(time: time, pixels: pixels, blurAmount: blurAmount(pixels))
     }
 
     private static func bgraLuma(baseAddress: UnsafeMutableRawPointer, x: Int, y: Int, bytesPerRow: Int) -> UInt8 {
@@ -451,7 +464,7 @@ enum AutoStabilizationEstimator {
         }
     }
 
-    private static func closestFrameIndex(to time: Double, in frames: [GrayFrame]) -> Int {
+    private static func closestFrameIndex(to time: Double, in frames: [StabilizerAnalysisFrame]) -> Int {
         var bestIndex = 0
         var bestDistance = Double.greatestFiniteMagnitude
         for (index, frame) in frames.enumerated() {
@@ -474,7 +487,7 @@ enum AutoStabilizationEstimator {
         return total / Float(indices.count)
     }
 
-    private static func timeWeightedAverage(_ values: [Float], frames: [GrayFrame], indices: [Int], centerTime: Double, windowSeconds: Double) -> Float {
+    private static func timeWeightedAverage(_ values: [Float], frames: [StabilizerAnalysisFrame], indices: [Int], centerTime: Double, windowSeconds: Double) -> Float {
         guard !indices.isEmpty else {
             return 0.0
         }
@@ -530,164 +543,5 @@ enum AutoStabilizationEstimator {
 
     private static func clamp(_ value: Float, min minValue: Float, max maxValue: Float) -> Float {
         Swift.max(minValue, Swift.min(maxValue, value))
-    }
-}
-
-private struct StabilizationCacheFile: Decodable {
-    let schemaVersion: Int
-    let model: String
-    let mediaWidth: Float?
-    let mediaHeight: Float?
-    let samples: [StabilizationCacheSample]
-}
-
-private struct StabilizationCacheSample: Decodable {
-    let timeSeconds: Double
-    let pixelOffsetX: Float
-    let pixelOffsetY: Float
-    let rotationDegrees: Float
-    let scaleMultiplier: Float
-    let yawPitchProxyX: Float
-    let yawPitchProxyY: Float
-    let shearX: Float
-    let shearY: Float
-    let perspectiveX: Float
-    let perspectiveY: Float
-    let cropSafety: Float
-    let blurAmount: Float
-}
-
-enum StabilizationCacheStore {
-    private static let lock = NSLock()
-    private static var cachedURL: URL?
-    private static var cachedModifiedDate: Date?
-    private static var cachedFile: StabilizationCacheFile?
-
-    static func hasUsableCache() -> Bool {
-        loadCache() != nil
-    }
-
-    static func transform(at renderTime: CMTime, outputSize: vector_float2) -> StabilizerAutoTransform? {
-        guard let cache = loadCache(), cache.schemaVersion == 1, Self.supportedCacheModels.contains(cache.model) else {
-            return nil
-        }
-        let samples = cache.samples.sorted { $0.timeSeconds < $1.timeSeconds }
-        guard let first = samples.first, let last = samples.last else {
-            return nil
-        }
-        let seconds = CMTimeGetSeconds(renderTime)
-        guard seconds.isFinite else {
-            return nil
-        }
-
-        let sample: StabilizationCacheSample
-        if seconds <= first.timeSeconds {
-            sample = first
-        } else if seconds >= last.timeSeconds {
-            sample = last
-        } else {
-            var lowerIndex = 0
-            var upperIndex = samples.count - 1
-            for index in 1..<samples.count where samples[index].timeSeconds >= seconds {
-                lowerIndex = index - 1
-                upperIndex = index
-                break
-            }
-            sample = interpolate(samples[lowerIndex], samples[upperIndex], at: seconds)
-        }
-
-        let sourceWidth = max(1.0, cache.mediaWidth ?? outputSize.x)
-        let sourceHeight = max(1.0, cache.mediaHeight ?? outputSize.y)
-        let outputScale = vector_float2(outputSize.x / sourceWidth, outputSize.y / sourceHeight)
-        return StabilizerAutoTransform(
-            pixelOffset: vector_float2(sample.pixelOffsetX * outputScale.x, sample.pixelOffsetY * outputScale.y),
-            rotationDegrees: sample.rotationDegrees,
-            scaleMultiplier: sample.scaleMultiplier,
-            yawPitchProxy: vector_float2(sample.yawPitchProxyX, sample.yawPitchProxyY),
-            shear: vector_float2(sample.shearX, sample.shearY),
-            perspective: vector_float2(sample.perspectiveX, sample.perspectiveY),
-            cropSafety: sample.cropSafety,
-            blurAmount: sample.blurAmount
-        )
-    }
-
-    private static func loadCache() -> StabilizationCacheFile? {
-        lock.lock()
-        defer { lock.unlock() }
-
-        for url in cacheURLs() {
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                continue
-            }
-            let modifiedDate = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
-            if cachedURL == url, cachedModifiedDate == modifiedDate {
-                return cachedFile
-            }
-            guard let data = try? Data(contentsOf: url),
-                  let cache = try? JSONDecoder().decode(StabilizationCacheFile.self, from: data) else {
-                cachedURL = url
-                cachedModifiedDate = modifiedDate
-                cachedFile = nil
-                return nil
-            }
-            cachedURL = url
-            cachedModifiedDate = modifiedDate
-            cachedFile = cache
-            return cache
-        }
-
-        cachedURL = nil
-        cachedModifiedDate = nil
-        cachedFile = nil
-        return nil
-    }
-
-    private static let supportedCacheModels: Set<String> = [
-        "fxplug-precomputed-stabilization-v1",
-        "fxplug-metal-precomputed-stabilization-v1",
-    ]
-
-    private static func cacheURLs() -> [URL] {
-        var homes: [String] = []
-        if let envHome = ProcessInfo.processInfo.environment["HOME"], !envHome.isEmpty {
-            homes.append(envHome)
-        }
-        if let passwordEntry = getpwuid(getuid()), let directory = passwordEntry.pointee.pw_dir {
-            homes.append(String(cString: directory))
-        }
-        homes.append(NSHomeDirectory())
-
-        var urls: [URL] = []
-        var seen = Set<String>()
-        for home in homes {
-            let path = (home as NSString).appendingPathComponent("Library/Application Support/CommandPost/StabilizerFxPlug/current.json")
-            if seen.insert(path).inserted {
-                urls.append(URL(fileURLWithPath: path))
-            }
-        }
-        return urls
-    }
-
-    private static func interpolate(_ lower: StabilizationCacheSample, _ upper: StabilizationCacheSample, at seconds: Double) -> StabilizationCacheSample {
-        let span = max(1e-9, upper.timeSeconds - lower.timeSeconds)
-        let amount = Float(max(0.0, min(1.0, (seconds - lower.timeSeconds) / span)))
-        func mix(_ a: Float, _ b: Float) -> Float {
-            a + ((b - a) * amount)
-        }
-        return StabilizationCacheSample(
-            timeSeconds: seconds,
-            pixelOffsetX: mix(lower.pixelOffsetX, upper.pixelOffsetX),
-            pixelOffsetY: mix(lower.pixelOffsetY, upper.pixelOffsetY),
-            rotationDegrees: mix(lower.rotationDegrees, upper.rotationDegrees),
-            scaleMultiplier: mix(lower.scaleMultiplier, upper.scaleMultiplier),
-            yawPitchProxyX: mix(lower.yawPitchProxyX, upper.yawPitchProxyX),
-            yawPitchProxyY: mix(lower.yawPitchProxyY, upper.yawPitchProxyY),
-            shearX: mix(lower.shearX, upper.shearX),
-            shearY: mix(lower.shearY, upper.shearY),
-            perspectiveX: mix(lower.perspectiveX, upper.perspectiveX),
-            perspectiveY: mix(lower.perspectiveY, upper.perspectiveY),
-            cropSafety: mix(lower.cropSafety, upper.cropSafety),
-            blurAmount: mix(lower.blurAmount, upper.blurAmount)
-        )
     }
 }

@@ -12,7 +12,6 @@ stabilization workflow to a selected Final Cut Pro timeline clip.
 Primary action:
 
 - `Stabilizer: Transform Keyframes`
-- `Stabilizer: Analyze FxPlug Cache`
 
 The plugin intentionally does not use Final Cut Pro's built-in `Stabilization`, because
 that effect applies its own internal crop/scale. It uses Final Cut Pro's `Transform`
@@ -28,20 +27,11 @@ keyframe API for each Transform row before writing values into that keyframe. If
 Pro keeps reporting Add Keyframe after the API call, continue AutoWB-style and only surface
 that state when a failure path needs diagnostics.
 
-`Stabilizer: Analyze FxPlug Cache` uses the same selected-clip pasteboard source path and
-writes the native FxPlug prerender cache here:
-
-```text
-/Users/justadev/Library/Application Support/CommandPost/StabilizerFxPlug/current.json
-```
-
-The native `Stabilizer Transform` FxPlug reads that cache when `Use Prerender Cache` is
-enabled. If the cache is missing, the FxPlug live-analysis path is used; keep that visible
-in README/docs when changing behavior. Unlike the Transform keyframe writer, the cache action
-may show a compact progress bar because it is an explicit long-running prerender step.
-The cache action should use `scripts/estimate_stabilization_gpu.swift`, with
-AVFoundation/VideoToolbox decode and Metal compute downsampling/block matching. Do not add
-a hidden Python CPU fallback for this cache path.
+The native `Stabilizer Transform` FxPlug supports only explicit `Host Analysis` and
+`Live Frames` modes. `Host Analysis` is the primary long-term path and uses Final Cut Pro's
+FxPlug analysis infrastructure to request GPU analysis frames from the host. `Live Frames`
+requests the analysis window during render. Do not add prerender-cache support, hidden cache
+fallbacks, or Python CPU fallbacks to the native FxPlug path.
 
 ## Source Layout
 
@@ -137,8 +127,7 @@ After Lua edits, run:
 ```sh
 luac -p init.lua stabilizer.lua
 python3 -m py_compile scripts/estimate_stabilization_scale.py
-/usr/bin/xcrun swiftc -parse scripts/estimate_stabilization_gpu.swift
-git diff --check -- init.lua stabilizer.lua scripts/estimate_stabilization_scale.py scripts/estimate_stabilization_gpu.swift AGENTS.md README.md docs/usage.md
+git diff --check -- init.lua stabilizer.lua scripts/estimate_stabilization_scale.py AGENTS.md README.md docs/usage.md
 ```
 
 After FxPlug edits, also run:

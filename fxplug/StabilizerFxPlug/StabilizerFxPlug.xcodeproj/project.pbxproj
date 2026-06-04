@@ -376,11 +376,12 @@
 		};
 		000000000000000000000A10 /* Debug */ = {
 			isa = XCBuildConfiguration;
-				buildSettings = {
-					CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
-					CODE_SIGN_IDENTITY = "Apple Development";
-					CODE_SIGN_STYLE = Automatic;
-					DEVELOPMENT_TEAM = MVL44V84KR;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = WrapperApp/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.CommandPostEmDash.StabilizerFxPlug;
@@ -393,11 +394,12 @@
 		};
 		000000000000000000000A11 /* Release */ = {
 			isa = XCBuildConfiguration;
-				buildSettings = {
-					CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
-					CODE_SIGN_IDENTITY = "Apple Development";
-					CODE_SIGN_STYLE = Automatic;
-					DEVELOPMENT_TEAM = MVL44V84KR;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = WrapperApp/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.CommandPostEmDash.StabilizerFxPlug;
@@ -409,11 +411,12 @@
 			name = Release;
 		};
 		000000000000000000000A20 /* Debug */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-					CODE_SIGN_IDENTITY = "Apple Development";
-					CODE_SIGN_STYLE = Automatic;
-					DEVELOPMENT_TEAM = MVL44V84KR;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
 				HEADER_SEARCH_PATHS = Plugin;
 				INFOPLIST_FILE = Plugin/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -424,17 +427,19 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.CommandPostEmDash.StabilizerFxPlug.Plugin;
 				PRODUCT_MODULE_NAME = StabilizerFxPlugPlugin;
 				PRODUCT_NAME = "StabilizerFxPlug XPC Service";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "Plugin/XPC Service-Bridging-Header.h";
 				WRAPPER_EXTENSION = pluginkit;
 			};
 			name = Debug;
 		};
 		000000000000000000000A21 /* Release */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-					CODE_SIGN_IDENTITY = "Apple Development";
-					CODE_SIGN_STYLE = Automatic;
-					DEVELOPMENT_TEAM = MVL44V84KR;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
 				HEADER_SEARCH_PATHS = Plugin;
 				INFOPLIST_FILE = Plugin/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -445,6 +450,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.CommandPostEmDash.StabilizerFxPlug.Plugin;
 				PRODUCT_MODULE_NAME = StabilizerFxPlugPlugin;
 				PRODUCT_NAME = "StabilizerFxPlug XPC Service";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "Plugin/XPC Service-Bridging-Header.h";
 				WRAPPER_EXTENSION = pluginkit;
 			};

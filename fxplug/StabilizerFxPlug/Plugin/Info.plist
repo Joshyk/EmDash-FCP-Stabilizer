@@ -61,7 +61,7 @@
 			<key>group</key>
 			<string>AF02FE29-857F-44AF-885C-CA7083B68584</string>
 			<key>infoString</key>
-			<string>Configurable pan smoothing with prerender cache, XYZ, rotation, shear, perspective, crop, and blur analysis.</string>
+			<string>Host-managed stabilization analysis with explicit Host Analysis and Live Frames modes, XYZ, rotation, shear, perspective, crop, and blur compensation.</string>
 			<key>protocolNames</key>
 			<array>
 				<string>FxFilter</string>

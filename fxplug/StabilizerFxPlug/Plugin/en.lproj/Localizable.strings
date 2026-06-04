@@ -1,2 +1,2 @@
 "StabilizerFxPlug::Stabilizer Transform" = "Stabilizer Transform";
-"StabilizerFxPlug::Configurable pan smoothing with prerender cache, XYZ, rotation, shear, perspective, crop, and blur analysis." = "Configurable pan smoothing with prerender cache, XYZ, rotation, shear, perspective, crop, and blur analysis.";
+"StabilizerFxPlug::Host-managed stabilization analysis with explicit Host Analysis and Live Frames modes, XYZ, rotation, shear, perspective, crop, and blur compensation." = "Host-managed stabilization analysis with explicit Host Analysis and Live Frames modes, XYZ, rotation, shear, perspective, crop, and blur compensation.";
