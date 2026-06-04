@@ -28,6 +28,9 @@ typedef struct StabilizerTransformUniforms {
     float strength;
     vector_float2 outputSize;
     vector_float4 diagnostic;
+    vector_float4 diagnostic2;
+    vector_float2 shear;
+    vector_float2 perspective;
     float debugOverlay;
 } StabilizerTransformUniforms;
 

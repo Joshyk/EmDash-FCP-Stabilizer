@@ -12,6 +12,7 @@ stabilization workflow to a selected Final Cut Pro timeline clip.
 Primary action:
 
 - `Stabilizer: Transform Keyframes`
+- `Stabilizer: Analyze FxPlug Cache`
 
 The plugin intentionally does not use Final Cut Pro's built-in `Stabilization`, because
 that effect applies its own internal crop/scale. It uses Final Cut Pro's `Transform`
@@ -26,6 +27,21 @@ user-facing errors clear. Keyframe writes must use CommandPost's official video 
 keyframe API for each Transform row before writing values into that keyframe. If Final Cut
 Pro keeps reporting Add Keyframe after the API call, continue AutoWB-style and only surface
 that state when a failure path needs diagnostics.
+
+`Stabilizer: Analyze FxPlug Cache` uses the same selected-clip pasteboard source path and
+writes the native FxPlug prerender cache here:
+
+```text
+/Users/justadev/Library/Application Support/CommandPost/StabilizerFxPlug/current.json
+```
+
+The native `Stabilizer Transform` FxPlug reads that cache when `Use Prerender Cache` is
+enabled. If the cache is missing, the FxPlug live-analysis path is used; keep that visible
+in README/docs when changing behavior. Unlike the Transform keyframe writer, the cache action
+may show a compact progress bar because it is an explicit long-running prerender step.
+The cache action should use `scripts/estimate_stabilization_gpu.swift`, with
+AVFoundation/VideoToolbox decode and Metal compute downsampling/block matching. Do not add
+a hidden Python CPU fallback for this cache path.
 
 ## Source Layout
 
@@ -74,7 +90,7 @@ not in the installed CommandPost plugin folder.
 
 Do not add a repo source watcher.
 
-Lua, Python, or other programming updates should take effect only after a manual CommandPost
+Lua, Swift, Python, or other programming updates should take effect only after a manual CommandPost
 reload or restart.
 
 CommandPost reload shortcut exists now.
@@ -121,7 +137,8 @@ After Lua edits, run:
 ```sh
 luac -p init.lua stabilizer.lua
 python3 -m py_compile scripts/estimate_stabilization_scale.py
-git diff --check -- init.lua stabilizer.lua scripts/estimate_stabilization_scale.py AGENTS.md README.md docs/usage.md
+/usr/bin/xcrun swiftc -parse scripts/estimate_stabilization_gpu.swift
+git diff --check -- init.lua stabilizer.lua scripts/estimate_stabilization_scale.py scripts/estimate_stabilization_gpu.swift AGENTS.md README.md docs/usage.md
 ```
 
 After FxPlug edits, also run:
@@ -134,4 +151,5 @@ git diff --check -- fxplug/StabilizerFxPlug
 
 The `StabilizerFxPlug` shared scheme has a post-build action that runs
 `fxplug/StabilizerFxPlug/scripts/install_debug_app.sh`. A successful build should install
-`~/Applications/StabilizerFxPlug.app` and register its embedded pluginkit for Final Cut Pro.
+`/Applications/StabilizerFxPlug.app`, copy the Motion Template into the user's Movies
+Motion Templates folder, and register its embedded pluginkit for Final Cut Pro.

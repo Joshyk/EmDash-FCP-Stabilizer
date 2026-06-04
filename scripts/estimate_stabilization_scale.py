@@ -17,6 +17,7 @@ from typing import Iterable
 
 
 SCHEMA_VERSION = 5
+FXPLUG_CACHE_SCHEMA_VERSION = 1
 SAMPLE_WIDTH = 96
 SAMPLE_HEIGHT = 54
 MIN_SCALE = 100.0
@@ -32,6 +33,7 @@ BLACK_STRIP_MIN_CONTENT_FRACTION = 0.06
 BLACK_STRIP_SCALE_PADDING = 1.01
 SCALE_SMOOTH_SECONDS = 4.0
 POSITION_COMPENSATION_GAIN = 1.75
+FXPLUG_MAX_SCALE = 1.35
 
 
 @dataclass
@@ -55,6 +57,17 @@ def emit(payload: dict, status: int = 0) -> int:
 
 def fail(message: str, status: int = 1) -> int:
     return emit({"schemaVersion": SCHEMA_VERSION, "error": message}, status)
+
+
+def write_progress(progress_file: Path | None, percent: float, message: str) -> None:
+    if progress_file is None:
+        return
+    payload = {
+        "percent": round(clamp(percent, 0.0, 1.0), 4),
+        "message": message,
+    }
+    progress_file.parent.mkdir(parents=True, exist_ok=True)
+    progress_file.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 
 
 def parse_time(value: str | None, default: Fraction | None = None) -> Fraction:
@@ -227,6 +240,8 @@ def extract_gray_frames(media_path: Path, source_start: float, duration: float, 
         "error",
         "-ss",
         f"{max(0.0, source_start):.6f}",
+        "-hwaccel",
+        "videotoolbox",
         "-i",
         str(media_path),
         "-t",
@@ -486,11 +501,26 @@ def pair_motion(previous: bytes, current: bytes) -> dict:
     right = estimate_shift(previous, current, SAMPLE_WIDTH - 32, 8, 28, SAMPLE_HEIGHT - 16, LOCAL_SEARCH_RADIUS, center)
     top = estimate_shift(previous, current, 12, 4, SAMPLE_WIDTH - 24, 20, LOCAL_SEARCH_RADIUS, center)
     bottom = estimate_shift(previous, current, 12, SAMPLE_HEIGHT - 24, SAMPLE_WIDTH - 24, 20, LOCAL_SEARCH_RADIUS, center)
+    top_left = estimate_shift(previous, current, 6, 5, 24, 16, LOCAL_SEARCH_RADIUS, center)
+    top_right = estimate_shift(previous, current, SAMPLE_WIDTH - 30, 5, 24, 16, LOCAL_SEARCH_RADIUS, center)
+    bottom_left = estimate_shift(previous, current, 6, SAMPLE_HEIGHT - 21, 24, 16, LOCAL_SEARCH_RADIUS, center)
+    bottom_right = estimate_shift(previous, current, SAMPLE_WIDTH - 30, SAMPLE_HEIGHT - 21, 24, 16, LOCAL_SEARCH_RADIUS, center)
 
     roll_from_vertical = (right[1] - left[1]) / max(1, SAMPLE_WIDTH - 32)
-    roll_from_horizontal = -(bottom[0] - top[0]) / max(1, SAMPLE_HEIGHT - 16)
+    horizontal_slope = (bottom[0] - top[0]) / max(1, SAMPLE_HEIGHT - 16)
+    roll_from_horizontal = -horizontal_slope
     signed_roll = (roll_from_vertical + roll_from_horizontal) * 0.5
     roll_motion = max(abs(roll_from_vertical), abs(roll_from_horizontal))
+    yaw_proxy = (right[0] - left[0]) / max(1, SAMPLE_WIDTH - 32)
+    pitch_proxy = (bottom[1] - top[1]) / max(1, SAMPLE_HEIGHT - 16)
+    shear_x = horizontal_slope + signed_roll
+    shear_y = roll_from_vertical - signed_roll
+    top_spread = top_right[0] - top_left[0]
+    bottom_spread = bottom_right[0] - bottom_left[0]
+    left_vertical_spread = bottom_left[1] - top_left[1]
+    right_vertical_spread = bottom_right[1] - top_right[1]
+    perspective_x = (top_spread - bottom_spread) / max(1, SAMPLE_WIDTH - 12)
+    perspective_y = (left_vertical_spread - right_vertical_spread) / max(1, SAMPLE_HEIGHT - 10)
 
     return {
         "rawMotion": raw_motion,
@@ -499,6 +529,12 @@ def pair_motion(previous: bytes, current: bytes) -> dict:
         "residualMotion": residual,
         "rollMotion": roll_motion,
         "signedRollMotion": signed_roll,
+        "yawProxy": yaw_proxy,
+        "pitchProxy": pitch_proxy,
+        "shearX": shear_x,
+        "shearY": shear_y,
+        "perspectiveX": perspective_x,
+        "perspectiveY": perspective_y,
     }
 
 
@@ -508,6 +544,188 @@ def centered_difference(values: list[float], index: int) -> float:
     previous_index = max(0, index - 1)
     next_index = min(len(values) - 1, index + 1)
     return values[index] - ((values[previous_index] + values[next_index]) * 0.5)
+
+
+def blur_amount(frame: bytes) -> float:
+    total_gradient = 0.0
+    count = 0
+    for y in range(1, SAMPLE_HEIGHT - 1):
+        row = y * SAMPLE_WIDTH
+        for x in range(1, SAMPLE_WIDTH - 1):
+            horizontal = abs(frame[row + x + 1] - frame[row + x - 1])
+            vertical = abs(frame[row + SAMPLE_WIDTH + x] - frame[row - SAMPLE_WIDTH + x])
+            total_gradient += (horizontal + vertical) / 510.0
+            count += 1
+    if count <= 0:
+        return 1.0
+    sharpness = total_gradient / count
+    return 1.0 - clamp((sharpness - 0.015) / 0.11, 0.0, 1.0)
+
+
+def closest_index(times: list[float], target: float) -> int:
+    best_index = 0
+    best_distance = float("inf")
+    for index, value in enumerate(times):
+        distance = abs(value - target)
+        if distance < best_distance:
+            best_index = index
+            best_distance = distance
+    return best_index
+
+
+def time_weighted_average(values: list[float], times: list[float], indices: list[int], center_time: float, window_seconds: float) -> float:
+    if not indices:
+        return 0.0
+    if len(indices) == 1:
+        return values[indices[0]]
+
+    sorted_indices = sorted(indices)
+    window_start = center_time - (window_seconds * 0.5)
+    window_end = center_time + (window_seconds * 0.5)
+    weighted_total = 0.0
+    total_weight = 0.0
+    for position, index in enumerate(sorted_indices):
+        current_time = times[index]
+        if position > 0:
+            left_boundary = max(window_start, (times[sorted_indices[position - 1]] + current_time) * 0.5)
+        else:
+            left_boundary = window_start
+        if position + 1 < len(sorted_indices):
+            right_boundary = min(window_end, (current_time + times[sorted_indices[position + 1]]) * 0.5)
+        else:
+            right_boundary = window_end
+        weight = max(0.0, right_boundary - left_boundary)
+        weighted_total += values[index] * weight
+        total_weight += weight
+
+    if total_weight <= 1e-9:
+        return sum(values[index] for index in indices) / len(indices)
+    return weighted_total / total_weight
+
+
+def max_value(values: list[float], indices: list[int]) -> float:
+    if not indices:
+        return 0.0
+    return max(values[index] for index in indices)
+
+
+def build_fxplug_cache_samples(
+    motions: list[dict],
+    blur_values: list[float],
+    sample_fps: float,
+    duration: float,
+    media_width: int,
+    media_height: int,
+    pan_smooth_seconds: float,
+) -> list[dict]:
+    if not motions:
+        motions = [{"globalDx": 0.0, "globalDy": 0.0, "residualMotion": 0.0, "rollMotion": 0.0, "signedRollMotion": 0.0}]
+    if not blur_values:
+        blur_values = [0.0 for _ in motions]
+
+    count = min(len(motions), len(blur_values))
+    motions = motions[:count]
+    blur_values = blur_values[:count]
+    times = [min(duration, index / sample_fps) for index in range(count)]
+    dx_values = [motion.get("globalDx", 0.0) for motion in motions]
+    dy_values = [motion.get("globalDy", 0.0) for motion in motions]
+    residual_values = [motion.get("residualMotion", 0.0) for motion in motions]
+    signed_roll_values = [motion.get("signedRollMotion", 0.0) for motion in motions]
+    roll_motion_values = [motion.get("rollMotion", 0.0) for motion in motions]
+    yaw_values = [motion.get("yawProxy", 0.0) for motion in motions]
+    pitch_values = [motion.get("pitchProxy", 0.0) for motion in motions]
+    shear_x_values = [motion.get("shearX", 0.0) for motion in motions]
+    shear_y_values = [motion.get("shearY", 0.0) for motion in motions]
+    perspective_x_values = [motion.get("perspectiveX", 0.0) for motion in motions]
+    perspective_y_values = [motion.get("perspectiveY", 0.0) for motion in motions]
+
+    path_x = cumulative_sum(dx_values)
+    path_y = cumulative_sum(dy_values)
+    path_roll = [math.degrees(value) for value in cumulative_sum(signed_roll_values)]
+    path_yaw = cumulative_sum(yaw_values)
+    path_pitch = cumulative_sum(pitch_values)
+    path_shear_x = cumulative_sum(shear_x_values)
+    path_shear_y = cumulative_sum(shear_y_values)
+    path_perspective_x = cumulative_sum(perspective_x_values)
+    path_perspective_y = cumulative_sum(perspective_y_values)
+
+    window_seconds = max(0.1, pan_smooth_seconds)
+    x_scale = media_width / SAMPLE_WIDTH
+    y_scale = media_height / SAMPLE_HEIGHT
+    samples = []
+    for index, seconds in enumerate(times):
+        window_indices = [item for item, item_time in enumerate(times) if abs(item_time - seconds) <= window_seconds * 0.5]
+        active_indices = window_indices or list(range(count))
+        smooth_x = time_weighted_average(path_x, times, active_indices, seconds, window_seconds)
+        smooth_y = time_weighted_average(path_y, times, active_indices, seconds, window_seconds)
+        smooth_roll = time_weighted_average(path_roll, times, active_indices, seconds, window_seconds)
+        smooth_yaw = time_weighted_average(path_yaw, times, active_indices, seconds, window_seconds)
+        smooth_pitch = time_weighted_average(path_pitch, times, active_indices, seconds, window_seconds)
+        smooth_shear_x = time_weighted_average(path_shear_x, times, active_indices, seconds, window_seconds)
+        smooth_shear_y = time_weighted_average(path_shear_y, times, active_indices, seconds, window_seconds)
+        smooth_perspective_x = time_weighted_average(path_perspective_x, times, active_indices, seconds, window_seconds)
+        smooth_perspective_y = time_weighted_average(path_perspective_y, times, active_indices, seconds, window_seconds)
+        residual = max_value(residual_values, active_indices)
+        blur = time_weighted_average(blur_values, times, active_indices, seconds, window_seconds)
+        confidence = clamp(1.0 - (residual * 1.6) - (blur * 0.35), 0.25, 1.0)
+        compensation_x = -(path_x[index] - smooth_x) * x_scale * POSITION_COMPENSATION_GAIN * confidence
+        compensation_y = -(path_y[index] - smooth_y) * y_scale * POSITION_COMPENSATION_GAIN * confidence
+        compensation_rotation = -(path_roll[index] - smooth_roll) * confidence
+        compensation_yaw = clamp(-(path_yaw[index] - smooth_yaw) * 1.4 * confidence, -0.18, 0.18)
+        compensation_pitch = clamp(-(path_pitch[index] - smooth_pitch) * 1.4 * confidence, -0.18, 0.18)
+        compensation_shear_x = clamp(-(path_shear_x[index] - smooth_shear_x) * 1.3 * confidence, -0.16, 0.16)
+        compensation_shear_y = clamp(-(path_shear_y[index] - smooth_shear_y) * 1.3 * confidence, -0.16, 0.16)
+        compensation_perspective_x = clamp(-(path_perspective_x[index] - smooth_perspective_x) * 1.2 * confidence, -0.16, 0.16)
+        compensation_perspective_y = clamp(-(path_perspective_y[index] - smooth_perspective_y) * 1.2 * confidence, -0.16, 0.16)
+
+        local_motion_indices = [item for item, item_time in enumerate(times) if abs(item_time - seconds) <= (4.5 / 30.0)]
+        active_motion_indices = local_motion_indices or [index]
+        roll_motion = max_value(roll_motion_values, active_motion_indices)
+        translation_scale = max(
+            1.0 + (2.0 * abs(compensation_x) / max(1.0, media_width)),
+            1.0 + (2.0 * abs(compensation_y) / max(1.0, media_height)),
+        )
+        rotation_scale = 1.0 + min(0.12, abs(compensation_rotation) * 0.006)
+        jitter_scale = 1.0 + min(0.10, (residual * 0.10) + (roll_motion * 0.45))
+        warp_scale = 1.0 + min(
+            0.20,
+            (
+                abs(compensation_yaw)
+                + abs(compensation_pitch)
+                + abs(compensation_shear_x)
+                + abs(compensation_shear_y)
+                + abs(compensation_perspective_x)
+                + abs(compensation_perspective_y)
+            )
+            * 0.55,
+        )
+        blur_scale = 1.0 + min(0.06, blur * 0.06)
+        crop_safety = max(1.0, translation_scale, rotation_scale, warp_scale)
+        scale = min(FXPLUG_MAX_SCALE, max(crop_safety, jitter_scale, blur_scale))
+
+        samples.append(
+            {
+                "timeSeconds": round(seconds, 6),
+                "pixelOffsetX": round(compensation_x, 4),
+                "pixelOffsetY": round(compensation_y, 4),
+                "rotationDegrees": round(compensation_rotation, 4),
+                "scaleMultiplier": round(scale, 6),
+                "yawPitchProxyX": round(compensation_yaw, 6),
+                "yawPitchProxyY": round(compensation_pitch, 6),
+                "shearX": round(compensation_shear_x, 6),
+                "shearY": round(compensation_shear_y, 6),
+                "perspectiveX": round(compensation_perspective_x, 6),
+                "perspectiveY": round(compensation_perspective_y, 6),
+                "cropSafety": round(crop_safety, 6),
+                "blurAmount": round(blur, 6),
+            }
+        )
+
+    if samples and samples[-1]["timeSeconds"] < duration - 0.05:
+        last = dict(samples[-1])
+        last["timeSeconds"] = round(duration, 6)
+        samples.append(last)
+    return samples
 
 
 def build_samples(motions: list[dict], black_metrics: list[dict], sample_fps: float, duration: float, media_width: int, media_height: int) -> list[dict]:
@@ -676,6 +894,91 @@ def estimate(candidate: Candidate, interval_frames: int, max_samples: int, durat
     }
 
 
+def estimate_fxplug_cache(
+    candidate: Candidate,
+    cache_fps: float,
+    max_samples: int,
+    duration_seconds: float | None,
+    pan_smooth_seconds: float,
+    progress_file: Path | None,
+) -> dict:
+    write_progress(progress_file, 0.02, "Preparing selected clip analysis")
+    if candidate.unsupported:
+        raise ValueError(f"unsupported FCPXML timing/clip structure for FxPlug cache: {candidate.unsupported}")
+    if not candidate.media_path.exists():
+        raise FileNotFoundError(f"media file does not exist: {candidate.media_path}")
+
+    write_progress(progress_file, 0.06, "Probing source media")
+    frame_rate = float(Fraction(1, 1) / candidate.frame_duration)
+    duration = min(float(candidate.duration), duration_seconds) if duration_seconds and duration_seconds > 0 else float(candidate.duration)
+    if duration <= 0:
+        raise ValueError("duration must be positive for FxPlug cache analysis")
+    media_width, media_height = probe_media_dimensions(candidate.media_path)
+    sample_fps = cache_fps if cache_fps and cache_fps > 0 else min(frame_rate, 15.0)
+    sample_fps = min(max(1.0, sample_fps), max(1.0, frame_rate))
+    expected_samples = max(1, int(math.ceil(duration * sample_fps)))
+    if max_samples > 0 and expected_samples > max_samples:
+        sample_fps = max_samples / duration
+
+    write_progress(progress_file, 0.10, "Extracting analysis frames")
+    frames = extract_gray_frames(candidate.media_path, float(candidate.source_start), duration, sample_fps)
+    write_progress(progress_file, 0.50, f"Analyzing {len(frames)} frame samples")
+    blur_values = [blur_amount(frame) for frame in frames]
+    motions = [
+        {
+            "rawMotion": 0.0,
+            "globalDx": 0.0,
+            "globalDy": 0.0,
+            "residualMotion": 0.0,
+            "rollMotion": 0.0,
+            "signedRollMotion": 0.0,
+            "yawProxy": 0.0,
+            "pitchProxy": 0.0,
+            "shearX": 0.0,
+            "shearY": 0.0,
+            "perspectiveX": 0.0,
+            "perspectiveY": 0.0,
+        }
+    ]
+    progress_step = max(1, len(frames) // 80)
+    for index in range(1, len(frames)):
+        motions.append(pair_motion(frames[index - 1], frames[index]))
+        if index % progress_step == 0:
+            write_progress(progress_file, 0.50 + (0.32 * (index / max(1, len(frames) - 1))), f"Analyzing motion {index}/{len(frames) - 1}")
+
+    write_progress(progress_file, 0.86, "Building cached stabilization values")
+    samples = build_fxplug_cache_samples(
+        motions,
+        blur_values,
+        sample_fps,
+        duration,
+        media_width,
+        media_height,
+        pan_smooth_seconds,
+    )
+    write_progress(progress_file, 0.96, "Writing FxPlug cache")
+
+    return {
+        "schemaVersion": FXPLUG_CACHE_SCHEMA_VERSION,
+        "model": "fxplug-precomputed-stabilization-v1",
+        "clipName": candidate.name,
+        "assetId": candidate.asset_id,
+        "mediaPath": str(candidate.media_path),
+        "mediaWidth": media_width,
+        "mediaHeight": media_height,
+        "frameRate": round(frame_rate, 6),
+        "durationSeconds": round(duration, 6),
+        "sourceStartSeconds": round(float(candidate.source_start), 6),
+        "sampleFps": round(sample_fps, 6),
+        "panSmoothSeconds": round(max(0.1, pan_smooth_seconds), 6),
+        "samples": samples,
+        "warnings": [
+            "FxPlug cache values are precomputed. Changing Pan Smooth Seconds in Final Cut Pro does not change cached motion until the cache is rebuilt.",
+            "If the cache file is missing, the FxPlug effect uses its live frame analysis path.",
+        ],
+    }
+
+
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fcpxml", type=Path)
@@ -684,9 +987,14 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--source-start")
     parser.add_argument("--duration")
     parser.add_argument("--clip-name")
-    parser.add_argument("--interval-frames", required=True, type=int)
+    parser.add_argument("--interval-frames", type=int, default=1)
     parser.add_argument("--duration-seconds", type=float)
     parser.add_argument("--max-samples", type=int, default=180)
+    parser.add_argument("--fxplug-cache-output", type=Path)
+    parser.add_argument("--fxplug-cache-fps", type=float, default=15.0)
+    parser.add_argument("--fxplug-cache-max-samples", type=int, default=7200)
+    parser.add_argument("--pan-smooth-seconds", type=float, default=6.0)
+    parser.add_argument("--progress-file", type=Path)
     return parser.parse_args(argv)
 
 
@@ -709,8 +1017,33 @@ def main(argv: Iterable[str]) -> int:
                 raise ValueError("either --fcpxml or --media-path is required")
             candidates = load_candidates(args.fcpxml)
             candidate = choose_candidate(candidates, args.duration_seconds)
+        if args.fxplug_cache_output:
+            payload = estimate_fxplug_cache(
+                candidate,
+                args.fxplug_cache_fps,
+                args.fxplug_cache_max_samples,
+                args.duration_seconds,
+                args.pan_smooth_seconds,
+                args.progress_file,
+            )
+            args.fxplug_cache_output.parent.mkdir(parents=True, exist_ok=True)
+            args.fxplug_cache_output.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            write_progress(args.progress_file, 1.0, "FxPlug cache complete")
+            return emit(
+                {
+                    "schemaVersion": FXPLUG_CACHE_SCHEMA_VERSION,
+                    "model": payload["model"],
+                    "cachePath": str(args.fxplug_cache_output),
+                    "clipName": payload["clipName"],
+                    "durationSeconds": payload["durationSeconds"],
+                    "sampleFps": payload["sampleFps"],
+                    "sampleCount": len(payload.get("samples") or []),
+                    "panSmoothSeconds": payload["panSmoothSeconds"],
+                }
+            )
         return emit(estimate(candidate, args.interval_frames, args.max_samples, args.duration_seconds))
     except Exception as exc:  # noqa: BLE001 - command-line tool must return JSON errors.
+        write_progress(args.progress_file, 1.0, "FxPlug cache failed")
         return fail(str(exc))
 
 

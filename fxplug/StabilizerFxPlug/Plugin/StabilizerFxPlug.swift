@@ -5,28 +5,24 @@ import simd
 
 private enum ParameterID: UInt32 {
     case strength = 1
-    case offsetX = 2
-    case offsetY = 3
-    case rotationDegrees = 4
-    case scalePercent = 5
     case autoStabilize = 6
     case xyzStrength = 7
     case rotationStrength = 8
     case panSmoothSeconds = 9
     case debugOverlay = 10
+    case panSmoothSecondsText = 11
+    case usePrerenderCache = 12
 }
 
 private struct StabilizerPluginState {
     var strength: Double
-    var offsetX: Double
-    var offsetY: Double
-    var rotationDegrees: Double
-    var scalePercent: Double
     var autoStabilize: Bool
     var xyzStrength: Double
     var rotationStrength: Double
     var panSmoothSeconds: Double
     var debugOverlay: Bool
+    var usePrerenderCache: Bool
+    var prerenderCacheAvailable: Bool
 }
 
 @objc(StabilizerFxPlugPlugIn)
@@ -50,50 +46,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             sliderMin: 0.0,
             sliderMax: 2.0,
             delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Offset X",
-            parameterID: ParameterID.offsetX.rawValue,
-            defaultValue: 0.0,
-            parameterMin: -5000.0,
-            parameterMax: 5000.0,
-            sliderMin: -500.0,
-            sliderMax: 500.0,
-            delta: 0.1,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Offset Y",
-            parameterID: ParameterID.offsetY.rawValue,
-            defaultValue: 0.0,
-            parameterMin: -5000.0,
-            parameterMax: 5000.0,
-            sliderMin: -500.0,
-            sliderMax: 500.0,
-            delta: 0.1,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Rotation Degrees",
-            parameterID: ParameterID.rotationDegrees.rawValue,
-            defaultValue: 0.0,
-            parameterMin: -45.0,
-            parameterMax: 45.0,
-            sliderMin: -10.0,
-            sliderMax: 10.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Scale Percent",
-            parameterID: ParameterID.scalePercent.rawValue,
-            defaultValue: 100.0,
-            parameterMin: 1.0,
-            parameterMax: 200.0,
-            sliderMin: 90.0,
-            sliderMax: 130.0,
-            delta: 0.1,
             parameterFlags: flags
         )
         paramAPI.addToggleButton(
@@ -125,14 +77,26 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Pan Smooth Seconds",
+            withName: "Pan Smooth Seconds Slider",
             parameterID: ParameterID.panSmoothSeconds.rawValue,
             defaultValue: 6.0,
-            parameterMin: 1.0,
-            parameterMax: 12.0,
-            sliderMin: 1.0,
-            sliderMax: 12.0,
+            parameterMin: 0.1,
+            parameterMax: 120.0,
+            sliderMin: 0.1,
+            sliderMax: 30.0,
             delta: 0.25,
+            parameterFlags: flags
+        )
+        paramAPI.addStringParameter(
+            withName: "Pan Smooth Seconds",
+            parameterID: ParameterID.panSmoothSecondsText.rawValue,
+            defaultValue: "6",
+            parameterFlags: flags
+        )
+        paramAPI.addToggleButton(
+            withName: "Use Prerender Cache",
+            parameterID: ParameterID.usePrerenderCache.rawValue,
+            defaultValue: true,
             parameterFlags: flags
         )
         paramAPI.addToggleButton(
@@ -158,32 +122,46 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
 
         var state = StabilizerPluginState(
             strength: 1.0,
-            offsetX: 0.0,
-            offsetY: 0.0,
-            rotationDegrees: 0.0,
-            scalePercent: 100.0,
             autoStabilize: true,
             xyzStrength: 1.0,
             rotationStrength: 1.0,
             panSmoothSeconds: 6.0,
-            debugOverlay: false
+            debugOverlay: false,
+            usePrerenderCache: true,
+            prerenderCacheAvailable: false
         )
         paramAPI.getFloatValue(&state.strength, fromParameter: ParameterID.strength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.offsetX, fromParameter: ParameterID.offsetX.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.offsetY, fromParameter: ParameterID.offsetY.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.rotationDegrees, fromParameter: ParameterID.rotationDegrees.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.scalePercent, fromParameter: ParameterID.scalePercent.rawValue, at: renderTime)
         var autoStabilize = ObjCBool(state.autoStabilize)
         paramAPI.getBoolValue(&autoStabilize, fromParameter: ParameterID.autoStabilize.rawValue, at: renderTime)
         state.autoStabilize = autoStabilize.boolValue
         paramAPI.getFloatValue(&state.xyzStrength, fromParameter: ParameterID.xyzStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.rotationStrength, fromParameter: ParameterID.rotationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
+        var panSmoothText = "" as NSString
+        if paramAPI.getStringParameterValue(&panSmoothText, fromParameter: ParameterID.panSmoothSecondsText.rawValue),
+           let value = Self.parsePositiveSeconds(panSmoothText as String) {
+            state.panSmoothSeconds = value
+        }
         var debugOverlay = ObjCBool(state.debugOverlay)
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
         state.debugOverlay = debugOverlay.boolValue
+        var usePrerenderCache = ObjCBool(state.usePrerenderCache)
+        paramAPI.getBoolValue(&usePrerenderCache, fromParameter: ParameterID.usePrerenderCache.rawValue, at: renderTime)
+        state.usePrerenderCache = usePrerenderCache.boolValue
+        state.prerenderCacheAvailable = state.usePrerenderCache && StabilizationCacheStore.hasUsableCache()
 
         pluginState?.pointee = NSData(bytes: &state, length: MemoryLayout<StabilizerPluginState>.size)
+    }
+
+    private static func parsePositiveSeconds(_ text: String?) -> Double? {
+        guard let rawText = text?.trimmingCharacters(in: .whitespacesAndNewlines), !rawText.isEmpty else {
+            return nil
+        }
+        let normalized = rawText.replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(normalized), value.isFinite, value > 0.0 else {
+            return nil
+        }
+        return value
     }
 
     func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
@@ -204,8 +182,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             requests.append(current)
         }
 
-        if state.autoStabilize {
-            let windowSeconds = min(12.0, max(1.0, state.panSmoothSeconds))
+        if state.autoStabilize && !state.prerenderCacheAvailable {
+            let windowSeconds = max(0.1, state.panSmoothSeconds)
             let halfWindow = windowSeconds * 0.5
             let requestTimescale: CMTimeScale = 600
             let frameStep = CMTime(value: 20, timescale: requestTimescale)
@@ -230,7 +208,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
                 appendAnalysisRequest(at: CMTimeAdd(renderTime, CMTimeMultiply(frameStep, multiplier: Int32(frameOffset))))
             }
 
-            let sampleStepSeconds = 0.5
+            let sampleStepSeconds = max(0.5, windowSeconds / 240.0)
             var offset = -halfWindow
             while offset <= halfWindow + 0.0001 {
                 appendAnalysisRequest(at: CMTimeAdd(renderTime, CMTime(seconds: offset, preferredTimescale: requestTimescale)))
@@ -283,18 +261,25 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             StabilizerVertex2D(position: vector_float2(Float(-outputWidth) / 2.0, Float(outputHeight) / 2.0), textureCoordinate: vector_float2(0.0, 0.0))
         ]
         var viewportSize = simd_uint2(UInt32(outputWidth), UInt32(outputHeight))
-        let autoTransform = state.autoStabilize
-            ? AutoStabilizationEstimator.estimate(
-                sourceImages: sourceImages,
-                renderTime: renderTime,
-                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                panSmoothSeconds: state.panSmoothSeconds
-            )
-            : .identity
+        let autoTransform: StabilizerAutoTransform
+        if state.autoStabilize {
+            autoTransform = state.prerenderCacheAvailable
+                ? (StabilizationCacheStore.transform(
+                    at: renderTime,
+                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight))
+                ) ?? .identity)
+                : AutoStabilizationEstimator.estimate(
+                    sourceImages: sourceImages,
+                    renderTime: renderTime,
+                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                    panSmoothSeconds: state.panSmoothSeconds
+                )
+        } else {
+            autoTransform = .identity
+        }
         let masterStrength = Float(max(0.0, state.strength))
         let xyzStrength = Float(max(0.0, state.xyzStrength)) * masterStrength
         let rotationStrength = Float(max(0.0, state.rotationStrength)) * masterStrength
-        let manualScale = Float(max(state.scalePercent, 1.0) / 100.0)
         let autoScale = 1.0 + ((autoTransform.scaleMultiplier - 1.0) * xyzStrength)
         let diagnostic = vector_float4(
             min(1.0, abs(autoTransform.pixelOffset.x) / max(1.0, Float(outputWidth) * 0.05)),
@@ -302,14 +287,23 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect {
             min(1.0, max(0.0, (autoTransform.scaleMultiplier - 1.0) / 0.18)),
             min(1.0, abs(autoTransform.rotationDegrees) / 5.0)
         )
+        let diagnostic2 = vector_float4(
+            min(1.0, simd_length(autoTransform.yawPitchProxy) / 0.10),
+            min(1.0, simd_length(autoTransform.shear) / 0.10),
+            min(1.0, simd_length(autoTransform.perspective) / 0.10),
+            min(1.0, autoTransform.blurAmount)
+        )
 
         var transform = StabilizerTransformUniforms(
-            pixelOffset: vector_float2(Float(state.offsetX), Float(state.offsetY)) + (autoTransform.pixelOffset * xyzStrength),
-            rotationRadians: Float(state.rotationDegrees * .pi / 180.0) + (autoTransform.rotationDegrees * .pi / 180.0 * rotationStrength),
-            scale: manualScale * autoScale,
+            pixelOffset: autoTransform.pixelOffset * xyzStrength,
+            rotationRadians: autoTransform.rotationDegrees * .pi / 180.0 * rotationStrength,
+            scale: autoScale,
             strength: 1.0,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
             diagnostic: diagnostic,
+            diagnostic2: diagnostic2,
+            shear: autoTransform.shear * xyzStrength,
+            perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * xyzStrength,
             debugOverlay: state.debugOverlay ? 1.0 : 0.0
         )
 

@@ -44,6 +44,13 @@ fragment float4 fragmentShader(
 
     float scale = max(transform->scale, 0.01);
     float2 stabilizedPixels = (rotated / scale) - (transform->pixelOffset * transform->strength);
+    float2 normalizedPixels = stabilizedPixels / transform->outputSize;
+    float perspectiveDenominator = max(0.35, 1.0 + (transform->perspective.x * normalizedPixels.x) + (transform->perspective.y * normalizedPixels.y));
+    stabilizedPixels = stabilizedPixels / perspectiveDenominator;
+    stabilizedPixels -= float2(
+        transform->shear.x * stabilizedPixels.y,
+        transform->shear.y * stabilizedPixels.x
+    );
     float2 sampleUV = (stabilizedPixels / transform->outputSize) + 0.5;
 
     half4 colorSample = colorTexture.sample(textureSampler, sampleUV);
@@ -53,7 +60,7 @@ fragment float4 fragmentShader(
         float2 pixel = uv * transform->outputSize;
         float barX = pixel.x - 16.0;
         float barY = pixel.y - 16.0;
-        if (barX >= 0.0 && barX <= 180.0 && barY >= 0.0 && barY <= 52.0) {
+        if (barX >= 0.0 && barX <= 180.0 && barY >= 0.0 && barY <= 104.0) {
             int row = int(floor(barY / 13.0));
             float fill = 0.0;
             float3 color = float3(1.0);
@@ -66,9 +73,21 @@ fragment float4 fragmentShader(
             } else if (row == 2) {
                 fill = saturate(transform->diagnostic.z);
                 color = float3(0.2, 0.45, 1.0);
-            } else {
+            } else if (row == 3) {
                 fill = saturate(transform->diagnostic.w);
                 color = float3(1.0, 0.85, 0.15);
+            } else if (row == 4) {
+                fill = saturate(transform->diagnostic2.x);
+                color = float3(0.85, 0.25, 1.0);
+            } else if (row == 5) {
+                fill = saturate(transform->diagnostic2.y);
+                color = float3(0.1, 0.95, 0.95);
+            } else if (row == 6) {
+                fill = saturate(transform->diagnostic2.z);
+                color = float3(1.0, 0.55, 0.15);
+            } else {
+                fill = saturate(transform->diagnostic2.w);
+                color = float3(0.72, 0.72, 0.72);
             }
             float activeWidth = 180.0 * fill;
             float3 background = float3(0.02, 0.02, 0.02);

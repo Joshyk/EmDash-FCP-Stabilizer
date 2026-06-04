@@ -19,6 +19,11 @@ local fs = require "hs.fs"
 local timer = require "hs.timer"
 local eventtap = require "hs.eventtap"
 local alert = require "hs.alert"
+local task = require "hs.task"
+local canvasOK, canvas = pcall(require, "hs.canvas")
+local screenOK, screen = pcall(require, "hs.screen")
+if not canvasOK then canvas = nil end
+if not screenOK then screen = nil end
 
 local format = string.format
 local usleep = timer.usleep
@@ -27,10 +32,17 @@ local mod = {}
 
 local ACTION_TITLE = "Stabilizer: Transform Keyframes"
 local ACTION_ID = "stabilizerDynamicStrengthScale"
+local FXPLUG_CACHE_ACTION_TITLE = "Stabilizer: Analyze FxPlug Cache"
+local FXPLUG_CACHE_ACTION_ID = "stabilizerAnalyzeFxPlugCache"
 local REPO_DIRECTORY = "/Users/justadev/Developer/EDT/Command-Post-Em_Dash/Stabilizer"
 local ESTIMATOR_SCRIPT = REPO_DIRECTORY .. "/scripts/estimate_stabilization_scale.py"
+local GPU_ESTIMATOR_SCRIPT = REPO_DIRECTORY .. "/scripts/estimate_stabilization_gpu.swift"
 local PYTHON_BINARY = os.getenv("STABILIZER_PYTHON") or "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3"
+local SWIFT_RUNNER = os.getenv("STABILIZER_SWIFT_RUNNER") or "/usr/bin/xcrun"
+local FXPLUG_CACHE_PATH = os.getenv("STABILIZER_FXPLUG_CACHE_PATH") or ((os.getenv("HOME") or "") .. "/Library/Application Support/CommandPost/StabilizerFxPlug/current.json")
 local DEFAULT_INTERVAL_FRAMES = "3"
+local DEFAULT_FXPLUG_CACHE_FPS = "15"
+local DEFAULT_PAN_SMOOTH_SECONDS = "6"
 local MAX_SAMPLES = 240
 local CONTROL_READY_TIMEOUT_SECONDS = 12
 local KEYFRAME_CONFIRM_TIMEOUT_SECONDS = 1.5
@@ -41,6 +53,7 @@ local FCP_PASTEBOARD_UTI = "com.apple.flexo.proFFPasteboardUTI"
 local playheadMovePreferredMethod = nil
 local restorePasteboard
 local withTextPasteboard
+local activeCacheTasks = {}
 
 local function sleep(seconds)
     usleep((seconds or 0.1) * 1000000)
@@ -57,6 +70,123 @@ local function fileExists(path)
         return true
     end
     return false
+end
+
+local function parentDirectory(path)
+    return tostring(path or ""):match("^(.*)/[^/]*$") or ""
+end
+
+local function ensureDirectory(path)
+    if path == nil or path == "" then
+        return false, "Directory path was empty."
+    end
+    local _, ok = hs.execute("/bin/mkdir -p " .. shellQuote(path), true)
+    if not ok then
+        return false, "Could not create directory: " .. tostring(path)
+    end
+    return true, nil
+end
+
+local function readTextFile(path)
+    local file = io.open(path, "r")
+    if not file then return nil end
+    local text = file:read("*a")
+    file:close()
+    return text
+end
+
+local function removeFile(path)
+    if path and path ~= "" then
+        os.remove(path)
+    end
+end
+
+local function progressUIStart(title)
+    if not canvas or not screen or not screen.mainScreen then
+        return nil
+    end
+    local mainScreen = screen.mainScreen()
+    if not mainScreen then return nil end
+    local frame = mainScreen:frame()
+    local width = 520
+    local height = 126
+    local view = canvas.new({
+        x = frame.x + ((frame.w - width) / 2),
+        y = frame.y + 88,
+        w = width,
+        h = height,
+    })
+    if not view then return nil end
+    view:appendElements({
+        {
+            type = "rectangle",
+            action = "fill",
+            frame = { x = 0, y = 0, w = width, h = height },
+            roundedRectRadii = { xRadius = 10, yRadius = 10 },
+            fillColor = { white = 0.08, alpha = 0.92 },
+        },
+        {
+            type = "text",
+            text = tostring(title or "Stabilizer"),
+            frame = { x = 24, y = 18, w = width - 48, h = 22 },
+            textColor = { white = 1.0, alpha = 1.0 },
+            textSize = 15,
+        },
+        {
+            type = "rectangle",
+            action = "fill",
+            frame = { x = 24, y = 58, w = width - 48, h = 14 },
+            roundedRectRadii = { xRadius = 7, yRadius = 7 },
+            fillColor = { white = 0.30, alpha = 1.0 },
+        },
+        {
+            type = "rectangle",
+            action = "fill",
+            frame = { x = 24, y = 58, w = 1, h = 14 },
+            roundedRectRadii = { xRadius = 7, yRadius = 7 },
+            fillColor = { red = 0.20, green = 0.58, blue = 1.0, alpha = 1.0 },
+        },
+        {
+            type = "text",
+            text = "0%",
+            frame = { x = width - 82, y = 78, w = 58, h = 20 },
+            textAlignment = "right",
+            textColor = { white = 0.92, alpha = 1.0 },
+            textSize = 12,
+        },
+        {
+            type = "text",
+            text = "Starting...",
+            frame = { x = 24, y = 78, w = width - 116, h = 26 },
+            textColor = { white = 0.82, alpha = 1.0 },
+            textSize = 12,
+        },
+    })
+    if view.level then
+        pcall(function() view:level("floating") end)
+    end
+    if view.behavior then
+        pcall(function() view:behavior({ "canJoinAllSpaces", "fullScreenAuxiliary" }) end)
+    end
+    view:show()
+    return { view = view, width = width, barWidth = width - 48 }
+end
+
+local function progressUIUpdate(progress, percent, message)
+    if not progress or not progress.view then return end
+    local value = math.max(0, math.min(1, tonumber(percent) or 0))
+    local fillWidth = math.max(1, progress.barWidth * value)
+    pcall(function()
+        progress.view[4].frame = { x = 24, y = 58, w = fillWidth, h = 14 }
+        progress.view[5].text = tostring(math.floor((value * 100) + 0.5)) .. "%"
+        progress.view[6].text = tostring(message or "")
+    end)
+end
+
+local function progressUIStop(progress)
+    if progress and progress.view then
+        pcall(function() progress.view:delete() end)
+    end
 end
 
 local function activateFinalCutPro()
@@ -1109,6 +1239,110 @@ local function runEstimator(source, intervalFrames, durationSeconds)
     return decoded, nil
 end
 
+local function startFxPlugCacheEstimator(source, durationSeconds, panSmoothSeconds, onSuccess, onFailure)
+    if not fileExists(GPU_ESTIMATOR_SCRIPT) then
+        return false, "GPU estimator script was not found: " .. GPU_ESTIMATOR_SCRIPT
+    end
+    if not fileExists(SWIFT_RUNNER) then
+        return false, "Swift runner was not found: " .. SWIFT_RUNNER
+    end
+
+    local cacheDir = parentDirectory(FXPLUG_CACHE_PATH)
+    local ok, mkdirErr = ensureDirectory(cacheDir)
+    if not ok then
+        return false, mkdirErr
+    end
+
+    local token = tostring(timer.secondsSinceEpoch()):gsub("[^%d]", "") .. "-" .. tostring(math.random(100000, 999999))
+    local progressPath = "/tmp/stabilizer-fxplug-cache-progress-" .. token .. ".json"
+    local progress = progressUIStart(FXPLUG_CACHE_ACTION_TITLE)
+    progressUIUpdate(progress, 0.0, "Starting cache analysis")
+
+    local function updateProgressFromFile()
+        local progressText = readTextFile(progressPath)
+        if progressText and progressText ~= "" then
+            local payload = nil
+            pcall(function() payload = json.decode(progressText) end)
+            if type(payload) == "table" then
+                progressUIUpdate(progress, payload.percent, payload.message)
+            end
+        end
+    end
+
+    local function cleanup()
+        local state = activeCacheTasks[token]
+        if state and state.progressTimer then
+            state.progressTimer:stop()
+        end
+        progressUIStop(progress)
+        removeFile(progressPath)
+        activeCacheTasks[token] = nil
+    end
+
+    local args = {
+        "swift",
+        "-suppress-warnings",
+        GPU_ESTIMATOR_SCRIPT,
+        "--media-path", source.mediaPath,
+        "--source-start", source.sourceStart,
+        "--duration", source.duration,
+        "--clip-name", source.clipName or "selected timeline clip",
+        "--duration-seconds", tostring(durationSeconds),
+        "--fxplug-cache-output", FXPLUG_CACHE_PATH,
+        "--fxplug-cache-fps", DEFAULT_FXPLUG_CACHE_FPS,
+        "--fxplug-cache-max-samples", "7200",
+        "--pan-smooth-seconds", tostring(panSmoothSeconds),
+        "--progress-file", progressPath,
+    }
+
+    local estimatorTask = task.new(SWIFT_RUNNER, function(exitCode, stdOut, stdErr)
+        updateProgressFromFile()
+        local decoded = nil
+        pcall(function() decoded = json.decode(stdOut or "") end)
+        local failed = exitCode ~= 0
+        local message = nil
+        if failed then
+            message = decoded and decoded.error or ((stdErr and stdErr ~= "") and stdErr or stdOut or "FxPlug cache estimator failed.")
+        elseif type(decoded) ~= "table" then
+            message = "FxPlug cache estimator did not return valid JSON."
+            failed = true
+        elseif decoded.error then
+            message = decoded.error
+            failed = true
+        elseif not fileExists(FXPLUG_CACHE_PATH) then
+            message = "FxPlug cache file was not written: " .. FXPLUG_CACHE_PATH
+            failed = true
+        end
+
+        progressUIUpdate(progress, 1.0, failed and "FxPlug cache failed" or "FxPlug cache complete")
+        local state = activeCacheTasks[token] or {}
+        state.doneTimer = timer.doAfter(0.45, function()
+            cleanup()
+            if failed then
+                onFailure(message)
+            else
+                onSuccess(decoded)
+            end
+        end)
+        activeCacheTasks[token] = state
+    end, args)
+
+    if not estimatorTask then
+        progressUIStop(progress)
+        removeFile(progressPath)
+        return false, "Could not create FxPlug cache estimator task."
+    end
+
+    local progressTimer = timer.doEvery(0.15, updateProgressFromFile)
+    activeCacheTasks[token] = {
+        task = estimatorTask,
+        progressTimer = progressTimer,
+        progress = progress,
+    }
+    estimatorTask:start()
+    return true, nil
+end
+
 local function intervalFramesPrompt()
     local value = dialog.displayChooseFromList(
         "Choose the stabilizer keyframe interval in frames: 1,2,3,4.",
@@ -1125,6 +1359,26 @@ local function intervalFramesPrompt()
         return nil, "Invalid keyframe interval selection: " .. tostring(value)
     end
     return math.floor(frames)
+end
+
+local function panSmoothSecondsPrompt()
+    local button, answer = hs.dialog.textPrompt(
+        "FxPlug prerender smoothing",
+        "Enter the smoothing window in seconds for the cache file.",
+        DEFAULT_PAN_SMOOTH_SECONDS,
+        "Analyze",
+        "Cancel"
+    )
+    if button == "Cancel" then return nil, "cancelled" end
+    if button ~= "Analyze" then
+        return nil, "The smoothing prompt did not return Analyze; stopping before processing."
+    end
+    local normalized = (trim(answer):gsub(",", "."))
+    local value = tonumber(normalized)
+    if not value or value <= 0 then
+        return nil, "Invalid smoothing window: " .. tostring(answer)
+    end
+    return value, nil
 end
 
 local function selectedClipContext(frameRate)
@@ -1290,6 +1544,68 @@ local function applyDynamicStrengthScale()
     return true
 end
 
+local function analyzeFxPlugCache()
+    local startedAt = timer.secondsSinceEpoch()
+    local stage = "start"
+    local function fail(message, fields)
+        logStage("failed", tostring(message), fields or {
+            { "stage", stage },
+            { "elapsed", format("%.1fs", timer.secondsSinceEpoch() - startedAt) },
+        })
+        showFailure(FXPLUG_CACHE_ACTION_TITLE, tostring(message))
+        displayError(FXPLUG_CACHE_ACTION_TITLE, tostring(message))
+        return false
+    end
+
+    stage = "smoothing prompt"
+    local panSmoothSeconds, promptErr = panSmoothSecondsPrompt()
+    if not panSmoothSeconds then
+        if promptErr and promptErr ~= "cancelled" then
+            return fail(promptErr)
+        end
+        log.i(FXPLUG_CACHE_ACTION_TITLE .. ": cancelled before smoothing selection.")
+        return false
+    end
+
+    stage = "selected clip"
+    local seedFrameRate = 30
+    local context, contextErr = selectedClipContext(seedFrameRate)
+    if not context then
+        return fail(contextErr)
+    end
+
+    stage = "pasteboard source"
+    local source, sourceErr = selectedClipPasteboardSource(context)
+    if not source then
+        return fail(sourceErr)
+    end
+
+    stage = "cache estimator"
+    local started, startErr = startFxPlugCacheEstimator(
+        source,
+        context.durationSeconds,
+        panSmoothSeconds,
+        function(result)
+            local message = format(
+                "Wrote FxPlug stabilization cache for %s: %d sample(s), %.2fs smoothing.\n%s",
+                context.label,
+                tonumber(result.sampleCount) or 0,
+                tonumber(result.panSmoothSeconds) or panSmoothSeconds,
+                FXPLUG_CACHE_PATH
+            )
+            log.i(FXPLUG_CACHE_ACTION_TITLE .. ": " .. message:gsub("\n", " "))
+            displayMessage(FXPLUG_CACHE_ACTION_TITLE, message)
+        end,
+        function(message)
+            fail(message)
+        end
+    )
+    if not started then
+        return fail(startErr)
+    end
+    return true
+end
+
 local function runWithErrorBoundary(title, fn)
     local ok, result = xpcall(fn, debug.traceback)
     if not ok then
@@ -1312,6 +1628,10 @@ function mod.applyDynamicStrengthScale()
     return applyDynamicStrengthScale()
 end
 
+function mod.analyzeFxPlugCache()
+    return analyzeFxPlugCache()
+end
+
 function mod.init(deps)
     if not fcp:isSupported() then return mod end
 
@@ -1322,6 +1642,14 @@ function mod.init(deps)
             runWithErrorBoundary(ACTION_TITLE, mod.applyDynamicStrengthScale)
         end)
         :titled(ACTION_TITLE)
+
+    deps.fcpxCmds
+        :add(FXPLUG_CACHE_ACTION_ID)
+        :groupedBy("video")
+        :whenActivated(function()
+            runWithErrorBoundary(FXPLUG_CACHE_ACTION_TITLE, mod.analyzeFxPlugCache)
+        end)
+        :titled(FXPLUG_CACHE_ACTION_TITLE)
 
     deps.actionmanager.addHandler("fcpx_stabilizer_dynamic_strength_scale", "fcpx")
         :onChoices(function(choices)
@@ -1335,6 +1663,20 @@ function mod.init(deps)
         end)
         :onActionId(function(action)
             return "stabilizer:" .. ((action and action.id) or ACTION_ID)
+        end)
+
+    deps.actionmanager.addHandler("fcpx_stabilizer_fxplug_cache", "fcpx")
+        :onChoices(function(choices)
+            choices:add(FXPLUG_CACHE_ACTION_TITLE)
+                :subText("Precompute selected clip stabilization into the cache file read by Stabilizer Transform")
+                :params({ id = FXPLUG_CACHE_ACTION_ID })
+                :id("stabilizer:" .. FXPLUG_CACHE_ACTION_ID)
+        end)
+        :onExecute(function()
+            runWithErrorBoundary(FXPLUG_CACHE_ACTION_TITLE, mod.analyzeFxPlugCache)
+        end)
+        :onActionId(function(action)
+            return "stabilizer:" .. ((action and action.id) or FXPLUG_CACHE_ACTION_ID)
         end)
 
     return mod

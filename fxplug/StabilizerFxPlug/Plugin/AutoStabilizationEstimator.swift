@@ -1,5 +1,6 @@
 import CoreMedia
 import CoreVideo
+import Darwin
 import Foundation
 import IOSurface
 import simd
@@ -8,17 +9,28 @@ struct StabilizerAutoTransform {
     var pixelOffset: vector_float2
     var rotationDegrees: Float
     var scaleMultiplier: Float
+    var yawPitchProxy: vector_float2
+    var shear: vector_float2
+    var perspective: vector_float2
+    var cropSafety: Float
+    var blurAmount: Float
 
     static let identity = StabilizerAutoTransform(
         pixelOffset: vector_float2(0.0, 0.0),
         rotationDegrees: 0.0,
-        scaleMultiplier: 1.0
+        scaleMultiplier: 1.0,
+        yawPitchProxy: vector_float2(0.0, 0.0),
+        shear: vector_float2(0.0, 0.0),
+        perspective: vector_float2(0.0, 0.0),
+        cropSafety: 1.0,
+        blurAmount: 0.0
     )
 }
 
 private struct GrayFrame {
     let time: Double
     let pixels: [UInt8]
+    let blurAmount: Float
 }
 
 private struct PairMotion {
@@ -27,6 +39,12 @@ private struct PairMotion {
     let residual: Float
     let signedRoll: Float
     let rollMotion: Float
+    let yawProxy: Float
+    let pitchProxy: Float
+    let shearX: Float
+    let shearY: Float
+    let perspectiveX: Float
+    let perspectiveY: Float
 }
 
 enum AutoStabilizationEstimator {
@@ -37,7 +55,7 @@ enum AutoStabilizationEstimator {
     private static let minMatchWidth = 18
     private static let minMatchHeight = 12
     private static let positionGain: Float = 1.75
-    private static let maxScale: Float = 1.18
+    private static let maxScale: Float = 1.35
 
     static func estimate(
         sourceImages: [FxImageTile],
@@ -59,10 +77,22 @@ enum AutoStabilizationEstimator {
             return .identity
         }
 
-        let smoothWindowSeconds = min(12.0, max(1.0, panSmoothSeconds))
+        let smoothWindowSeconds = max(0.1, panSmoothSeconds)
 
         var motions = [
-            PairMotion(dx: 0.0, dy: 0.0, residual: 0.0, signedRoll: 0.0, rollMotion: 0.0)
+            PairMotion(
+                dx: 0.0,
+                dy: 0.0,
+                residual: 0.0,
+                signedRoll: 0.0,
+                rollMotion: 0.0,
+                yawProxy: 0.0,
+                pitchProxy: 0.0,
+                shearX: 0.0,
+                shearY: 0.0,
+                perspectiveX: 0.0,
+                perspectiveY: 0.0
+            )
         ]
         for index in 1..<frames.count {
             motions.append(pairMotion(previous: frames[index - 1].pixels, current: frames[index].pixels))
@@ -71,6 +101,12 @@ enum AutoStabilizationEstimator {
         let pathX = cumulative(motions.map(\.dx))
         let pathY = cumulative(motions.map(\.dy))
         let pathRoll = cumulative(motions.map { radiansToDegrees($0.signedRoll) })
+        let pathYaw = cumulative(motions.map(\.yawProxy))
+        let pathPitch = cumulative(motions.map(\.pitchProxy))
+        let pathShearX = cumulative(motions.map(\.shearX))
+        let pathShearY = cumulative(motions.map(\.shearY))
+        let pathPerspectiveX = cumulative(motions.map(\.perspectiveX))
+        let pathPerspectiveY = cumulative(motions.map(\.perspectiveY))
         let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
         let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
@@ -78,16 +114,30 @@ enum AutoStabilizationEstimator {
         let smoothX = timeWeightedAverage(pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let smoothY = timeWeightedAverage(pathY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let smoothRoll = timeWeightedAverage(pathRoll, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothYaw = timeWeightedAverage(pathYaw, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothPitch = timeWeightedAverage(pathPitch, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothShearX = timeWeightedAverage(pathShearX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothShearY = timeWeightedAverage(pathShearY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothPerspectiveX = timeWeightedAverage(pathPerspectiveX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothPerspectiveY = timeWeightedAverage(pathPerspectiveY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
 
         let xScale = outputSize.x / Float(sampleWidth)
         let yScale = outputSize.y / Float(sampleHeight)
-        let compensationX = -(pathX[centerIndex] - smoothX) * xScale * positionGain
-        let compensationY = -(pathY[centerIndex] - smoothY) * yScale * positionGain
-        let compensationRotation = -(pathRoll[centerIndex] - smoothRoll)
+        let residual = maxValue(motions.map(\.residual), indices: activeIndices)
+        let blurAmount = timeWeightedAverage(frames.map(\.blurAmount), frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let confidence = clamp(1.0 - (residual * 1.6) - (blurAmount * 0.35), min: 0.25, max: 1.0)
+        let compensationX = -(pathX[centerIndex] - smoothX) * xScale * positionGain * confidence
+        let compensationY = -(pathY[centerIndex] - smoothY) * yScale * positionGain * confidence
+        let compensationRotation = -(pathRoll[centerIndex] - smoothRoll) * confidence
+        let compensationYaw = clamp(-(pathYaw[centerIndex] - smoothYaw) * 1.4 * confidence, min: -0.18, max: 0.18)
+        let compensationPitch = clamp(-(pathPitch[centerIndex] - smoothPitch) * 1.4 * confidence, min: -0.18, max: 0.18)
+        let compensationShearX = clamp(-(pathShearX[centerIndex] - smoothShearX) * 1.3 * confidence, min: -0.16, max: 0.16)
+        let compensationShearY = clamp(-(pathShearY[centerIndex] - smoothShearY) * 1.3 * confidence, min: -0.16, max: 0.16)
+        let compensationPerspectiveX = clamp(-(pathPerspectiveX[centerIndex] - smoothPerspectiveX) * 1.2 * confidence, min: -0.16, max: 0.16)
+        let compensationPerspectiveY = clamp(-(pathPerspectiveY[centerIndex] - smoothPerspectiveY) * 1.2 * confidence, min: -0.16, max: 0.16)
 
         let localMotionIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= (4.5 / 30.0) }
         let activeMotionIndices = localMotionIndices.isEmpty ? [centerIndex] : Array(localMotionIndices)
-        let residual = maxValue(motions.map(\.residual), indices: activeMotionIndices)
         let rollMotion = maxValue(motions.map(\.rollMotion), indices: activeMotionIndices)
         let translationScale = max(
             1.0 + (2.0 * abs(compensationX) / max(1.0, outputSize.x)),
@@ -95,12 +145,20 @@ enum AutoStabilizationEstimator {
         )
         let rotationScale = 1.0 + min(0.12, abs(compensationRotation) * 0.006)
         let jitterScale = 1.0 + min(0.10, (residual * 0.10) + (rollMotion * 0.45))
-        let scale = min(maxScale, max(1.0, translationScale, rotationScale, jitterScale))
+        let warpScale = 1.0 + min(0.20, (abs(compensationYaw) + abs(compensationPitch) + abs(compensationShearX) + abs(compensationShearY) + abs(compensationPerspectiveX) + abs(compensationPerspectiveY)) * 0.55)
+        let blurScale = 1.0 + min(0.06, blurAmount * 0.06)
+        let cropSafety = max(1.0, translationScale, rotationScale, warpScale)
+        let scale = min(maxScale, max(cropSafety, jitterScale, blurScale))
 
         return StabilizerAutoTransform(
             pixelOffset: vector_float2(compensationX, compensationY),
             rotationDegrees: compensationRotation,
-            scaleMultiplier: scale
+            scaleMultiplier: scale,
+            yawPitchProxy: vector_float2(compensationYaw, compensationPitch),
+            shear: vector_float2(compensationShearX, compensationShearY),
+            perspective: vector_float2(compensationPerspectiveX, compensationPerspectiveY),
+            cropSafety: cropSafety,
+            blurAmount: blurAmount
         )
     }
 
@@ -152,7 +210,7 @@ enum AutoStabilizationEstimator {
                 pixels[(sampleY * sampleWidth) + sampleX] = value
             }
         }
-        return GrayFrame(time: time, pixels: pixels)
+        return GrayFrame(time: time, pixels: pixels, blurAmount: blurAmount(pixels))
     }
 
     private static func bgraLuma(baseAddress: UnsafeMutableRawPointer, x: Int, y: Int, bytesPerRow: Int) -> UInt8 {
@@ -250,19 +308,59 @@ enum AutoStabilizationEstimator {
         let right = estimateShift(previous: previous, current: current, x0: sampleWidth - 32, y0: 8, width: 28, height: sampleHeight - 16, radius: localSearchRadius, center: center, refine: false)
         let top = estimateShift(previous: previous, current: current, x0: 12, y0: 4, width: sampleWidth - 24, height: 20, radius: localSearchRadius, center: center, refine: false)
         let bottom = estimateShift(previous: previous, current: current, x0: 12, y0: sampleHeight - 24, width: sampleWidth - 24, height: 20, radius: localSearchRadius, center: center, refine: false)
+        let topLeft = estimateShift(previous: previous, current: current, x0: 6, y0: 5, width: 24, height: 16, radius: localSearchRadius, center: center, refine: false)
+        let topRight = estimateShift(previous: previous, current: current, x0: sampleWidth - 30, y0: 5, width: 24, height: 16, radius: localSearchRadius, center: center, refine: false)
+        let bottomLeft = estimateShift(previous: previous, current: current, x0: 6, y0: sampleHeight - 21, width: 24, height: 16, radius: localSearchRadius, center: center, refine: false)
+        let bottomRight = estimateShift(previous: previous, current: current, x0: sampleWidth - 30, y0: sampleHeight - 21, width: 24, height: 16, radius: localSearchRadius, center: center, refine: false)
 
         let rollFromVertical = (right.dy - left.dy) / Float(max(1, sampleWidth - 32))
-        let rollFromHorizontal = -(bottom.dx - top.dx) / Float(max(1, sampleHeight - 16))
+        let horizontalSlope = (bottom.dx - top.dx) / Float(max(1, sampleHeight - 16))
+        let rollFromHorizontal = -horizontalSlope
         let signedRoll = (rollFromVertical + rollFromHorizontal) * 0.5
         let rollMotion = max(abs(rollFromVertical), abs(rollFromHorizontal))
+        let yawProxy = (right.dx - left.dx) / Float(max(1, sampleWidth - 32))
+        let pitchProxy = (bottom.dy - top.dy) / Float(max(1, sampleHeight - 16))
+        let shearX = horizontalSlope + signedRoll
+        let shearY = rollFromVertical - signedRoll
+        let topSpread = topRight.dx - topLeft.dx
+        let bottomSpread = bottomRight.dx - bottomLeft.dx
+        let leftVerticalSpread = bottomLeft.dy - topLeft.dy
+        let rightVerticalSpread = bottomRight.dy - topRight.dy
+        let perspectiveX = (topSpread - bottomSpread) / Float(max(1, sampleWidth - 12))
+        let perspectiveY = (leftVerticalSpread - rightVerticalSpread) / Float(max(1, sampleHeight - 10))
 
         return PairMotion(
             dx: global.dx,
             dy: global.dy,
             residual: global.score,
             signedRoll: signedRoll,
-            rollMotion: rollMotion
+            rollMotion: rollMotion,
+            yawProxy: yawProxy,
+            pitchProxy: pitchProxy,
+            shearX: shearX,
+            shearY: shearY,
+            perspectiveX: perspectiveX,
+            perspectiveY: perspectiveY
         )
+    }
+
+    private static func blurAmount(_ pixels: [UInt8]) -> Float {
+        var totalGradient: Float = 0.0
+        var count: Float = 0.0
+        for y in 1..<(sampleHeight - 1) {
+            let row = y * sampleWidth
+            for x in 1..<(sampleWidth - 1) {
+                let horizontal = abs(Int(pixels[row + x + 1]) - Int(pixels[row + x - 1]))
+                let vertical = abs(Int(pixels[row + sampleWidth + x]) - Int(pixels[row - sampleWidth + x]))
+                totalGradient += Float(horizontal + vertical) / 510.0
+                count += 1.0
+            }
+        }
+        guard count > 0.0 else {
+            return 1.0
+        }
+        let sharpness = totalGradient / count
+        return 1.0 - clamp((sharpness - 0.015) / 0.11, min: 0.0, max: 1.0)
     }
 
     private static func estimateShift(
@@ -432,5 +530,164 @@ enum AutoStabilizationEstimator {
 
     private static func clamp(_ value: Float, min minValue: Float, max maxValue: Float) -> Float {
         Swift.max(minValue, Swift.min(maxValue, value))
+    }
+}
+
+private struct StabilizationCacheFile: Decodable {
+    let schemaVersion: Int
+    let model: String
+    let mediaWidth: Float?
+    let mediaHeight: Float?
+    let samples: [StabilizationCacheSample]
+}
+
+private struct StabilizationCacheSample: Decodable {
+    let timeSeconds: Double
+    let pixelOffsetX: Float
+    let pixelOffsetY: Float
+    let rotationDegrees: Float
+    let scaleMultiplier: Float
+    let yawPitchProxyX: Float
+    let yawPitchProxyY: Float
+    let shearX: Float
+    let shearY: Float
+    let perspectiveX: Float
+    let perspectiveY: Float
+    let cropSafety: Float
+    let blurAmount: Float
+}
+
+enum StabilizationCacheStore {
+    private static let lock = NSLock()
+    private static var cachedURL: URL?
+    private static var cachedModifiedDate: Date?
+    private static var cachedFile: StabilizationCacheFile?
+
+    static func hasUsableCache() -> Bool {
+        loadCache() != nil
+    }
+
+    static func transform(at renderTime: CMTime, outputSize: vector_float2) -> StabilizerAutoTransform? {
+        guard let cache = loadCache(), cache.schemaVersion == 1, Self.supportedCacheModels.contains(cache.model) else {
+            return nil
+        }
+        let samples = cache.samples.sorted { $0.timeSeconds < $1.timeSeconds }
+        guard let first = samples.first, let last = samples.last else {
+            return nil
+        }
+        let seconds = CMTimeGetSeconds(renderTime)
+        guard seconds.isFinite else {
+            return nil
+        }
+
+        let sample: StabilizationCacheSample
+        if seconds <= first.timeSeconds {
+            sample = first
+        } else if seconds >= last.timeSeconds {
+            sample = last
+        } else {
+            var lowerIndex = 0
+            var upperIndex = samples.count - 1
+            for index in 1..<samples.count where samples[index].timeSeconds >= seconds {
+                lowerIndex = index - 1
+                upperIndex = index
+                break
+            }
+            sample = interpolate(samples[lowerIndex], samples[upperIndex], at: seconds)
+        }
+
+        let sourceWidth = max(1.0, cache.mediaWidth ?? outputSize.x)
+        let sourceHeight = max(1.0, cache.mediaHeight ?? outputSize.y)
+        let outputScale = vector_float2(outputSize.x / sourceWidth, outputSize.y / sourceHeight)
+        return StabilizerAutoTransform(
+            pixelOffset: vector_float2(sample.pixelOffsetX * outputScale.x, sample.pixelOffsetY * outputScale.y),
+            rotationDegrees: sample.rotationDegrees,
+            scaleMultiplier: sample.scaleMultiplier,
+            yawPitchProxy: vector_float2(sample.yawPitchProxyX, sample.yawPitchProxyY),
+            shear: vector_float2(sample.shearX, sample.shearY),
+            perspective: vector_float2(sample.perspectiveX, sample.perspectiveY),
+            cropSafety: sample.cropSafety,
+            blurAmount: sample.blurAmount
+        )
+    }
+
+    private static func loadCache() -> StabilizationCacheFile? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        for url in cacheURLs() {
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                continue
+            }
+            let modifiedDate = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+            if cachedURL == url, cachedModifiedDate == modifiedDate {
+                return cachedFile
+            }
+            guard let data = try? Data(contentsOf: url),
+                  let cache = try? JSONDecoder().decode(StabilizationCacheFile.self, from: data) else {
+                cachedURL = url
+                cachedModifiedDate = modifiedDate
+                cachedFile = nil
+                return nil
+            }
+            cachedURL = url
+            cachedModifiedDate = modifiedDate
+            cachedFile = cache
+            return cache
+        }
+
+        cachedURL = nil
+        cachedModifiedDate = nil
+        cachedFile = nil
+        return nil
+    }
+
+    private static let supportedCacheModels: Set<String> = [
+        "fxplug-precomputed-stabilization-v1",
+        "fxplug-metal-precomputed-stabilization-v1",
+    ]
+
+    private static func cacheURLs() -> [URL] {
+        var homes: [String] = []
+        if let envHome = ProcessInfo.processInfo.environment["HOME"], !envHome.isEmpty {
+            homes.append(envHome)
+        }
+        if let passwordEntry = getpwuid(getuid()), let directory = passwordEntry.pointee.pw_dir {
+            homes.append(String(cString: directory))
+        }
+        homes.append(NSHomeDirectory())
+
+        var urls: [URL] = []
+        var seen = Set<String>()
+        for home in homes {
+            let path = (home as NSString).appendingPathComponent("Library/Application Support/CommandPost/StabilizerFxPlug/current.json")
+            if seen.insert(path).inserted {
+                urls.append(URL(fileURLWithPath: path))
+            }
+        }
+        return urls
+    }
+
+    private static func interpolate(_ lower: StabilizationCacheSample, _ upper: StabilizationCacheSample, at seconds: Double) -> StabilizationCacheSample {
+        let span = max(1e-9, upper.timeSeconds - lower.timeSeconds)
+        let amount = Float(max(0.0, min(1.0, (seconds - lower.timeSeconds) / span)))
+        func mix(_ a: Float, _ b: Float) -> Float {
+            a + ((b - a) * amount)
+        }
+        return StabilizationCacheSample(
+            timeSeconds: seconds,
+            pixelOffsetX: mix(lower.pixelOffsetX, upper.pixelOffsetX),
+            pixelOffsetY: mix(lower.pixelOffsetY, upper.pixelOffsetY),
+            rotationDegrees: mix(lower.rotationDegrees, upper.rotationDegrees),
+            scaleMultiplier: mix(lower.scaleMultiplier, upper.scaleMultiplier),
+            yawPitchProxyX: mix(lower.yawPitchProxyX, upper.yawPitchProxyX),
+            yawPitchProxyY: mix(lower.yawPitchProxyY, upper.yawPitchProxyY),
+            shearX: mix(lower.shearX, upper.shearX),
+            shearY: mix(lower.shearY, upper.shearY),
+            perspectiveX: mix(lower.perspectiveX, upper.perspectiveX),
+            perspectiveY: mix(lower.perspectiveY, upper.perspectiveY),
+            cropSafety: mix(lower.cropSafety, upper.cropSafety),
+            blurAmount: mix(lower.blurAmount, upper.blurAmount)
+        )
     }
 }

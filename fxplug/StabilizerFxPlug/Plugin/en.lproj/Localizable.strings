@@ -1,2 +1,2 @@
 "StabilizerFxPlug::Stabilizer Transform" = "Stabilizer Transform";
-"StabilizerFxPlug::6-second pan smoothing with near-frame XYZ/rotation stabilizer." = "6-second pan smoothing with near-frame XYZ/rotation stabilizer.";
+"StabilizerFxPlug::Configurable pan smoothing with prerender cache, XYZ, rotation, shear, perspective, crop, and blur analysis." = "Configurable pan smoothing with prerender cache, XYZ, rotation, shear, perspective, crop, and blur analysis.";

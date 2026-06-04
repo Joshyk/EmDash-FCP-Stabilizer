@@ -40,20 +40,37 @@
 ## Native FxPlug
 
 The native FxPlug effect lives under `fxplug/StabilizerFxPlug/` and appears in Final Cut Pro
-as `StabilizerFxPlug::Stabilizer Transform` in the `CommandPost Em Dash` group after build
-and PluginKit registration.
+as `Stabilizer Transform` in the `CommandPost Em Dash` group after build, Motion Template
+install, and PluginKit registration.
 
 - It does not write Final Cut Pro Transform keyframes.
 - The Xcode shared scheme installs each successful build to
-  `~/Applications/StabilizerFxPlug.app` and registers the embedded FxPlug automatically.
+  `/Applications/StabilizerFxPlug.app` and registers the embedded FxPlug automatically.
 - Restart Final Cut Pro after rebuilding if it was already open.
-- It estimates X/Y motion and roll from low-resolution source frames requested by FxPlug.
-- It treats Z correction as dynamic scale.
+- It estimates X/Y motion, roll, yaw/pitch proxy motion, shear, perspective warp, crop
+  safety, and blur amount from low-resolution source frames requested by FxPlug.
+- It treats Z correction as dynamic scale and yaw/pitch as image-space proxy values, not
+  true solved 3D camera orientation.
 - It requests near-frame samples around the render time for fine gimbal jitter, and smooths
-  pan motion with `Pan Smooth Seconds`, defaulting to a 6-second centered window.
-- It exposes manual trim controls for Offset X/Y, Rotation Degrees, and Scale Percent.
+  pan motion with the `Pan Smooth Seconds` text field, defaulting to a 6-second centered
+  window.
+- To prerender the motion analysis, select exactly one timeline video clip in Final Cut Pro
+  and run `Stabilizer: Analyze FxPlug Cache` from CommandPost. It writes:
+
+  ```text
+  ~/Library/Application Support/CommandPost/StabilizerFxPlug/current.json
+  ```
+
+  Keep `Use Prerender Cache` enabled in `Stabilizer Transform` to use that file. Rebuild the
+  cache after changing the clip, source range, or desired smoothing window. If the cache file
+  is missing, the FxPlug uses its live frame-analysis path. The cache action shows a compact
+  progress bar while it decodes media, downsamples frames, analyzes motion on Metal, and
+  writes the cache. The cache generator uses AVFoundation/VideoToolbox for decode and Metal
+  compute for downsampling plus block-matching motion analysis. CPU code only orchestrates
+  sampling and JSON assembly. If Metal or hardware decode cannot start, the action fails
+  visibly instead of silently switching back to the Python CPU estimator.
 - `Debug Overlay` is normally off. Turn it on only while checking whether the FxPlug runtime
-  is producing X/Y/Z/rotation compensation values.
+  is producing X/Y/Z/rotation plus yaw/pitch, shear, perspective, and blur diagnostics.
 
 ## Error Logging
 
@@ -68,7 +85,7 @@ and PluginKit registration.
 
 ## Development Reload
 
-CommandPost does not auto reload this repo when Lua or Python files change. After a
+CommandPost does not auto reload this repo when Lua, Swift, or Python files change. After a
 programming update, manually reload or restart CommandPost before running the action.
 
 CommandPost reload shortcut exists now.
