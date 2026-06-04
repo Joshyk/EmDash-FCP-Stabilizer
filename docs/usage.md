@@ -37,6 +37,24 @@
 - Transform Scale All: keyframed from the estimated edge margin
 - Rolling Shutter: unchanged
 
+## Native FxPlug
+
+The native FxPlug effect lives under `fxplug/StabilizerFxPlug/` and appears in Final Cut Pro
+as `StabilizerFxPlug::Stabilizer Transform` in the `CommandPost Em Dash` group after build
+and PluginKit registration.
+
+- It does not write Final Cut Pro Transform keyframes.
+- The Xcode shared scheme installs each successful build to
+  `~/Applications/StabilizerFxPlug.app` and registers the embedded FxPlug automatically.
+- Restart Final Cut Pro after rebuilding if it was already open.
+- It estimates X/Y motion and roll from low-resolution source frames requested by FxPlug.
+- It treats Z correction as dynamic scale.
+- It requests near-frame samples around the render time for fine gimbal jitter, and smooths
+  pan motion with `Pan Smooth Seconds`, defaulting to a 6-second centered window.
+- It exposes manual trim controls for Offset X/Y, Rotation Degrees, and Scale Percent.
+- `Debug Overlay` is normally off. Turn it on only while checking whether the FxPlug runtime
+  is producing X/Y/Z/rotation compensation values.
+
 ## Error Logging
 
 - If Transform keyframe creation cannot be confirmed, the action stops instead of reporting

@@ -21,6 +21,14 @@ Stabilization effect. Select exactly one timeline clip, then run the action from
 CommandPost. The plugin does not export or import XML; it uses Final Cut Pro's Edit >
 Copy pasteboard data for the selected clip.
 
+Native FxPlug migration work lives under `fxplug/StabilizerFxPlug/`. That buildable Xcode
+project is separate from the active CommandPost plugin and applies automatic X/Y/Z-scale
+and rotation compensation as a native Final Cut Pro effect without writing Transform
+keyframes. It samples near-frame motion for fine gimbal jitter and uses a 6-second centered
+window to smooth pan motion. The shared Xcode scheme installs each successful Debug build to
+`~/Applications/StabilizerFxPlug.app` and registers its embedded FxPlug so Final Cut Pro
+can load the effect from that persistent app path.
+
 Transform keyframes are created through CommandPost's official video inspector keyframe
 API before values are written into the keyframe, then confirmed from the Transform row
 controls when Final Cut Pro exposes that state. If Final Cut Pro keeps reporting Add

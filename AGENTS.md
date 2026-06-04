@@ -37,11 +37,18 @@ Stabilizer/
   stabilizer.lua
   scripts/
   docs/
+  fxplug/
   installed_backups/
 ```
 
 Keep `init.lua` as the CommandPost entry point and keep workflow logic in
 `stabilizer.lua`. Keep source-media analysis helpers in `scripts/`.
+
+`fxplug/` is a separate native Final Cut Pro/Motion FxPlug 4 migration scaffold. Do not
+mix FxPlug source into the CommandPost runtime path. The FxPlug target requires full Xcode
+and the local FxPlug SDK; the CommandPost Lua plugin remains the active runtime until an
+FxPlug wrapper app/plugin is validated in Final Cut Pro. The Xcode project lives at
+`fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj`.
 
 ## Test Project
 
@@ -72,8 +79,16 @@ reload or restart.
 
 CommandPost reload shortcut exists now.
 
-On this machine, run `cpr` or `cmdpost-reload` to request a CommandPost reload quickly. It
+On this machine, `cpr` or `cmdpost-reload` requests a CommandPost reload quickly. It
 lives at `/usr/local/bin/cmdpost-reload`, with `/usr/local/bin/cpr` symlinked to it.
+
+Codex must ask the user before reloading CommandPost. Use a Yes/No confirmation button
+when the UI supports it; otherwise ask a clear text question and wait for the answer. Only
+run `cpr`, `cmdpost-reload`, or any `cmdpost` command that calls `hs.reload()` after the
+user explicitly answers Yes. If the user answers No or does not answer, do not reload and
+state that reload-dependent runtime verification was skipped. Treat indirect reload
+triggers through aliases, scripts, shell command substitution, or helper commands as reload
+attempts that require the same approval.
 
 It calls:
 
@@ -108,3 +123,15 @@ luac -p init.lua stabilizer.lua
 python3 -m py_compile scripts/estimate_stabilization_scale.py
 git diff --check -- init.lua stabilizer.lua scripts/estimate_stabilization_scale.py AGENTS.md README.md docs/usage.md
 ```
+
+After FxPlug edits, also run:
+
+```sh
+xcodebuild -project fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj -scheme StabilizerFxPlug -configuration Debug -derivedDataPath /tmp/StabilizerFxPlugDerived build
+pluginkit -m -A -p FxPlug -i com.justadev.CommandPostEmDash.StabilizerFxPlug.Plugin
+git diff --check -- fxplug/StabilizerFxPlug
+```
+
+The `StabilizerFxPlug` shared scheme has a post-build action that runs
+`fxplug/StabilizerFxPlug/scripts/install_debug_app.sh`. A successful build should install
+`~/Applications/StabilizerFxPlug.app` and register its embedded pluginkit for Final Cut Pro.
