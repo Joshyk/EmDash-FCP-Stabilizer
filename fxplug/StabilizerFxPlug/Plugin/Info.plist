@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.12</string>
+	<string>0.2.16</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>PlugInKit</key>
@@ -27,7 +27,7 @@
 			<key>com.apple.protocol</key>
 			<string>FxPlug</string>
 			<key>com.apple.version</key>
-			<string>1.1</string>
+			<string>1.5</string>
 		</dict>
 		<key>PrincipalClass</key>
 		<string>FxPrincipal</string>
@@ -61,7 +61,7 @@
 			<key>group</key>
 			<string>AF02FE29-857F-44AF-885C-CA7083B68584</string>
 			<key>infoString</key>
-			<string>Host-managed stabilization analysis with explicit Host Analysis and Live Frames modes, XYZ, rotation, shear, perspective, crop, and blur compensation.</string>
+			<string>Host-managed stabilization analysis with slider-only pan smoothing, visible Host Analysis status, persisted prepared analysis, Live Frames mode, XYZ, rotation, shear, perspective, crop, and blur compensation.</string>
 			<key>protocolNames</key>
 			<array>
 				<string>FxFilter</string>
@@ -69,7 +69,7 @@
 			<key>uuid</key>
 			<string>13C945BF-E268-4062-97F7-73A2BB593BE0</string>
 			<key>version</key>
-			<string>1.0</string>
+			<string>1.5</string>
 		</dict>
 	</array>
 	<key>XPCService</key>

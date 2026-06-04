@@ -30,8 +30,15 @@ that state when a failure path needs diagnostics.
 The native `Stabilizer Transform` FxPlug supports only explicit `Host Analysis` and
 `Live Frames` modes. `Host Analysis` is the primary long-term path and uses Final Cut Pro's
 FxPlug analysis infrastructure to request GPU analysis frames from the host. `Live Frames`
-requests the analysis window during render. Do not add prerender-cache support, hidden cache
-fallbacks, or Python CPU fallbacks to the native FxPlug path.
+requests the analysis window during render. Completed Host Analysis frame sets should be
+persisted by the FxPlug runtime at
+`/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` and
+must be validated against the current source frame before reuse. Host Analysis playback
+must render from prepared motion paths; do not re-run full block matching across the
+analyzed frame set on every render frame. Keep `Host Analysis Status` visible in the
+Inspector and update it to `Ready (... frames)` after completed analysis. Do not add the
+old CommandPost prerender-cache action, `current.json` support, hidden cache fallbacks, or
+Python CPU fallbacks to the native FxPlug path.
 
 ## Source Layout
 

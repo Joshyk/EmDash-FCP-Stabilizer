@@ -167,10 +167,10 @@
 		<target object="10036" channel="./6" name="Auto Stabilize"/>
 		<target object="10036" channel="./7" name="XYZ Strength"/>
 		<target object="10036" channel="./8" name="Rotation Strength"/>
-		<target object="10036" channel="./11" name="Pan Smooth Seconds"/>
 		<target object="10036" channel="./9" name="Pan Smooth Seconds Slider"/>
 		<target object="10036" channel="./13" name="Analysis Source"/>
 		<target object="10036" channel="./14" name="Start Host Analysis"/>
+		<target object="10036" channel="./15" name="Host Analysis Status"/>
 		<target object="10036" channel="./10" name="Debug Overlay"/>
 	</publishSettings>
 	<currentFrame>215040 153600 1 0</currentFrame>
@@ -269,9 +269,9 @@
 				<parameter name="Rotation Strength" id="8" flags="12884901904" default="1" value="1"/>
 				<parameter name="Pan Smooth Seconds Slider" id="9" flags="12884901904" default="6" value="6"/>
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
-				<parameter name="Pan Smooth Seconds" id="11" flags="12884901904" default="6" value="6"/>
 				<parameter name="Analysis Source" id="13" flags="12884901904" default="1" value="1"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
+				<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis" value="Needs Analysis"/>
 				<parameter name="Mix" id="10001" flags="12884901888" default="1" value="1"/>
 				<parameter name="Flip" id="10002" flags="12889161760" default="0" value="0"/>
 				<parameter name="Input Points" id="10003" flags="12889161760" default="1" value="1"/>

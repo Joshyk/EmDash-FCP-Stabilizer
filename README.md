@@ -26,7 +26,14 @@ project is separate from the active CommandPost plugin and applies automatic X/Y
 and rotation compensation as a native Final Cut Pro effect without writing Transform
 keyframes. The native effect supports `Analysis Source` = `Host Analysis` and `Live Frames`.
 `Host Analysis` is the primary long-term path through Final Cut Pro's FxPlug analysis
-infrastructure and can be started explicitly with `Start Host Analysis`; `Live Frames`
+infrastructure and can be started explicitly with `Start Host Analysis`. Completed Host
+Analysis frame sets are persisted to
+`/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` and
+reused only after the current source frame validates against the saved frame fingerprints;
+mismatched cache data is deleted and the effect waits for a new Host Analysis run. The
+cache includes prepared motion paths so playback renders from precomputed values instead of
+running block matching again on every frame. The Inspector shows `Host Analysis Status`;
+after a completed analysis it should read `Ready (... frames)`. `Live Frames`
 requests render-time source frames directly. It also evaluates yaw/pitch proxy motion, shear,
 perspective warp, crop safety, and blur amount from regional source-frame motion. The shared
 Xcode scheme installs each successful Debug build to

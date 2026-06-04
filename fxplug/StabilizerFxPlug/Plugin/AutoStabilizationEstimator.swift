@@ -33,6 +33,22 @@ struct StabilizerAnalysisFrame {
     let blurAmount: Float
 }
 
+struct StabilizerPreparedAnalysis {
+    let frames: [StabilizerAnalysisFrame]
+    let residuals: [Float]
+    let rollMotion: [Float]
+    let pathX: [Float]
+    let pathY: [Float]
+    let pathRoll: [Float]
+    let pathYaw: [Float]
+    let pathPitch: [Float]
+    let pathShearX: [Float]
+    let pathShearY: [Float]
+    let pathPerspectiveX: [Float]
+    let pathPerspectiveY: [Float]
+    let blurAmounts: [Float]
+}
+
 private struct PairMotion {
     let dx: Float
     let dy: Float
@@ -75,23 +91,8 @@ enum AutoStabilizationEstimator {
         )
     }
 
-    static func estimate(
-        analysisFrames frames: [StabilizerAnalysisFrame],
-        renderTime: CMTime,
-        outputSize: vector_float2,
-        panSmoothSeconds: Double
-    ) -> StabilizerAutoTransform {
-        let renderSeconds = CMTimeGetSeconds(renderTime)
-        guard renderSeconds.isFinite else {
-            return .identity
-        }
-
-        guard frames.count >= 3 else {
-            return .identity
-        }
-
-        let smoothWindowSeconds = max(0.1, panSmoothSeconds)
-
+    static func prepare(analysisFrames frames: [StabilizerAnalysisFrame]) -> StabilizerPreparedAnalysis {
+        let sortedFrames = frames.sorted { $0.time < $1.time }
         var motions = [
             PairMotion(
                 dx: 0.0,
@@ -107,51 +108,92 @@ enum AutoStabilizationEstimator {
                 perspectiveY: 0.0
             )
         ]
-        for index in 1..<frames.count {
-            motions.append(pairMotion(previous: frames[index - 1].pixels, current: frames[index].pixels))
+        if sortedFrames.count >= 2 {
+            for index in 1..<sortedFrames.count {
+                motions.append(pairMotion(previous: sortedFrames[index - 1].pixels, current: sortedFrames[index].pixels))
+            }
         }
 
-        let pathX = cumulative(motions.map(\.dx))
-        let pathY = cumulative(motions.map(\.dy))
-        let pathRoll = cumulative(motions.map { radiansToDegrees($0.signedRoll) })
-        let pathYaw = cumulative(motions.map(\.yawProxy))
-        let pathPitch = cumulative(motions.map(\.pitchProxy))
-        let pathShearX = cumulative(motions.map(\.shearX))
-        let pathShearY = cumulative(motions.map(\.shearY))
-        let pathPerspectiveX = cumulative(motions.map(\.perspectiveX))
-        let pathPerspectiveY = cumulative(motions.map(\.perspectiveY))
+        return StabilizerPreparedAnalysis(
+            frames: sortedFrames,
+            residuals: motions.map(\.residual),
+            rollMotion: motions.map(\.rollMotion),
+            pathX: cumulative(motions.map(\.dx)),
+            pathY: cumulative(motions.map(\.dy)),
+            pathRoll: cumulative(motions.map { radiansToDegrees($0.signedRoll) }),
+            pathYaw: cumulative(motions.map(\.yawProxy)),
+            pathPitch: cumulative(motions.map(\.pitchProxy)),
+            pathShearX: cumulative(motions.map(\.shearX)),
+            pathShearY: cumulative(motions.map(\.shearY)),
+            pathPerspectiveX: cumulative(motions.map(\.perspectiveX)),
+            pathPerspectiveY: cumulative(motions.map(\.perspectiveY)),
+            blurAmounts: sortedFrames.map(\.blurAmount)
+        )
+    }
+
+    static func estimate(
+        analysisFrames frames: [StabilizerAnalysisFrame],
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double
+    ) -> StabilizerAutoTransform {
+        estimate(
+            preparedAnalysis: prepare(analysisFrames: frames),
+            renderTime: renderTime,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds
+        )
+    }
+
+    static func estimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double
+    ) -> StabilizerAutoTransform {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite else {
+            return .identity
+        }
+
+        let frames = analysis.frames
+        guard frames.count >= 3 else {
+            return .identity
+        }
+
+        let smoothWindowSeconds = max(0.1, panSmoothSeconds)
         let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
         let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
 
-        let smoothX = timeWeightedAverage(pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothY = timeWeightedAverage(pathY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothRoll = timeWeightedAverage(pathRoll, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothYaw = timeWeightedAverage(pathYaw, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothPitch = timeWeightedAverage(pathPitch, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothShearX = timeWeightedAverage(pathShearX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothShearY = timeWeightedAverage(pathShearY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothPerspectiveX = timeWeightedAverage(pathPerspectiveX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothPerspectiveY = timeWeightedAverage(pathPerspectiveY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothX = timeWeightedAverage(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothY = timeWeightedAverage(analysis.pathY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothRoll = timeWeightedAverage(analysis.pathRoll, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothYaw = timeWeightedAverage(analysis.pathYaw, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothPitch = timeWeightedAverage(analysis.pathPitch, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothShearX = timeWeightedAverage(analysis.pathShearX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothShearY = timeWeightedAverage(analysis.pathShearY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothPerspectiveX = timeWeightedAverage(analysis.pathPerspectiveX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let smoothPerspectiveY = timeWeightedAverage(analysis.pathPerspectiveY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
 
         let xScale = outputSize.x / Float(sampleWidth)
         let yScale = outputSize.y / Float(sampleHeight)
-        let residual = maxValue(motions.map(\.residual), indices: activeIndices)
-        let blurAmount = timeWeightedAverage(frames.map(\.blurAmount), frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let residual = maxValue(analysis.residuals, indices: activeIndices)
+        let blurAmount = timeWeightedAverage(analysis.blurAmounts, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let confidence = clamp(1.0 - (residual * 1.6) - (blurAmount * 0.35), min: 0.25, max: 1.0)
-        let compensationX = -(pathX[centerIndex] - smoothX) * xScale * positionGain * confidence
-        let compensationY = -(pathY[centerIndex] - smoothY) * yScale * positionGain * confidence
-        let compensationRotation = -(pathRoll[centerIndex] - smoothRoll) * confidence
-        let compensationYaw = clamp(-(pathYaw[centerIndex] - smoothYaw) * 1.4 * confidence, min: -0.18, max: 0.18)
-        let compensationPitch = clamp(-(pathPitch[centerIndex] - smoothPitch) * 1.4 * confidence, min: -0.18, max: 0.18)
-        let compensationShearX = clamp(-(pathShearX[centerIndex] - smoothShearX) * 1.3 * confidence, min: -0.16, max: 0.16)
-        let compensationShearY = clamp(-(pathShearY[centerIndex] - smoothShearY) * 1.3 * confidence, min: -0.16, max: 0.16)
-        let compensationPerspectiveX = clamp(-(pathPerspectiveX[centerIndex] - smoothPerspectiveX) * 1.2 * confidence, min: -0.16, max: 0.16)
-        let compensationPerspectiveY = clamp(-(pathPerspectiveY[centerIndex] - smoothPerspectiveY) * 1.2 * confidence, min: -0.16, max: 0.16)
+        let compensationX = -(analysis.pathX[centerIndex] - smoothX) * xScale * positionGain * confidence
+        let compensationY = -(analysis.pathY[centerIndex] - smoothY) * yScale * positionGain * confidence
+        let compensationRotation = -(analysis.pathRoll[centerIndex] - smoothRoll) * confidence
+        let compensationYaw = clamp(-(analysis.pathYaw[centerIndex] - smoothYaw) * 1.4 * confidence, min: -0.18, max: 0.18)
+        let compensationPitch = clamp(-(analysis.pathPitch[centerIndex] - smoothPitch) * 1.4 * confidence, min: -0.18, max: 0.18)
+        let compensationShearX = clamp(-(analysis.pathShearX[centerIndex] - smoothShearX) * 1.3 * confidence, min: -0.16, max: 0.16)
+        let compensationShearY = clamp(-(analysis.pathShearY[centerIndex] - smoothShearY) * 1.3 * confidence, min: -0.16, max: 0.16)
+        let compensationPerspectiveX = clamp(-(analysis.pathPerspectiveX[centerIndex] - smoothPerspectiveX) * 1.2 * confidence, min: -0.16, max: 0.16)
+        let compensationPerspectiveY = clamp(-(analysis.pathPerspectiveY[centerIndex] - smoothPerspectiveY) * 1.2 * confidence, min: -0.16, max: 0.16)
 
         let localMotionIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= (4.5 / 30.0) }
         let activeMotionIndices = localMotionIndices.isEmpty ? [centerIndex] : Array(localMotionIndices)
-        let rollMotion = maxValue(motions.map(\.rollMotion), indices: activeMotionIndices)
+        let rollMotion = maxValue(analysis.rollMotion, indices: activeMotionIndices)
         let translationScale = max(
             1.0 + (2.0 * abs(compensationX) / max(1.0, outputSize.x)),
             1.0 + (2.0 * abs(compensationY) / max(1.0, outputSize.y))

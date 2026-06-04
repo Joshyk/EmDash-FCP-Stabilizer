@@ -56,10 +56,22 @@ install, and PluginKit registration.
   uses render-time source-frame requests.
 - `Host Analysis` is the long-term primary path. It asks Final Cut Pro to run a forward GPU
   analysis for the effect, stores low-resolution frame analysis inside the plug-in runtime,
-  and renders from that analyzed frame set. If analysis does not start automatically after
-  applying the effect, click `Start Host Analysis` in the effect inspector.
+  persists completed analysis to the FxPlug Application Support cache, and renders from
+  that analyzed frame set. On the next load, the effect validates the current source frame
+  against the saved frame fingerprints before using the persisted cache. If the cache does
+  not match, it is deleted and the effect waits for a new Host Analysis run. If analysis
+  does not start automatically after applying the effect, click `Start Host Analysis` in
+  the effect inspector.
+- Playback uses prepared motion paths from the completed Host Analysis. It must not run
+  full frame-to-frame block matching on every rendered playback frame.
+- The Host Analysis cache is written to:
+  `/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json`.
+  `Start Host Analysis` clears the saved cache before requesting a new host analysis pass.
+- `Host Analysis Status` in the effect Inspector shows the current state. After a completed
+  Host Analysis run it should show `Ready (... frames)`. If the status says `Needs Analysis`
+  or `Cache Rejected - Run Host Analysis`, click `Start Host Analysis`.
 - `Live Frames` requests near-frame samples around the render time for fine gimbal jitter,
-  and smooths pan motion with the `Pan Smooth Seconds` text field, defaulting to a 6-second
+  and smooths pan motion with the `Pan Smooth Seconds Slider`, defaulting to a 6-second
   centered window.
 - `Debug Overlay` is normally off. Turn it on only while checking whether the FxPlug runtime
   is producing X/Y/Z/rotation plus yaw/pitch, shear, perspective, and blur diagnostics.

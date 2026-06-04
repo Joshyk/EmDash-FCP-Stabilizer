@@ -16,17 +16,26 @@ Transform keyframes.
   long-term path is `Host Analysis`.
 - Uses Final Cut Pro's FxPlug analysis infrastructure in `Host Analysis` mode, requesting a
   forward GPU analysis and storing analyzed low-resolution frames in the plug-in runtime.
-  `Start Host Analysis` explicitly starts or restarts that request from the inspector.
-- Requests a near-frame cluster around the current render time plus the `Pan Smooth Seconds`
-  analysis window through `scheduleInputs` only when `Analysis Source` is `Live Frames`.
+  Completed Host Analysis frame sets are persisted to
+  `/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` and
+  reused only after the current source frame validates against the saved frame fingerprints.
+  The cache includes prepared motion paths so playback can render from precomputed values
+  instead of re-running block matching on every frame.
+  The effect Inspector publishes `Host Analysis Status`; completed analysis should show
+  `Ready (... frames)`.
+  `Start Host Analysis` explicitly clears the saved cache and starts or restarts that
+  request from the inspector.
+- Requests a near-frame cluster around the current render time plus the
+  `Pan Smooth Seconds Slider` analysis window through `scheduleInputs` only when
+  `Analysis Source` is `Live Frames`.
 - Estimates low-resolution global X/Y motion, roll, yaw/pitch proxy motion, shear,
   perspective warp, crop safety, and blur amount from the requested frames.
 - Treats Z stabilization as dynamic scale and yaw/pitch as image-space proxy values, so
   X/Y/Z, rotation, shear, and perspective are corrected without writing Final Cut Pro
   Transform keyframes.
 - Smooths panning by comparing the current path against the average path inside the
-  user-entered `Pan Smooth Seconds` time-weighted window, while near-frame samples catch
-  fine gimbal jitter.
+  `Pan Smooth Seconds Slider` time-weighted window, while near-frame samples catch fine
+  gimbal jitter.
 - Includes a minimal wrapper app source/resource set under `WrapperApp/`.
 
 The current implementation analyzes `kCVPixelFormatType_32BGRA`,
@@ -116,10 +125,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `XYZ Strength`: multiplier for automatic X/Y translation, Z scale, shear, perspective,
   and yaw/pitch proxy compensation.
 - `Rotation Strength`: multiplier for automatic roll compensation.
-- `Pan Smooth Seconds`: text field, defaults to `6`; positive numeric values define the
-  centered panning window. The slider remains as a fallback for older templates or empty
-  text input. Large windows automatically use wider-spaced samples so render-time requests
-  stay bounded while the smoothing window remains the entered duration.
+- `Pan Smooth Seconds Slider`: defaults to `6`; positive slider values define the centered
+  panning window. Large windows automatically use wider-spaced samples so render-time
+  requests stay bounded while the smoothing window remains the selected duration.
 - `Analysis Source`: defaults to `Host Analysis`. `Host Analysis` uses Final Cut Pro's
   FxPlug analysis infrastructure and requests GPU analysis frames from the host. `Live
   Frames` requests the analysis window during render. Incomplete host analysis renders
