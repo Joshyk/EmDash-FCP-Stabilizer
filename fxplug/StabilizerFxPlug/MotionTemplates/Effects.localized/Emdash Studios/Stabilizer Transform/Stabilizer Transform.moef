@@ -163,11 +163,10 @@
 	</sceneSettings>
 	<publishSettings>
 		<version>2</version>
-		<target object="10036" channel="./21" name="Micro Jitter Window"/>
+		<target object="10036" channel="./1" name="Overall Strength"/>
 		<target object="10036" channel="./7" name="Micro Jitter X Strength"/>
 		<target object="10036" channel="./18" name="Micro Jitter Y Strength"/>
 		<target object="10036" channel="./8" name="Micro Jitter Rotation Strength"/>
-		<target object="10036" channel="./1" name="Overall Strength"/>
 		<target object="10036" channel="./23" name="Panning X/Y Strength"/>
 		<target object="10036" channel="./9" name="Panning X/Y Window"/>
 		<target object="10036" channel="./22" name="Y Axis Stabilization Window"/>
@@ -270,7 +269,7 @@
 			<filter name="Stabilizer Transform" id="10036" factoryID="6" pluginUUID="13C945BF-E268-4062-97F7-73A2BB593BE0" pluginVersion="1" pluginName="Stabilizer Transform" pluginDynamicParams="0">
 				<timing in="0 1 1 0" out="1529856 153600 1 0" offset="0 1 1 0"/>
 				<baseFlags>8589934609</baseFlags>
-				<parameter name="Micro Jitter Window" id="21" flags="12884901904" default="0.12" value="0.12"/>
+				<parameter name="Micro Jitter Window" id="21" flags="12884901906" default="0.12" value="0.12"/>
 				<parameter name="Micro Jitter X Strength" id="7" flags="12884901904" default="0.5" value="0.5"/>
 				<parameter name="Micro Jitter Y Strength" id="18" flags="12884901904" default="0.5" value="0.5"/>
 				<parameter name="Micro Jitter Rotation Strength" id="8" flags="12884901904" default="0.35" value="0.35"/>

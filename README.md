@@ -52,15 +52,17 @@ uses that offset before sampling the prepared motion paths. The Inspector shows
 `Host Analysis Status`; after a completed analysis it should read `Ready (... frames)`.
 Analysis input still requires original media, but a validated analysis continues to drive
 the preview/render path when Final Cut Pro plays proxy media.
+If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
+media, render playback uses that loaded cache immediately instead of requiring re-analysis;
+original-media validation can happen later when original frames are available.
 Setting `Overall Strength` to `0` fully bypasses the automatic transform path, including
 crop-safety motion and debug overlay output.
 The plug-in also updates a hidden render revision whenever Host Analysis or cache state
 changes so Final Cut Pro refreshes the preview from the prepared motion paths.
-Fine high-frequency shake is controlled separately with `Micro Jitter Window`, which defaults
-to `0.12` seconds and adds a short-window correction on top of the long pan smoothing path
-without rerunning analysis. Values shorter than the analyzed frame interval are raised
-during render enough to include adjacent frames, so older `0.025` values still produce
-micro correction.
+Fine high-frequency shake is controlled separately with the Micro Jitter strength sliders.
+Micro Jitter treats X/Y/rotation shake as a frame-level impulse against a short median
+baseline, so footstep landing shock is not averaged back into the smooth path. Micro Jitter
+is not a periodic smoothing control.
 Large intentional pans are controlled with `Panning X/Y Strength`; higher values apply
 stronger long-window X/Y translation correction. Panning does not change roll. The pan band
 is taken after removing the short Micro Jitter band and, for Y, the Y Axis Stabilization
@@ -73,7 +75,7 @@ visible.
 `Debug Overlay` shows top-left diagnostics. `Edge Display Mode` switches preview edges
 between stretched source edges and black outside-source pixels.
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
-the active time bands (`Jitter <= Xs`, `Y Axis Stabilization X-Ys`, `Panning X/Y Y-Zs`), and analysis
+the active correction bands (`Jitter impulse`, `Y Axis Stabilization <= Ys`, `Panning X/Y Y-Zs`), and analysis
 metadata, so the Inspector can confirm which installed runtime Final Cut Pro is using.
 
 ## Build

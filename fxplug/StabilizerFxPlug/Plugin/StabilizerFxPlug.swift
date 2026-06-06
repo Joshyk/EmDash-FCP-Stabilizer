@@ -24,7 +24,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.65"
+private let stabilizerFxPlugVersion = "0.2.68"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -133,6 +133,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let flags = FxParameterFlags(kFxParameterFlag_DEFAULT)
 
         paramAPI.addFloatSlider(
+            withName: "Overall Strength",
+            parameterID: ParameterID.strength.rawValue,
+            defaultValue: 1.0,
+            parameterMin: 0.0,
+            parameterMax: 2.0,
+            sliderMin: 0.0,
+            sliderMax: 2.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
             withName: "Micro Jitter Window",
             parameterID: ParameterID.microJitterWindowSeconds.rawValue,
             defaultValue: 0.12,
@@ -140,6 +151,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterMax: 5.0,
             sliderMin: 0.01,
             sliderMax: 2.0,
+            delta: 0.01,
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
+        )
+        paramAPI.addFloatSlider(
+            withName: "Panning X/Y Strength",
+            parameterID: ParameterID.panStabilizationStrength.rawValue,
+            defaultValue: 0.5,
+            parameterMin: 0.0,
+            parameterMax: 1.0,
+            sliderMin: 0.0,
+            sliderMax: 1.0,
             delta: 0.01,
             parameterFlags: flags
         )
@@ -173,28 +195,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterMax: 2.0,
             sliderMin: 0.0,
             sliderMax: 2.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Overall Strength",
-            parameterID: ParameterID.strength.rawValue,
-            defaultValue: 1.0,
-            parameterMin: 0.0,
-            parameterMax: 2.0,
-            sliderMin: 0.0,
-            sliderMax: 2.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Panning X/Y Strength",
-            parameterID: ParameterID.panStabilizationStrength.rawValue,
-            defaultValue: 0.5,
-            parameterMin: 0.0,
-            parameterMax: 1.0,
-            sliderMin: 0.0,
-            sliderMax: 1.0,
             delta: 0.01,
             parameterFlags: flags
         )
@@ -340,7 +340,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         paramAPI.getFloatValue(&state.panStabilizationStrength, fromParameter: ParameterID.panStabilizationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.walkingBobStrength, fromParameter: ParameterID.walkingBobStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.microJitterWindowSeconds, fromParameter: ParameterID.microJitterWindowSeconds.rawValue, at: renderTime)
+        state.microJitterWindowSeconds = 0.12
         paramAPI.getFloatValue(&state.walkingBobWindowSeconds, fromParameter: ParameterID.walkingBobWindowSeconds.rawValue, at: renderTime)
         paramAPI.getIntValue(&state.edgeDisplayMode, fromParameter: ParameterID.edgeDisplayMode.rawValue, at: renderTime)
         var debugOverlay = ObjCBool(state.debugOverlay)
@@ -471,15 +471,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         var lines = ["FxPlug \(stabilizerFxPlugVersion)"]
         if let state {
             lines.append(String(
-                format: "Jitter <= %.2fs | X %.2f Y %.2f R %.2f",
-                state.microJitterWindowSeconds,
+                format: "Jitter impulse | X %.2f Y %.2f R %.2f",
                 state.microJitterXStrength,
                 state.microJitterYStrength,
                 state.microJitterRotationStrength
             ))
             lines.append(String(
-                format: "Y Axis Stabilization %.2f-%.2fs | strength %.2f",
-                state.microJitterWindowSeconds,
+                format: "Y Axis Stabilization <= %.2fs | strength %.2f",
                 state.walkingBobWindowSeconds,
                 state.walkingBobStrength
             ))
@@ -1155,8 +1153,10 @@ private final class StabilizerHostAnalysisStore {
             }
 
             if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) {
-                markProxyMediaUnavailable(reason: "Persisted cache validation requires original media. \(rejectionReason)")
-                return nil
+                markReadyAfterOriginalMediaReturnedIfNeeded()
+                updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
+                NSLog("StabilizerFxPlug: using loaded Host Analysis cache for render before original-media validation because current playback frame is proxy media: \(rejectionReason)")
+                return analysis
             }
 
             if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {

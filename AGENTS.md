@@ -56,17 +56,19 @@ whose render time differs from Host Analysis frame time by matching the current 
 fingerprint back to the analyzed frame set and applying that time offset before sampling the
 prepared motion paths. Once an analysis is validated, render playback should keep using the
 prepared motion path even when Final Cut Pro is playing proxy media; proxy media is rejected
-only for Host Analysis input and for validating an unvalidated persisted cache. When the
+only for Host Analysis input and for validating an unvalidated persisted cache. If a saved
+Host Analysis cache is loaded while Final Cut Pro is currently playing proxy media, render
+playback should still use the loaded cache immediately rather than requiring re-analysis;
+original-media validation can happen later when original frames are available. When the
 effective overall transform strength is zero, rendering must
 bypass prepared motion-path sampling and output an identity transform with no debug overlay.
 When Host Analysis/cache state changes, update a hidden render-affecting revision parameter
 so Final Cut Pro invalidates the preview/render cache and the viewer reflects the prepared
 stabilization immediately.
-Fine high-frequency shake should be handled by a render-time `Micro Jitter Window` path that
-adds short-window correction on top of the long pan smoothing path without rerunning Host
-Analysis. The effective micro window should include adjacent analyzed frames even when a
-saved effect instance requests a sub-frame value such as `0.025s`, so the micro correction
-does not collapse to zero on 29.97fps footage.
+Fine high-frequency shake should be handled by render-time Micro Jitter strength controls
+that compare X/Y/rotation against a short median baseline. Micro Jitter should suppress
+footstep landing shock as a frame-level impulse rather than treating it as periodic
+smoothing, and it should not require rerunning Host Analysis.
 Large intentional pans should be controlled by the render-time `Panning X/Y Strength`
 slider, where higher values apply stronger long-window X/Y translation correction. Panning
 must not apply roll correction. The pan band should be measured after removing the short

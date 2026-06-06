@@ -326,7 +326,7 @@ enum AutoStabilizationEstimator {
 
         let smoothX = timeWeightedAverage(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let smoothY = timeWeightedAverage(analysis.pathY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let requestedMicroWindowSeconds = min(max(0.01, microJitterWindowSeconds), max(0.01, smoothWindowSeconds))
+        let requestedMicroWindowSeconds = min(0.12, max(0.01, smoothWindowSeconds))
         let microWindowSeconds = min(
             max(requestedMicroWindowSeconds, adjacentFrameWindowSeconds(for: centerIndex, in: frames)),
             max(0.01, smoothWindowSeconds)
@@ -336,6 +336,10 @@ enum AutoStabilizationEstimator {
         let microSmoothX = timeWeightedAverage(analysis.pathX, frames: frames, indices: microActiveIndices, centerTime: renderSeconds, windowSeconds: microWindowSeconds)
         let microSmoothY = timeWeightedAverage(analysis.pathY, frames: frames, indices: microActiveIndices, centerTime: renderSeconds, windowSeconds: microWindowSeconds)
         let microSmoothRoll = timeWeightedAverage(analysis.pathRoll, frames: frames, indices: microActiveIndices, centerTime: renderSeconds, windowSeconds: microWindowSeconds)
+        let shockIndices = centeredIndices(around: centerIndex, radius: 3, inCount: frames.count)
+        let microImpulseBaselineX = median(analysis.pathX, indices: shockIndices) ?? microSmoothX
+        let microImpulseBaselineY = median(analysis.pathY, indices: shockIndices) ?? microSmoothY
+        let microImpulseBaselineRoll = median(analysis.pathRoll, indices: shockIndices) ?? microSmoothRoll
         let effectiveWalkingBobWindowSeconds = min(max(0.1, walkingBobWindowSeconds), smoothWindowSeconds)
         let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }
         let walkingBobActiveIndices = walkingBobWindowIndices.isEmpty ? [centerIndex] : Array(walkingBobWindowIndices)
@@ -355,9 +359,9 @@ enum AutoStabilizationEstimator {
         let macroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
         let macroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrength
         let macroCompensationRotation: Float = 0.0
-        let microCompensationX = -(analysis.pathX[centerIndex] - microSmoothX) * xScale * microJitterPositionGain * Float(max(0.0, strengths.microJitterX))
-        let microCompensationY = -(analysis.pathY[centerIndex] - microSmoothY) * yScale * microJitterPositionGain * Float(max(0.0, strengths.microJitterY))
-        let microCompensationRotation = -(analysis.pathRoll[centerIndex] - microSmoothRoll) * microJitterRotationGain * Float(max(0.0, strengths.microJitterRotation))
+        let microCompensationX = -(analysis.pathX[centerIndex] - microImpulseBaselineX) * xScale * microJitterPositionGain * Float(max(0.0, strengths.microJitterX))
+        let microCompensationY = -(analysis.pathY[centerIndex] - microImpulseBaselineY) * yScale * microJitterPositionGain * Float(max(0.0, strengths.microJitterY))
+        let microCompensationRotation = -(analysis.pathRoll[centerIndex] - microImpulseBaselineRoll) * microJitterRotationGain * Float(max(0.0, strengths.microJitterRotation))
         let walkingBobBandY = microSmoothY - walkingBobSmoothY
         let walkingBobCompensationY = -walkingBobBandY * yScale * walkingBobPositionGain * Float(max(0.0, strengths.walkingBob))
         let macroPixelOffset = vector_float2(macroCompensationX * confidence, macroCompensationY * confidence)
@@ -682,6 +686,30 @@ enum AutoStabilizationEstimator {
             partial + values[index]
         }
         return total / Float(indices.count)
+    }
+
+    private static func centeredIndices(around centerIndex: Int, radius: Int, inCount count: Int) -> [Int] {
+        guard count > 0 else {
+            return []
+        }
+        let start = Swift.max(0, centerIndex - radius)
+        let end = Swift.min(count - 1, centerIndex + radius)
+        guard start <= end else {
+            return []
+        }
+        return Array(start...end)
+    }
+
+    private static func median(_ values: [Float], indices: [Int]) -> Float? {
+        guard !indices.isEmpty else {
+            return nil
+        }
+        let sortedValues = indices.map { values[$0] }.sorted()
+        let middle = sortedValues.count / 2
+        if sortedValues.count % 2 == 0 {
+            return (sortedValues[middle - 1] + sortedValues[middle]) * 0.5
+        }
+        return sortedValues[middle]
     }
 
     private static func timeWeightedAverage(_ values: [Float], frames: [StabilizerAnalysisFrame], indices: [Int], centerTime: Double, windowSeconds: Double) -> Float {

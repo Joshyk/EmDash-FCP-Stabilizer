@@ -125,13 +125,12 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 
 ## Stabilization Model
 
-- `Micro Jitter Window`: short smoothing window for fine shake. The default is `0.12`
-  seconds. Values shorter than the analyzed frame interval are raised during render enough
-  to include adjacent frames, so old `0.025` values still produce a micro correction.
 - `Micro Jitter X Strength`: multiplier for horizontal micro-jitter correction. The default
   is `0.5`.
 - `Micro Jitter Y Strength`: multiplier for vertical micro-jitter correction. The default is
-  `0.5`.
+  `0.5`. Micro Jitter uses a short median baseline for X/Y/rotation so footstep landing
+  shock is treated as a frame-level impulse instead of being averaged back into the smooth
+  path.
 - `Micro Jitter Rotation Strength`: multiplier for roll micro-jitter correction. The default
   is `0.35`.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
@@ -158,6 +157,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   dimensions before Host Analysis runs. Long clips still use the requested width unless it
   exceeds the source frame width. Host Analysis reads this value once when the analysis
   pass starts. The actual size is shown in `Stabilizer Info`.
+- If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
+  media, render playback uses the loaded cache immediately instead of requiring re-analysis;
+  original-media validation can happen later when original frames are available.
 - `Edge Display Mode`: chooses whether transformed pixels outside the source image stretch
   edge pixels or draw black.
 - Host Analysis is always used. It requests GPU analysis frames from the host. Incomplete
@@ -173,7 +175,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
-  version, active time bands (`Jitter <= Xs`, `Y Axis Stabilization X-Ys`,
+  version, active correction bands (`Jitter impulse`, `Y Axis Stabilization <= Ys`,
   `Panning X/Y Y-Zs`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available.

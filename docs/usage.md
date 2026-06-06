@@ -11,15 +11,12 @@
 
 ## Controls
 
-- `Micro Jitter Window`: short smoothing window for fine shake. The default is `0.12`
-  seconds. The parameter minimum remains `0.01`, but render playback raises the effective
-  micro window enough to include adjacent analyzed frames when the requested value is shorter
-  than the frame interval. This is evaluated during render and does not require rebuilding
-  analysis.
 - `Micro Jitter X Strength`: multiplier for horizontal micro-jitter correction. The default
   is `0.5`.
 - `Micro Jitter Y Strength`: multiplier for vertical micro-jitter correction. The default is
-  `0.5`.
+  `0.5`. Micro Jitter uses a short median baseline for X/Y/rotation so footstep landing
+  shock is treated as a frame-level impulse instead of being averaged back into the smooth
+  path.
 - `Micro Jitter Rotation Strength`: multiplier for roll micro-jitter correction. The default
   is `0.35`.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
@@ -59,7 +56,7 @@
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
-  loaded FxPlug version, active time bands (`Jitter <= Xs`, `Y Axis Stabilization X-Ys`,
+  loaded FxPlug version, active correction bands (`Jitter impulse`, `Y Axis Stabilization <= Ys`,
   `Panning X/Y Y-Zs`), plus completed analysis time, frame count, actual sample image size, source
   frame size, and pixel transform scale when analysis is available.
 - `Debug Overlay`: top-left diagnostics for X/Y/rotation while checking runtime behavior.
@@ -91,8 +88,11 @@
   falling back to CPU analysis.
 - Playback uses prepared motion paths from completed Host Analysis. It must not run full
   frame-to-frame block matching on every rendered playback frame.
+- If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
+  media, render playback uses the loaded cache immediately instead of requiring re-analysis;
+  original-media validation can happen later when original frames are available.
 - Render playback combines `Panning X/Y Strength` and the long `Panning X/Y Window` path
-  with a short `Micro Jitter Window` path and a Y-only `Y Axis Stabilization Window`
+  with a Micro Jitter impulse path and a Y-only `Y Axis Stabilization Window`
   band-pass path. The panning band is X/Y translation only and is measured after removing
   short micro jitter. Its Y band is also measured after removing Y Axis Stabilization, so
   large walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can
