@@ -61,17 +61,20 @@ to `0.12` seconds and adds a short-window correction on top of the long pan smoo
 without rerunning analysis. Values shorter than the analyzed frame interval are raised
 during render enough to include adjacent frames, so older `0.025` values still produce
 micro correction.
-Large intentional pans are controlled with `Pan Stabilization Strength`; higher values
-apply stronger long-window correction.
-Y-axis walking bob is controlled with `Walking Bob Window` and `Walking Bob Strength`, which
-target the Y band between Micro Jitter smoothing and a Y-only bob smoothing window. Shorter
-values around `0.4-1.0` seconds target visible footstep bounce, and the strength slider can
-be pushed past `2.0` when the bounce remains visible.
+Large intentional pans are controlled with `Panning X/Y Strength`; higher values apply
+stronger long-window X/Y translation correction. Panning does not change roll. The pan band
+is taken after removing the short Micro Jitter band and, for Y, the Y Axis Stabilization
+band, so it does not double-correct footstep bounce.
+Footstep vertical motion is controlled with `Y Axis Stabilization Window` and
+`Y Axis Stabilization Strength`, which target the Y band between Micro Jitter smoothing and
+a Y-only stabilization window. Shorter values around `0.4-1.0` seconds target visible
+footstep bounce, and the strength slider can be pushed past `2.0` when the bounce remains
+visible.
 `Debug Overlay` shows top-left diagnostics. `Edge Display Mode` switches preview edges
 between stretched source edges and black outside-source pixels.
-`Stabilizer Info` shows the loaded FxPlug version and current Micro Jitter, Walking Bob,
-and Pan Stabilization values before the analysis metadata, so the Inspector can confirm
-which installed runtime Final Cut Pro is using.
+`Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
+the active time bands (`Jitter <= Xs`, `Y Axis Stabilization X-Ys`, `Panning X/Y Y-Zs`), and analysis
+metadata, so the Inspector can confirm which installed runtime Final Cut Pro is using.
 
 ## Build
 

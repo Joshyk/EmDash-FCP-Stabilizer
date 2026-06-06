@@ -67,13 +67,16 @@ adds short-window correction on top of the long pan smoothing path without rerun
 Analysis. The effective micro window should include adjacent analyzed frames even when a
 saved effect instance requests a sub-frame value such as `0.025s`, so the micro correction
 does not collapse to zero on 29.97fps footage.
-Large intentional pans should be controlled by the render-time `Pan Stabilization Strength`
-slider, where higher values apply stronger long-window correction.
+Large intentional pans should be controlled by the render-time `Panning X/Y Strength`
+slider, where higher values apply stronger long-window X/Y translation correction. Panning
+must not apply roll correction. The pan band should be measured after removing the short
+Micro Jitter band, and the Y pan band should also remove the Y Axis Stabilization band so
+vertical motion is not double-corrected.
 Y-axis walking bob between micro jitter and panning should be handled by the render-time
-`Walking Bob Window` and `Walking Bob Strength` path, which corrects the Y-only band between
-the Micro Jitter smooth path and the bob smoothing window without changing X or roll and
-without rerunning Host Analysis. Keep the strength range wide enough for footstep bob that
-remains visible at `2.0`.
+`Y Axis Stabilization Window` and `Y Axis Stabilization Strength` path, which corrects the
+Y-only band between the Micro Jitter smooth path and the Y stabilization smoothing window
+without changing X or roll and without rerunning Host Analysis. Keep the strength range wide
+enough for footstep bob that remains visible at `2.0`.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
 Overlay`; debug overlay should only show diagnostics.

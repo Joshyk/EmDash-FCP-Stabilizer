@@ -326,7 +326,6 @@ enum AutoStabilizationEstimator {
 
         let smoothX = timeWeightedAverage(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let smoothY = timeWeightedAverage(analysis.pathY, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let smoothRoll = timeWeightedAverage(analysis.pathRoll, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let requestedMicroWindowSeconds = min(max(0.01, microJitterWindowSeconds), max(0.01, smoothWindowSeconds))
         let microWindowSeconds = min(
             max(requestedMicroWindowSeconds, adjacentFrameWindowSeconds(for: centerIndex, in: frames)),
@@ -351,9 +350,11 @@ enum AutoStabilizationEstimator {
         let confidence = clamp(1.0 - (residual * 1.2), min: 0.35, max: 1.0)
         let jitterConfidence = clamp(1.0 - (residual * 0.7), min: 0.70, max: 1.0)
         let panCorrectionStrength = clamp(Float(strengths.panStabilizationStrength), min: 0.0, max: 1.0)
-        let macroCompensationX = -(analysis.pathX[centerIndex] - smoothX) * xScale * positionGain * panCorrectionStrength
-        let macroCompensationY = -(analysis.pathY[centerIndex] - smoothY) * yScale * positionGain * panCorrectionStrength
-        let macroCompensationRotation = -(analysis.pathRoll[centerIndex] - smoothRoll) * rotationGain * panCorrectionStrength
+        let panBandX = microSmoothX - smoothX
+        let panBandY = walkingBobSmoothY - smoothY
+        let macroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
+        let macroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrength
+        let macroCompensationRotation: Float = 0.0
         let microCompensationX = -(analysis.pathX[centerIndex] - microSmoothX) * xScale * microJitterPositionGain * Float(max(0.0, strengths.microJitterX))
         let microCompensationY = -(analysis.pathY[centerIndex] - microSmoothY) * yScale * microJitterPositionGain * Float(max(0.0, strengths.microJitterY))
         let microCompensationRotation = -(analysis.pathRoll[centerIndex] - microSmoothRoll) * microJitterRotationGain * Float(max(0.0, strengths.microJitterRotation))

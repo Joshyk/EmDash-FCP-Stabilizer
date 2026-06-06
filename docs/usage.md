@@ -25,21 +25,21 @@
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
-- `Pan Stabilization Strength`: controls how strongly the stabilizer corrects large
-  intentional pans. At `0`, long-window correction is bypassed; at `1`, long-window
-  correction is strongest.
-- `Pan Smooth Seconds Slider`: centered smoothing window. In Host Analysis mode this is
+- `Panning X/Y Strength`: controls how strongly the stabilizer corrects large intentional
+  pans in X/Y translation only. It does not change roll. At `0`, long-window correction is
+  bypassed; at `1`, long-window correction is strongest.
+- `Panning X/Y Window`: centered smoothing window. In Host Analysis mode this is
   evaluated against prepared motion paths during render, so changing the slider does not
   require rebuilding analysis.
-- `Walking Bob Window`: Y-axis-only window for footstep bob and vertical shake between
-  micro jitter and large panning. The correction uses the Y band between the Micro Jitter
-  smooth path and this bob smooth path, without changing X or roll. The default is `1.5`
-  seconds. Use shorter values around `0.4-1.0` seconds for visible footstep bounce and
-  larger values for slower vertical sway. Values above `Pan Smooth Seconds Slider` are
-  clamped to the pan window during render.
-- `Walking Bob Strength`: multiplier for the Y-only walking-bob correction. Footstep
-  bounce can be reduced without changing X or roll. The slider range extends to `4.0` for
-  footage where footstep bob remains visible at `2.0`.
+- `Y Axis Stabilization Window`: Y-axis-only window for footstep bob and vertical shake
+  between micro jitter and large panning. The correction uses the Y band between the Micro
+  Jitter smooth path and this Y stabilization smooth path, without changing X or roll. The
+  default is `1.5` seconds. Use shorter values around `0.4-1.0` seconds for visible
+  footstep bounce and larger values for slower vertical sway. Values above `Panning X/Y
+  Window` are clamped to the pan window during render.
+- `Y Axis Stabilization Strength`: multiplier for the Y-only correction. Footstep bounce
+  can be reduced without changing X or roll. The slider range extends to `4.0` for footage
+  where footstep bounce remains visible at `2.0`.
 - `Sample Width`: analysis image width. The sample height is calculated from the current
   source frame aspect ratio. Width values above the current source frame width use the
   source frame size before Host Analysis runs. Long clips still use the requested width
@@ -58,10 +58,10 @@
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse.
-- `Stabilizer Info`: read-only runtime and analysis metadata. It shows the loaded FxPlug
-  version, current Micro Jitter, Walking Bob, and Pan Stabilization values, plus completed
-  analysis time, frame count, actual sample image size, source frame size, and pixel
-  transform scale when analysis is available.
+- `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
+  loaded FxPlug version, active time bands (`Jitter <= Xs`, `Y Axis Stabilization X-Ys`,
+  `Panning X/Y Y-Zs`), plus completed analysis time, frame count, actual sample image size, source
+  frame size, and pixel transform scale when analysis is available.
 - `Debug Overlay`: top-left diagnostics for X/Y/rotation while checking runtime behavior.
   When enabled, `Host Analysis Status` also shows the current Y correction split into
   macro, micro, and walking-bob components.
@@ -91,10 +91,12 @@
   falling back to CPU analysis.
 - Playback uses prepared motion paths from completed Host Analysis. It must not run full
   frame-to-frame block matching on every rendered playback frame.
-- Render playback combines `Pan Stabilization Strength` and the long `Pan Smooth Seconds Slider` path with a short
-  `Micro Jitter Window` path and a Y-only `Walking Bob Window` band-pass path so large
-  walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can be tuned
-  separately without rerunning Host Analysis.
+- Render playback combines `Panning X/Y Strength` and the long `Panning X/Y Window` path
+  with a short `Micro Jitter Window` path and a Y-only `Y Axis Stabilization Window`
+  band-pass path. The panning band is X/Y translation only and is measured after removing
+  short micro jitter. Its Y band is also measured after removing Y Axis Stabilization, so
+  large walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can
+  be tuned separately without rerunning Host Analysis.
 - Host Analysis/cache state changes update a hidden render revision parameter so Final Cut
   Pro invalidates cached preview frames and redraws from the prepared motion path.
 - Trimmed clips are supported by matching the current render frame fingerprint against the

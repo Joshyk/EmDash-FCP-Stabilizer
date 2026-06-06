@@ -137,18 +137,22 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
-- `Pan Stabilization Strength`: controls how strongly the stabilizer corrects large
-  intentional pans. At `0`, long-window correction is bypassed; at `1`, long-window
-  correction is strongest.
-- `Pan Smooth Seconds Slider`: centered panning window. In Host Analysis mode this slider
+- `Panning X/Y Strength`: controls how strongly the stabilizer corrects large intentional
+  pans in X/Y translation only. It does not change roll. At `0`, long-window correction is
+  bypassed; at `1`, long-window correction is strongest. The pan band is measured after
+  removing short micro jitter, and the Y pan band is measured after removing Y Axis
+  Stabilization, so enabling Y Axis Stabilization does not add the same vertical movement
+  twice.
+- `Panning X/Y Window`: centered panning window. In Host Analysis mode this slider
   is evaluated during render against the prepared analysis path, so changing it does not
   require rebuilding analysis.
-- `Walking Bob Window`: Y-axis-only window for footstep bob and vertical shake between
-  micro jitter and large panning. It corrects the Y band between the Micro Jitter smooth
-  path and this bob smooth path without changing X or roll. Use shorter values around
-  `0.4-1.0` seconds for visible footstep bounce and larger values for slower vertical sway.
-- `Walking Bob Strength`: multiplier for the Y-only walking-bob correction. The slider
-  range extends to `4.0` for footage where footstep bob remains visible at `2.0`.
+- `Y Axis Stabilization Window`: Y-axis-only window for footstep bob and vertical shake
+  between micro jitter and large panning. It corrects the Y band between the Micro Jitter
+  smooth path and this Y stabilization smooth path without changing X or roll. Use shorter
+  values around `0.4-1.0` seconds for visible footstep bounce and larger values for slower
+  vertical sway.
+- `Y Axis Stabilization Strength`: multiplier for the Y-only correction. The slider range
+  extends to `4.0` for footage where footstep bob remains visible at `2.0`.
 - `Sample Width`: analysis image width. The sample height is calculated from the source
   frame aspect ratio. Width values above the source frame width use the source frame
   dimensions before Host Analysis runs. Long clips still use the requested width unless it
@@ -168,10 +172,11 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   rejected cache and requests a new analysis.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
-- `Stabilizer Info`: read-only Inspector value showing the loaded FxPlug version, current
-  Micro Jitter, Walking Bob, and Pan Stabilization values, plus latest analysis time, frame
-  count, actual sample image size, source frame size, and pixel transform scale when
-  analysis is available.
+- `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
+  version, active time bands (`Jitter <= Xs`, `Y Axis Stabilization X-Ys`,
+  `Panning X/Y Y-Zs`), plus latest
+  analysis time, frame count, actual sample image size, source frame size, and pixel
+  transform scale when analysis is available.
 - `Debug Overlay`: normally off. When enabled, the top-left bars visualize automatic X, Y,
   and rotation diagnostics so Final Cut Pro runtime analysis can be checked. It also writes
   current render correction values into `Host Analysis Status`, including the Y correction

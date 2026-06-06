@@ -1,3 +1,4 @@
+import AppKit
 import CoreMedia
 import Foundation
 import Metal
@@ -23,7 +24,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.62"
+private let stabilizerFxPlugVersion = "0.2.65"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -103,12 +104,15 @@ private enum StabilizerOriginalMediaPolicy {
 }
 
 @objc(StabilizerFxPlugPlugIn)
-final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
+final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCustomParameterViewHost_v2 {
     private static let sharedHostAnalysisStore: StabilizerHostAnalysisStore = {
         let store = StabilizerHostAnalysisStore()
         store.loadPersistentCache()
         return store
     }()
+    private static let stabilizerInfoViewLock = NSLock()
+    private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
+    private static var latestStabilizerInfo = "No Analysis"
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -184,7 +188,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Pan Stabilization Strength",
+            withName: "Panning X/Y Strength",
             parameterID: ParameterID.panStabilizationStrength.rawValue,
             defaultValue: 0.5,
             parameterMin: 0.0,
@@ -195,7 +199,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Pan Smooth Seconds Slider",
+            withName: "Panning X/Y Window",
             parameterID: ParameterID.panSmoothSeconds.rawValue,
             defaultValue: 6.0,
             parameterMin: 0.1,
@@ -206,7 +210,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Walking Bob Window",
+            withName: "Y Axis Stabilization Window",
             parameterID: ParameterID.walkingBobWindowSeconds.rawValue,
             defaultValue: 1.5,
             parameterMin: 0.1,
@@ -217,7 +221,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Walking Bob Strength",
+            withName: "Y Axis Stabilization Strength",
             parameterID: ParameterID.walkingBobStrength.rawValue,
             defaultValue: 0.5,
             parameterMin: 0.0,
@@ -267,7 +271,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             withName: "Stabilizer Info",
             parameterID: ParameterID.stabilizerInfo.rawValue,
             defaultValue: "No Analysis",
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DONT_SAVE | kFxParameterFlag_CUSTOM_UI | kFxParameterFlag_USE_FULL_VIEW_WIDTH)
         )
         paramAPI.addFloatSlider(
             withName: "Render Revision",
@@ -298,6 +302,15 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             kFxPropertyKey_PixelTransformSupport: NSNumber(value: kFxPixelTransform_Full),
             kFxPropertyKey_VariesWhenParamsAreStatic: true
         ] as NSDictionary
+    }
+
+    func createView(forParameterID parameterID: UInt32) -> NSView {
+        guard parameterID == ParameterID.stabilizerInfo.rawValue else {
+            return NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 1))
+        }
+        let view = StabilizerInfoScrollView()
+        Self.registerStabilizerInfoView(view)
+        return view
     }
 
     func pluginState(_ pluginState: AutoreleasingUnsafeMutablePointer<NSData>?, at renderTime: CMTime, quality qualityLevel: UInt) throws {
@@ -423,8 +436,11 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             lastPublishedInfo = info
         }
         statusLock.unlock()
-        guard shouldPublish,
-              let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
+        guard shouldPublish else {
+            return
+        }
+        Self.updateStabilizerInfoViews(info)
+        guard let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
         }
@@ -433,20 +449,44 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
         }
     }
 
+    private static func registerStabilizerInfoView(_ view: StabilizerInfoScrollView) {
+        stabilizerInfoViewLock.lock()
+        stabilizerInfoViews.add(view)
+        let info = latestStabilizerInfo
+        stabilizerInfoViewLock.unlock()
+        view.infoText = info
+    }
+
+    private static func updateStabilizerInfoViews(_ info: String) {
+        stabilizerInfoViewLock.lock()
+        latestStabilizerInfo = info
+        let views = stabilizerInfoViews.allObjects
+        stabilizerInfoViewLock.unlock()
+        DispatchQueue.main.async {
+            views.forEach { $0.infoText = info }
+        }
+    }
+
     private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
         var lines = ["FxPlug \(stabilizerFxPlugVersion)"]
         if let state {
             lines.append(String(
-                format: "Micro %.2fs X %.2f Y %.2f R %.2f",
+                format: "Jitter <= %.2fs | X %.2f Y %.2f R %.2f",
                 state.microJitterWindowSeconds,
                 state.microJitterXStrength,
                 state.microJitterYStrength,
                 state.microJitterRotationStrength
             ))
             lines.append(String(
-                format: "Bob %.2fs x %.2f | Pan %.2f",
+                format: "Y Axis Stabilization %.2f-%.2fs | strength %.2f",
+                state.microJitterWindowSeconds,
                 state.walkingBobWindowSeconds,
-                state.walkingBobStrength,
+                state.walkingBobStrength
+            ))
+            lines.append(String(
+                format: "Panning X/Y %.2f-%.2fs | strength %.2f",
+                state.walkingBobWindowSeconds,
+                state.panSmoothSeconds,
                 state.panStabilizationStrength
             ))
         }
@@ -694,6 +734,62 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
+    }
+}
+
+private final class StabilizerInfoScrollView: NSScrollView {
+    private let textView = NSTextView()
+
+    var infoText: String {
+        get {
+            textView.string
+        }
+        set {
+            if Thread.isMainThread {
+                setInfoText(newValue)
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.setInfoText(newValue)
+                }
+            }
+        }
+    }
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 96))
+        drawsBackground = false
+        borderType = .bezelBorder
+        hasVerticalScroller = true
+        hasHorizontalScroller = false
+        autohidesScrollers = false
+        translatesAutoresizingMaskIntoConstraints = false
+
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = true
+        textView.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.08)
+        textView.textColor = NSColor.labelColor
+        textView.font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+        documentView = textView
+
+        heightAnchor.constraint(equalToConstant: 96).isActive = true
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    private func setInfoText(_ text: String) {
+        guard textView.string != text else {
+            return
+        }
+        textView.string = text
     }
 }
 
