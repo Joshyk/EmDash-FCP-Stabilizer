@@ -184,9 +184,8 @@ enum AutoStabilizationEstimator {
     private static let localSearchRadius = 5
     private static let positionGain: Float = 0.85
     private static let rotationGain: Float = 0.65
-    private static let microJitterPositionGain: Float = 0.75
-    private static let microJitterRotationGain: Float = 0.55
-    private static let walkingBobPositionGain: Float = 0.85
+    private static let microImpulseInnerRadius = 3
+    private static let microImpulseOuterRadius = 12
 
     fileprivate static func metalError(_ message: String) -> NSError {
         NSError(
@@ -336,14 +335,36 @@ enum AutoStabilizationEstimator {
         let microSmoothX = timeWeightedAverage(analysis.pathX, frames: frames, indices: microActiveIndices, centerTime: renderSeconds, windowSeconds: microWindowSeconds)
         let microSmoothY = timeWeightedAverage(analysis.pathY, frames: frames, indices: microActiveIndices, centerTime: renderSeconds, windowSeconds: microWindowSeconds)
         let microSmoothRoll = timeWeightedAverage(analysis.pathRoll, frames: frames, indices: microActiveIndices, centerTime: renderSeconds, windowSeconds: microWindowSeconds)
-        let shockIndices = centeredIndices(around: centerIndex, radius: 3, inCount: frames.count)
-        let microImpulseBaselineX = median(analysis.pathX, indices: shockIndices) ?? microSmoothX
-        let microImpulseBaselineY = median(analysis.pathY, indices: shockIndices) ?? microSmoothY
-        let microImpulseBaselineRoll = median(analysis.pathRoll, indices: shockIndices) ?? microSmoothRoll
+        let microImpulseBaselineX = outerLinearPrediction(
+            analysis.pathX,
+            centerIndex: centerIndex,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        ) ?? microSmoothX
+        let microImpulseBaselineY = outerLinearPrediction(
+            analysis.pathY,
+            centerIndex: centerIndex,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        ) ?? microSmoothY
+        let microImpulseBaselineRoll = outerLinearPrediction(
+            analysis.pathRoll,
+            centerIndex: centerIndex,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        ) ?? microSmoothRoll
         let effectiveWalkingBobWindowSeconds = min(max(0.1, walkingBobWindowSeconds), smoothWindowSeconds)
         let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }
         let walkingBobActiveIndices = walkingBobWindowIndices.isEmpty ? [centerIndex] : Array(walkingBobWindowIndices)
-        let walkingBobSmoothY = timeWeightedAverage(analysis.pathY, frames: frames, indices: walkingBobActiveIndices, centerTime: renderSeconds, windowSeconds: effectiveWalkingBobWindowSeconds)
+        let walkingBobSmoothY = timeWeightedOuterLinearPredictionAverage(
+            analysis.pathY,
+            frames: frames,
+            indices: walkingBobActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: effectiveWalkingBobWindowSeconds,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
 
         let sampleWidth = frames[centerIndex].sampleWidth
         let sampleHeight = frames[centerIndex].sampleHeight
@@ -354,16 +375,20 @@ enum AutoStabilizationEstimator {
         let confidence = clamp(1.0 - (residual * 1.2), min: 0.35, max: 1.0)
         let jitterConfidence = clamp(1.0 - (residual * 0.7), min: 0.70, max: 1.0)
         let panCorrectionStrength = clamp(Float(strengths.panStabilizationStrength), min: 0.0, max: 1.0)
-        let panBandX = microSmoothX - smoothX
+        let microXCorrectionStrength = correctionFactor(strengths.microJitterX)
+        let microYCorrectionStrength = correctionFactor(strengths.microJitterY)
+        let microRotationCorrectionStrength = correctionFactor(strengths.microJitterRotation)
+        let walkingBobCorrectionStrength = correctionFactor(strengths.walkingBob)
+        let panBandX = microImpulseBaselineX - smoothX
         let panBandY = walkingBobSmoothY - smoothY
         let macroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
         let macroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrength
         let macroCompensationRotation: Float = 0.0
-        let microCompensationX = -(analysis.pathX[centerIndex] - microImpulseBaselineX) * xScale * microJitterPositionGain * Float(max(0.0, strengths.microJitterX))
-        let microCompensationY = -(analysis.pathY[centerIndex] - microImpulseBaselineY) * yScale * microJitterPositionGain * Float(max(0.0, strengths.microJitterY))
-        let microCompensationRotation = -(analysis.pathRoll[centerIndex] - microImpulseBaselineRoll) * microJitterRotationGain * Float(max(0.0, strengths.microJitterRotation))
-        let walkingBobBandY = microSmoothY - walkingBobSmoothY
-        let walkingBobCompensationY = -walkingBobBandY * yScale * walkingBobPositionGain * Float(max(0.0, strengths.walkingBob))
+        let microCompensationX = -(analysis.pathX[centerIndex] - microImpulseBaselineX) * xScale * microXCorrectionStrength
+        let microCompensationY = -(analysis.pathY[centerIndex] - microImpulseBaselineY) * yScale * microYCorrectionStrength
+        let microCompensationRotation = -(analysis.pathRoll[centerIndex] - microImpulseBaselineRoll) * microRotationCorrectionStrength
+        let walkingBobBandY = microImpulseBaselineY - walkingBobSmoothY
+        let walkingBobCompensationY = -walkingBobBandY * yScale * walkingBobCorrectionStrength
         let macroPixelOffset = vector_float2(macroCompensationX * confidence, macroCompensationY * confidence)
         let microPixelOffset = vector_float2(microCompensationX * jitterConfidence, microCompensationY * jitterConfidence)
         let walkingBobPixelOffset = vector_float2(0.0, walkingBobCompensationY * jitterConfidence)
@@ -700,6 +725,64 @@ enum AutoStabilizationEstimator {
         return Array(start...end)
     }
 
+    private static func surroundingIndicesExcludingCenter(around centerIndex: Int, innerRadius: Int, outerRadius: Int, inCount count: Int) -> [Int] {
+        guard count > 0 else {
+            return []
+        }
+        let outerStart = Swift.max(0, centerIndex - outerRadius)
+        let outerEnd = Swift.min(count - 1, centerIndex + outerRadius)
+        let innerStart = Swift.max(0, centerIndex - innerRadius)
+        let innerEnd = Swift.min(count - 1, centerIndex + innerRadius)
+        let indices = (outerStart...outerEnd).filter { index in
+            index < innerStart || index > innerEnd
+        }
+        if indices.count >= 3 {
+            return indices
+        }
+        return centeredIndices(around: centerIndex, radius: outerRadius, inCount: count)
+    }
+
+    private static func outerLinearPrediction(_ values: [Float], centerIndex: Int, innerRadius: Int, outerRadius: Int) -> Float? {
+        guard !values.isEmpty else {
+            return nil
+        }
+        let preEnd = Swift.max(0, centerIndex - innerRadius)
+        let preStart = Swift.max(0, centerIndex - outerRadius)
+        let postStart = Swift.min(values.count, centerIndex + innerRadius + 1)
+        let postEnd = Swift.min(values.count, centerIndex + outerRadius + 1)
+        var points: [(x: Float, y: Float)] = []
+        if preStart < preEnd {
+            for index in preStart..<preEnd {
+                points.append((x: Float(index - centerIndex), y: values[index]))
+            }
+        }
+        if postStart < postEnd {
+            for index in postStart..<postEnd {
+                points.append((x: Float(index - centerIndex), y: values[index]))
+            }
+        }
+        guard points.count >= 3 else {
+            let indices = surroundingIndicesExcludingCenter(
+                around: centerIndex,
+                innerRadius: Swift.max(1, innerRadius),
+                outerRadius: outerRadius,
+                inCount: values.count
+            )
+            return median(values, indices: indices)
+        }
+
+        let count = Float(points.count)
+        let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
+        let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
+        let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
+        let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
+        let denominator = (count * sumXX) - (sumX * sumX)
+        guard abs(denominator) > Float.ulpOfOne else {
+            return sumY / count
+        }
+        return ((sumY * sumXX) - (sumX * sumXY)) / denominator
+    }
+
     private static func median(_ values: [Float], indices: [Int]) -> Float? {
         guard !indices.isEmpty else {
             return nil
@@ -753,6 +836,69 @@ enum AutoStabilizationEstimator {
         return weightedTotal / Float(totalWeight)
     }
 
+    private static func timeWeightedOuterLinearPredictionAverage(
+        _ values: [Float],
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        centerTime: Double,
+        windowSeconds: Double,
+        innerRadius: Int,
+        outerRadius: Int
+    ) -> Float {
+        guard !indices.isEmpty else {
+            return 0.0
+        }
+        guard indices.count > 1 else {
+            return outerLinearPrediction(
+                values,
+                centerIndex: indices[0],
+                innerRadius: innerRadius,
+                outerRadius: outerRadius
+            ) ?? values[indices[0]]
+        }
+
+        let sortedIndices = indices.sorted()
+        let windowStart = centerTime - (windowSeconds * 0.5)
+        let windowEnd = centerTime + (windowSeconds * 0.5)
+        var weightedTotal: Float = 0.0
+        var totalWeight: Double = 0.0
+
+        for (position, index) in sortedIndices.enumerated() {
+            let currentTime = frames[index].time
+            let leftBoundary: Double
+            if position > 0 {
+                leftBoundary = max(windowStart, (frames[sortedIndices[position - 1]].time + currentTime) * 0.5)
+            } else {
+                leftBoundary = windowStart
+            }
+
+            let rightBoundary: Double
+            if position + 1 < sortedIndices.count {
+                rightBoundary = min(windowEnd, (currentTime + frames[sortedIndices[position + 1]].time) * 0.5)
+            } else {
+                rightBoundary = windowEnd
+            }
+
+            let weight = max(0.0, rightBoundary - leftBoundary)
+            let predictedValue = outerLinearPrediction(
+                values,
+                centerIndex: index,
+                innerRadius: innerRadius,
+                outerRadius: outerRadius
+            ) ?? values[index]
+            weightedTotal += predictedValue * Float(weight)
+            totalWeight += weight
+        }
+
+        guard totalWeight > 1e-9 else {
+            let predictedValues = indices.map {
+                outerLinearPrediction(values, centerIndex: $0, innerRadius: innerRadius, outerRadius: outerRadius) ?? values[$0]
+            }
+            return predictedValues.reduce(Float(0.0), +) / Float(predictedValues.count)
+        }
+        return weightedTotal / Float(totalWeight)
+    }
+
     private static func adjacentFrameWindowSeconds(for centerIndex: Int, in frames: [StabilizerAnalysisFrame]) -> Double {
         guard frames.indices.contains(centerIndex), frames.count > 1 else {
             return 0.01
@@ -793,6 +939,10 @@ enum AutoStabilizationEstimator {
 
     private static func clamp(_ value: Float, min minValue: Float, max maxValue: Float) -> Float {
         Swift.max(minValue, Swift.min(maxValue, value))
+    }
+
+    private static func correctionFactor(_ strength: Double) -> Float {
+        clamp(Float(strength), min: 0.0, max: 1.0)
     }
 }
 

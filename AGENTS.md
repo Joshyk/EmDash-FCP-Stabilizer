@@ -66,19 +66,23 @@ When Host Analysis/cache state changes, update a hidden render-affecting revisio
 so Final Cut Pro invalidates the preview/render cache and the viewer reflects the prepared
 stabilization immediately.
 Fine high-frequency shake should be handled by render-time Micro Jitter strength controls
-that compare X/Y/rotation against a short median baseline. Micro Jitter should suppress
-footstep landing shock as a frame-level impulse rather than treating it as periodic
-smoothing, and it should not require rerunning Host Analysis.
+that compare X/Y/rotation against an outer-frame linear prediction that skips the center
+shock region. Micro Jitter should suppress footstep landing shock as a frame-level impulse
+rather than treating it as periodic smoothing, and it should not require rerunning Host
+Analysis. Micro Jitter strength values should be direct removal amounts and must clamp at
+full detected-impulse removal during render so high slider values do not add inverse shake.
 Large intentional pans should be controlled by the render-time `Panning X/Y Strength`
 slider, where higher values apply stronger long-window X/Y translation correction. Panning
-must not apply roll correction. The pan band should be measured after removing the short
-Micro Jitter band, and the Y pan band should also remove the Y Axis Stabilization band so
-vertical motion is not double-corrected.
+must not apply roll correction. The pan band should be measured from the Micro Jitter
+baseline instead of the raw short-window path, and the Y pan band should also remove the
+Y Axis Stabilization band so short landing shock is not reintroduced by pan correction.
 Y-axis walking bob between micro jitter and panning should be handled by the render-time
 `Y Axis Stabilization Window` and `Y Axis Stabilization Strength` path, which corrects the
-Y-only band between the Micro Jitter smooth path and the Y stabilization smoothing window
-without changing X or roll and without rerunning Host Analysis. Keep the strength range wide
-enough for footstep bob that remains visible at `2.0`.
+Y-only band between the Micro Jitter baseline and the Y stabilization smoothing window,
+also computed from the Micro Jitter baseline, without changing X or roll and without
+rerunning Host Analysis. Y Axis Stabilization strength values should clamp at full
+detected-band removal during render so high slider values do not add inverse vertical
+shake.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
 Overlay`; debug overlay should only show diagnostics.

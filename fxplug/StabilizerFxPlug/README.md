@@ -125,33 +125,36 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 
 ## Stabilization Model
 
-- `Micro Jitter X Strength`: multiplier for horizontal micro-jitter correction. The default
-  is `0.5`.
-- `Micro Jitter Y Strength`: multiplier for vertical micro-jitter correction. The default is
-  `0.5`. Micro Jitter uses a short median baseline for X/Y/rotation so footstep landing
-  shock is treated as a frame-level impulse instead of being averaged back into the smooth
-  path.
-- `Micro Jitter Rotation Strength`: multiplier for roll micro-jitter correction. The default
-  is `0.35`.
+- `Micro Jitter X Strength`: direct amount for horizontal micro-jitter correction. The
+  default is `0.5`; `1.0` fully removes the detected impulse, and higher values are clamped
+  during render to avoid inverse shake.
+- `Micro Jitter Y Strength`: direct amount for vertical micro-jitter correction. The default
+  is `0.5`. Micro Jitter uses an outer-frame linear prediction that skips the center shock
+  region for X/Y/rotation, so footstep landing shock is treated as a frame-level impulse
+  instead of being averaged back into the smooth path. `1.0` fully removes the detected
+  impulse, and higher values are clamped during render to avoid inverse shake.
+- `Micro Jitter Rotation Strength`: direct amount for roll micro-jitter correction. The
+  default is `0.35`; `1.0` fully removes the detected impulse, and higher values are
+  clamped during render to avoid inverse shake.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
 - `Panning X/Y Strength`: controls how strongly the stabilizer corrects large intentional
   pans in X/Y translation only. It does not change roll. At `0`, long-window correction is
-  bypassed; at `1`, long-window correction is strongest. The pan band is measured after
-  removing short micro jitter, and the Y pan band is measured after removing Y Axis
-  Stabilization, so enabling Y Axis Stabilization does not add the same vertical movement
-  twice.
+  bypassed; at `1`, long-window correction is strongest. The pan band is measured from the
+  Micro Jitter baseline, and the Y pan band is measured after removing Y Axis
+  Stabilization, so short landing shock is not reintroduced by the pan correction.
 - `Panning X/Y Window`: centered panning window. In Host Analysis mode this slider
   is evaluated during render against the prepared analysis path, so changing it does not
   require rebuilding analysis.
 - `Y Axis Stabilization Window`: Y-axis-only window for footstep bob and vertical shake
   between micro jitter and large panning. It corrects the Y band between the Micro Jitter
-  smooth path and this Y stabilization smooth path without changing X or roll. Use shorter
-  values around `0.4-1.0` seconds for visible footstep bounce and larger values for slower
-  vertical sway.
-- `Y Axis Stabilization Strength`: multiplier for the Y-only correction. The slider range
-  extends to `4.0` for footage where footstep bob remains visible at `2.0`.
+  baseline and this Y stabilization smooth path, which is also computed from the Micro
+  Jitter baseline without changing X or roll. Use shorter values around `0.4-1.0` seconds
+  for visible footstep bounce and larger values for slower vertical sway.
+- `Y Axis Stabilization Strength`: direct amount for the Y-only correction. `1.0` fully
+  removes the detected Y-axis band, and higher values are clamped during render to avoid
+  adding inverse vertical shake.
 - `Sample Width`: analysis image width. The sample height is calculated from the source
   frame aspect ratio. Width values above the source frame width use the source frame
   dimensions before Host Analysis runs. Long clips still use the requested width unless it

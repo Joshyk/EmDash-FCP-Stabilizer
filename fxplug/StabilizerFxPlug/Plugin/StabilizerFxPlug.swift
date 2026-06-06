@@ -24,7 +24,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.68"
+private let stabilizerFxPlugVersion = "0.2.72"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0

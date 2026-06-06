@@ -60,18 +60,20 @@ crop-safety motion and debug overlay output.
 The plug-in also updates a hidden render revision whenever Host Analysis or cache state
 changes so Final Cut Pro refreshes the preview from the prepared motion paths.
 Fine high-frequency shake is controlled separately with the Micro Jitter strength sliders.
-Micro Jitter treats X/Y/rotation shake as a frame-level impulse against a short median
-baseline, so footstep landing shock is not averaged back into the smooth path. Micro Jitter
-is not a periodic smoothing control.
+Micro Jitter treats X/Y/rotation shake as a frame-level impulse against an outer-frame
+linear prediction that skips the center shock region, so footstep landing shock is not
+averaged back into the smooth path. Micro Jitter is not a periodic smoothing control.
 Large intentional pans are controlled with `Panning X/Y Strength`; higher values apply
 stronger long-window X/Y translation correction. Panning does not change roll. The pan band
-is taken after removing the short Micro Jitter band and, for Y, the Y Axis Stabilization
-band, so it does not double-correct footstep bounce.
+is taken from the Micro Jitter baseline instead of the raw short-window path, and for Y it
+also removes the Y Axis Stabilization band, so short landing shock is not reintroduced by
+the pan correction.
 Footstep vertical motion is controlled with `Y Axis Stabilization Window` and
-`Y Axis Stabilization Strength`, which target the Y band between Micro Jitter smoothing and
-a Y-only stabilization window. Shorter values around `0.4-1.0` seconds target visible
-footstep bounce, and the strength slider can be pushed past `2.0` when the bounce remains
-visible.
+`Y Axis Stabilization Strength`, which target the Y band between the Micro Jitter baseline
+and a Y-only stabilization window computed from the same Micro Jitter baseline. Shorter
+values around `0.4-1.0` seconds target visible footstep bounce. Micro Jitter and Y Axis
+Stabilization strengths are clamped at full detected-band removal during render, so high
+slider values do not add inverse shake.
 `Debug Overlay` shows top-left diagnostics. `Edge Display Mode` switches preview edges
 between stretched source edges and black outside-source pixels.
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
