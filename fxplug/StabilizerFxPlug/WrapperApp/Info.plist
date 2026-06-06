@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string></string>
 	<key>CFBundleIdentifier</key>
-	<string>com.justadev.CommandPostEmDash.StabilizerFxPlug</string>
+	<string>com.justadev.StabilizerFxPlug</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.12</string>
+	<string>0.2.61</string>
 	<key>CFBundleVersion</key>
-	<string>6</string>
+	<string>49</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.video</string>
 	<key>LSMinimumSystemVersion</key>

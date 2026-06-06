@@ -163,14 +163,21 @@
 	</sceneSettings>
 	<publishSettings>
 		<version>2</version>
-		<target object="10036" channel="./1" name="Stabilizer Transform"/>
-		<target object="10036" channel="./6" name="Auto Stabilize"/>
-		<target object="10036" channel="./7" name="XYZ Strength"/>
-		<target object="10036" channel="./8" name="Rotation Strength"/>
+		<target object="10036" channel="./21" name="Micro Jitter Window"/>
+		<target object="10036" channel="./7" name="Micro Jitter X Strength"/>
+		<target object="10036" channel="./18" name="Micro Jitter Y Strength"/>
+		<target object="10036" channel="./8" name="Micro Jitter Rotation Strength"/>
+		<target object="10036" channel="./1" name="Overall Strength"/>
+		<target object="10036" channel="./23" name="Pan Stabilization Strength"/>
 		<target object="10036" channel="./9" name="Pan Smooth Seconds Slider"/>
-		<target object="10036" channel="./13" name="Analysis Source"/>
+		<target object="10036" channel="./22" name="Walking Bob Window"/>
+		<target object="10036" channel="./26" name="Walking Bob Strength"/>
+		<target object="10036" channel="./19" name="Sample Width"/>
+		<target object="10036" channel="./27" name="Edge Display Mode"/>
 		<target object="10036" channel="./14" name="Start Host Analysis"/>
+		<target object="10036" channel="./17" name="Clear Host Analysis Cache"/>
 		<target object="10036" channel="./15" name="Host Analysis Status"/>
+		<target object="10036" channel="./16" name="Stabilizer Info"/>
 		<target object="10036" channel="./10" name="Debug Overlay"/>
 	</publishSettings>
 	<currentFrame>215040 153600 1 0</currentFrame>
@@ -263,15 +270,23 @@
 			<filter name="Stabilizer Transform" id="10036" factoryID="6" pluginUUID="13C945BF-E268-4062-97F7-73A2BB593BE0" pluginVersion="1" pluginName="Stabilizer Transform" pluginDynamicParams="0">
 				<timing in="0 1 1 0" out="1529856 153600 1 0" offset="0 1 1 0"/>
 				<baseFlags>8589934609</baseFlags>
-				<parameter name="Strength" id="1" flags="12884901904" default="1" value="1"/>
-				<parameter name="Auto Stabilize" id="6" flags="12884901904" default="1" value="1"/>
-				<parameter name="XYZ Strength" id="7" flags="12884901904" default="1" value="1"/>
-				<parameter name="Rotation Strength" id="8" flags="12884901904" default="1" value="1"/>
+				<parameter name="Micro Jitter Window" id="21" flags="12884901904" default="0.12" value="0.12"/>
+				<parameter name="Micro Jitter X Strength" id="7" flags="12884901904" default="0.5" value="0.5"/>
+				<parameter name="Micro Jitter Y Strength" id="18" flags="12884901904" default="0.5" value="0.5"/>
+				<parameter name="Micro Jitter Rotation Strength" id="8" flags="12884901904" default="0.35" value="0.35"/>
+				<parameter name="Overall Strength" id="1" flags="12884901904" default="1" value="1"/>
+				<parameter name="Pan Stabilization Strength" id="23" flags="12884901904" default="0.5" value="0.5"/>
 				<parameter name="Pan Smooth Seconds Slider" id="9" flags="12884901904" default="6" value="6"/>
+				<parameter name="Walking Bob Window" id="22" flags="12884901904" default="1.5" value="1.5"/>
+				<parameter name="Walking Bob Strength" id="26" flags="12884901904" default="0.5" value="0.5"/>
+				<parameter name="Sample Width" id="19" flags="12884901904" default="96" value="96"/>
+				<parameter name="Edge Display Mode" id="27" flags="12884901904" default="0" value="0"/>
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
-				<parameter name="Analysis Source" id="13" flags="12884901904" default="1" value="1"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
+				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
 				<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis" value="Needs Analysis"/>
+				<parameter name="Stabilizer Info" id="16" flags="12884901909" default="No Analysis" value="No Analysis"/>
+				<parameter name="Render Revision" id="20" flags="12884901906" default="0" value="0"/>
 				<parameter name="Mix" id="10001" flags="12884901888" default="1" value="1"/>
 				<parameter name="Flip" id="10002" flags="12889161760" default="0" value="0"/>
 				<parameter name="Input Points" id="10003" flags="12889161760" default="1" value="1"/>

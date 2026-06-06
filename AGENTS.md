@@ -6,39 +6,72 @@ Always reply to the user in Japanese unless the user explicitly asks for another
 
 ## Project
 
-This directory hosts one CommandPost plugin repo for applying a dynamic Transform-keyframe
-stabilization workflow to a selected Final Cut Pro timeline clip.
+This directory hosts the native `Stabilizer Transform` FxPlug project for Final Cut Pro and
+Motion. The project is FxPlug-only. Do not add non-FxPlug runtime files, standalone
+estimators, timeline automation actions, legacy cache models, or app reload workflows back
+into this repo.
 
-Primary action:
+The effect intentionally avoids Final Cut Pro's built-in `Stabilization`, because that
+effect applies its own internal crop/scale. The native effect renders a transformed source
+texture with Metal and applies automatic walking-gimbal stabilization inside the FxPlug
+render path.
 
-- `Stabilizer: Transform Keyframes`
+The FxPlug uses Final Cut Pro's FxPlug `Host Analysis` infrastructure to request GPU
+analysis frames from the host. The native analysis path must use Metal compute inside the
+plug-in runtime for luma downsampling and frame-to-frame motion search. Do not add a CPU
+analysis fallback; if Metal analysis resources are unavailable, fail the Host Analysis path
+visibly in logs/status.
 
-The plugin intentionally does not use Final Cut Pro's built-in `Stabilization`, because
-that effect applies its own internal crop/scale. It uses Final Cut Pro's `Transform`
-controls instead. A local Python estimator reads the selected clip's pasteboard media
-path/range, analyzes source-frame motion with `ffmpeg`/`ffprobe`, and produces Transform
-Position/Rotation/Scale keyframe values. The estimator also detects source-frame black
-strips and folds that correction into Transform Position and Scale keyframes.
+Completed Host Analysis frame sets should be persisted by the FxPlug runtime at
+`/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json`,
+`/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-index-v2.json`,
+and range-indexed files under
+`/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/`. Cache candidates
+must be validated against the current source frame before reuse. Rejected candidates should
+be visible in logs/status and should not be deleted just because they do not match the
+current clip. `Start Host Analysis` should first reload and use a saved persistent cache
+when one exists; only start a new host analysis when no saved cache can be loaded. It must
+not delete saved cache files. If the loaded cache is rejected for the current clip, the next
+start should skip that rejected cache and request a new analysis. `Clear Host Analysis
+Cache` is the explicit cache-clear path and should show `Cache Cleared`.
 
-The workflow must not show progress alerts or routine progress logs during selection,
-pasteboard read, estimator execution, or Transform keyframe writing. Keep failure logs and
-user-facing errors clear. Keyframe writes must use CommandPost's official video inspector
-keyframe API for each Transform row before writing values into that keyframe. If Final Cut
-Pro keeps reporting Add Keyframe after the API call, continue AutoWB-style and only surface
-that state when a failure path needs diagnostics.
+Host Analysis should read user-controlled `Sample Width` once when analysis starts. Long
+clips should keep that requested sample size unless it exceeds the original source frame
+width. In-progress analysis should stream frame-to-frame motion in memory and keep only the
+previous luma buffer needed for the next Metal motion search; do not write per-frame `.luma`
+scratch files or store analysis files inside a Final Cut Pro library/project bundle.
+Persistent cache files should store prepared paths, frame timing, blur values, and
+fingerprints instead of every frame's full luma sample.
 
-The native `Stabilizer Transform` FxPlug supports only explicit `Host Analysis` and
-`Live Frames` modes. `Host Analysis` is the primary long-term path and uses Final Cut Pro's
-FxPlug analysis infrastructure to request GPU analysis frames from the host. `Live Frames`
-requests the analysis window during render. Completed Host Analysis frame sets should be
-persisted by the FxPlug runtime at
-`/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` and
-must be validated against the current source frame before reuse. Host Analysis playback
-must render from prepared motion paths; do not re-run full block matching across the
-analyzed frame set on every render frame. Keep `Host Analysis Status` visible in the
-Inspector and update it to `Ready (... frames)` after completed analysis. Do not add the
-old CommandPost prerender-cache action, `current.json` support, hidden cache fallbacks, or
-Python CPU fallbacks to the native FxPlug path.
+Host Analysis playback must render from prepared motion paths shared across FxPlug
+analyzer/render instances. Do not re-run full block matching across the analyzed frame set
+on every render frame. Keep `Host Analysis Status` visible in the Inspector and update it to
+`Ready (... frames)` after completed analysis. Render playback must tolerate trimmed clips
+whose render time differs from Host Analysis frame time by matching the current render frame
+fingerprint back to the analyzed frame set and applying that time offset before sampling the
+prepared motion paths. Once an analysis is validated, render playback should keep using the
+prepared motion path even when Final Cut Pro is playing proxy media; proxy media is rejected
+only for Host Analysis input and for validating an unvalidated persisted cache. When the
+effective overall transform strength is zero, rendering must
+bypass prepared motion-path sampling and output an identity transform with no debug overlay.
+When Host Analysis/cache state changes, update a hidden render-affecting revision parameter
+so Final Cut Pro invalidates the preview/render cache and the viewer reflects the prepared
+stabilization immediately.
+Fine high-frequency shake should be handled by a render-time `Micro Jitter Window` path that
+adds short-window correction on top of the long pan smoothing path without rerunning Host
+Analysis. The effective micro window should include adjacent analyzed frames even when a
+saved effect instance requests a sub-frame value such as `0.025s`, so the micro correction
+does not collapse to zero on 29.97fps footage.
+Large intentional pans should be controlled by the render-time `Pan Stabilization Strength`
+slider, where higher values apply stronger long-window correction.
+Y-axis walking bob between micro jitter and panning should be handled by the render-time
+`Walking Bob Window` and `Walking Bob Strength` path, which corrects the Y-only band between
+the Micro Jitter smooth path and the bob smoothing window without changing X or roll and
+without rerunning Host Analysis. Keep the strength range wide enough for footstep bob that
+remains visible at `2.0`.
+`Edge Display Mode` should control whether transformed source pixels outside the original
+image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
+Overlay`; debug overlay should only show diagnostics.
 
 ## Source Layout
 
@@ -46,22 +79,16 @@ Python CPU fallbacks to the native FxPlug path.
 Stabilizer/
   AGENTS.md
   README.md
-  init.lua
-  stabilizer.lua
-  scripts/
   docs/
   fxplug/
-  installed_backups/
 ```
 
-Keep `init.lua` as the CommandPost entry point and keep workflow logic in
-`stabilizer.lua`. Keep source-media analysis helpers in `scripts/`.
-
-`fxplug/` is a separate native Final Cut Pro/Motion FxPlug 4 migration scaffold. Do not
-mix FxPlug source into the CommandPost runtime path. The FxPlug target requires full Xcode
-and the local FxPlug SDK; the CommandPost Lua plugin remains the active runtime until an
-FxPlug wrapper app/plugin is validated in Final Cut Pro. The Xcode project lives at
-`fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj`.
+The Xcode project lives at
+`fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj`. Keep FxPlug source under
+`fxplug/StabilizerFxPlug/Plugin`, wrapper app source under
+`fxplug/StabilizerFxPlug/WrapperApp`, installer scripts under
+`fxplug/StabilizerFxPlug/scripts`, and Motion Template resources under
+`fxplug/StabilizerFxPlug/MotionTemplates`.
 
 ## Test Project
 
@@ -71,78 +98,25 @@ Use this local Final Cut Pro library for manual end-to-end testing:
 /Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/test.fcpbundle
 ```
 
-It is a shared workspace test fixture, outside this plugin repo. Use it when checking
-the Stabilizer actions against real selected timeline clips in Final Cut Pro.
-
-## Installed CommandPost Layout
-
-Use a small installed bootstrap at:
-
-```text
-/Users/justadev/Library/Application Support/CommandPost/Plugins/Stabilizer/init.lua
-```
-
-The bootstrap should load this repo's `init.lua`. Keep implementation files in the repo,
-not in the installed CommandPost plugin folder.
-
-Do not add a repo source watcher.
-
-Lua, Swift, Python, or other programming updates should take effect only after a manual CommandPost
-reload or restart.
-
-CommandPost reload shortcut exists now.
-
-On this machine, `cpr` or `cmdpost-reload` requests a CommandPost reload quickly. It
-lives at `/usr/local/bin/cmdpost-reload`, with `/usr/local/bin/cpr` symlinked to it.
-
-Codex must ask the user before reloading CommandPost. Use a Yes/No confirmation button
-when the UI supports it; otherwise ask a clear text question and wait for the answer. Only
-run `cpr`, `cmdpost-reload`, or any `cmdpost` command that calls `hs.reload()` after the
-user explicitly answers Yes. If the user answers No or does not answer, do not reload and
-state that reload-dependent runtime verification was skipped. Treat indirect reload
-triggers through aliases, scripts, shell command substitution, or helper commands as reload
-attempts that require the same approval.
-
-It calls:
-
-```sh
-/Applications/CommandPost.app/Contents/Frameworks/hs/cmdpost -A -q -t 1 -c 'hs.reload()'
-```
-
-Important: the command returns quickly after requesting reload, but CommandPost itself can
-take tens of seconds before IPC is reachable again. To verify it came back:
-
-```sh
-/Applications/CommandPost.app/Contents/Frameworks/hs/cmdpost -q -t 6 -c 'return hs.application.nameForBundleID("org.latenitefilms.CommandPost")'
-```
-
-Expected output:
-
-```text
-CommandPost
-```
+It is a shared workspace test fixture, outside this plugin repo. Use it when checking the
+native effect against real timeline clips in Final Cut Pro.
 
 ## Version Visibility
 
-Keep `PLUGIN_VERSION` in `init.lua`, expose it through the returned module as `_version`,
-and bump it for user-visible behavior changes.
+Keep `stabilizerFxPlugVersion` in
+`fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift` aligned with
+`CFBundleShortVersionString` in the wrapper app and plug-in plist files. User-visible
+FxPlug behavior changes should bump the version value used by `Stabilizer Info`.
 
 ## Verification
 
-After Lua edits, run:
-
-```sh
-luac -p init.lua stabilizer.lua
-python3 -m py_compile scripts/estimate_stabilization_scale.py
-git diff --check -- init.lua stabilizer.lua scripts/estimate_stabilization_scale.py AGENTS.md README.md docs/usage.md
-```
-
-After FxPlug edits, also run:
+After FxPlug edits, run:
 
 ```sh
 xcodebuild -project fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj -scheme StabilizerFxPlug -configuration Debug -derivedDataPath /tmp/StabilizerFxPlugDerived build
-pluginkit -m -A -p FxPlug -i com.justadev.CommandPostEmDash.StabilizerFxPlug.Plugin
-git diff --check -- fxplug/StabilizerFxPlug
+pluginkit -m -A -p FxPlug -i com.justadev.StabilizerFxPlug.Plugin
+codesign --verify --deep --strict /Applications/StabilizerFxPlug.app
+git diff --check -- AGENTS.md README.md docs/usage.md fxplug/StabilizerFxPlug
 ```
 
 The `StabilizerFxPlug` shared scheme has a post-build action that runs

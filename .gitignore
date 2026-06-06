@@ -1,5 +1,3 @@
 .DS_Store
 *.log
 scripts/__pycache__
-installed_backups/*
-!installed_backups/.gitkeep

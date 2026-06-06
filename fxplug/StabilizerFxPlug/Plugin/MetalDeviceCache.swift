@@ -8,6 +8,8 @@ private let keyCommandQueue = "CommandQueue"
 final class MetalDeviceCacheItem: NSObject {
     let gpuDevice: MTLDevice
     let pipelineState: MTLRenderPipelineState
+    let downsamplePipelineState: MTLComputePipelineState
+    let shiftPipelineState: MTLComputePipelineState
     let pixelFormat: MTLPixelFormat
     var commandQueueCache: [[String: Any]]
     let commandQueueCacheLock: NSLock
@@ -23,13 +25,27 @@ final class MetalDeviceCacheItem: NSObject {
         }
 
         let defaultLibrary = gpuDevice.makeDefaultLibrary()
+        guard
+            let vertexFunction = defaultLibrary?.makeFunction(name: "vertexShader"),
+            let fragmentFunction = defaultLibrary?.makeFunction(name: "fragmentShader"),
+            let downsampleFunction = defaultLibrary?.makeFunction(name: "stabilizerDownsampleLuma"),
+            let shiftFunction = defaultLibrary?.makeFunction(name: "stabilizerShiftScores")
+        else {
+            throw NSError(
+                domain: "com.justadev.StabilizerFxPlug",
+                code: 1001,
+                userInfo: [NSLocalizedDescriptionKey: "StabilizerFxPlug Metal shader functions were unavailable."]
+            )
+        }
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.label = "StabilizerTransform"
-        descriptor.vertexFunction = defaultLibrary?.makeFunction(name: "vertexShader")
-        descriptor.fragmentFunction = defaultLibrary?.makeFunction(name: "fragmentShader")
+        descriptor.vertexFunction = vertexFunction
+        descriptor.fragmentFunction = fragmentFunction
         descriptor.colorAttachments[0].pixelFormat = pixFormat
         pixelFormat = pixFormat
         pipelineState = try gpuDevice.makeRenderPipelineState(descriptor: descriptor)
+        downsamplePipelineState = try gpuDevice.makeComputePipelineState(function: downsampleFunction)
+        shiftPipelineState = try gpuDevice.makeComputePipelineState(function: shiftFunction)
         commandQueueCacheLock = NSLock()
     }
 
@@ -115,6 +131,42 @@ final class MetalDeviceCache: NSObject {
             return cache.pipelineState
         } catch {
             NSLog("Unable to create StabilizerFxPlug pipeline state.")
+            return nil
+        }
+    }
+
+    func downsamplePipelineState(with registryID: UInt64, pixelFormat: MTLPixelFormat) -> MTLComputePipelineState? {
+        if let cache = deviceCaches.first(where: { $0.gpuDevice.registryID == registryID && $0.pixelFormat == pixelFormat }) {
+            return cache.downsamplePipelineState
+        }
+
+        guard let device = MTLCopyAllDevices().first(where: { $0.registryID == registryID }) else {
+            return nil
+        }
+        do {
+            let cache = try MetalDeviceCacheItem(device: device, pixelFormat: pixelFormat)
+            deviceCaches.append(cache)
+            return cache.downsamplePipelineState
+        } catch {
+            NSLog("Unable to create StabilizerFxPlug downsample pipeline state.")
+            return nil
+        }
+    }
+
+    func shiftPipelineState(with registryID: UInt64, pixelFormat: MTLPixelFormat) -> MTLComputePipelineState? {
+        if let cache = deviceCaches.first(where: { $0.gpuDevice.registryID == registryID && $0.pixelFormat == pixelFormat }) {
+            return cache.shiftPipelineState
+        }
+
+        guard let device = MTLCopyAllDevices().first(where: { $0.registryID == registryID }) else {
+            return nil
+        }
+        do {
+            let cache = try MetalDeviceCacheItem(device: device, pixelFormat: pixelFormat)
+            deviceCaches.append(cache)
+            return cache.shiftPipelineState
+        } catch {
+            NSLog("Unable to create StabilizerFxPlug shift pipeline state.")
             return nil
         }
     }

@@ -42,8 +42,7 @@ fragment float4 fragmentShader(
         (centeredPixels.x * s) + (centeredPixels.y * c)
     );
 
-    float scale = max(transform->scale, 0.01);
-    float2 stabilizedPixels = (rotated / scale) - (transform->pixelOffset * transform->strength);
+    float2 stabilizedPixels = rotated - (transform->pixelOffset * transform->strength);
     float2 normalizedPixels = stabilizedPixels / transform->outputSize;
     float perspectiveDenominator = max(0.35, 1.0 + (transform->perspective.x * normalizedPixels.x) + (transform->perspective.y * normalizedPixels.y));
     stabilizedPixels = stabilizedPixels / perspectiveDenominator;
@@ -53,14 +52,17 @@ fragment float4 fragmentShader(
     );
     float2 sampleUV = (stabilizedPixels / transform->outputSize) + 0.5;
 
+    bool outsideSource = sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0;
     half4 colorSample = colorTexture.sample(textureSampler, sampleUV);
-    float4 outputColor = float4(colorSample);
+    float4 outputColor = (transform->edgeMode > 0.5 && outsideSource)
+        ? float4(0.0, 0.0, 0.0, 1.0)
+        : float4(colorSample);
 
     if (transform->debugOverlay > 0.5) {
         float2 pixel = uv * transform->outputSize;
         float barX = pixel.x - 16.0;
         float barY = pixel.y - 16.0;
-        if (barX >= 0.0 && barX <= 180.0 && barY >= 0.0 && barY <= 104.0) {
+        if (barX >= 0.0 && barX <= 180.0 && barY >= 0.0 && barY <= 39.0) {
             int row = int(floor(barY / 13.0));
             float fill = 0.0;
             float3 color = float3(1.0);
@@ -72,22 +74,7 @@ fragment float4 fragmentShader(
                 color = float3(0.2, 0.9, 0.25);
             } else if (row == 2) {
                 fill = saturate(transform->diagnostic.z);
-                color = float3(0.2, 0.45, 1.0);
-            } else if (row == 3) {
-                fill = saturate(transform->diagnostic.w);
                 color = float3(1.0, 0.85, 0.15);
-            } else if (row == 4) {
-                fill = saturate(transform->diagnostic2.x);
-                color = float3(0.85, 0.25, 1.0);
-            } else if (row == 5) {
-                fill = saturate(transform->diagnostic2.y);
-                color = float3(0.1, 0.95, 0.95);
-            } else if (row == 6) {
-                fill = saturate(transform->diagnostic2.z);
-                color = float3(1.0, 0.55, 0.15);
-            } else {
-                fill = saturate(transform->diagnostic2.w);
-                color = float3(0.72, 0.72, 0.72);
             }
             float activeWidth = 180.0 * fill;
             float3 background = float3(0.02, 0.02, 0.02);
@@ -98,4 +85,60 @@ fragment float4 fragmentShader(
     }
 
     return outputColor;
+}
+
+kernel void stabilizerDownsampleLuma(
+    texture2d<float, access::sample> input [[texture(SCTI_InputImage)]],
+    device uchar *output [[buffer(SCBI_DownsampleOutput)]],
+    constant StabilizerDownsampleUniforms &uniforms [[buffer(SCBI_DownsampleUniforms)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= uniforms.width || gid.y >= uniforms.height) {
+        return;
+    }
+
+    constexpr sampler nearestSampler(coord::pixel, address::clamp_to_edge, filter::nearest);
+    float x = (float(gid.x) + 0.5) * float(input.get_width()) / float(uniforms.width);
+    float y = (float(gid.y) + 0.5) * float(input.get_height()) / float(uniforms.height);
+    float4 colorSample = input.sample(nearestSampler, float2(x, y));
+    float luma = (0.2126 * colorSample.r) + (0.7152 * colorSample.g) + (0.0722 * colorSample.b);
+    output[(gid.y * uniforms.width) + gid.x] = uchar(clamp(luma * 255.0, 0.0, 255.0));
+}
+
+kernel void stabilizerShiftScores(
+    device const uchar *previous [[buffer(SCBI_PreviousFrame)]],
+    device const uchar *current [[buffer(SCBI_CurrentFrame)]],
+    device float *scores [[buffer(SCBI_ShiftScores)]],
+    constant StabilizerShiftUniforms &uniforms [[buffer(SCBI_ShiftUniforms)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    uint side = (uniforms.radius * 2) + 1;
+    uint count = side * side;
+    if (gid >= count) {
+        return;
+    }
+
+    int dx = int(gid % side) + uniforms.centerX - int(uniforms.radius);
+    int dy = int(gid / side) + uniforms.centerY - int(uniforms.radius);
+    int xStart = max(max(int(uniforms.x0), -dx), 0);
+    int yStart = max(max(int(uniforms.y0), -dy), 0);
+    int xEnd = min(min(int(uniforms.x0 + uniforms.regionWidth), int(uniforms.width) - dx), int(uniforms.width));
+    int yEnd = min(min(int(uniforms.y0 + uniforms.regionHeight), int(uniforms.height) - dy), int(uniforms.height));
+
+    if ((xEnd - xStart) < 18 || (yEnd - yStart) < 12) {
+        scores[gid] = INFINITY;
+        return;
+    }
+
+    float total = 0.0;
+    uint samples = 0;
+    for (int y = yStart; y < yEnd; y += int(uniforms.stride)) {
+        int previousRow = y * int(uniforms.width);
+        int currentRow = (y + dy) * int(uniforms.width);
+        for (int x = xStart; x < xEnd; x += int(uniforms.stride)) {
+            total += abs(float(previous[previousRow + x]) - float(current[currentRow + x + dx]));
+            samples += 1;
+        }
+    }
+    scores[gid] = samples == 0 ? INFINITY : total / float(samples) / 255.0;
 }

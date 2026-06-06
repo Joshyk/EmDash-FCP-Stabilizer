@@ -1,117 +1,152 @@
 # Usage
 
-1. Select exactly one video clip in the Final Cut Pro timeline.
-2. Run `Stabilizer: Transform Keyframes`.
-3. Choose a keyframe interval from `1,2,3,4` when prompted. Use `1` or `2`
-   frames when the clip has fine gimbal jitter.
-4. CommandPost selects the clip, runs Final Cut Pro's Edit > Copy, and reads the selected
-   clip range plus source media path from the pasteboard.
-5. The action turns Final Cut Pro's built-in Stabilization off and writes Transform
-   keyframes instead.
-6. The action does not show progress alerts or write routine progress logs while it runs.
-7. If Final Cut Pro has the clip's Video Animation editor focused, the action attempts to
-   hide Video Animation and reread the selected timeline clip before failing.
+## Final Cut Pro
 
-## Behavior
-
-- The plugin analyzes source-frame motion from the selected clip's pasteboard media reference.
-- It builds a smoothed camera path and keyframes Transform Position/Rotation to counter
-  the difference between the original path and the smoothed path. Position uses sub-pixel
-  motion refinement plus explicit compensation gain so small shakes produce visible
-  Position keyframe changes.
-- It detects black strips in source frames, recenters the visible content with Transform
-  Position, and keyframes Transform Scale All from the strongest required visible-edge
-  or black-strip margin.
-- It smooths Transform Scale All over about 4 seconds so zoom changes ramp instead of
-  stepping between keyframes.
-- Low-motion sections stay close to 100% scale.
-- High-motion sections scale up only as needed to hide Transform-created edges.
-- Black-strip removal is source-frame based. If a Final Cut Pro effect creates black
-  after rendering, the estimator may not see it.
+1. Build the FxPlug wrapper app.
+2. Restart Final Cut Pro if it was already open.
+3. Apply `Stabilizer Transform` from the `Emdash Studios` effects group.
+4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis` or
+   `Cache Rejected - Run Host Analysis`.
+5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
 ## Controls
 
-- Stabilization: disabled
-- Transform Position: keyframed from estimated sub-pixel translation compensation plus black-strip recentering
-- Transform Rotation: keyframed from estimated uneven roll/pan compensation
-- Transform Scale All: keyframed from the estimated edge margin
-- Rolling Shutter: unchanged
+- `Micro Jitter Window`: short smoothing window for fine shake. The default is `0.12`
+  seconds. The parameter minimum remains `0.01`, but render playback raises the effective
+  micro window enough to include adjacent analyzed frames when the requested value is shorter
+  than the frame interval. This is evaluated during render and does not require rebuilding
+  analysis.
+- `Micro Jitter X Strength`: multiplier for horizontal micro-jitter correction. The default
+  is `0.5`.
+- `Micro Jitter Y Strength`: multiplier for vertical micro-jitter correction. The default is
+  `0.5`.
+- `Micro Jitter Rotation Strength`: multiplier for roll micro-jitter correction. The default
+  is `0.35`.
+- `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
+  At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
+  overlay output.
+- `Pan Stabilization Strength`: controls how strongly the stabilizer corrects large
+  intentional pans. At `0`, long-window correction is bypassed; at `1`, long-window
+  correction is strongest.
+- `Pan Smooth Seconds Slider`: centered smoothing window. In Host Analysis mode this is
+  evaluated against prepared motion paths during render, so changing the slider does not
+  require rebuilding analysis.
+- `Walking Bob Window`: Y-axis-only window for footstep bob and vertical shake between
+  micro jitter and large panning. The correction uses the Y band between the Micro Jitter
+  smooth path and this bob smooth path, without changing X or roll. The default is `1.5`
+  seconds. Use shorter values around `0.4-1.0` seconds for visible footstep bounce and
+  larger values for slower vertical sway. Values above `Pan Smooth Seconds Slider` are
+  clamped to the pan window during render.
+- `Walking Bob Strength`: multiplier for the Y-only walking-bob correction. Footstep
+  bounce can be reduced without changing X or roll. The slider range extends to `4.0` for
+  footage where footstep bob remains visible at `2.0`.
+- `Sample Width`: analysis image width. The sample height is calculated from the current
+  source frame aspect ratio. Width values above the current source frame width use the
+  source frame size before Host Analysis runs. Long clips still use the requested width
+  unless it exceeds the source frame width. The actual size is shown in `Stabilizer Info`.
+- `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
+  edge pixels outside the transformed source image. `Black Outside` draws those outside
+  pixels black so the viewer shows how far stabilization is moving the image.
+- `Start Host Analysis`: resets the current in-memory host-analysis frames, reloads a saved
+  persistent cache if one exists, and only asks Final Cut Pro to start a forward GPU
+  analysis when no saved cache can be loaded. Saved cache files remain available for later
+  reuse. If the previous cache was rejected for the current clip, the next start skips that
+  rejected cache and requests a new analysis.
+- `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
+  `Cache Cleared`.
+- `Host Analysis Status`: read-only status for analysis and cache reuse.
+- `Stabilizer Info`: read-only runtime and analysis metadata. It shows the loaded FxPlug
+  version, current Micro Jitter, Walking Bob, and Pan Stabilization values, plus completed
+  analysis time, frame count, actual sample image size, source frame size, and pixel
+  transform scale when analysis is available.
+- `Debug Overlay`: top-left diagnostics for X/Y/rotation while checking runtime behavior.
+  When enabled, `Host Analysis Status` also shows the current Y correction split into
+  macro, micro, and walking-bob components.
 
-## Native FxPlug
+## Behavior
 
-The native FxPlug effect lives under `fxplug/StabilizerFxPlug/` and appears in Final Cut Pro
-as `Stabilizer Transform` in the `CommandPost Em Dash` group after build, Motion Template
-install, and PluginKit registration.
+- The effect does not write Final Cut Pro Transform keyframes.
+- It estimates low-resolution global X/Y motion and roll from FxPlug-requested source
+  frames.
+- It is tuned for walking-gimbal footage. The render path corrects softened X/Y translation
+  and roll only; yaw/pitch proxy, shear, and perspective compensation are disabled.
+- It does not apply Z correction or zoom; render scale stays fixed at 1.0.
+- The effect always uses Host Analysis. It asks Final Cut Pro to run a forward GPU
+  analysis, uses Metal compute inside the FxPlug runtime to downsample source frames and
+  run frame-to-frame block matching, stores prepared frame analysis inside the plug-in
+  runtime, persists completed analysis to the FxPlug Application Support cache, and renders
+  from that analyzed frame set.
+- Host Analysis reads `Sample Width` once when analysis starts. Long-clip analysis keeps
+  the requested sample size and streams frame-to-frame motion directly through Metal while
+  retaining only the previous luma buffer needed for the next motion search. It does not
+  write per-frame `.luma` scratch files.
+- Host Analysis refuses proxy-scaled frames. If Final Cut Pro supplies proxy media, the
+  Inspector shows `Proxy Media Rejected - Use Original Media`; switch playback/media back
+  to original media and run Host Analysis again. After analysis has been validated, playback
+  can use proxy media while rendering from the prepared original-media motion path.
+- If Metal analysis resources are unavailable, Host Analysis fails visibly instead of
+  falling back to CPU analysis.
+- Playback uses prepared motion paths from completed Host Analysis. It must not run full
+  frame-to-frame block matching on every rendered playback frame.
+- Render playback combines `Pan Stabilization Strength` and the long `Pan Smooth Seconds Slider` path with a short
+  `Micro Jitter Window` path and a Y-only `Walking Bob Window` band-pass path so large
+  walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can be tuned
+  separately without rerunning Host Analysis.
+- Host Analysis/cache state changes update a hidden render revision parameter so Final Cut
+  Pro invalidates cached preview frames and redraws from the prepared motion path.
+- Trimmed clips are supported by matching the current render frame fingerprint against the
+  analyzed Host Analysis frame set. If Final Cut Pro reports render time in a different time
+  domain than analysis time, the effect applies that offset before reading the prepared
+  motion paths.
 
-- It does not write Final Cut Pro Transform keyframes.
-- The Xcode shared scheme installs each successful build to
-  `/Applications/StabilizerFxPlug.app` and registers the embedded FxPlug automatically.
-- Restart Final Cut Pro after rebuilding if it was already open.
-- It estimates X/Y motion, roll, yaw/pitch proxy motion, shear, perspective warp, crop
-  safety, and blur amount from low-resolution source frames requested by FxPlug.
-- It treats Z correction as dynamic scale and yaw/pitch as image-space proxy values, not
-  true solved 3D camera orientation.
-- `Analysis Source` selects the native analysis path:
-  `Host Analysis` uses Final Cut Pro's FxPlug analysis infrastructure, and `Live Frames`
-  uses render-time source-frame requests.
-- `Host Analysis` is the long-term primary path. It asks Final Cut Pro to run a forward GPU
-  analysis for the effect, stores low-resolution frame analysis inside the plug-in runtime,
-  persists completed analysis to the FxPlug Application Support cache, and renders from
-  that analyzed frame set. On the next load, the effect validates the current source frame
-  against the saved frame fingerprints before using the persisted cache. If the cache does
-  not match, it is deleted and the effect waits for a new Host Analysis run. If analysis
-  does not start automatically after applying the effect, click `Start Host Analysis` in
-  the effect inspector.
-- Playback uses prepared motion paths from the completed Host Analysis. It must not run
-  full frame-to-frame block matching on every rendered playback frame.
-- The Host Analysis cache is written to:
-  `/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json`.
-  `Start Host Analysis` clears the saved cache before requesting a new host analysis pass.
-- `Host Analysis Status` in the effect Inspector shows the current state. After a completed
-  Host Analysis run it should show `Ready (... frames)`. If the status says `Needs Analysis`
-  or `Cache Rejected - Run Host Analysis`, click `Start Host Analysis`.
-- `Live Frames` requests near-frame samples around the render time for fine gimbal jitter,
-  and smooths pan motion with the `Pan Smooth Seconds Slider`, defaulting to a 6-second
-  centered window.
-- `Debug Overlay` is normally off. Turn it on only while checking whether the FxPlug runtime
-  is producing X/Y/Z/rotation plus yaw/pitch, shear, perspective, and blur diagnostics.
+## Host Analysis Cache
 
-## Error Logging
-
-- If Transform keyframe creation cannot be confirmed, the action stops instead of reporting
-  success only when the keyframe control cannot be found or called.
-- Transform keyframes are created through CommandPost's official video inspector keyframe
-  API before values are written into the keyframe.
-- If Final Cut Pro keeps reporting Add Keyframe after the API call, the action logs that
-  unconfirmed state and continues AutoWB-style.
-- Routine progress logs are suppressed for performance. Failure logs still include the
-  failed stage, sample index, target timecode, and relevant Final Cut Pro diagnostics.
-
-## Development Reload
-
-CommandPost does not auto reload this repo when Lua, Swift, or Python files change. After a
-programming update, manually reload or restart CommandPost before running the action.
-
-CommandPost reload shortcut exists now.
-
-On this machine, run `cpr` or `cmdpost-reload` to request a CommandPost reload quickly. It
-lives at `/usr/local/bin/cmdpost-reload`, with `/usr/local/bin/cpr` symlinked to it.
-
-It calls:
-
-```sh
-/Applications/CommandPost.app/Contents/Frameworks/hs/cmdpost -A -q -t 1 -c 'hs.reload()'
-```
-
-Important: the command returns quickly after requesting reload, but CommandPost itself can
-take tens of seconds before IPC is reachable again. To verify it came back:
-
-```sh
-/Applications/CommandPost.app/Contents/Frameworks/hs/cmdpost -q -t 6 -c 'return hs.application.nameForBundleID("org.latenitefilms.CommandPost")'
-```
-
-Expected output:
+The latest Host Analysis cache is written to:
 
 ```text
-CommandPost
+/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json
+```
+
+The cache index is written to:
+
+```text
+/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-index-v2.json
+```
+
+Range-specific cache files are stored under:
+
+```text
+/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/
+```
+
+On load, the effect validates the current source frame against saved frame fingerprints
+before using a persisted cache. Rejected cache candidates are visible in logs/status and
+left on disk for other clips.
+
+New cache files store prepared motion paths, per-frame timestamps, blur values, and
+fingerprints instead of every frame's full luma sample. This keeps cache reuse available
+without writing long-clip `Sample Width` pixel buffers into JSON.
+
+The effect does not store analysis files inside a Final Cut Pro library or project bundle.
+The FCP bundle path is host-owned, and moving large scratch files there would still consume
+the same disk while risking library corruption.
+
+## Development
+
+Build and install with:
+
+```sh
+xcodebuild \
+  -project fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj \
+  -scheme StabilizerFxPlug \
+  -configuration Debug \
+  -derivedDataPath /tmp/StabilizerFxPlugDerived \
+  build
+```
+
+Verify with:
+
+```sh
+pluginkit -m -A -p FxPlug -i com.justadev.StabilizerFxPlug.Plugin
+codesign --verify --deep --strict /Applications/StabilizerFxPlug.app
 ```

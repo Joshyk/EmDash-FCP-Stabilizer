@@ -5,46 +5,123 @@ import simd
 
 private enum ParameterID: UInt32 {
     case strength = 1
-    case autoStabilize = 6
-    case xyzStrength = 7
+    case xStrength = 7
     case rotationStrength = 8
     case panSmoothSeconds = 9
     case debugOverlay = 10
-    case analysisSource = 13
     case startHostAnalysis = 14
     case hostAnalysisStatus = 15
+    case stabilizerInfo = 16
+    case clearHostAnalysisCache = 17
+    case yStrength = 18
+    case sampleWidth = 19
+    case renderRevision = 20
+    case microJitterWindowSeconds = 21
+    case walkingBobWindowSeconds = 22
+    case panStabilizationStrength = 23
+    case walkingBobStrength = 26
+    case edgeDisplayMode = 27
 }
 
-private enum AnalysisSource: Int32 {
-    case hostAnalysis = 1
-    case liveFrames = 2
+private let stabilizerFxPlugVersion = "0.2.61"
 
-    static func fromParameterValue(_ value: Int32) -> AnalysisSource {
-        AnalysisSource(rawValue: value) ?? .hostAnalysis
-    }
+private enum StabilizerEdgeDisplayMode: Int32 {
+    case stretchEdges = 0
+    case blackOutside = 1
 }
 
 private struct StabilizerPluginState {
     var strength: Double
-    var autoStabilize: Bool
-    var xyzStrength: Double
-    var rotationStrength: Double
+    var microJitterXStrength: Double
+    var microJitterYStrength: Double
+    var microJitterRotationStrength: Double
+    var panStabilizationStrength: Double
+    var walkingBobStrength: Double
     var panSmoothSeconds: Double
+    var microJitterWindowSeconds: Double
+    var walkingBobWindowSeconds: Double
+    var edgeDisplayMode: Int32
     var debugOverlay: Bool
-    var analysisSource: Int32
+    var sampleWidth: Double
     var hostAnalysisFrameCount: Int32
+    var hostAnalysisRevision: UInt64
+    var renderRevision: Double
+}
+
+private struct StabilizerSourceFrameInfo {
+    let sourceWidth: Int
+    let sourceHeight: Int
+    let pixelScaleX: Double
+    let pixelScaleY: Double
+
+    var sourceSizeDescription: String {
+        "\(sourceWidth)x\(sourceHeight)"
+    }
+
+    var pixelScaleDescription: String {
+        String(format: "%.2fx/%.2fx", pixelScaleX, pixelScaleY)
+    }
+}
+
+private enum StabilizerOriginalMediaPolicy {
+    private static let proxyScaleTolerance = 0.05
+
+    static func proxyRejectionReason(for frame: FxImageTile) -> String? {
+        guard let frameInfo = frameInfo(for: frame) else {
+            return "Host Analysis received a source frame without pixel transform; original media could not be confirmed."
+        }
+        let scaleX = frameInfo.pixelScaleX
+        let scaleY = frameInfo.pixelScaleY
+        guard scaleX.isFinite, scaleY.isFinite else {
+            return "Host Analysis received a source frame with invalid pixel transform; original media could not be confirmed."
+        }
+        guard max(scaleX, scaleY) <= 1.0 + proxyScaleTolerance else {
+            return String(
+                format: "Host Analysis received proxy-scaled media (pixel transform %.2fx, %.2fx). Use original media and rerun Host Analysis.",
+                scaleX,
+                scaleY
+            )
+        }
+        return nil
+    }
+
+    static func frameInfo(for frame: FxImageTile) -> StabilizerSourceFrameInfo? {
+        guard let transform = frame.pixelTransform else {
+            return nil
+        }
+        let origin = transform.transform2DPoint(CGPoint(x: 0.0, y: 0.0))
+        let unitX = transform.transform2DPoint(CGPoint(x: 1.0, y: 0.0))
+        let unitY = transform.transform2DPoint(CGPoint(x: 0.0, y: 1.0))
+        let bounds = frame.imagePixelBounds
+        return StabilizerSourceFrameInfo(
+            sourceWidth: Int(abs(bounds.right - bounds.left)),
+            sourceHeight: Int(abs(bounds.top - bounds.bottom)),
+            pixelScaleX: hypot(Double(unitX.x - origin.x), Double(unitX.y - origin.y)),
+            pixelScaleY: hypot(Double(unitY.x - origin.x), Double(unitY.y - origin.y))
+        )
+    }
 }
 
 @objc(StabilizerFxPlugPlugIn)
 final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
+    private static let sharedHostAnalysisStore: StabilizerHostAnalysisStore = {
+        let store = StabilizerHostAnalysisStore()
+        store.loadPersistentCache()
+        return store
+    }()
+
     private let apiManager: PROAPIAccessing
-    private let hostAnalysisStore = StabilizerHostAnalysisStore()
     private let statusLock = NSLock()
     private var lastPublishedStatus = ""
+    private var lastPublishedInfo = ""
+    private var lastPublishedRenderRevision: UInt64?
+    private var hostAnalysisStore: StabilizerHostAnalysisStore {
+        Self.sharedHostAnalysisStore
+    }
 
     required init?(apiManager: PROAPIAccessing) {
         self.apiManager = apiManager
-        hostAnalysisStore.loadPersistentCache()
+        _ = Self.sharedHostAnalysisStore
     }
 
     func addParameters() throws {
@@ -52,7 +129,51 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
         let flags = FxParameterFlags(kFxParameterFlag_DEFAULT)
 
         paramAPI.addFloatSlider(
-            withName: "Strength",
+            withName: "Micro Jitter Window",
+            parameterID: ParameterID.microJitterWindowSeconds.rawValue,
+            defaultValue: 0.12,
+            parameterMin: 0.01,
+            parameterMax: 5.0,
+            sliderMin: 0.01,
+            sliderMax: 2.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Micro Jitter X Strength",
+            parameterID: ParameterID.xStrength.rawValue,
+            defaultValue: 0.5,
+            parameterMin: 0.0,
+            parameterMax: 2.0,
+            sliderMin: 0.0,
+            sliderMax: 2.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Micro Jitter Y Strength",
+            parameterID: ParameterID.yStrength.rawValue,
+            defaultValue: 0.5,
+            parameterMin: 0.0,
+            parameterMax: 2.0,
+            sliderMin: 0.0,
+            sliderMax: 2.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Micro Jitter Rotation Strength",
+            parameterID: ParameterID.rotationStrength.rawValue,
+            defaultValue: 0.35,
+            parameterMin: 0.0,
+            parameterMax: 2.0,
+            sliderMin: 0.0,
+            sliderMax: 2.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Overall Strength",
             parameterID: ParameterID.strength.rawValue,
             defaultValue: 1.0,
             parameterMin: 0.0,
@@ -62,31 +183,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             delta: 0.01,
             parameterFlags: flags
         )
-        paramAPI.addToggleButton(
-            withName: "Auto Stabilize",
-            parameterID: ParameterID.autoStabilize.rawValue,
-            defaultValue: true,
-            parameterFlags: flags
-        )
         paramAPI.addFloatSlider(
-            withName: "XYZ Strength",
-            parameterID: ParameterID.xyzStrength.rawValue,
-            defaultValue: 1.0,
+            withName: "Pan Stabilization Strength",
+            parameterID: ParameterID.panStabilizationStrength.rawValue,
+            defaultValue: 0.5,
             parameterMin: 0.0,
-            parameterMax: 2.0,
+            parameterMax: 1.0,
             sliderMin: 0.0,
-            sliderMax: 2.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Rotation Strength",
-            parameterID: ParameterID.rotationStrength.rawValue,
-            defaultValue: 1.0,
-            parameterMin: 0.0,
-            parameterMax: 2.0,
-            sliderMin: 0.0,
-            sliderMax: 2.0,
+            sliderMax: 1.0,
             delta: 0.01,
             parameterFlags: flags
         )
@@ -101,11 +205,44 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             delta: 0.25,
             parameterFlags: flags
         )
+        paramAPI.addFloatSlider(
+            withName: "Walking Bob Window",
+            parameterID: ParameterID.walkingBobWindowSeconds.rawValue,
+            defaultValue: 1.5,
+            parameterMin: 0.1,
+            parameterMax: 30.0,
+            sliderMin: 0.1,
+            sliderMax: 6.0,
+            delta: 0.05,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Walking Bob Strength",
+            parameterID: ParameterID.walkingBobStrength.rawValue,
+            defaultValue: 0.5,
+            parameterMin: 0.0,
+            parameterMax: 4.0,
+            sliderMin: 0.0,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Sample Width",
+            parameterID: ParameterID.sampleWidth.rawValue,
+            defaultValue: Double(AutoStabilizationEstimator.defaultSampleWidth),
+            parameterMin: Double(AutoStabilizationEstimator.minimumSampleWidth),
+            parameterMax: 8192.0,
+            sliderMin: Double(AutoStabilizationEstimator.minimumSampleWidth),
+            sliderMax: 1024.0,
+            delta: 1.0,
+            parameterFlags: flags
+        )
         paramAPI.addPopupMenu(
-            withName: "Analysis Source",
-            parameterID: ParameterID.analysisSource.rawValue,
-            defaultValue: UInt32(AnalysisSource.hostAnalysis.rawValue),
-            menuEntries: ["Host Analysis", "Live Frames"],
+            withName: "Edge Display Mode",
+            parameterID: ParameterID.edgeDisplayMode.rawValue,
+            defaultValue: UInt32(StabilizerEdgeDisplayMode.stretchEdges.rawValue),
+            menuEntries: ["Stretch Edges", "Black Outside"],
             parameterFlags: flags
         )
         paramAPI.addPushButton(
@@ -114,11 +251,34 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             selector: #selector(startHostAnalysis),
             parameterFlags: flags
         )
+        paramAPI.addPushButton(
+            withName: "Clear Host Analysis Cache",
+            parameterID: ParameterID.clearHostAnalysisCache.rawValue,
+            selector: #selector(clearHostAnalysisCache),
+            parameterFlags: flags
+        )
         paramAPI.addStringParameter(
             withName: "Host Analysis Status",
             parameterID: ParameterID.hostAnalysisStatus.rawValue,
             defaultValue: "Needs Analysis",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
+        )
+        paramAPI.addStringParameter(
+            withName: "Stabilizer Info",
+            parameterID: ParameterID.stabilizerInfo.rawValue,
+            defaultValue: "No Analysis",
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
+        )
+        paramAPI.addFloatSlider(
+            withName: "Render Revision",
+            parameterID: ParameterID.renderRevision.rawValue,
+            defaultValue: 0.0,
+            parameterMin: 0.0,
+            parameterMax: Double(UInt32.max),
+            sliderMin: 0.0,
+            sliderMax: 1.0,
+            delta: 1.0,
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
         )
         paramAPI.addToggleButton(
             withName: "Debug Overlay",
@@ -127,6 +287,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             parameterFlags: flags
         )
         publishHostAnalysisStatus(force: true)
+        publishStabilizerInfo(force: true)
     }
 
     func properties(_ properties: AutoreleasingUnsafeMutablePointer<NSDictionary>?) throws {
@@ -144,43 +305,67 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
 
         var state = StabilizerPluginState(
             strength: 1.0,
-            autoStabilize: true,
-            xyzStrength: 1.0,
-            rotationStrength: 1.0,
+            microJitterXStrength: 0.5,
+            microJitterYStrength: 0.5,
+            microJitterRotationStrength: 0.35,
+            panStabilizationStrength: 0.5,
+            walkingBobStrength: 0.5,
             panSmoothSeconds: 6.0,
+            microJitterWindowSeconds: 0.12,
+            walkingBobWindowSeconds: 1.5,
+            edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
             debugOverlay: false,
-            analysisSource: AnalysisSource.hostAnalysis.rawValue,
-            hostAnalysisFrameCount: 0
+            sampleWidth: Double(AutoStabilizationEstimator.defaultSampleWidth),
+            hostAnalysisFrameCount: 0,
+            hostAnalysisRevision: 0,
+            renderRevision: 0.0
         )
         paramAPI.getFloatValue(&state.strength, fromParameter: ParameterID.strength.rawValue, at: renderTime)
-        var autoStabilize = ObjCBool(state.autoStabilize)
-        paramAPI.getBoolValue(&autoStabilize, fromParameter: ParameterID.autoStabilize.rawValue, at: renderTime)
-        state.autoStabilize = autoStabilize.boolValue
-        paramAPI.getFloatValue(&state.xyzStrength, fromParameter: ParameterID.xyzStrength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.rotationStrength, fromParameter: ParameterID.rotationStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.microJitterXStrength, fromParameter: ParameterID.xStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.microJitterYStrength, fromParameter: ParameterID.yStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.microJitterRotationStrength, fromParameter: ParameterID.rotationStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.panStabilizationStrength, fromParameter: ParameterID.panStabilizationStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.walkingBobStrength, fromParameter: ParameterID.walkingBobStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.microJitterWindowSeconds, fromParameter: ParameterID.microJitterWindowSeconds.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.walkingBobWindowSeconds, fromParameter: ParameterID.walkingBobWindowSeconds.rawValue, at: renderTime)
+        paramAPI.getIntValue(&state.edgeDisplayMode, fromParameter: ParameterID.edgeDisplayMode.rawValue, at: renderTime)
         var debugOverlay = ObjCBool(state.debugOverlay)
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
         state.debugOverlay = debugOverlay.boolValue
-        var analysisSource = Int32(state.analysisSource)
-        if paramAPI.getIntValue(&analysisSource, fromParameter: ParameterID.analysisSource.rawValue, at: renderTime) {
-            state.analysisSource = AnalysisSource.fromParameterValue(analysisSource).rawValue
-        }
+        paramAPI.getFloatValue(&state.sampleWidth, fromParameter: ParameterID.sampleWidth.rawValue, at: renderTime)
         let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
-        if state.autoStabilize && AnalysisSource.fromParameterValue(state.analysisSource) == .hostAnalysis {
-            requestHostAnalysisIfNeeded()
-        }
+        state.hostAnalysisRevision = hostAnalysisStore.revision
+        paramAPI.getFloatValue(&state.renderRevision, fromParameter: ParameterID.renderRevision.rawValue, at: renderTime)
+        state.renderRevision = Double(state.hostAnalysisRevision)
+        requestHostAnalysisIfNeeded()
         publishHostAnalysisStatus()
+        publishStabilizerInfo(state: state)
+        publishRenderRevision(state.hostAnalysisRevision)
 
         pluginState?.pointee = NSData(bytes: &state, length: MemoryLayout<StabilizerPluginState>.size)
     }
 
     @objc(startHostAnalysis)
     func startHostAnalysis() {
-        hostAnalysisStore.reset(removePersistentCache: true)
+        let shouldSkipPersistentCacheReload = hostAnalysisStore.hasRejectedPersistentCache
+        hostAnalysisStore.reset()
+        let loadedPersistentCache = shouldSkipPersistentCacheReload ? false : hostAnalysisStore.loadPersistentCache()
         publishHostAnalysisStatus(force: true)
-        requestHostAnalysisIfNeeded(force: true)
+        publishStabilizerInfo(force: true)
+        publishRenderRevision(hostAnalysisStore.revision, force: true)
+        if !loadedPersistentCache {
+            requestHostAnalysisIfNeeded(force: true)
+        }
+    }
+
+    @objc(clearHostAnalysisCache)
+    func clearHostAnalysisCache() {
+        hostAnalysisStore.clearPersistentCache()
+        publishHostAnalysisStatus(force: true)
+        publishStabilizerInfo(force: true)
+        publishRenderRevision(hostAnalysisStore.revision, force: true)
     }
 
     private func requestHostAnalysisIfNeeded(force: Bool = false) {
@@ -206,13 +391,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
             hostAnalysisStore.markRequested()
             publishHostAnalysisStatus(force: true)
+            publishRenderRevision(hostAnalysisStore.revision, force: true)
         } catch {
             NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
         }
     }
 
-    private func publishHostAnalysisStatus(force: Bool = false) {
-        let status = hostAnalysisStore.statusText
+    private func publishHostAnalysisStatus(force: Bool = false, statusOverride: String? = nil) {
+        let status = statusOverride ?? hostAnalysisStore.statusText
         statusLock.lock()
         let shouldPublish = force || status != lastPublishedStatus
         if shouldPublish {
@@ -229,14 +415,96 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
         }
     }
 
-    func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
-        guard let state = pluginState?.withUnsafeBytes({ pointer in
-            pointer.bindMemory(to: StabilizerPluginState.self).baseAddress?.pointee
-        }) else {
-            inputImageRequests?.pointee = nil
+    private func publishStabilizerInfo(force: Bool = false, state: StabilizerPluginState? = nil) {
+        let info = Self.stabilizerInfoText(analysisInfo: hostAnalysisStore.infoText, state: state)
+        statusLock.lock()
+        let shouldPublish = force || info != lastPublishedInfo
+        if shouldPublish {
+            lastPublishedInfo = info
+        }
+        statusLock.unlock()
+        guard shouldPublish,
+              let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
+        else {
             return
         }
+        if !settingAPI.setStringParameterValue(info, toParameter: ParameterID.stabilizerInfo.rawValue) {
+            NSLog("StabilizerFxPlug: failed to update Stabilizer Info parameter.")
+        }
+    }
 
+    private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
+        var lines = ["FxPlug \(stabilizerFxPlugVersion)"]
+        if let state {
+            lines.append(String(
+                format: "Micro %.2fs X %.2f Y %.2f R %.2f",
+                state.microJitterWindowSeconds,
+                state.microJitterXStrength,
+                state.microJitterYStrength,
+                state.microJitterRotationStrength
+            ))
+            lines.append(String(
+                format: "Bob %.2fs x %.2f | Pan %.2f",
+                state.walkingBobWindowSeconds,
+                state.walkingBobStrength,
+                state.panStabilizationStrength
+            ))
+        }
+        if analysisInfo != "No Analysis" {
+            lines.append(analysisInfo)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func publishRenderRevision(_ revision: UInt64, force: Bool = false) {
+        statusLock.lock()
+        let shouldPublish = force || lastPublishedRenderRevision != revision
+        if shouldPublish {
+            lastPublishedRenderRevision = revision
+        }
+        statusLock.unlock()
+        guard shouldPublish,
+              let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
+        else {
+            return
+        }
+        if !settingAPI.setFloatValue(Double(revision), toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
+            NSLog("StabilizerFxPlug: failed to update Render Revision parameter.")
+        }
+    }
+
+    private func requestedSampleWidth(at time: CMTime) -> Int {
+        var sampleWidth = Double(AutoStabilizationEstimator.defaultSampleWidth)
+        if let paramAPI = apiManager.api(for: FxParameterRetrievalAPI_v6.self) as? FxParameterRetrievalAPI_v6 {
+            paramAPI.getFloatValue(&sampleWidth, fromParameter: ParameterID.sampleWidth.rawValue, at: time)
+        }
+        return Int(sampleWidth.rounded())
+    }
+
+    private func publishHostAnalysisRenderDiagnostics(
+        frameCount: Int,
+        panSmoothSeconds: Double,
+        autoTransform: StabilizerAutoTransform,
+        appliedPixelOffset: vector_float2,
+        appliedRotationRadians: Float
+    ) {
+        let status = String(
+            format: "Ready (%d) | smooth %.1fs | X %.1f Y %.1f | R %.2f | y macro %.1f micro %.1f bob %.1f | raw X %.1f Y %.1f",
+            frameCount,
+            panSmoothSeconds,
+            appliedPixelOffset.x,
+            appliedPixelOffset.y,
+            appliedRotationRadians * 180.0 / .pi,
+            autoTransform.macroPixelOffset.y,
+            autoTransform.microPixelOffset.y,
+            autoTransform.walkingBobPixelOffset.y,
+            autoTransform.pixelOffset.x,
+            autoTransform.pixelOffset.y
+        )
+        publishHostAnalysisStatus(statusOverride: status)
+    }
+
+    func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
         var requests: [FxImageTileRequest] = []
         if let current = FxImageTileRequest(
             source: kFxImageTileRequestSourceEffectClip,
@@ -245,40 +513,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             parameterID: 0
         ) {
             requests.append(current)
-        }
-
-        if state.autoStabilize && AnalysisSource.fromParameterValue(state.analysisSource) == .liveFrames {
-            let windowSeconds = max(0.1, state.panSmoothSeconds)
-            let halfWindow = windowSeconds * 0.5
-            let requestTimescale: CMTimeScale = 600
-            let frameStep = CMTime(value: 20, timescale: requestTimescale)
-            var requestedTimes = Set<Int64>()
-
-            func appendAnalysisRequest(at time: CMTime) {
-                let normalizedTime = CMTimeConvertScale(time, timescale: requestTimescale, method: .roundHalfAwayFromZero)
-                guard requestedTimes.insert(normalizedTime.value).inserted else {
-                    return
-                }
-                if let request = FxImageTileRequest(
-                    source: kFxImageTileRequestSourceEffectClip,
-                    time: normalizedTime,
-                    includeFilters: true,
-                    parameterID: 0
-                ) {
-                    requests.append(request)
-                }
-            }
-
-            for frameOffset in -4...4 {
-                appendAnalysisRequest(at: CMTimeAdd(renderTime, CMTimeMultiply(frameStep, multiplier: Int32(frameOffset))))
-            }
-
-            let sampleStepSeconds = max(0.5, windowSeconds / 240.0)
-            var offset = -halfWindow
-            while offset <= halfWindow + 0.0001 {
-                appendAnalysisRequest(at: CMTimeAdd(renderTime, CMTime(seconds: offset, preferredTimescale: requestTimescale)))
-                offset += sampleStepSeconds
-            }
         }
 
         inputImageRequests?.pointee = requests as NSArray
@@ -326,41 +560,35 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
             StabilizerVertex2D(position: vector_float2(Float(-outputWidth) / 2.0, Float(outputHeight) / 2.0), textureCoordinate: vector_float2(0.0, 0.0))
         ]
         var viewportSize = simd_uint2(UInt32(outputWidth), UInt32(outputHeight))
-        let analysisSource = AnalysisSource.fromParameterValue(state.analysisSource)
+        let masterStrength = Float(max(0.0, state.strength))
+        let transformEnabled = masterStrength > 0.0001
         let autoTransform: StabilizerAutoTransform
-        if state.autoStabilize {
-            switch analysisSource {
-            case .hostAnalysis:
-                if let preparedAnalysis = hostAnalysisStore.preparedAnalysisForRender(validating: sourceImages[0], at: renderTime) {
-                    autoTransform = AutoStabilizationEstimator.estimate(
-                        preparedAnalysis: preparedAnalysis,
-                        renderTime: renderTime,
-                        outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                        panSmoothSeconds: state.panSmoothSeconds
-                    )
-                } else {
-                    autoTransform = .identity
-                }
-            case .liveFrames:
-                autoTransform = AutoStabilizationEstimator.estimate(
-                    sourceImages: sourceImages,
-                    renderTime: renderTime,
-                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                    panSmoothSeconds: state.panSmoothSeconds
+        if transformEnabled,
+           let preparedAnalysis = hostAnalysisStore.preparedAnalysisForRender(validating: sourceImages[0], at: renderTime) {
+            let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
+            autoTransform = AutoStabilizationEstimator.estimate(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: analysisRenderTime,
+                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                panSmoothSeconds: state.panSmoothSeconds,
+                microJitterWindowSeconds: state.microJitterWindowSeconds,
+                walkingBobWindowSeconds: state.walkingBobWindowSeconds,
+                strengths: StabilizerCorrectionStrengths(
+                    microJitterX: state.microJitterXStrength,
+                    microJitterY: state.microJitterYStrength,
+                    microJitterRotation: state.microJitterRotationStrength,
+                    panStabilizationStrength: state.panStabilizationStrength,
+                    walkingBob: state.walkingBobStrength
                 )
-            }
+            )
         } else {
             autoTransform = .identity
         }
-        let masterStrength = Float(max(0.0, state.strength))
-        let xyzStrength = Float(max(0.0, state.xyzStrength)) * masterStrength
-        let rotationStrength = Float(max(0.0, state.rotationStrength)) * masterStrength
-        let autoScale = 1.0 + ((autoTransform.scaleMultiplier - 1.0) * xyzStrength)
         let diagnostic = vector_float4(
             min(1.0, abs(autoTransform.pixelOffset.x) / max(1.0, Float(outputWidth) * 0.05)),
             min(1.0, abs(autoTransform.pixelOffset.y) / max(1.0, Float(outputHeight) * 0.05)),
-            min(1.0, max(0.0, (autoTransform.scaleMultiplier - 1.0) / 0.18)),
-            min(1.0, abs(autoTransform.rotationDegrees) / 5.0)
+            min(1.0, abs(autoTransform.rotationDegrees) / 5.0),
+            0.0
         )
         let diagnostic2 = vector_float4(
             min(1.0, simd_length(autoTransform.yawPitchProxy) / 0.10),
@@ -370,17 +598,26 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
         )
 
         var transform = StabilizerTransformUniforms(
-            pixelOffset: autoTransform.pixelOffset * xyzStrength,
-            rotationRadians: autoTransform.rotationDegrees * .pi / 180.0 * rotationStrength,
-            scale: autoScale,
+            pixelOffset: autoTransform.pixelOffset * masterStrength,
+            rotationRadians: autoTransform.rotationDegrees * .pi / 180.0 * masterStrength,
             strength: 1.0,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
             diagnostic: diagnostic,
             diagnostic2: diagnostic2,
-            shear: autoTransform.shear * xyzStrength,
-            perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * xyzStrength,
-            debugOverlay: state.debugOverlay ? 1.0 : 0.0
+            shear: autoTransform.shear * masterStrength,
+            perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * masterStrength,
+            edgeMode: Float(state.edgeDisplayMode),
+            debugOverlay: state.debugOverlay && transformEnabled ? 1.0 : 0.0
         )
+        if state.debugOverlay && transformEnabled {
+            publishHostAnalysisRenderDiagnostics(
+                frameCount: Int(state.hostAnalysisFrameCount),
+                panSmoothSeconds: state.panSmoothSeconds,
+                autoTransform: autoTransform,
+                appliedPixelOffset: transform.pixelOffset,
+                appliedRotationRadians: transform.rotationRadians
+            )
+        }
 
         let colorAttachment = MTLRenderPassColorAttachmentDescriptor()
         colorAttachment.texture = outputTexture
@@ -415,31 +652,48 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
     }
 
     func setupAnalysis(for analysisRange: CMTimeRange, frameDuration: CMTime) throws {
-        hostAnalysisStore.begin(range: analysisRange, frameDuration: frameDuration)
+        hostAnalysisStore.begin(
+            range: analysisRange,
+            frameDuration: frameDuration,
+            requestedSampleWidth: requestedSampleWidth(at: analysisRange.start)
+        )
         publishHostAnalysisStatus(force: true)
     }
 
     func analyzeFrame(_ frame: FxImageTile!, at frameTime: CMTime) throws {
         guard let frame else {
             throw NSError(
-                domain: "com.justadev.CommandPostEmDash.StabilizerFxPlug",
+                domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
                 userInfo: [NSLocalizedDescriptionKey: "StabilizerFxPlug host analysis supplied no frame."]
             )
         }
-        guard let analysisFrame = AutoStabilizationEstimator.analysisFrame(from: frame, at: frameTime) else {
+        if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: frame) {
+            hostAnalysisStore.rejectProxyAnalysis(reason: rejectionReason)
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
             throw NSError(
-                domain: "com.justadev.CommandPostEmDash.StabilizerFxPlug",
+                domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
-                userInfo: [NSLocalizedDescriptionKey: "StabilizerFxPlug could not read the host analysis frame."]
+                userInfo: [NSLocalizedDescriptionKey: rejectionReason]
             )
         }
-        hostAnalysisStore.append(analysisFrame)
+        let frameInfo = StabilizerOriginalMediaPolicy.frameInfo(for: frame)
+        let sampleSize = hostAnalysisStore.sampleSize(for: frameInfo)
+        let analysisFrame = try AutoStabilizationEstimator.analysisFrame(
+            from: frame,
+            at: frameTime,
+            sampleWidth: sampleSize.width,
+            sampleHeight: sampleSize.height
+        )
+        try hostAnalysisStore.append(analysisFrame, sourceInfo: frameInfo)
     }
 
     func cleanupAnalysis() throws {
-        hostAnalysisStore.finish()
+        try hostAnalysisStore.finish()
         publishHostAnalysisStatus(force: true)
+        publishStabilizerInfo(force: true)
+        publishRenderRevision(hostAnalysisStore.revision, force: true)
     }
 }
 
@@ -457,6 +711,8 @@ private enum HostAnalysisStatus {
     case cacheLoaded
     case ready
     case cacheRejected
+    case cacheCleared
+    case proxyRejected
 }
 
 private struct PersistedHostAnalysisCache: Codable {
@@ -465,6 +721,8 @@ private struct PersistedHostAnalysisCache: Codable {
     let rangeStartSeconds: Double
     let rangeDurationSeconds: Double
     let frameDurationSeconds: Double
+    let sampleWidth: Int
+    let sampleHeight: Int
     let frames: [PersistedHostAnalysisFrame]
     let residuals: [Float]?
     let rollMotion: [Float]?
@@ -482,29 +740,85 @@ private struct PersistedHostAnalysisCache: Codable {
 
 private struct PersistedHostAnalysisFrame: Codable {
     let time: Double
-    let pixels: Data
+    let pixels: Data?
     let blurAmount: Float
+    let fingerprint: String?
+}
+
+private struct PersistedHostAnalysisIndex: Codable {
+    let schemaVersion: Int
+    var entries: [PersistedHostAnalysisIndexEntry]
+}
+
+private struct PersistedHostAnalysisIndexEntry: Codable {
+    let cacheFileName: String
+    let createdAt: Double
+    let rangeStartSeconds: Double
+    let rangeDurationSeconds: Double
+    let frameDurationSeconds: Double
+    let sampleWidth: Int
+    let sampleHeight: Int
+    let frameCount: Int
+    let firstFingerprint: String
+    let middleFingerprint: String
+    let lastFingerprint: String
+}
+
+private struct LoadedPersistentHostAnalysisCache {
+    let fileName: String
+    let url: URL
+    let cache: PersistedHostAnalysisCache
+    let frames: [StabilizerAnalysisFrame]
+    let preparedAnalysis: StabilizerPreparedAnalysis
 }
 
 private final class StabilizerHostAnalysisStore {
-    private static let cacheSchemaVersion = 2
+    private static let cacheSchemaVersion = 5
+    private static let supportedCacheSchemaVersions: Set<Int> = [3, 4, 5]
+    private static let maxPersistentCacheEntries = 8
+    private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0
     private static let cacheDirectoryName = "StabilizerFxPlug"
     private static let cacheFileName = "host-analysis-v2.json"
+    private static let cacheIndexFileName = "host-analysis-index-v2.json"
+    private static let cacheStorageDirectoryName = "caches"
+    private static let analysisScratchDirectoryName = "analysis-work"
 
     private let lock = NSLock()
     private var framesByTimeKey: [Int64: StabilizerAnalysisFrame] = [:]
+    private var streamingAnalysisBuilder: StreamingStabilizationAnalysisBuilder?
     private var preparedAnalysis: StabilizerPreparedAnalysis?
+    private var persistentCacheCandidates: [URL] = []
+    private var activePersistentCacheFileName: String?
     private var activeRange: CMTimeRange = .invalid
     private var activeFrameDuration: CMTime = .invalid
+    private var activeRequestedSampleWidth = AutoStabilizationEstimator.defaultSampleWidth
+    private var renderToAnalysisOffsetSeconds: Double?
+    private var renderToAnalysisOffsetProbeAttempted = false
     private var finished = false
     private var validationState: HostAnalysisValidationState = .notRequired
     private var status: HostAnalysisStatus = .needsAnalysis
+    private var analysisRevision: UInt64 = 0
+    private var latestSourceFrameInfo: StabilizerSourceFrameInfo?
+    private var latestSampleSize: (width: Int, height: Int)?
+    private var analysisInfoText = "No Analysis"
 
     var frameCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return framesByTimeKey.count
+    }
+
+    var revision: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return analysisRevision
+    }
+
+    var infoText: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return analysisInfoText
     }
 
     var statusText: String {
@@ -530,6 +844,10 @@ private final class StabilizerHostAnalysisStore {
             return "Needs Analysis"
         case .cacheRejected:
             return "Cache Rejected - Run Host Analysis"
+        case .cacheCleared:
+            return "Cache Cleared"
+        case .proxyRejected:
+            return "Proxy Media Rejected - Use Original Media"
         }
     }
 
@@ -539,138 +857,319 @@ private final class StabilizerHostAnalysisStore {
         return finished && validationState != .rejected && preparedAnalysis != nil
     }
 
-    func begin(range: CMTimeRange, frameDuration: CMTime) {
+    var hasRejectedPersistentCache: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return validationState == .rejected || status == .cacheRejected
+    }
+
+    func begin(range: CMTimeRange, frameDuration: CMTime, requestedSampleWidth: Int) {
+        removeLegacyAnalysisScratchDirectory()
         lock.lock()
         framesByTimeKey.removeAll(keepingCapacity: true)
+        streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        persistentCacheCandidates.removeAll(keepingCapacity: false)
+        activePersistentCacheFileName = nil
         activeRange = range
         activeFrameDuration = frameDuration
+        activeRequestedSampleWidth = requestedSampleWidth
+        renderToAnalysisOffsetSeconds = nil
+        renderToAnalysisOffsetProbeAttempted = false
         finished = false
         validationState = .validated
         status = .analyzing
+        latestSourceFrameInfo = nil
+        latestSampleSize = nil
+        analysisInfoText = "Analyzing..."
+        bumpRevisionLocked()
         lock.unlock()
-        removePersistentCache(logFailures: true)
+    }
+
+    func sampleSize(for sourceInfo: StabilizerSourceFrameInfo?) -> (width: Int, height: Int) {
+        lock.lock()
+        let requestedWidth = activeRequestedSampleWidth
+        lock.unlock()
+        return AutoStabilizationEstimator.clampedSampleSize(
+            requestedWidth: requestedWidth,
+            sourceWidth: sourceInfo?.sourceWidth ?? requestedWidth,
+            sourceHeight: sourceInfo?.sourceHeight ?? AutoStabilizationEstimator.defaultSampleHeight
+        )
     }
 
     func markRequested() {
         lock.lock()
         if preparedAnalysis == nil && status != .analyzing {
             status = .requested
+            bumpRevisionLocked()
         }
         lock.unlock()
     }
 
     func reset(removePersistentCache shouldRemovePersistentCache: Bool = false) {
+        removeLegacyAnalysisScratchDirectory()
         lock.lock()
         framesByTimeKey.removeAll(keepingCapacity: true)
+        streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        persistentCacheCandidates.removeAll(keepingCapacity: false)
+        activePersistentCacheFileName = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
+        activeRequestedSampleWidth = AutoStabilizationEstimator.defaultSampleWidth
+        renderToAnalysisOffsetSeconds = nil
+        renderToAnalysisOffsetProbeAttempted = false
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
+        latestSourceFrameInfo = nil
+        latestSampleSize = nil
+        analysisInfoText = "No Analysis"
+        bumpRevisionLocked()
         lock.unlock()
         if shouldRemovePersistentCache {
             removePersistentCache(logFailures: true)
         }
     }
 
-    func append(_ frame: StabilizerAnalysisFrame) {
+    func clearPersistentCache() {
+        removeLegacyAnalysisScratchDirectory()
         lock.lock()
-        framesByTimeKey[Self.timeKey(frame.time)] = frame
+        framesByTimeKey.removeAll(keepingCapacity: true)
+        streamingAnalysisBuilder = nil
+        preparedAnalysis = nil
+        persistentCacheCandidates.removeAll(keepingCapacity: false)
+        activePersistentCacheFileName = nil
+        activeRange = .invalid
+        activeFrameDuration = .invalid
+        activeRequestedSampleWidth = AutoStabilizationEstimator.defaultSampleWidth
+        renderToAnalysisOffsetSeconds = nil
+        renderToAnalysisOffsetProbeAttempted = false
+        finished = false
+        validationState = .notRequired
+        status = .cacheCleared
+        latestSourceFrameInfo = nil
+        latestSampleSize = nil
+        analysisInfoText = "Cache Cleared"
+        bumpRevisionLocked()
+        lock.unlock()
+        removePersistentCache(logFailures: true)
+        NSLog("StabilizerFxPlug: cleared persisted Host Analysis cache set.")
+    }
+
+    func rejectProxyAnalysis(reason: String) {
+        removeLegacyAnalysisScratchDirectory()
+        lock.lock()
+        framesByTimeKey.removeAll(keepingCapacity: true)
+        streamingAnalysisBuilder = nil
+        preparedAnalysis = nil
+        activeRange = .invalid
+        activeFrameDuration = .invalid
+        activeRequestedSampleWidth = AutoStabilizationEstimator.defaultSampleWidth
+        renderToAnalysisOffsetSeconds = nil
+        renderToAnalysisOffsetProbeAttempted = false
+        finished = false
+        validationState = .notRequired
+        status = .proxyRejected
+        analysisInfoText = "Rejected proxy media. Use original media and rerun Host Analysis."
+        bumpRevisionLocked()
+        lock.unlock()
+        NSLog("StabilizerFxPlug: rejected Host Analysis proxy media: \(reason)")
+    }
+
+    func append(_ frame: StabilizerAnalysisFrame, sourceInfo: StabilizerSourceFrameInfo?) throws {
+        let key = Self.timeKey(frame.time)
+        lock.lock()
+        if framesByTimeKey[key] != nil {
+            lock.unlock()
+            return
+        }
+        if streamingAnalysisBuilder == nil {
+            do {
+                streamingAnalysisBuilder = try StreamingStabilizationAnalysisBuilder()
+            } catch {
+                lock.unlock()
+                throw error
+            }
+        }
+        let builder = streamingAnalysisBuilder
+        lock.unlock()
+
+        guard let builder else {
+            throw NSError(
+                domain: "com.justadev.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "Stabilizer streaming analysis builder was unavailable."]
+            )
+        }
+        try builder.append(frame)
+
+        lock.lock()
+        framesByTimeKey[key] = frame.withoutRetainedPixels()
+        latestSampleSize = (frame.sampleWidth, frame.sampleHeight)
+        if let sourceInfo {
+            latestSourceFrameInfo = sourceInfo
+        }
         lock.unlock()
     }
 
-    func finish() {
-        rebuildPreparedAnalysis(markFinished: true)
-        persistIfCompleted()
+    func finish() throws {
+        do {
+            try rebuildPreparedAnalysis(markFinished: true)
+            markAnalysisCompleted()
+            persistIfCompleted()
+            releaseRetainedAnalysisPixels()
+            removeLegacyAnalysisScratchDirectory()
+        } catch {
+            lock.lock()
+            preparedAnalysis = nil
+            streamingAnalysisBuilder = nil
+            finished = false
+            status = .needsAnalysis
+            analysisInfoText = "Analysis failed: \(error.localizedDescription)"
+            bumpRevisionLocked()
+            lock.unlock()
+            removeLegacyAnalysisScratchDirectory()
+            NSLog("StabilizerFxPlug: Metal Host Analysis preparation failed: \(error.localizedDescription)")
+            throw error
+        }
     }
 
     func preparedAnalysisForRender(validating sourceImage: FxImageTile, at renderTime: CMTime) -> StabilizerPreparedAnalysis? {
-        guard let analysis = preparedAnalysisSnapshot() else {
-            return nil
-        }
-
-        let state = currentValidationState()
-        if state == .validated || state == .notRequired {
-            return analysis
-        }
-        if state == .rejected {
-            return nil
-        }
-
-        guard let currentFrame = AutoStabilizationEstimator.analysisFrame(from: sourceImage, at: renderTime) else {
-            rejectPersistentCache(reason: "could not validate the persisted cache against the current source frame")
-            return nil
-        }
-        guard let closestFrame = analysis.frames.min(by: { abs($0.time - currentFrame.time) < abs($1.time - currentFrame.time) }) else {
-            rejectPersistentCache(reason: "persisted cache had no comparable frame")
-            return nil
-        }
-
-        let meanDifference = Self.meanAbsoluteDifference(currentFrame.pixels, closestFrame.pixels)
-        guard meanDifference <= Self.cacheValidationMeanDifferenceThreshold else {
-            rejectPersistentCache(
-                reason: String(format: "current frame did not match the persisted cache (mean luma difference %.2f)", meanDifference)
-            )
-            return nil
-        }
-
-        lock.lock()
-        if validationState == .pending {
-            validationState = .validated
-            status = .ready
-        }
-        lock.unlock()
-        NSLog("StabilizerFxPlug: validated persisted Host Analysis cache with \(analysis.frames.count) frames.")
-        return analysis
-    }
-
-    func loadPersistentCache() {
-        let url = Self.cacheURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return
-        }
-        do {
-            let data = try Data(contentsOf: url)
-            let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
-            guard cache.schemaVersion == Self.cacheSchemaVersion else {
-                NSLog("StabilizerFxPlug: ignoring Host Analysis cache with unsupported schema \(cache.schemaVersion).")
-                return
-            }
-            let frames = cache.frames.compactMap { persistedFrame -> StabilizerAnalysisFrame? in
-                let pixels = [UInt8](persistedFrame.pixels)
-                guard !pixels.isEmpty else {
+        while true {
+            guard let analysis = preparedAnalysisSnapshot() else {
+                guard activateNextPersistentCache(afterRejecting: nil) else {
                     return nil
                 }
-                return StabilizerAnalysisFrame(
-                    time: persistedFrame.time,
-                    pixels: pixels,
-                    blurAmount: persistedFrame.blurAmount
-                )
+                continue
             }
-            guard frames.count >= 3 else {
-                NSLog("StabilizerFxPlug: ignoring Host Analysis cache with too few frames.")
-                return
+
+            let state = currentValidationState()
+            if state == .validated || state == .notRequired {
+                markReadyAfterOriginalMediaReturnedIfNeeded()
+                updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
+                return analysis
             }
-            let prepared = Self.preparedAnalysis(from: cache, frames: frames)
+            if state == .rejected {
+                return nil
+            }
+
+            if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) {
+                markProxyMediaUnavailable(reason: "Persisted cache validation requires original media. \(rejectionReason)")
+                return nil
+            }
+
+            if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
+                guard activateNextPersistentCache(afterRejecting: rejectionReason) else {
+                    rejectPersistentCache(reason: rejectionReason)
+                    return nil
+                }
+                continue
+            }
 
             lock.lock()
-            framesByTimeKey = Dictionary(uniqueKeysWithValues: frames.map { (Self.timeKey($0.time), $0) })
-            preparedAnalysis = prepared
-            activeRange = CMTimeRange(
-                start: CMTime(seconds: cache.rangeStartSeconds, preferredTimescale: 600),
-                duration: CMTime(seconds: cache.rangeDurationSeconds, preferredTimescale: 600)
-            )
-            activeFrameDuration = CMTime(seconds: cache.frameDurationSeconds, preferredTimescale: 600)
-            finished = true
-            validationState = .pending
-            status = .cacheLoaded
+            if validationState == .pending {
+                validationState = .validated
+                status = .ready
+                bumpRevisionLocked()
+            }
             lock.unlock()
-            NSLog("StabilizerFxPlug: loaded persisted Host Analysis cache with \(frames.count) frames.")
-        } catch {
-            NSLog("StabilizerFxPlug: failed to load Host Analysis cache: \(error.localizedDescription)")
+            NSLog("StabilizerFxPlug: validated persisted Host Analysis cache with \(analysis.frames.count) frames.")
+            releaseRetainedAnalysisPixels()
+            return analysis
         }
+    }
+
+    func analysisRenderTime(for renderTime: CMTime, preparedAnalysis analysis: StabilizerPreparedAnalysis) -> CMTime {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite else {
+            return renderTime
+        }
+        lock.lock()
+        let offsetSeconds = renderToAnalysisOffsetSeconds
+        lock.unlock()
+        if let offsetSeconds, offsetSeconds.isFinite {
+            let mappedSeconds = Self.clampedAnalysisSeconds(renderSeconds + offsetSeconds, frames: analysis.frames)
+            let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : CMTimeScale(600)
+            return CMTime(seconds: mappedSeconds, preferredTimescale: preferredTimescale)
+        }
+        let mappedSeconds = mappedAnalysisSeconds(forRenderSeconds: renderSeconds, frames: analysis.frames)
+        guard mappedSeconds.isFinite, abs(mappedSeconds - renderSeconds) > 1e-9 else {
+            return renderTime
+        }
+        let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : CMTimeScale(600)
+        return CMTime(seconds: mappedSeconds, preferredTimescale: preferredTimescale)
+    }
+
+    @discardableResult
+    func loadPersistentCache() -> Bool {
+        var candidateURLs = Self.persistentCacheCandidateURLs()
+        while !candidateURLs.isEmpty {
+            let activeURL = candidateURLs.removeFirst()
+            guard let activeCandidate = Self.loadPersistentCache(at: activeURL) else {
+                continue
+            }
+            lock.lock()
+            installPersistentCacheLocked(activeCandidate)
+            persistentCacheCandidates = candidateURLs
+            analysisInfoText = Self.infoText(
+                completedAt: Date(timeIntervalSince1970: activeCandidate.cache.createdAt),
+                frameCount: activeCandidate.frames.count,
+                sampleWidth: activeCandidate.cache.sampleWidth,
+                sampleHeight: activeCandidate.cache.sampleHeight,
+                sourceInfo: nil,
+                prefix: "Loaded Cache"
+            )
+            lock.unlock()
+            NSLog("StabilizerFxPlug: loaded persisted Host Analysis cache \(activeCandidate.fileName) with \(activeCandidate.frames.count) frames; \(candidateURLs.count) lazy alternate cache(s) available.")
+            return true
+        }
+        return false
+    }
+
+    private func markAnalysisCompleted() {
+        let completedAt = Date()
+        let snapshot: (frameCount: Int, sampleSize: (width: Int, height: Int)?, sourceInfo: StabilizerSourceFrameInfo?) = {
+            lock.lock()
+            let value = (framesByTimeKey.count, latestSampleSize, latestSourceFrameInfo)
+            lock.unlock()
+            return value
+        }()
+        let info = Self.infoText(
+            completedAt: completedAt,
+            frameCount: snapshot.frameCount,
+            sampleWidth: snapshot.sampleSize?.width,
+            sampleHeight: snapshot.sampleSize?.height,
+            sourceInfo: snapshot.sourceInfo,
+            prefix: "Analyzed"
+        )
+        lock.lock()
+        analysisInfoText = info
+        bumpRevisionLocked()
+        lock.unlock()
+    }
+
+    private static func infoText(
+        completedAt: Date,
+        frameCount: Int,
+        sampleWidth: Int?,
+        sampleHeight: Int?,
+        sourceInfo: StabilizerSourceFrameInfo?,
+        prefix: String
+    ) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss ZZZZ"
+        let dateText = formatter.string(from: completedAt)
+        let sourceText = sourceInfo?.sourceSizeDescription ?? "unknown"
+        let scaleText = sourceInfo?.pixelScaleDescription ?? "unknown"
+        let sampleText: String
+        if let sampleWidth, let sampleHeight {
+            sampleText = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
+        } else {
+            sampleText = "unknown"
+        }
+        return "\(prefix) \(dateText) | frames \(frameCount) | sample \(sampleText) | source \(sourceText) | pixel scale \(scaleText)"
     }
 
     private func persistIfCompleted() {
@@ -687,13 +1186,17 @@ private final class StabilizerHostAnalysisStore {
         guard snapshot.frames.count >= 3, let prepared = snapshot.prepared else {
             return
         }
-        let rangeStartSeconds = CMTimeGetSeconds(snapshot.range.start)
-        let rangeDurationSeconds = CMTimeGetSeconds(snapshot.range.duration)
-        let frameDurationSeconds = CMTimeGetSeconds(snapshot.frameDuration)
-        guard rangeStartSeconds.isFinite, rangeDurationSeconds.isFinite, frameDurationSeconds.isFinite else {
-            NSLog("StabilizerFxPlug: Host Analysis cache was not saved because the host supplied an invalid time range.")
-            return
-        }
+        let firstFrameTime = snapshot.frames.first?.time ?? 0.0
+        let lastFrameTime = snapshot.frames.last?.time ?? firstFrameTime
+        let sampleWidth = snapshot.frames.first?.sampleWidth ?? AutoStabilizationEstimator.defaultSampleWidth
+        let sampleHeight = snapshot.frames.first?.sampleHeight ?? AutoStabilizationEstimator.defaultSampleHeight
+        let frameDurationSeconds = Self.validFrameDurationSeconds(snapshot.frameDuration, frames: snapshot.frames)
+        let suppliedRangeStartSeconds = CMTimeGetSeconds(snapshot.range.start)
+        let suppliedRangeDurationSeconds = CMTimeGetSeconds(snapshot.range.duration)
+        let rangeStartSeconds = suppliedRangeStartSeconds.isFinite ? suppliedRangeStartSeconds : firstFrameTime
+        let rangeDurationSeconds = suppliedRangeDurationSeconds.isFinite
+            ? suppliedRangeDurationSeconds
+            : max(frameDurationSeconds, (lastFrameTime - firstFrameTime) + frameDurationSeconds)
 
         let cache = PersistedHostAnalysisCache(
             schemaVersion: Self.cacheSchemaVersion,
@@ -701,11 +1204,14 @@ private final class StabilizerHostAnalysisStore {
             rangeStartSeconds: rangeStartSeconds,
             rangeDurationSeconds: rangeDurationSeconds,
             frameDurationSeconds: frameDurationSeconds,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
             frames: snapshot.frames.map {
                 PersistedHostAnalysisFrame(
                     time: $0.time,
-                    pixels: Data($0.pixels),
-                    blurAmount: $0.blurAmount
+                    pixels: nil,
+                    blurAmount: $0.blurAmount,
+                    fingerprint: $0.fingerprint
                 )
             },
             residuals: prepared.residuals,
@@ -724,22 +1230,74 @@ private final class StabilizerHostAnalysisStore {
 
         do {
             try FileManager.default.createDirectory(at: Self.cacheDirectoryURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: Self.cacheStorageDirectoryURL, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(cache)
+            let cacheFileName = Self.persistentCacheFileName(for: cache, frames: snapshot.frames)
+            let cacheURL = Self.cacheStorageDirectoryURL.appendingPathComponent(cacheFileName, isDirectory: false)
+            try data.write(to: cacheURL, options: .atomic)
             try data.write(to: Self.cacheURL, options: .atomic)
-            NSLog("StabilizerFxPlug: saved Host Analysis cache with \(snapshot.frames.count) frames to \(Self.cacheURL.path).")
+            if let indexEntry = Self.indexEntry(for: cache, fileName: cacheFileName, frames: snapshot.frames) {
+                try Self.updatePersistentCacheIndex(with: indexEntry)
+            }
+            NSLog("StabilizerFxPlug: saved Host Analysis cache with \(snapshot.frames.count) frames to \(cacheURL.path).")
         } catch {
             NSLog("StabilizerFxPlug: failed to save Host Analysis cache: \(error.localizedDescription)")
         }
     }
 
-    private func rebuildPreparedAnalysis(markFinished: Bool) {
-        let frames = framesSnapshot()
-        let prepared = frames.count >= 3 ? AutoStabilizationEstimator.prepare(analysisFrames: frames) : nil
+    private func rebuildPreparedAnalysis(markFinished: Bool) throws {
+        let snapshot: (frames: [StabilizerAnalysisFrame], builder: StreamingStabilizationAnalysisBuilder?) = {
+            lock.lock()
+            let value = (framesByTimeKey.values.sorted { $0.time < $1.time }, streamingAnalysisBuilder)
+            lock.unlock()
+            return value
+        }()
+        let prepared: StabilizerPreparedAnalysis?
+        if snapshot.frames.count >= 3 {
+            guard let builder = snapshot.builder else {
+                throw NSError(
+                    domain: "com.justadev.StabilizerFxPlug",
+                    code: Int(kFxError_AnalysisError),
+                    userInfo: [NSLocalizedDescriptionKey: "Stabilizer streaming analysis was unavailable at finish."]
+                )
+            }
+            prepared = try builder.preparedAnalysis()
+        } else {
+            prepared = nil
+        }
         lock.lock()
         preparedAnalysis = prepared
         if markFinished {
+            activePersistentCacheFileName = nil
+            streamingAnalysisBuilder = nil
+        }
+        if markFinished {
             finished = true
             status = prepared == nil ? .needsAnalysis : .ready
+        }
+        bumpRevisionLocked()
+        lock.unlock()
+    }
+
+    private func releaseRetainedAnalysisPixels() {
+        lock.lock()
+        framesByTimeKey = framesByTimeKey.mapValues { $0.withoutRetainedPixels() }
+        if let analysis = preparedAnalysis {
+            preparedAnalysis = StabilizerPreparedAnalysis(
+                frames: analysis.frames.map { $0.withoutRetainedPixels() },
+                residuals: analysis.residuals,
+                rollMotion: analysis.rollMotion,
+                pathX: analysis.pathX,
+                pathY: analysis.pathY,
+                pathRoll: analysis.pathRoll,
+                pathYaw: analysis.pathYaw,
+                pathPitch: analysis.pathPitch,
+                pathShearX: analysis.pathShearX,
+                pathShearY: analysis.pathShearY,
+                pathPerspectiveX: analysis.pathPerspectiveX,
+                pathPerspectiveY: analysis.pathPerspectiveY,
+                blurAmounts: analysis.blurAmounts
+            )
         }
         lock.unlock()
     }
@@ -765,30 +1323,257 @@ private final class StabilizerHostAnalysisStore {
         return state
     }
 
+    private func markProxyMediaUnavailable(reason: String) {
+        lock.lock()
+        if status != .proxyRejected {
+            status = .proxyRejected
+            analysisInfoText = "Rejected proxy media. Use original media and rerun Host Analysis."
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+        NSLog("StabilizerFxPlug: refusing proxy media frame: \(reason)")
+    }
+
+    private func markReadyAfterOriginalMediaReturnedIfNeeded() {
+        lock.lock()
+        if status == .proxyRejected, preparedAnalysis != nil {
+            status = .ready
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+    }
+
     private func rejectPersistentCache(reason: String) {
         lock.lock()
         framesByTimeKey.removeAll(keepingCapacity: true)
+        streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        persistentCacheCandidates.removeAll(keepingCapacity: false)
+        activePersistentCacheFileName = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         finished = false
         validationState = .rejected
         status = .cacheRejected
+        bumpRevisionLocked()
         lock.unlock()
-        removePersistentCache(logFailures: true)
         NSLog("StabilizerFxPlug: rejected persisted Host Analysis cache: \(reason).")
     }
 
-    private func removePersistentCache(logFailures: Bool) {
-        let url = Self.cacheURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
+    private func persistentCacheRejectionReason(for analysis: StabilizerPreparedAnalysis, validating sourceImage: FxImageTile, at renderTime: CMTime) -> String? {
+        let validationTime = analysisRenderTime(for: renderTime, preparedAnalysis: analysis)
+        let currentFrame: StabilizerAnalysisFrame
+        do {
+            let sampleWidth = analysis.frames.first?.sampleWidth ?? AutoStabilizationEstimator.defaultSampleWidth
+            let sampleHeight = analysis.frames.first?.sampleHeight ?? AutoStabilizationEstimator.defaultSampleHeight
+            currentFrame = try AutoStabilizationEstimator.analysisFrame(
+                from: sourceImage,
+                at: validationTime,
+                sampleWidth: sampleWidth,
+                sampleHeight: sampleHeight
+            )
+        } catch {
+            return "could not validate the persisted cache against the current source frame: \(error.localizedDescription)"
+        }
+        guard let matchedFrame = matchedAnalysisFrame(for: currentFrame, in: analysis.frames) else {
+            return "persisted cache had no comparable frame"
+        }
+        updateRenderTimeMapping(renderTime: renderTime, matchedAnalysisFrame: matchedFrame)
+
+        if matchedFrame.pixels.isEmpty {
+            return nil
+        }
+
+        let meanDifference = Self.meanAbsoluteDifference(currentFrame.pixels, matchedFrame.pixels)
+        guard meanDifference <= Self.cacheValidationMeanDifferenceThreshold else {
+            return String(format: "current frame did not match the persisted cache (mean luma difference %.2f)", meanDifference)
+        }
+        return nil
+    }
+
+    private func updateRenderTimeMappingIfNeeded(for analysis: StabilizerPreparedAnalysis, validating sourceImage: FxImageTile, at renderTime: CMTime) {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite,
+              !analysis.frames.isEmpty
+        else {
             return
         }
+        guard StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) == nil else {
+            return
+        }
+        let renderTimeInsideAnalysisRange = Self.renderSeconds(renderSeconds, isInside: analysis.frames)
+        lock.lock()
+        let alreadyMapped = renderToAnalysisOffsetSeconds != nil
+        let probeAttempted = renderToAnalysisOffsetProbeAttempted
+        if !alreadyMapped, (!probeAttempted || !renderTimeInsideAnalysisRange) {
+            renderToAnalysisOffsetProbeAttempted = true
+        }
+        lock.unlock()
+        guard !alreadyMapped, !probeAttempted || !renderTimeInsideAnalysisRange else {
+            return
+        }
+
         do {
-            try FileManager.default.removeItem(at: url)
+            let sampleWidth = analysis.frames.first?.sampleWidth ?? AutoStabilizationEstimator.defaultSampleWidth
+            let sampleHeight = analysis.frames.first?.sampleHeight ?? AutoStabilizationEstimator.defaultSampleHeight
+            let currentFrame = try AutoStabilizationEstimator.analysisFrame(
+                from: sourceImage,
+                at: renderTime,
+                sampleWidth: sampleWidth,
+                sampleHeight: sampleHeight
+            )
+            if let matchedFrame = matchedAnalysisFrame(for: currentFrame, in: analysis.frames) {
+                updateRenderTimeMapping(renderTime: renderTime, matchedAnalysisFrame: matchedFrame)
+            }
         } catch {
-            if logFailures {
-                NSLog("StabilizerFxPlug: failed to remove Host Analysis cache: \(error.localizedDescription)")
+            NSLog("StabilizerFxPlug: could not map trimmed render time to Host Analysis time: \(error.localizedDescription)")
+        }
+    }
+
+    private func updateRenderTimeMapping(renderTime: CMTime, matchedAnalysisFrame: StabilizerAnalysisFrame) {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite, matchedAnalysisFrame.time.isFinite else {
+            return
+        }
+        let offsetSeconds = matchedAnalysisFrame.time - renderSeconds
+        lock.lock()
+        renderToAnalysisOffsetSeconds = offsetSeconds
+        renderToAnalysisOffsetProbeAttempted = true
+        lock.unlock()
+    }
+
+    private func matchedAnalysisFrame(for currentFrame: StabilizerAnalysisFrame, in frames: [StabilizerAnalysisFrame]) -> StabilizerAnalysisFrame? {
+        if let fingerprintMatch = frames.first(where: { $0.fingerprint == currentFrame.fingerprint }) {
+            return fingerprintMatch
+        }
+        guard let closestFrame = frames.min(by: { abs($0.time - currentFrame.time) < abs($1.time - currentFrame.time) }) else {
+            return nil
+        }
+        guard !closestFrame.pixels.isEmpty,
+              Self.meanAbsoluteDifference(currentFrame.pixels, closestFrame.pixels) <= Self.cacheValidationMeanDifferenceThreshold
+        else {
+            return nil
+        }
+        return closestFrame
+    }
+
+    private func activateNextPersistentCache(afterRejecting rejectionReason: String?) -> Bool {
+        while true {
+            lock.lock()
+            let rejectedFileName = activePersistentCacheFileName
+            guard !persistentCacheCandidates.isEmpty else {
+                lock.unlock()
+                if let rejectionReason {
+                    NSLog("StabilizerFxPlug: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(rejectionReason).")
+                }
+                return false
+            }
+            let nextURL = persistentCacheCandidates.removeFirst()
+            let remainingURLCount = persistentCacheCandidates.count
+            lock.unlock()
+
+            guard let nextCandidate = Self.loadPersistentCache(at: nextURL) else {
+                NSLog("StabilizerFxPlug: skipped unavailable Host Analysis cache candidate \(nextURL.lastPathComponent); \(remainingURLCount) lazy alternate cache(s) remain.")
+                continue
+            }
+
+            lock.lock()
+            installPersistentCacheLocked(nextCandidate)
+            let remainingCount = persistentCacheCandidates.count
+            lock.unlock()
+
+            if let rejectionReason {
+                NSLog("StabilizerFxPlug: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(rejectionReason); trying \(nextCandidate.fileName).")
+            } else {
+                NSLog("StabilizerFxPlug: activating persisted Host Analysis cache \(nextCandidate.fileName).")
+            }
+            if remainingCount > 0 {
+                NSLog("StabilizerFxPlug: \(remainingCount) lazy alternate Host Analysis cache(s) remain available.")
+            }
+            return true
+        }
+    }
+
+    private func installPersistentCacheLocked(_ loadedCache: LoadedPersistentHostAnalysisCache) {
+        framesByTimeKey = Dictionary(uniqueKeysWithValues: loadedCache.frames.map { (Self.timeKey($0.time), $0) })
+        preparedAnalysis = loadedCache.preparedAnalysis
+        activePersistentCacheFileName = loadedCache.fileName
+        activeRange = CMTimeRange(
+            start: CMTime(seconds: loadedCache.cache.rangeStartSeconds, preferredTimescale: 600),
+            duration: CMTime(seconds: loadedCache.cache.rangeDurationSeconds, preferredTimescale: 600)
+        )
+        activeFrameDuration = CMTime(seconds: loadedCache.cache.frameDurationSeconds, preferredTimescale: 600)
+        renderToAnalysisOffsetSeconds = nil
+        renderToAnalysisOffsetProbeAttempted = false
+        finished = true
+        validationState = .pending
+        status = .cacheLoaded
+        bumpRevisionLocked()
+    }
+
+    private func mappedAnalysisSeconds(forRenderSeconds renderSeconds: Double, frames: [StabilizerAnalysisFrame]) -> Double {
+        guard let firstFrameTime = frames.first?.time,
+              let lastFrameTime = frames.last?.time,
+              firstFrameTime.isFinite,
+              lastFrameTime.isFinite
+        else {
+            return renderSeconds
+        }
+
+        let activeRangeSnapshot: CMTimeRange
+        let activeFrameDurationSnapshot: CMTime
+        lock.lock()
+        activeRangeSnapshot = activeRange
+        activeFrameDurationSnapshot = activeFrameDuration
+        lock.unlock()
+
+        let rangeStartSeconds = CMTimeGetSeconds(activeRangeSnapshot.start)
+        let frameDurationSeconds = CMTimeGetSeconds(activeFrameDurationSnapshot)
+        let padding = max(0.05, frameDurationSeconds.isFinite ? frameDurationSeconds * 2.0 : 0.05)
+        var candidates = [renderSeconds, renderSeconds + firstFrameTime, renderSeconds - firstFrameTime]
+        if rangeStartSeconds.isFinite {
+            candidates.append(renderSeconds - rangeStartSeconds + firstFrameTime)
+            candidates.append(renderSeconds + rangeStartSeconds - firstFrameTime)
+        }
+
+        var bestSeconds = renderSeconds
+        var bestScore = Self.frameRangeDistance(renderSeconds, firstFrameTime: firstFrameTime, lastFrameTime: lastFrameTime, padding: padding)
+        for candidate in candidates where candidate.isFinite {
+            let clampedCandidate = min(max(candidate, firstFrameTime), lastFrameTime)
+            let score = Self.frameRangeDistance(candidate, firstFrameTime: firstFrameTime, lastFrameTime: lastFrameTime, padding: padding)
+                + abs(candidate - renderSeconds) * 1e-9
+            if score < bestScore {
+                bestScore = score
+                bestSeconds = clampedCandidate
+            }
+        }
+        return bestSeconds
+    }
+
+    private func bumpRevisionLocked() {
+        analysisRevision &+= 1
+    }
+
+    private func removePersistentCache(logFailures: Bool) {
+        let urls = [Self.cacheURL, Self.cacheIndexURL, Self.cacheStorageDirectoryURL]
+        for url in urls where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                if logFailures {
+                    NSLog("StabilizerFxPlug: failed to remove Host Analysis cache \(url.path): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func removeLegacyAnalysisScratchDirectory() {
+        let scratchDirectory = Self.analysisScratchDirectoryURL()
+        if FileManager.default.fileExists(atPath: scratchDirectory.path) {
+            do {
+                try FileManager.default.removeItem(at: scratchDirectory)
+            } catch {
+                NSLog("StabilizerFxPlug: failed to remove legacy Host Analysis scratch directory \(scratchDirectory.path): \(error.localizedDescription)")
             }
         }
     }
@@ -797,7 +1582,73 @@ private final class StabilizerHostAnalysisStore {
         Int64((seconds * 600.0).rounded())
     }
 
-    private static func preparedAnalysis(from cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) -> StabilizerPreparedAnalysis {
+    private static func validFrameDurationSeconds(_ frameDuration: CMTime, frames: [StabilizerAnalysisFrame]) -> Double {
+        let supplied = CMTimeGetSeconds(frameDuration)
+        if supplied.isFinite, supplied > 0.0 {
+            return supplied
+        }
+        guard frames.count >= 2 else {
+            return 1.0 / 30.0
+        }
+        let sortedTimes = frames.map(\.time).sorted()
+        var deltas: [Double] = []
+        for index in 1..<sortedTimes.count {
+            let delta = sortedTimes[index] - sortedTimes[index - 1]
+            if delta.isFinite, delta > 0.0 {
+                deltas.append(delta)
+            }
+        }
+        guard !deltas.isEmpty else {
+            return 1.0 / 30.0
+        }
+        return deltas[deltas.count / 2]
+    }
+
+    private static func plausiblePersistedFrameCountLimit(for cache: PersistedHostAnalysisCache) -> Int? {
+        guard cache.rangeDurationSeconds.isFinite,
+              cache.frameDurationSeconds.isFinite,
+              cache.rangeDurationSeconds > 0.0,
+              cache.frameDurationSeconds > 0.0
+        else {
+            return nil
+        }
+        let expectedFrameCount = Int((cache.rangeDurationSeconds / cache.frameDurationSeconds).rounded(.up)) + 2
+        return max(120, expectedFrameCount * 3)
+    }
+
+    private static func frameRangeDistance(_ seconds: Double, firstFrameTime: Double, lastFrameTime: Double, padding: Double) -> Double {
+        if seconds < firstFrameTime - padding {
+            return firstFrameTime - padding - seconds
+        }
+        if seconds > lastFrameTime + padding {
+            return seconds - lastFrameTime - padding
+        }
+        return 0.0
+    }
+
+    private static func renderSeconds(_ seconds: Double, isInside frames: [StabilizerAnalysisFrame]) -> Bool {
+        guard let firstFrameTime = frames.first?.time,
+              let lastFrameTime = frames.last?.time,
+              firstFrameTime.isFinite,
+              lastFrameTime.isFinite
+        else {
+            return true
+        }
+        return seconds >= firstFrameTime && seconds <= lastFrameTime
+    }
+
+    private static func clampedAnalysisSeconds(_ seconds: Double, frames: [StabilizerAnalysisFrame]) -> Double {
+        guard let firstFrameTime = frames.first?.time,
+              let lastFrameTime = frames.last?.time,
+              firstFrameTime.isFinite,
+              lastFrameTime.isFinite
+        else {
+            return seconds
+        }
+        return min(max(seconds, firstFrameTime), lastFrameTime)
+    }
+
+    private static func preparedAnalysis(from cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) throws -> StabilizerPreparedAnalysis {
         let arrays = [
             cache.residuals,
             cache.rollMotion,
@@ -841,7 +1692,247 @@ private final class StabilizerHostAnalysisStore {
                 blurAmounts: blurAmounts
             )
         }
-        return AutoStabilizationEstimator.prepare(analysisFrames: frames)
+        throw NSError(
+            domain: "com.justadev.StabilizerFxPlug",
+            code: Int(kFxError_AnalysisError),
+            userInfo: [NSLocalizedDescriptionKey: "persisted Host Analysis cache was missing prepared Metal motion paths"]
+        )
+    }
+
+    private static func persistentCacheCandidateURLs() -> [URL] {
+        var candidateURLs: [URL] = []
+        var seenPaths = Set<String>()
+
+        func appendCandidateURL(_ url: URL) {
+            guard FileManager.default.fileExists(atPath: url.path),
+                  seenPaths.insert(url.path).inserted
+            else {
+                return
+            }
+            candidateURLs.append(url)
+        }
+
+        if FileManager.default.fileExists(atPath: cacheIndexURL.path) {
+            do {
+                let data = try Data(contentsOf: cacheIndexURL)
+                let index = try JSONDecoder().decode(PersistedHostAnalysisIndex.self, from: data)
+                if !supportedCacheSchemaVersions.contains(index.schemaVersion) {
+                    NSLog("StabilizerFxPlug: ignoring Host Analysis cache index with unsupported schema \(index.schemaVersion).")
+                } else {
+                    for entry in index.entries {
+                        appendCandidateURL(cacheStorageDirectoryURL.appendingPathComponent(entry.cacheFileName, isDirectory: false))
+                    }
+                }
+            } catch {
+                NSLog("StabilizerFxPlug: failed to load Host Analysis cache index: \(error.localizedDescription)")
+            }
+        }
+
+        if let cacheURLs = try? FileManager.default.contentsOfDirectory(
+            at: cacheStorageDirectoryURL,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            let sortedCacheURLs = cacheURLs
+                .filter { $0.pathExtension == "json" }
+                .sorted {
+                    let leftDate = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    let rightDate = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    return leftDate > rightDate
+                }
+            for url in sortedCacheURLs {
+                appendCandidateURL(url)
+            }
+        }
+
+        appendCandidateURL(cacheURL)
+        return candidateURLs
+    }
+
+    private static func loadPersistentCache(at url: URL) -> LoadedPersistentHostAnalysisCache? {
+        do {
+            if let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+               fileSize > maxPersistentCacheReadBytes {
+                NSLog("StabilizerFxPlug: ignoring oversized Host Analysis cache at \(url.path) (\(fileSize) bytes).")
+                return nil
+            }
+            let data = try Data(contentsOf: url)
+            let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
+            guard supportedCacheSchemaVersions.contains(cache.schemaVersion) else {
+                NSLog("StabilizerFxPlug: ignoring Host Analysis cache with unsupported schema \(cache.schemaVersion) at \(url.path).")
+                return nil
+            }
+            if let maximumFrameCount = plausiblePersistedFrameCountLimit(for: cache),
+               cache.frames.count > maximumFrameCount {
+                NSLog("StabilizerFxPlug: ignoring oversized Host Analysis cache at \(url.path): \(cache.frames.count) frames exceeded expected limit \(maximumFrameCount).")
+                return nil
+            }
+            let frames = cache.frames.compactMap { persistedFrame -> StabilizerAnalysisFrame? in
+                let pixels = persistedFrame.pixels.map { [UInt8]($0) } ?? []
+                if !pixels.isEmpty, pixels.count != cache.sampleWidth * cache.sampleHeight {
+                    return nil
+                }
+                let fingerprint = persistedFrame.fingerprint ?? (pixels.isEmpty ? nil : StabilizerAnalysisFrame.fingerprint(for: pixels))
+                guard let fingerprint else {
+                    return nil
+                }
+                return StabilizerAnalysisFrame(
+                    time: persistedFrame.time,
+                    pixels: pixels,
+                    sampleWidth: cache.sampleWidth,
+                    sampleHeight: cache.sampleHeight,
+                    blurAmount: persistedFrame.blurAmount,
+                    fingerprint: fingerprint
+                )
+            }
+            guard frames.count >= 3 else {
+                NSLog("StabilizerFxPlug: ignoring Host Analysis cache with too few frames at \(url.path).")
+                return nil
+            }
+            guard persistentCacheIdentity(for: cache, frames: frames) != nil else {
+                NSLog("StabilizerFxPlug: ignoring Host Analysis cache with incomplete fingerprints at \(url.path).")
+                return nil
+            }
+            let prepared = try preparedAnalysis(from: cache, frames: frames)
+            let lightweightCache = PersistedHostAnalysisCache(
+                schemaVersion: cache.schemaVersion,
+                createdAt: cache.createdAt,
+                rangeStartSeconds: cache.rangeStartSeconds,
+                rangeDurationSeconds: cache.rangeDurationSeconds,
+                frameDurationSeconds: cache.frameDurationSeconds,
+                sampleWidth: cache.sampleWidth,
+                sampleHeight: cache.sampleHeight,
+                frames: [],
+                residuals: cache.residuals,
+                rollMotion: cache.rollMotion,
+                pathX: cache.pathX,
+                pathY: cache.pathY,
+                pathRoll: cache.pathRoll,
+                pathYaw: cache.pathYaw,
+                pathPitch: cache.pathPitch,
+                pathShearX: cache.pathShearX,
+                pathShearY: cache.pathShearY,
+                pathPerspectiveX: cache.pathPerspectiveX,
+                pathPerspectiveY: cache.pathPerspectiveY,
+                blurAmounts: cache.blurAmounts
+            )
+            return LoadedPersistentHostAnalysisCache(
+                fileName: url.lastPathComponent,
+                url: url,
+                cache: lightweightCache,
+                frames: frames,
+                preparedAnalysis: prepared
+            )
+        } catch {
+            NSLog("StabilizerFxPlug: failed to load Host Analysis cache \(url.path): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private static func updatePersistentCacheIndex(with entry: PersistedHostAnalysisIndexEntry) throws {
+        var entries: [PersistedHostAnalysisIndexEntry] = []
+        if FileManager.default.fileExists(atPath: cacheIndexURL.path) {
+            do {
+                let data = try Data(contentsOf: cacheIndexURL)
+                let index = try JSONDecoder().decode(PersistedHostAnalysisIndex.self, from: data)
+                if supportedCacheSchemaVersions.contains(index.schemaVersion) {
+                    entries = index.entries
+                }
+            } catch {
+                NSLog("StabilizerFxPlug: rebuilding Host Analysis cache index after load failure: \(error.localizedDescription)")
+            }
+        }
+
+        entries.removeAll { existing in
+            existing.cacheFileName == entry.cacheFileName
+                || (
+                    existing.frameCount == entry.frameCount
+                    && existing.sampleWidth == entry.sampleWidth
+                    && existing.sampleHeight == entry.sampleHeight
+                    && existing.rangeStartSeconds == entry.rangeStartSeconds
+                    && existing.rangeDurationSeconds == entry.rangeDurationSeconds
+                    && existing.firstFingerprint == entry.firstFingerprint
+                    && existing.middleFingerprint == entry.middleFingerprint
+                    && existing.lastFingerprint == entry.lastFingerprint
+                )
+        }
+        entries.insert(entry, at: 0)
+        entries.sort { $0.createdAt > $1.createdAt }
+
+        let retainedEntries = Array(entries.prefix(maxPersistentCacheEntries))
+        let prunedEntries = entries.dropFirst(maxPersistentCacheEntries)
+        let index = PersistedHostAnalysisIndex(schemaVersion: cacheSchemaVersion, entries: retainedEntries)
+        let data = try JSONEncoder().encode(index)
+        try data.write(to: cacheIndexURL, options: .atomic)
+
+        for prunedEntry in prunedEntries {
+            let url = cacheStorageDirectoryURL.appendingPathComponent(prunedEntry.cacheFileName, isDirectory: false)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    private static func indexEntry(for cache: PersistedHostAnalysisCache, fileName: String, frames: [StabilizerAnalysisFrame]) -> PersistedHostAnalysisIndexEntry? {
+        guard let fingerprints = persistentCacheFingerprints(for: frames) else {
+            return nil
+        }
+        return PersistedHostAnalysisIndexEntry(
+            cacheFileName: fileName,
+            createdAt: cache.createdAt,
+            rangeStartSeconds: cache.rangeStartSeconds,
+            rangeDurationSeconds: cache.rangeDurationSeconds,
+            frameDurationSeconds: cache.frameDurationSeconds,
+            sampleWidth: cache.sampleWidth,
+            sampleHeight: cache.sampleHeight,
+            frameCount: frames.count,
+            firstFingerprint: fingerprints.first,
+            middleFingerprint: fingerprints.middle,
+            lastFingerprint: fingerprints.last
+        )
+    }
+
+    private static func persistentCacheFileName(for cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) -> String {
+        let fingerprints = persistentCacheFingerprints(for: frames)
+        let first = fingerprints?.first.prefix(12) ?? "unknown"
+        let middle = fingerprints?.middle.prefix(12) ?? "unknown"
+        let last = fingerprints?.last.prefix(12) ?? "unknown"
+        return "host-analysis-v2-r\(timeKey(cache.rangeStartSeconds))-d\(timeKey(cache.rangeDurationSeconds))-s\(cache.sampleWidth)x\(cache.sampleHeight)-n\(frames.count)-\(first)-\(middle)-\(last).json"
+    }
+
+    private static func persistentCacheIdentity(for cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) -> String? {
+        guard let fingerprints = persistentCacheFingerprints(for: frames) else {
+            return nil
+        }
+        return [
+            "\(timeKey(cache.rangeStartSeconds))",
+            "\(timeKey(cache.rangeDurationSeconds))",
+            "\(timeKey(cache.frameDurationSeconds))",
+            "\(cache.sampleWidth)",
+            "\(cache.sampleHeight)",
+            "\(frames.count)",
+            fingerprints.first,
+            fingerprints.middle,
+            fingerprints.last
+        ].joined(separator: ":")
+    }
+
+    private static func persistentCacheFingerprints(for frames: [StabilizerAnalysisFrame]) -> (first: String, middle: String, last: String)? {
+        guard let firstFrame = frames.first,
+              let lastFrame = frames.last
+        else {
+            return nil
+        }
+        let middleFrame = frames[frames.count / 2]
+        return (
+            first: frameFingerprint(firstFrame),
+            middle: frameFingerprint(middleFrame),
+            last: frameFingerprint(lastFrame)
+        )
+    }
+
+    private static func frameFingerprint(_ frame: StabilizerAnalysisFrame) -> String {
+        frame.fingerprint
     }
 
     private static var cacheDirectoryURL: URL {
@@ -853,6 +1944,18 @@ private final class StabilizerHostAnalysisStore {
 
     private static var cacheURL: URL {
         cacheDirectoryURL.appendingPathComponent(cacheFileName, isDirectory: false)
+    }
+
+    private static var cacheIndexURL: URL {
+        cacheDirectoryURL.appendingPathComponent(cacheIndexFileName, isDirectory: false)
+    }
+
+    private static var cacheStorageDirectoryURL: URL {
+        cacheDirectoryURL.appendingPathComponent(cacheStorageDirectoryName, isDirectory: true)
+    }
+
+    private static func analysisScratchDirectoryURL() -> URL {
+        cacheDirectoryURL.appendingPathComponent(analysisScratchDirectoryName, isDirectory: true)
     }
 
     private static func meanAbsoluteDifference(_ left: [UInt8], _ right: [UInt8]) -> Float {

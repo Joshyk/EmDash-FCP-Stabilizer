@@ -384,7 +384,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = WrapperApp/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.CommandPostEmDash.StabilizerFxPlug;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.StabilizerFxPlug;
 				PRODUCT_MODULE_NAME = StabilizerFxPlug;
 				PRODUCT_NAME = StabilizerFxPlug;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -402,7 +402,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = WrapperApp/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.CommandPostEmDash.StabilizerFxPlug;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.StabilizerFxPlug;
 				PRODUCT_MODULE_NAME = StabilizerFxPlug;
 				PRODUCT_NAME = StabilizerFxPlug;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -424,7 +424,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACH_O_TYPE = mh_execute;
-				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.CommandPostEmDash.StabilizerFxPlug.Plugin;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.StabilizerFxPlug.Plugin;
 				PRODUCT_MODULE_NAME = StabilizerFxPlugPlugin;
 				PRODUCT_NAME = "StabilizerFxPlug XPC Service";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -447,7 +447,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACH_O_TYPE = mh_execute;
-				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.CommandPostEmDash.StabilizerFxPlug.Plugin;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.StabilizerFxPlug.Plugin;
 				PRODUCT_MODULE_NAME = StabilizerFxPlugPlugin;
 				PRODUCT_NAME = "StabilizerFxPlug XPC Service";
 				PROVISIONING_PROFILE_SPECIFIER = "";

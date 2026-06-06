@@ -1,14 +1,14 @@
 #!/bin/sh
 set -eu
 
-PLUGIN_IDENTIFIER="com.justadev.CommandPostEmDash.StabilizerFxPlug.Plugin"
+PLUGIN_IDENTIFIER="com.justadev.StabilizerFxPlug.Plugin"
 APP_NAME="StabilizerFxPlug.app"
 PLUGIN_RELATIVE_PATH="Contents/PlugIns/StabilizerFxPlug XPC Service.pluginkit"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
-MOTION_TEMPLATE_SOURCE="${PROJECT_DIR}/MotionTemplates/Effects.localized/CommandPost Em Dash/Stabilizer Transform"
-MOTION_TEMPLATE_DEST="${HOME}/Movies/Motion Templates.localized/Effects.localized/CommandPost Em Dash/Stabilizer Transform"
+MOTION_TEMPLATE_SOURCE="${PROJECT_DIR}/MotionTemplates/Effects.localized/Emdash Studios/Stabilizer Transform"
+MOTION_TEMPLATE_DEST="${HOME}/Movies/Motion Templates.localized/Effects.localized/Emdash Studios/Stabilizer Transform"
 
 unset SWIFT_DEBUG_INFORMATION_FORMAT
 unset SWIFT_DEBUG_INFORMATION_VERSION
@@ -50,9 +50,28 @@ install_motion_template() {
 		exit 1
 	fi
 
+	for legacy_template in \
+		"${HOME}/Movies/Motion Templates.localized/Effects.localized/Stabilizer/Stabilizer Transform" \
+		"${HOME}/Movies/Motion Templates.localized/Effects.localized/CommandPost Em Dash/Stabilizer Transform"
+	do
+		if [ "$legacy_template" != "$MOTION_TEMPLATE_DEST" ] && [ -e "$legacy_template" ]; then
+			rm -rf "$legacy_template"
+		fi
+	done
+
 	mkdir -p "$(dirname "$MOTION_TEMPLATE_DEST")"
 	rm -rf "$MOTION_TEMPLATE_DEST"
 	ditto "$MOTION_TEMPLATE_SOURCE" "$MOTION_TEMPLATE_DEST"
+
+	for legacy_group in \
+		"${HOME}/Movies/Motion Templates.localized/Effects.localized/Stabilizer" \
+		"${HOME}/Movies/Motion Templates.localized/Effects.localized/CommandPost Em Dash"
+	do
+		if [ -d "$legacy_group" ]; then
+			rm -f "$legacy_group/.DS_Store"
+			rmdir "$legacy_group" 2>/dev/null || true
+		fi
+	done
 }
 
 mkdir -p "$install_dir"
@@ -66,9 +85,15 @@ if [ -d "$legacy_user_plugin" ] && [ "$legacy_user_plugin" != "$install_plugin" 
 	"$LSREGISTER" -u "$legacy_user_app" >/dev/null 2>&1 || true
 fi
 
+if [ -d "$legacy_user_app" ] && [ "$legacy_user_app" != "$install_app" ]; then
+	rm -rf "$legacy_user_app"
+fi
+
 unregister_stale_plugins
 
-ditto "$source_app" "$install_app"
+if [ "$source_app" != "$install_app" ]; then
+	ditto "$source_app" "$install_app"
+fi
 xattr -dr com.apple.quarantine "$install_app" >/dev/null 2>&1 || true
 
 codesign --verify --deep --strict "$install_app"
