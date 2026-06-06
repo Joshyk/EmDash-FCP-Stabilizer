@@ -34,6 +34,11 @@ when one exists; only start a new host analysis when no saved cache can be loade
 not delete saved cache files. If the loaded cache is rejected for the current clip, the next
 start should skip that rejected cache and request a new analysis. `Clear Host Analysis
 Cache` is the explicit cache-clear path and should show `Cache Cleared`.
+Persistent cache compatibility is based on cache schema and current source-frame
+validation, not the visible FxPlug runtime version. Render-only version bumps should reuse
+saved Host Analysis cache candidates. The loader should also consider current and legacy
+Stabilizer container cache locations so bundle-id migrations do not force a new analysis
+when the cache schema is still supported.
 
 Host Analysis should read user-controlled `Sample Width` once when analysis starts. Long
 clips should keep that requested sample size unless it exceeds the original source frame

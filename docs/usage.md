@@ -52,6 +52,9 @@
   analysis when no saved cache can be loaded. Saved cache files remain available for later
   reuse. If the previous cache was rejected for the current clip, the next start skips that
   rejected cache and requests a new analysis.
+- Persistent analysis reuse is based on cache schema and current source-frame validation,
+  not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
+  Host Analysis cache.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse.
@@ -106,6 +109,11 @@ The latest Host Analysis cache is written to:
 ```text
 /Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json
 ```
+
+In sandboxed FxPlug runs, macOS may redirect that Application Support path into the current
+plug-in container. The loader also checks current and legacy Stabilizer container cache
+locations so a bundle-id or runtime migration does not require rerunning analysis when the
+cache schema is still supported.
 
 The cache index is written to:
 

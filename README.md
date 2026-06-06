@@ -37,6 +37,9 @@ saved cache when one exists and only starts a new analysis when no saved cache c
 If that cache was rejected for the current clip, the next start skips it and requests a new
 analysis. `Clear Host Analysis Cache` is the explicit delete control and shows
 `Cache Cleared` in the Inspector.
+Cache compatibility is tied to cache schema and current source-frame validation, not the
+visible FxPlug runtime version, so render-only runtime updates should not force a new
+analysis pass.
 
 The cache includes prepared motion paths so playback renders from precomputed values instead
 of running block matching again on every frame. New cache files store prepared paths, frame

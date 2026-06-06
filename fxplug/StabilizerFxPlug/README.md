@@ -19,6 +19,9 @@ estimators, or Transform-keyframe writers back into this target.
   `/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` as
   the latest cache and to range-indexed files under
   `/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/`.
+- Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema
+  and current source-frame validation still match. The loader checks current and legacy
+  Stabilizer container cache locations so bundle-id migrations do not force analysis again.
 - Streams in-progress Host Analysis motion directly through Metal and keeps only the
   previous luma buffer needed for the next frame-to-frame motion search. It does not write
   per-frame `.luma` scratch files.

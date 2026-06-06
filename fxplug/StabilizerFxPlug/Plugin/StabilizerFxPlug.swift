@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.61"
+private let stabilizerFxPlugVersion = "0.2.62"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -783,6 +783,10 @@ private final class StabilizerHostAnalysisStore {
     private static let cacheIndexFileName = "host-analysis-index-v2.json"
     private static let cacheStorageDirectoryName = "caches"
     private static let analysisScratchDirectoryName = "analysis-work"
+    private static let legacyCacheBundleIdentifiers = [
+        "com.justadev.CommandPostEmDash.StabilizerFxPlug.Plugin",
+        "com.justadev.CommandPostEmDash.StabilizerFxPlug"
+    ]
 
     private let lock = NSLock()
     private var framesByTimeKey: [Int64: StabilizerAnalysisFrame] = [:]
@@ -1555,7 +1559,13 @@ private final class StabilizerHostAnalysisStore {
     }
 
     private func removePersistentCache(logFailures: Bool) {
-        let urls = [Self.cacheURL, Self.cacheIndexURL, Self.cacheStorageDirectoryURL]
+        let urls = Self.cacheDirectoryURLs.flatMap { directoryURL in
+            [
+                Self.cacheURL(in: directoryURL),
+                Self.cacheIndexURL(in: directoryURL),
+                Self.cacheStorageDirectoryURL(in: directoryURL)
+            ]
+        }
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
             do {
                 try FileManager.default.removeItem(at: url)
@@ -1568,8 +1578,7 @@ private final class StabilizerHostAnalysisStore {
     }
 
     private func removeLegacyAnalysisScratchDirectory() {
-        let scratchDirectory = Self.analysisScratchDirectoryURL()
-        if FileManager.default.fileExists(atPath: scratchDirectory.path) {
+        for scratchDirectory in Self.cacheDirectoryURLs.map(Self.analysisScratchDirectoryURL(in:)) where FileManager.default.fileExists(atPath: scratchDirectory.path) {
             do {
                 try FileManager.default.removeItem(at: scratchDirectory)
             } catch {
@@ -1712,40 +1721,45 @@ private final class StabilizerHostAnalysisStore {
             candidateURLs.append(url)
         }
 
-        if FileManager.default.fileExists(atPath: cacheIndexURL.path) {
-            do {
-                let data = try Data(contentsOf: cacheIndexURL)
-                let index = try JSONDecoder().decode(PersistedHostAnalysisIndex.self, from: data)
-                if !supportedCacheSchemaVersions.contains(index.schemaVersion) {
-                    NSLog("StabilizerFxPlug: ignoring Host Analysis cache index with unsupported schema \(index.schemaVersion).")
-                } else {
-                    for entry in index.entries {
-                        appendCandidateURL(cacheStorageDirectoryURL.appendingPathComponent(entry.cacheFileName, isDirectory: false))
+        for directoryURL in cacheDirectoryURLs {
+            let directoryCacheIndexURL = cacheIndexURL(in: directoryURL)
+            let directoryCacheStorageURL = cacheStorageDirectoryURL(in: directoryURL)
+            if FileManager.default.fileExists(atPath: directoryCacheIndexURL.path) {
+                do {
+                    let data = try Data(contentsOf: directoryCacheIndexURL)
+                    let index = try JSONDecoder().decode(PersistedHostAnalysisIndex.self, from: data)
+                    if !supportedCacheSchemaVersions.contains(index.schemaVersion) {
+                        NSLog("StabilizerFxPlug: ignoring Host Analysis cache index with unsupported schema \(index.schemaVersion) at \(directoryCacheIndexURL.path).")
+                    } else {
+                        for entry in index.entries {
+                            appendCandidateURL(directoryCacheStorageURL.appendingPathComponent(entry.cacheFileName, isDirectory: false))
+                        }
                     }
+                } catch {
+                    NSLog("StabilizerFxPlug: failed to load Host Analysis cache index \(directoryCacheIndexURL.path): \(error.localizedDescription)")
                 }
-            } catch {
-                NSLog("StabilizerFxPlug: failed to load Host Analysis cache index: \(error.localizedDescription)")
             }
+
+            if let cacheURLs = try? FileManager.default.contentsOfDirectory(
+                at: directoryCacheStorageURL,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                let sortedCacheURLs = cacheURLs
+                    .filter { $0.pathExtension == "json" }
+                    .sorted {
+                        let leftDate = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                        let rightDate = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                        return leftDate > rightDate
+                    }
+                for url in sortedCacheURLs {
+                    appendCandidateURL(url)
+                }
+            }
+
+            appendCandidateURL(cacheURL(in: directoryURL))
         }
 
-        if let cacheURLs = try? FileManager.default.contentsOfDirectory(
-            at: cacheStorageDirectoryURL,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            let sortedCacheURLs = cacheURLs
-                .filter { $0.pathExtension == "json" }
-                .sorted {
-                    let leftDate = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                    let rightDate = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                    return leftDate > rightDate
-                }
-            for url in sortedCacheURLs {
-                appendCandidateURL(url)
-            }
-        }
-
-        appendCandidateURL(cacheURL)
         return candidateURLs
     }
 
@@ -1936,26 +1950,75 @@ private final class StabilizerHostAnalysisStore {
     }
 
     private static var cacheDirectoryURL: URL {
-        if let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            return applicationSupport.appendingPathComponent(cacheDirectoryName, isDirectory: true)
+        cacheDirectoryURLs[0]
+    }
+
+    private static var cacheDirectoryURLs: [URL] {
+        var urls: [URL] = []
+        var seenPaths = Set<String>()
+        func append(_ url: URL) {
+            let standardized = url.standardizedFileURL
+            if seenPaths.insert(standardized.path).inserted {
+                urls.append(standardized)
+            }
         }
-        return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(cacheDirectoryName, isDirectory: true)
+
+        if let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            append(applicationSupport.appendingPathComponent(cacheDirectoryName, isDirectory: true))
+        }
+        if let homeDirectory = ProcessInfo.processInfo.environment["HOME"], !homeDirectory.isEmpty {
+            let homeURL = URL(fileURLWithPath: homeDirectory, isDirectory: true)
+            append(homeURL.appendingPathComponent("Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
+            append(homeURL.appendingPathComponent("Library/Containers/com.justadev.StabilizerFxPlug.Plugin/Data/Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
+            for bundleIdentifier in legacyCacheBundleIdentifiers {
+                append(homeURL.appendingPathComponent("Library/Containers/\(bundleIdentifier)/Data/Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
+            }
+        }
+        let userName = NSUserName()
+        if !userName.isEmpty {
+            let userHomeURL = URL(fileURLWithPath: "/Users/\(userName)", isDirectory: true)
+            append(userHomeURL.appendingPathComponent("Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
+            append(userHomeURL.appendingPathComponent("Library/Containers/com.justadev.StabilizerFxPlug.Plugin/Data/Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
+            for bundleIdentifier in legacyCacheBundleIdentifiers {
+                append(userHomeURL.appendingPathComponent("Library/Containers/\(bundleIdentifier)/Data/Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
+            }
+        }
+        if urls.isEmpty {
+            append(URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(cacheDirectoryName, isDirectory: true))
+        }
+        return urls
     }
 
     private static var cacheURL: URL {
-        cacheDirectoryURL.appendingPathComponent(cacheFileName, isDirectory: false)
+        cacheURL(in: cacheDirectoryURL)
     }
 
     private static var cacheIndexURL: URL {
-        cacheDirectoryURL.appendingPathComponent(cacheIndexFileName, isDirectory: false)
+        cacheIndexURL(in: cacheDirectoryURL)
     }
 
     private static var cacheStorageDirectoryURL: URL {
-        cacheDirectoryURL.appendingPathComponent(cacheStorageDirectoryName, isDirectory: true)
+        cacheStorageDirectoryURL(in: cacheDirectoryURL)
     }
 
     private static func analysisScratchDirectoryURL() -> URL {
-        cacheDirectoryURL.appendingPathComponent(analysisScratchDirectoryName, isDirectory: true)
+        analysisScratchDirectoryURL(in: cacheDirectoryURL)
+    }
+
+    private static func cacheURL(in directoryURL: URL) -> URL {
+        directoryURL.appendingPathComponent(cacheFileName, isDirectory: false)
+    }
+
+    private static func cacheIndexURL(in directoryURL: URL) -> URL {
+        directoryURL.appendingPathComponent(cacheIndexFileName, isDirectory: false)
+    }
+
+    private static func cacheStorageDirectoryURL(in directoryURL: URL) -> URL {
+        directoryURL.appendingPathComponent(cacheStorageDirectoryName, isDirectory: true)
+    }
+
+    private static func analysisScratchDirectoryURL(in directoryURL: URL) -> URL {
+        directoryURL.appendingPathComponent(analysisScratchDirectoryName, isDirectory: true)
     }
 
     private static func meanAbsoluteDifference(_ left: [UInt8], _ right: [UInt8]) -> Float {
