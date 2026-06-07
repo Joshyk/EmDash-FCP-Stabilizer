@@ -21,10 +21,11 @@ and run frame-to-frame block matching while preparing motion paths. If those Met
 resources are unavailable, Host Analysis fails visibly instead of falling back to CPU
 analysis.
 
-Host Analysis reads `Sample Width` once when an analysis pass starts. Long clips still use
-the requested sample size unless it exceeds the source frame width. In-progress analysis
-streams frame-to-frame motion directly through Metal and keeps only the previous luma buffer
-needed for the next motion search, so it no longer writes per-frame `.luma` scratch files.
+Host Analysis reads `Sample Width` once when an analysis pass starts. The default is `720`
+pixels. Long clips still use the requested sample size unless it exceeds the source frame
+width. In-progress analysis streams frame-to-frame motion directly through Metal and keeps
+only the previous luma buffer needed for the next motion search, so it no longer writes
+per-frame `.luma` scratch files.
 The stabilization result is still built from the same prepared motion path.
 
 Completed Host Analysis frame sets are persisted to
@@ -59,25 +60,37 @@ Setting `Overall Strength` to `0` fully bypasses the automatic transform path, i
 crop-safety motion and debug overlay output.
 The plug-in also updates a hidden render revision whenever Host Analysis or cache state
 changes so Final Cut Pro refreshes the preview from the prepared motion paths.
-Fine high-frequency shake is controlled separately with the Micro Jitter strength sliders.
-Micro Jitter treats X/Y/rotation shake as a frame-level impulse against an outer-frame
+Fine high-frequency shake is controlled separately with the Footstep Jitter strength sliders.
+Footstep Jitter treats X/Y/rotation shake as a frame-level impulse against an outer-frame
 linear prediction that skips the center shock region, so footstep landing shock is not
-averaged back into the smooth path. Micro Jitter is not a periodic smoothing control.
-Large intentional pans are controlled with `Panning X/Y Strength`; higher values apply
-stronger long-window X/Y translation correction. Panning does not change roll. The pan band
-is taken from the Micro Jitter baseline instead of the raw short-window path, and for Y it
-also removes the Y Axis Stabilization band, so short landing shock is not reintroduced by
-the pan correction.
-Footstep vertical motion is controlled with `Y Axis Stabilization Window` and
-`Y Axis Stabilization Strength`, which target the Y band between the Micro Jitter baseline
-and a Y-only stabilization window computed from the same Micro Jitter baseline. Shorter
-values around `0.4-1.0` seconds target visible footstep bounce. Micro Jitter and Y Axis
-Stabilization strengths are clamped at full detected-band removal during render, so high
-slider values do not add inverse shake.
-`Debug Overlay` shows top-left diagnostics. `Edge Display Mode` switches preview edges
-between stretched source edges and black outside-source pixels.
+averaged back into the smooth path. Host Analysis estimates motion from multiple Metal
+block-matched regions, prioritizes upper-frame far-field blocks for walking landscape
+footage, and rejects outlier blocks before building the per-frame path. This keeps distant
+mountain/background motion from being dominated by close grass, water, or road parallax.
+Footstep Jitter is evaluated per render frame and is not a windowed or periodic smoothing
+control. Strength values run up to `4.0`; values above `1.0` can push through low-confidence
+gating, but the applied correction still clamps at full detected-impulse removal so it does
+not add inverse shake.
+Segmented walking turns are controlled with `Turn Smoothing Strength`; higher values
+concatenate stop-and-go turn motion into a smoother long-window intent. Turn smoothing does
+not change roll. Y correction is ordered as Footstep Jitter first, Turn Smoothing second,
+and Walking Bob last. The Y turn intent is measured from the footstep-cleaned baseline
+instead of the raw frame path, so short landing shock is not reintroduced by the turn
+correction.
+Footstep vertical motion is controlled with `Walking Bob Window` and `Walking Bob Removal`,
+which remain in the same effect as the final Y-only correction stage. Walking Bob targets
+the remaining medium-period vertical band after Footstep Jitter and Turn Smoothing; it does
+not gate or reduce Footstep Jitter Y. The default removal is `0.75` to avoid overcorrecting
+walking footage. Shorter window values around `0.4-1.0` seconds target visible footstep
+bounce. Footstep Jitter and Walking Bob strengths are clamped at full detected-band removal
+during render, so high slider values do not add inverse shake. Values above `1.0` are useful
+when confidence gating makes the detected correction visibly too weak.
+`Debug Overlay` shows top-left diagnostics, including separate `footstep q` and `bob q`
+confidence values in Host Analysis status while rendering. `Edge Display Mode` switches
+preview edges between
+stretched source edges and black outside-source pixels.
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
-the active correction bands (`Jitter impulse`, `Y Axis Stabilization <= Ys`, `Panning X/Y Y-Zs`), and analysis
+the active correction bands (`Footstep jitter`, `Walking Bob`, `Turn Smoothing`), and analysis
 metadata, so the Inspector can confirm which installed runtime Final Cut Pro is using.
 
 ## Build

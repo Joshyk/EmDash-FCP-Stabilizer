@@ -11,42 +11,50 @@
 
 ## Controls
 
-- `Micro Jitter X Strength`: direct amount for horizontal micro-jitter correction. The
-  default is `0.5`; `1.0` fully removes the detected impulse, and higher values are clamped
-  during render to avoid inverse shake.
-- `Micro Jitter Y Strength`: direct amount for vertical micro-jitter correction. The default
-  is `0.5`. Micro Jitter uses an outer-frame linear prediction that skips the center shock
-  region for X/Y/rotation, so footstep landing shock is treated as a frame-level impulse
-  instead of being averaged back into the smooth path. `1.0` fully removes the detected
-  impulse, and higher values are clamped during render to avoid inverse shake.
-- `Micro Jitter Rotation Strength`: direct amount for roll micro-jitter correction. The
-  default is `0.35`; `1.0` fully removes the detected impulse, and higher values are
-  clamped during render to avoid inverse shake.
+- `Footstep Jitter X Strength`: direct amount for horizontal footstep-jitter correction. The
+  default is `1.0` and the maximum is `4.0`. Values above `1.0` push through low-confidence
+  gating when the detected impulse is visibly under-corrected, but render output still
+  clamps at full detected-impulse removal to avoid inverse shake.
+- `Footstep Jitter Y Strength`: direct amount for vertical footstep-jitter correction. The
+  default is `1.0` and the maximum is `4.0`. Footstep Jitter uses an outer-frame linear
+  prediction that skips the center shock region for X/Y/rotation, so footstep landing shock
+  is treated as a frame-level impulse instead of being averaged back into the smooth path.
+  Host Analysis builds that path from multiple Metal block-matched regions with outlier
+  blocks rejected before render. Values above `1.0` push through low-confidence gating when
+  the detected impulse is visibly under-corrected, but render output still clamps at full
+  detected-impulse removal to avoid inverse shake.
+- `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
+  default is `1.0` and the maximum is `4.0`. Values above `1.0` push through low-confidence
+  gating when the detected impulse is visibly under-corrected, but render output still
+  clamps at full detected-impulse removal to avoid inverse shake.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
-- `Panning X/Y Strength`: controls how strongly the stabilizer corrects large intentional
-  pans in X/Y translation only. It does not change roll. At `0`, long-window correction is
-  bypassed; at `1`, long-window correction is strongest. The X/Y pan bands are measured
-  from the Micro Jitter baseline instead of the raw short-window path, so short landing
-  shock is not reintroduced by the pan correction.
-- `Panning X/Y Window`: centered smoothing window. In Host Analysis mode this is
-  evaluated against prepared motion paths during render, so changing the slider does not
-  require rebuilding analysis.
-- `Y Axis Stabilization Window`: Y-axis-only window for footstep bob and vertical shake
-  between micro jitter and large panning. The correction uses the Y band between the Micro
-  Jitter baseline and this Y stabilization smooth path, which is also computed from the
-  Micro Jitter baseline without changing X or roll. The default is `1.5` seconds. Use
+- `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
+  walking turns in X/Y translation only. It does not change roll. At `0`, long-window turn
+  correction is bypassed; the default is `1.0`, and at `1` long-window turn smoothing is
+  strongest. The X/Y turn bands are measured from the Footstep Jitter baseline instead of
+  the raw frame path, so short landing shock is not reintroduced by turn smoothing.
+- `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
+  mode this is evaluated against prepared motion paths during render, so changing the slider
+  does not require rebuilding analysis.
+- `Walking Bob Window`: Y-axis-only window for footstep bob and vertical walking shake
+  left after Footstep Jitter and Turn Smoothing. The correction uses the Y band between the
+  Footstep Jitter baseline and this walking-bob smooth path, which is computed from the same
+  footstep-cleaned baseline without changing X or roll. The default is `1.5` seconds. Use
   shorter values around `0.4-1.0` seconds for visible footstep bounce and larger values for
-  slower vertical sway. Values above `Panning X/Y Window` are clamped to the pan window
+  slower vertical sway. Values above `Turn Detection Window` are clamped to the turn window
   during render.
-- `Y Axis Stabilization Strength`: direct amount for the Y-only correction. Footstep bounce
-  can be reduced without changing X or roll. `1.0` fully removes the detected Y-axis band,
-  and higher values are clamped during render to avoid adding inverse vertical shake.
+- `Walking Bob Removal`: direct amount for the Y-only correction. Footstep bounce
+  can be reduced without changing X or roll. This is the final correction stage inside the
+  same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
+  `0.75`, which is intentionally conservative; higher values can push through low-confidence
+  gating but are clamped during render to avoid adding inverse vertical shake.
 - `Sample Width`: analysis image width. The sample height is calculated from the current
-  source frame aspect ratio. Width values above the current source frame width use the
-  source frame size before Host Analysis runs. Long clips still use the requested width
-  unless it exceeds the source frame width. The actual size is shown in `Stabilizer Info`.
+  source frame aspect ratio. The default is `720` pixels. Width values above the current
+  source frame width use the source frame size before Host Analysis runs. Long clips still
+  use the requested width unless it exceeds the source frame width. The actual size is shown
+  in `Stabilizer Info`.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image.
@@ -62,17 +70,18 @@
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
-  loaded FxPlug version, active correction bands (`Jitter impulse`, `Y Axis Stabilization <= Ys`,
-  `Panning X/Y Y-Zs`), plus completed analysis time, frame count, actual sample image size, source
+  loaded FxPlug version, active correction bands (`Footstep jitter`, `Walking Bob`,
+  `Turn Smoothing`), plus completed analysis time, frame count, actual sample image size, source
   frame size, and pixel transform scale when analysis is available.
 - `Debug Overlay`: top-left diagnostics for X/Y/rotation while checking runtime behavior.
   When enabled, `Host Analysis Status` also shows the current Y correction split into
-  macro, micro, and walking-bob components.
+  turn, footstep, and walking-bob components plus separate `footstep q` and `bob q`
+  confidence values.
 
 ## Behavior
 
 - The effect does not write Final Cut Pro Transform keyframes.
-- It estimates low-resolution global X/Y motion and roll from FxPlug-requested source
+- It estimates low-resolution multi-block X/Y motion and roll from FxPlug-requested source
   frames.
 - It is tuned for walking-gimbal footage. The render path corrects softened X/Y translation
   and roll only; yaw/pitch proxy, shear, and perspective compensation are disabled.
@@ -92,17 +101,24 @@
   can use proxy media while rendering from the prepared original-media motion path.
 - If Metal analysis resources are unavailable, Host Analysis fails visibly instead of
   falling back to CPU analysis.
+- Host Analysis uses Metal block matching across multiple regions and prioritizes upper-frame
+  far-field blocks for walking landscape footage. This keeps distant mountains and background
+  features from being overruled by close grass, water, or road parallax.
 - Playback uses prepared motion paths from completed Host Analysis. It must not run full
   frame-to-frame block matching on every rendered playback frame.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.
-- Render playback combines `Panning X/Y Strength` and the long `Panning X/Y Window` path
-  with a Micro Jitter impulse path and a Y-only `Y Axis Stabilization Window`
-  band-pass path. The panning band is X/Y translation only and is measured after removing
-  short micro jitter. Its Y band is also measured after removing Y Axis Stabilization, so
-  large walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can
+- Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
+  path with a per-frame Footstep Jitter impulse path and a Y-only `Walking Bob Window`
+  band-pass path. Y correction is always evaluated as Footstep Jitter first, Turn Smoothing
+  second, and Walking Bob last. Turn smoothing uses the footstep-cleaned Y baseline rather
+  than the raw frame path, and Walking Bob removes only the remaining medium-period Y band,
+  so large walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can
   be tuned separately without rerunning Host Analysis.
+- Host Analysis cache schema `7` stores the far-field-prioritized multi-block motion path
+  with confidence and accepted-block counts. Older prepared caches are ignored and require a
+  new Host Analysis run.
 - Host Analysis/cache state changes update a hidden render revision parameter so Final Cut
   Pro invalidates cached preview frames and redraws from the prepared motion path.
 - Trimmed clips are supported by matching the current render frame fingerprint against the

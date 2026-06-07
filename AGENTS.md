@@ -47,6 +47,13 @@ previous luma buffer needed for the next Metal motion search; do not write per-f
 scratch files or store analysis files inside a Final Cut Pro library/project bundle.
 Persistent cache files should store prepared paths, frame timing, blur values, and
 fingerprints instead of every frame's full luma sample.
+Fine jitter analysis should use Metal block matching across multiple source-frame regions,
+reject outlier blocks, and expose low block-confidence states in status/debug output instead
+of silently falling back to a coarse global shift. Walking landscape analysis should
+prioritize upper-frame far-field blocks so distant mountains/background motion is not
+dominated by close grass, water, or road parallax. Motion-path algorithm changes that alter
+prepared analysis output should bump the Host Analysis cache schema so stale caches are not
+reused.
 
 Host Analysis playback must render from prepared motion paths shared across FxPlug
 analyzer/render instances. Do not re-run full block matching across the analyzed frame set
@@ -65,24 +72,32 @@ bypass prepared motion-path sampling and output an identity transform with no de
 When Host Analysis/cache state changes, update a hidden render-affecting revision parameter
 so Final Cut Pro invalidates the preview/render cache and the viewer reflects the prepared
 stabilization immediately.
-Fine high-frequency shake should be handled by render-time Micro Jitter strength controls
+Fine high-frequency shake should be handled by render-time Footstep Jitter strength controls
 that compare X/Y/rotation against an outer-frame linear prediction that skips the center
-shock region. Micro Jitter should suppress footstep landing shock as a frame-level impulse
+shock region. Footstep Jitter should suppress footstep landing shock as a frame-level impulse
 rather than treating it as periodic smoothing, and it should not require rerunning Host
-Analysis. Micro Jitter strength values should be direct removal amounts and must clamp at
-full detected-impulse removal during render so high slider values do not add inverse shake.
-Large intentional pans should be controlled by the render-time `Panning X/Y Strength`
-slider, where higher values apply stronger long-window X/Y translation correction. Panning
-must not apply roll correction. The pan band should be measured from the Micro Jitter
-baseline instead of the raw short-window path, and the Y pan band should also remove the
-Y Axis Stabilization band so short landing shock is not reintroduced by pan correction.
+Analysis. Do not add or expose a Footstep Jitter window; fine jitter should be corrected from
+the current render frame's impulse against the predicted outer-frame baseline using the
+multi-block Host Analysis path. Footstep Jitter strength values should be direct removal
+amounts with an exposed maximum of `4.0`. Values above `1.0` may compensate for
+low-confidence gating when correction is too weak, but applied correction must clamp at full
+detected-impulse removal during render so high slider values do not add inverse shake.
+Large segmented walking turns should be controlled by the render-time `Turn Smoothing
+Strength` slider, where higher values concatenate stop-and-go X/Y pan motion into a smoother
+turn intent. Turn smoothing must not apply roll correction. The turn band should be measured
+from the Footstep Jitter baseline instead of the raw frame path, and Y correction priority
+must stay Footstep Jitter first, Turn Smoothing second, and Walking Bob last so short landing
+shock is not reintroduced by turn smoothing.
 Y-axis walking bob between micro jitter and panning should be handled by the render-time
-`Y Axis Stabilization Window` and `Y Axis Stabilization Strength` path, which corrects the
-Y-only band between the Micro Jitter baseline and the Y stabilization smoothing window,
-also computed from the Micro Jitter baseline, without changing X or roll and without
-rerunning Host Analysis. Y Axis Stabilization strength values should clamp at full
+`Walking Bob Window` and `Walking Bob Removal` path, which corrects the Y-only band between
+the Footstep Jitter baseline and the walking-bob smoothing window, also computed from the
+Footstep Jitter baseline, without changing X or roll and without rerunning Host Analysis.
+Walking Bob should remain in the same effect as the final Y-only correction stage. It must
+use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, and setting
+`Walking Bob Removal` to zero must still allow Footstep Jitter Y to work.
+Walking Bob removal values should clamp at full
 detected-band removal during render so high slider values do not add inverse vertical
-shake.
+shake, while still allowing values above `1.0` to compensate for low-confidence gating.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
 Overlay`; debug overlay should only show diagnostics.

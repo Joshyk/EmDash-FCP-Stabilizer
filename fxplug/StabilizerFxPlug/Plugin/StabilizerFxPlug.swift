@@ -17,14 +17,13 @@ private enum ParameterID: UInt32 {
     case yStrength = 18
     case sampleWidth = 19
     case renderRevision = 20
-    case microJitterWindowSeconds = 21
     case walkingBobWindowSeconds = 22
     case panStabilizationStrength = 23
     case walkingBobStrength = 26
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.72"
+private let stabilizerFxPlugVersion = "0.2.81"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -39,7 +38,6 @@ private struct StabilizerPluginState {
     var panStabilizationStrength: Double
     var walkingBobStrength: Double
     var panSmoothSeconds: Double
-    var microJitterWindowSeconds: Double
     var walkingBobWindowSeconds: Double
     var edgeDisplayMode: Int32
     var debugOverlay: Bool
@@ -144,20 +142,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Micro Jitter Window",
-            parameterID: ParameterID.microJitterWindowSeconds.rawValue,
-            defaultValue: 0.12,
-            parameterMin: 0.01,
-            parameterMax: 5.0,
-            sliderMin: 0.01,
-            sliderMax: 2.0,
-            delta: 0.01,
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
-        )
-        paramAPI.addFloatSlider(
-            withName: "Panning X/Y Strength",
+            withName: "Turn Smoothing Strength",
             parameterID: ParameterID.panStabilizationStrength.rawValue,
-            defaultValue: 0.5,
+            defaultValue: 1.0,
             parameterMin: 0.0,
             parameterMax: 1.0,
             sliderMin: 0.0,
@@ -166,40 +153,40 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Micro Jitter X Strength",
+            withName: "Footstep Jitter X Strength",
             parameterID: ParameterID.xStrength.rawValue,
-            defaultValue: 0.5,
+            defaultValue: 1.0,
             parameterMin: 0.0,
-            parameterMax: 2.0,
+            parameterMax: 4.0,
             sliderMin: 0.0,
-            sliderMax: 2.0,
+            sliderMax: 4.0,
             delta: 0.01,
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Micro Jitter Y Strength",
+            withName: "Footstep Jitter Y Strength",
             parameterID: ParameterID.yStrength.rawValue,
-            defaultValue: 0.5,
+            defaultValue: 1.0,
             parameterMin: 0.0,
-            parameterMax: 2.0,
+            parameterMax: 4.0,
             sliderMin: 0.0,
-            sliderMax: 2.0,
+            sliderMax: 4.0,
             delta: 0.01,
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Micro Jitter Rotation Strength",
+            withName: "Footstep Jitter Rotation Strength",
             parameterID: ParameterID.rotationStrength.rawValue,
-            defaultValue: 0.35,
+            defaultValue: 1.0,
             parameterMin: 0.0,
-            parameterMax: 2.0,
+            parameterMax: 4.0,
             sliderMin: 0.0,
-            sliderMax: 2.0,
+            sliderMax: 4.0,
             delta: 0.01,
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Panning X/Y Window",
+            withName: "Turn Detection Window",
             parameterID: ParameterID.panSmoothSeconds.rawValue,
             defaultValue: 6.0,
             parameterMin: 0.1,
@@ -210,7 +197,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Y Axis Stabilization Window",
+            withName: "Walking Bob Window",
             parameterID: ParameterID.walkingBobWindowSeconds.rawValue,
             defaultValue: 1.5,
             parameterMin: 0.1,
@@ -221,9 +208,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Y Axis Stabilization Strength",
+            withName: "Walking Bob Removal",
             parameterID: ParameterID.walkingBobStrength.rawValue,
-            defaultValue: 0.5,
+            defaultValue: 0.75,
             parameterMin: 0.0,
             parameterMax: 4.0,
             sliderMin: 0.0,
@@ -318,13 +305,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
         var state = StabilizerPluginState(
             strength: 1.0,
-            microJitterXStrength: 0.5,
-            microJitterYStrength: 0.5,
-            microJitterRotationStrength: 0.35,
-            panStabilizationStrength: 0.5,
-            walkingBobStrength: 0.5,
+            microJitterXStrength: 1.0,
+            microJitterYStrength: 1.0,
+            microJitterRotationStrength: 1.0,
+            panStabilizationStrength: 1.0,
+            walkingBobStrength: 0.75,
             panSmoothSeconds: 6.0,
-            microJitterWindowSeconds: 0.12,
             walkingBobWindowSeconds: 1.5,
             edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
             debugOverlay: false,
@@ -340,7 +326,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         paramAPI.getFloatValue(&state.panStabilizationStrength, fromParameter: ParameterID.panStabilizationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.walkingBobStrength, fromParameter: ParameterID.walkingBobStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
-        state.microJitterWindowSeconds = 0.12
         paramAPI.getFloatValue(&state.walkingBobWindowSeconds, fromParameter: ParameterID.walkingBobWindowSeconds.rawValue, at: renderTime)
         paramAPI.getIntValue(&state.edgeDisplayMode, fromParameter: ParameterID.edgeDisplayMode.rawValue, at: renderTime)
         var debugOverlay = ObjCBool(state.debugOverlay)
@@ -471,18 +456,18 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         var lines = ["FxPlug \(stabilizerFxPlugVersion)"]
         if let state {
             lines.append(String(
-                format: "Jitter impulse | X %.2f Y %.2f R %.2f",
+                format: "Footstep jitter | X %.2f Y %.2f R %.2f",
                 state.microJitterXStrength,
                 state.microJitterYStrength,
                 state.microJitterRotationStrength
             ))
             lines.append(String(
-                format: "Y Axis Stabilization <= %.2fs | strength %.2f",
+                format: "Walking Bob <= %.2fs | removal %.2f",
                 state.walkingBobWindowSeconds,
                 state.walkingBobStrength
             ))
             lines.append(String(
-                format: "Panning X/Y %.2f-%.2fs | strength %.2f",
+                format: "Turn Smoothing %.2f-%.2fs | strength %.2f",
                 state.walkingBobWindowSeconds,
                 state.panSmoothSeconds,
                 state.panStabilizationStrength
@@ -527,12 +512,16 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | smooth %.1fs | X %.1f Y %.1f | R %.2f | y macro %.1f micro %.1f bob %.1f | raw X %.1f Y %.1f",
+            format: "Ready (%d) | turn %.1fs | X %.1f Y %.1f | R %.2f | footstep q %.2f bob q %.2f blocks %d/%d | y turn %.1f foot %.1f bob %.1f | raw X %.1f Y %.1f",
             frameCount,
             panSmoothSeconds,
             appliedPixelOffset.x,
             appliedPixelOffset.y,
             appliedRotationRadians * 180.0 / .pi,
+            autoTransform.microConfidence,
+            autoTransform.bobConfidence,
+            autoTransform.acceptedBlockCount,
+            autoTransform.totalBlockCount,
             autoTransform.macroPixelOffset.y,
             autoTransform.microPixelOffset.y,
             autoTransform.walkingBobPixelOffset.y,
@@ -609,7 +598,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 renderTime: analysisRenderTime,
                 outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
                 panSmoothSeconds: state.panSmoothSeconds,
-                microJitterWindowSeconds: state.microJitterWindowSeconds,
                 walkingBobWindowSeconds: state.walkingBobWindowSeconds,
                 strengths: StabilizerCorrectionStrengths(
                     microJitterX: state.microJitterXStrength,
@@ -829,6 +817,9 @@ private struct PersistedHostAnalysisCache: Codable {
     let pathShearY: [Float]?
     let pathPerspectiveX: [Float]?
     let pathPerspectiveY: [Float]?
+    let analysisConfidence: [Float]?
+    let acceptedBlockCounts: [Int32]?
+    let totalBlockCounts: [Int32]?
     let blurAmounts: [Float]?
 }
 
@@ -867,8 +858,8 @@ private struct LoadedPersistentHostAnalysisCache {
 }
 
 private final class StabilizerHostAnalysisStore {
-    private static let cacheSchemaVersion = 5
-    private static let supportedCacheSchemaVersions: Set<Int> = [3, 4, 5]
+    private static let cacheSchemaVersion = 7
+    private static let supportedCacheSchemaVersions: Set<Int> = [7]
     private static let maxPersistentCacheEntries = 8
     private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0
@@ -1325,6 +1316,9 @@ private final class StabilizerHostAnalysisStore {
             pathShearY: prepared.pathShearY,
             pathPerspectiveX: prepared.pathPerspectiveX,
             pathPerspectiveY: prepared.pathPerspectiveY,
+            analysisConfidence: prepared.analysisConfidence,
+            acceptedBlockCounts: prepared.acceptedBlockCounts,
+            totalBlockCounts: prepared.totalBlockCounts,
             blurAmounts: prepared.blurAmounts
         )
 
@@ -1396,6 +1390,9 @@ private final class StabilizerHostAnalysisStore {
                 pathShearY: analysis.pathShearY,
                 pathPerspectiveX: analysis.pathPerspectiveX,
                 pathPerspectiveY: analysis.pathPerspectiveY,
+                analysisConfidence: analysis.analysisConfidence,
+                acceptedBlockCounts: analysis.acceptedBlockCounts,
+                totalBlockCounts: analysis.totalBlockCounts,
                 blurAmounts: analysis.blurAmounts
             )
         }
@@ -1754,7 +1751,7 @@ private final class StabilizerHostAnalysisStore {
     }
 
     private static func preparedAnalysis(from cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) throws -> StabilizerPreparedAnalysis {
-        let arrays = [
+        let floatArrays = [
             cache.residuals,
             cache.rollMotion,
             cache.pathX,
@@ -1766,9 +1763,15 @@ private final class StabilizerHostAnalysisStore {
             cache.pathShearY,
             cache.pathPerspectiveX,
             cache.pathPerspectiveY,
+            cache.analysisConfidence,
             cache.blurAmounts
         ]
-        if arrays.allSatisfy({ $0?.count == frames.count }),
+        let countArrays = [
+            cache.acceptedBlockCounts,
+            cache.totalBlockCounts
+        ]
+        if floatArrays.allSatisfy({ $0?.count == frames.count }),
+           countArrays.allSatisfy({ $0?.count == frames.count }),
            let residuals = cache.residuals,
            let rollMotion = cache.rollMotion,
            let pathX = cache.pathX,
@@ -1780,6 +1783,9 @@ private final class StabilizerHostAnalysisStore {
            let pathShearY = cache.pathShearY,
            let pathPerspectiveX = cache.pathPerspectiveX,
            let pathPerspectiveY = cache.pathPerspectiveY,
+           let analysisConfidence = cache.analysisConfidence,
+           let acceptedBlockCounts = cache.acceptedBlockCounts,
+           let totalBlockCounts = cache.totalBlockCounts,
            let blurAmounts = cache.blurAmounts {
             return StabilizerPreparedAnalysis(
                 frames: frames.sorted { $0.time < $1.time },
@@ -1794,6 +1800,9 @@ private final class StabilizerHostAnalysisStore {
                 pathShearY: pathShearY,
                 pathPerspectiveX: pathPerspectiveX,
                 pathPerspectiveY: pathPerspectiveY,
+                analysisConfidence: analysisConfidence,
+                acceptedBlockCounts: acceptedBlockCounts,
+                totalBlockCounts: totalBlockCounts,
                 blurAmounts: blurAmounts
             )
         }
@@ -1924,6 +1933,9 @@ private final class StabilizerHostAnalysisStore {
                 pathShearY: cache.pathShearY,
                 pathPerspectiveX: cache.pathPerspectiveX,
                 pathPerspectiveY: cache.pathPerspectiveY,
+                analysisConfidence: cache.analysisConfidence,
+                acceptedBlockCounts: cache.acceptedBlockCounts,
+                totalBlockCounts: cache.totalBlockCounts,
                 blurAmounts: cache.blurAmounts
             )
             return LoadedPersistentHostAnalysisCache(
