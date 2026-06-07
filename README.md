@@ -21,11 +21,12 @@ and run frame-to-frame block matching while preparing motion paths. If those Met
 resources are unavailable, Host Analysis fails visibly instead of falling back to CPU
 analysis.
 
-Host Analysis reads `Sample Width` once when an analysis pass starts. The default is `720`
-pixels. Long clips still use the requested sample size unless it exceeds the source frame
-width. In-progress analysis streams frame-to-frame motion directly through Metal and keeps
-only the previous luma buffer needed for the next motion search, so it no longer writes
-per-frame `.luma` scratch files.
+Host Analysis reads `Sample Size` once when an analysis pass starts. The sample image is
+always derived from the original clip dimensions, with options for `100%`, `75%`, `50%`,
+`25%`, and `10%`. The default is `100%`, which analyzes at the original clip size.
+In-progress analysis streams frame-to-frame motion directly through Metal and keeps only the
+previous luma buffer needed for the next motion search, so it no longer writes per-frame
+`.luma` scratch files.
 The stabilization result is still built from the same prepared motion path.
 
 Completed Host Analysis frame sets are persisted to

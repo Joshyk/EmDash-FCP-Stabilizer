@@ -438,24 +438,18 @@ enum AutoStabilizationEstimator {
         )
     }
 
-    static func clampedSampleSize(
-        requestedWidth: Int,
+    static func sampleSize(
         sourceWidth: Int,
-        sourceHeight: Int
+        sourceHeight: Int,
+        scalePercent: Double
     ) -> (width: Int, height: Int) {
         let sourceWidth = max(1, sourceWidth)
         let sourceHeight = max(1, sourceHeight)
-        let minimumWidth = min(minimumSampleWidth, sourceWidth)
-        let minimumHeight = min(minimumSampleHeight, sourceHeight)
-        let width = min(max(minimumWidth, requestedWidth), sourceWidth)
-        if width == sourceWidth {
-            return (width: sourceWidth, height: sourceHeight)
-        }
-        let aspectHeight = Int((Double(width) * Double(sourceHeight) / Double(sourceWidth)).rounded())
-        return (
-            width: width,
-            height: min(max(minimumHeight, aspectHeight), sourceHeight)
-        )
+        let normalizedPercent = clamp(Float(scalePercent), min: 10.0, max: 100.0)
+        let scale = Double(normalizedPercent) / 100.0
+        let width = min(sourceWidth, max(minimumSampleWidth, Int((Double(sourceWidth) * scale).rounded())))
+        let height = min(sourceHeight, max(minimumSampleHeight, Int((Double(sourceHeight) * scale).rounded())))
+        return (width: width, height: height)
     }
 
     static func sampleSizeDescription(width: Int, height: Int) -> String {

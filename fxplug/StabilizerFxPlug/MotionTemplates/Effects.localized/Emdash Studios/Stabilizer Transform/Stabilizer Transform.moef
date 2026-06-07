@@ -171,7 +171,7 @@
 		<target object="10036" channel="./9" name="Turn Detection Window"/>
 		<target object="10036" channel="./22" name="Walking Bob Window"/>
 		<target object="10036" channel="./26" name="Walking Bob Removal"/>
-		<target object="10036" channel="./19" name="Sample Width"/>
+		<target object="10036" channel="./19" name="Sample Size"/>
 		<target object="10036" channel="./27" name="Edge Display Mode"/>
 		<target object="10036" channel="./14" name="Start Host Analysis"/>
 		<target object="10036" channel="./17" name="Clear Host Analysis Cache"/>
@@ -277,7 +277,7 @@
 				<parameter name="Turn Detection Window" id="9" flags="12884901904" default="6" value="6"/>
 				<parameter name="Walking Bob Window" id="22" flags="12884901904" default="1.5" value="1.5"/>
 				<parameter name="Walking Bob Removal" id="26" flags="12884901904" default="0.75" value="0.75"/>
-				<parameter name="Sample Width" id="19" flags="12884901904" default="720" value="720"/>
+				<parameter name="Sample Size" id="19" flags="12884901904" default="0" value="0"/>
 				<parameter name="Edge Display Mode" id="27" flags="12884901904" default="0" value="0"/>
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>

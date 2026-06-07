@@ -50,11 +50,9 @@
   same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
   `0.75`, which is intentionally conservative; higher values can push through low-confidence
   gating but are clamped during render to avoid adding inverse vertical shake.
-- `Sample Width`: analysis image width. The sample height is calculated from the current
-  source frame aspect ratio. The default is `720` pixels. Width values above the current
-  source frame width use the source frame size before Host Analysis runs. Long clips still
-  use the requested width unless it exceeds the source frame width. The actual size is shown
-  in `Stabilizer Info`.
+- `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
+  options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
+  at the original clip size. The actual pixel size is shown in `Stabilizer Info`.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image.
@@ -91,10 +89,10 @@
   run frame-to-frame block matching, stores prepared frame analysis inside the plug-in
   runtime, persists completed analysis to the FxPlug Application Support cache, and renders
   from that analyzed frame set.
-- Host Analysis reads `Sample Width` once when analysis starts. Long-clip analysis keeps
-  the requested sample size and streams frame-to-frame motion directly through Metal while
-  retaining only the previous luma buffer needed for the next motion search. It does not
-  write per-frame `.luma` scratch files.
+- Host Analysis reads `Sample Size` once when analysis starts. Long-clip analysis keeps the
+  requested percentage of the original clip size and streams frame-to-frame motion directly
+  through Metal while retaining only the previous luma buffer needed for the next motion
+  search. It does not write per-frame `.luma` scratch files.
 - Host Analysis refuses proxy-scaled frames. If Final Cut Pro supplies proxy media, the
   Inspector shows `Proxy Media Rejected - Use Original Media`; switch playback/media back
   to original media and run Host Analysis again. After analysis has been validated, playback
@@ -116,9 +114,9 @@
   than the raw frame path, and Walking Bob removes only the remaining medium-period Y band,
   so large walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can
   be tuned separately without rerunning Host Analysis.
-- Host Analysis cache schema `7` stores the far-field-prioritized multi-block motion path
-  with confidence and accepted-block counts. Older prepared caches are ignored and require a
-  new Host Analysis run.
+- Host Analysis cache schema `8` stores the original-size-percentage sample path with the
+  far-field-prioritized multi-block motion path, confidence, and accepted-block counts. Older
+  prepared caches are ignored and require a new Host Analysis run.
 - Host Analysis/cache state changes update a hidden render revision parameter so Final Cut
   Pro invalidates cached preview frames and redraws from the prepared motion path.
 - Trimmed clips are supported by matching the current render frame fingerprint against the
@@ -157,7 +155,7 @@ left on disk for other clips.
 
 New cache files store prepared motion paths, per-frame timestamps, blur values, and
 fingerprints instead of every frame's full luma sample. This keeps cache reuse available
-without writing long-clip `Sample Width` pixel buffers into JSON.
+without writing long-clip `Sample Size` pixel buffers into JSON.
 
 The effect does not store analysis files inside a Final Cut Pro library or project bundle.
 The FCP bundle path is host-owned, and moving large scratch files there would still consume

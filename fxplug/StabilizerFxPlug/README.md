@@ -155,11 +155,10 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Y Axis Stabilization Strength`: direct amount for the Y-only correction. `1.0` fully
   removes the detected Y-axis band, and higher values are clamped during render to avoid
   adding inverse vertical shake.
-- `Sample Width`: analysis image width. The sample height is calculated from the source
-  frame aspect ratio. Width values above the source frame width use the source frame
-  dimensions before Host Analysis runs. Long clips still use the requested width unless it
-  exceeds the source frame width. Host Analysis reads this value once when the analysis
-  pass starts. The actual size is shown in `Stabilizer Info`.
+- `Sample Size`: analysis image size as a percentage of the original clip dimensions.
+  Options are `100%`, `75%`, `50%`, `25%`, and `10%`; `100%` analyzes at the original clip
+  size. Host Analysis reads this value once when the analysis pass starts. The actual pixel
+  size is shown in `Stabilizer Info`.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.

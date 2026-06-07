@@ -40,11 +40,13 @@ saved Host Analysis cache candidates. The loader should also consider current an
 Stabilizer container cache locations so bundle-id migrations do not force a new analysis
 when the cache schema is still supported.
 
-Host Analysis should read user-controlled `Sample Width` once when analysis starts. Long
-clips should keep that requested sample size unless it exceeds the original source frame
-width. In-progress analysis should stream frame-to-frame motion in memory and keep only the
-previous luma buffer needed for the next Metal motion search; do not write per-frame `.luma`
-scratch files or store analysis files inside a Final Cut Pro library/project bundle.
+Host Analysis should read user-controlled `Sample Size` once when analysis starts. The
+sample image must always be derived from the original clip dimensions using the selected
+percentage option: `100%`, `75%`, `50%`, `25%`, or `10%`. Long clips should keep that
+requested percentage. In-progress analysis should stream frame-to-frame motion in memory and
+keep only the previous luma buffer needed for the next Metal motion search; do not write
+per-frame `.luma` scratch files or store analysis files inside a Final Cut Pro library/project
+bundle.
 Persistent cache files should store prepared paths, frame timing, blur values, and
 fingerprints instead of every frame's full luma sample.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,

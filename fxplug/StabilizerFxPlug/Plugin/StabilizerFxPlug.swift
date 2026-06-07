@@ -15,7 +15,7 @@ private enum ParameterID: UInt32 {
     case stabilizerInfo = 16
     case clearHostAnalysisCache = 17
     case yStrength = 18
-    case sampleWidth = 19
+    case sampleScale = 19
     case renderRevision = 20
     case walkingBobWindowSeconds = 22
     case panStabilizationStrength = 23
@@ -23,11 +23,40 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.81"
+private let stabilizerFxPlugVersion = "0.2.82"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
     case blackOutside = 1
+}
+
+private enum StabilizerSampleScale: Int32 {
+    case original = 0
+    case scale75 = 1
+    case scale50 = 2
+    case scale25 = 3
+    case scale10 = 4
+
+    static let menuEntries = ["100%", "75%", "50%", "25%", "10%"]
+
+    var percent: Double {
+        switch self {
+        case .original:
+            return 100.0
+        case .scale75:
+            return 75.0
+        case .scale50:
+            return 50.0
+        case .scale25:
+            return 25.0
+        case .scale10:
+            return 10.0
+        }
+    }
+
+    static func scale(for rawValue: Int32) -> StabilizerSampleScale {
+        StabilizerSampleScale(rawValue: rawValue) ?? .original
+    }
 }
 
 private struct StabilizerPluginState {
@@ -41,7 +70,7 @@ private struct StabilizerPluginState {
     var walkingBobWindowSeconds: Double
     var edgeDisplayMode: Int32
     var debugOverlay: Bool
-    var sampleWidth: Double
+    var sampleScale: Int32
     var hostAnalysisFrameCount: Int32
     var hostAnalysisRevision: UInt64
     var renderRevision: Double
@@ -218,15 +247,11 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             delta: 0.01,
             parameterFlags: flags
         )
-        paramAPI.addFloatSlider(
-            withName: "Sample Width",
-            parameterID: ParameterID.sampleWidth.rawValue,
-            defaultValue: Double(AutoStabilizationEstimator.defaultSampleWidth),
-            parameterMin: Double(AutoStabilizationEstimator.minimumSampleWidth),
-            parameterMax: 8192.0,
-            sliderMin: Double(AutoStabilizationEstimator.minimumSampleWidth),
-            sliderMax: 1024.0,
-            delta: 1.0,
+        paramAPI.addPopupMenu(
+            withName: "Sample Size",
+            parameterID: ParameterID.sampleScale.rawValue,
+            defaultValue: UInt32(StabilizerSampleScale.original.rawValue),
+            menuEntries: StabilizerSampleScale.menuEntries,
             parameterFlags: flags
         )
         paramAPI.addPopupMenu(
@@ -314,7 +339,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             walkingBobWindowSeconds: 1.5,
             edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
             debugOverlay: false,
-            sampleWidth: Double(AutoStabilizationEstimator.defaultSampleWidth),
+            sampleScale: StabilizerSampleScale.original.rawValue,
             hostAnalysisFrameCount: 0,
             hostAnalysisRevision: 0,
             renderRevision: 0.0
@@ -331,7 +356,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         var debugOverlay = ObjCBool(state.debugOverlay)
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
         state.debugOverlay = debugOverlay.boolValue
-        paramAPI.getFloatValue(&state.sampleWidth, fromParameter: ParameterID.sampleWidth.rawValue, at: renderTime)
+        paramAPI.getIntValue(&state.sampleScale, fromParameter: ParameterID.sampleScale.rawValue, at: renderTime)
         let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
@@ -496,12 +521,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
     }
 
-    private func requestedSampleWidth(at time: CMTime) -> Int {
-        var sampleWidth = Double(AutoStabilizationEstimator.defaultSampleWidth)
+    private func requestedSampleScalePercent(at time: CMTime) -> Double {
+        var sampleScale = StabilizerSampleScale.original.rawValue
         if let paramAPI = apiManager.api(for: FxParameterRetrievalAPI_v6.self) as? FxParameterRetrievalAPI_v6 {
-            paramAPI.getFloatValue(&sampleWidth, fromParameter: ParameterID.sampleWidth.rawValue, at: time)
+            paramAPI.getIntValue(&sampleScale, fromParameter: ParameterID.sampleScale.rawValue, at: time)
         }
-        return Int(sampleWidth.rounded())
+        return StabilizerSampleScale.scale(for: sampleScale).percent
     }
 
     private func publishHostAnalysisRenderDiagnostics(
@@ -681,7 +706,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         hostAnalysisStore.begin(
             range: analysisRange,
             frameDuration: frameDuration,
-            requestedSampleWidth: requestedSampleWidth(at: analysisRange.start)
+            requestedSampleScalePercent: requestedSampleScalePercent(at: analysisRange.start)
         )
         publishHostAnalysisStatus(force: true)
     }
@@ -704,7 +729,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 userInfo: [NSLocalizedDescriptionKey: rejectionReason]
             )
         }
-        let frameInfo = StabilizerOriginalMediaPolicy.frameInfo(for: frame)
+        guard let frameInfo = StabilizerOriginalMediaPolicy.frameInfo(for: frame) else {
+            let reason = "Host Analysis could not read the original clip size for Sample Size."
+            hostAnalysisStore.rejectProxyAnalysis(reason: reason)
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            throw NSError(
+                domain: "com.justadev.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: reason]
+            )
+        }
         let sampleSize = hostAnalysisStore.sampleSize(for: frameInfo)
         let analysisFrame = try AutoStabilizationEstimator.analysisFrame(
             from: frame,
@@ -858,8 +893,8 @@ private struct LoadedPersistentHostAnalysisCache {
 }
 
 private final class StabilizerHostAnalysisStore {
-    private static let cacheSchemaVersion = 7
-    private static let supportedCacheSchemaVersions: Set<Int> = [7]
+    private static let cacheSchemaVersion = 8
+    private static let supportedCacheSchemaVersions: Set<Int> = [8]
     private static let maxPersistentCacheEntries = 8
     private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0
@@ -881,7 +916,7 @@ private final class StabilizerHostAnalysisStore {
     private var activePersistentCacheFileName: String?
     private var activeRange: CMTimeRange = .invalid
     private var activeFrameDuration: CMTime = .invalid
-    private var activeRequestedSampleWidth = AutoStabilizationEstimator.defaultSampleWidth
+    private var activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
     private var renderToAnalysisOffsetSeconds: Double?
     private var renderToAnalysisOffsetProbeAttempted = false
     private var finished = false
@@ -952,7 +987,7 @@ private final class StabilizerHostAnalysisStore {
         return validationState == .rejected || status == .cacheRejected
     }
 
-    func begin(range: CMTimeRange, frameDuration: CMTime, requestedSampleWidth: Int) {
+    func begin(range: CMTimeRange, frameDuration: CMTime, requestedSampleScalePercent: Double) {
         removeLegacyAnalysisScratchDirectory()
         lock.lock()
         framesByTimeKey.removeAll(keepingCapacity: true)
@@ -962,7 +997,7 @@ private final class StabilizerHostAnalysisStore {
         activePersistentCacheFileName = nil
         activeRange = range
         activeFrameDuration = frameDuration
-        activeRequestedSampleWidth = requestedSampleWidth
+        activeRequestedSampleScalePercent = requestedSampleScalePercent
         renderToAnalysisOffsetSeconds = nil
         renderToAnalysisOffsetProbeAttempted = false
         finished = false
@@ -975,14 +1010,14 @@ private final class StabilizerHostAnalysisStore {
         lock.unlock()
     }
 
-    func sampleSize(for sourceInfo: StabilizerSourceFrameInfo?) -> (width: Int, height: Int) {
+    func sampleSize(for sourceInfo: StabilizerSourceFrameInfo) -> (width: Int, height: Int) {
         lock.lock()
-        let requestedWidth = activeRequestedSampleWidth
+        let scalePercent = activeRequestedSampleScalePercent
         lock.unlock()
-        return AutoStabilizationEstimator.clampedSampleSize(
-            requestedWidth: requestedWidth,
-            sourceWidth: sourceInfo?.sourceWidth ?? requestedWidth,
-            sourceHeight: sourceInfo?.sourceHeight ?? AutoStabilizationEstimator.defaultSampleHeight
+        return AutoStabilizationEstimator.sampleSize(
+            sourceWidth: sourceInfo.sourceWidth,
+            sourceHeight: sourceInfo.sourceHeight,
+            scalePercent: scalePercent
         )
     }
 
@@ -1005,7 +1040,7 @@ private final class StabilizerHostAnalysisStore {
         activePersistentCacheFileName = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
-        activeRequestedSampleWidth = AutoStabilizationEstimator.defaultSampleWidth
+        activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
         renderToAnalysisOffsetSeconds = nil
         renderToAnalysisOffsetProbeAttempted = false
         finished = false
@@ -1031,7 +1066,7 @@ private final class StabilizerHostAnalysisStore {
         activePersistentCacheFileName = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
-        activeRequestedSampleWidth = AutoStabilizationEstimator.defaultSampleWidth
+        activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
         renderToAnalysisOffsetSeconds = nil
         renderToAnalysisOffsetProbeAttempted = false
         finished = false
@@ -1054,7 +1089,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
-        activeRequestedSampleWidth = AutoStabilizationEstimator.defaultSampleWidth
+        activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
         renderToAnalysisOffsetSeconds = nil
         renderToAnalysisOffsetProbeAttempted = false
         finished = false
