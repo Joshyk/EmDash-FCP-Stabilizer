@@ -32,9 +32,12 @@
   overlay output.
 - `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
   walking turns in X/Y translation only. It does not change roll. At `0`, long-window turn
-  correction is bypassed; the default is `1.0`, and at `1` long-window turn smoothing is
-  strongest. The X/Y turn bands are measured from the Footstep Jitter baseline instead of
-  the raw frame path, so short landing shock is not reintroduced by turn smoothing.
+  correction is bypassed; the default is `1.0` and the maximum is `4.0`. Values above `1.0`
+  push through low-confidence gating when stop-and-go panning is still visible, but render
+  output still clamps at full detected turn-band removal. The turn intent is a monotonic
+  S-curve through the detection window instead of a straight-line fit. The X/Y turn bands
+  are measured from the Footstep Jitter baseline instead of the raw frame path, so short
+  landing shock is not reintroduced by turn smoothing.
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
   mode this is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis.
@@ -108,12 +111,13 @@
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
-  path with a per-frame Footstep Jitter impulse path and a Y-only `Walking Bob Window`
-  band-pass path. Y correction is always evaluated as Footstep Jitter first, Turn Smoothing
-  second, and Walking Bob last. Turn smoothing uses the footstep-cleaned Y baseline rather
-  than the raw frame path, and Walking Bob removes only the remaining medium-period Y band,
-  so large walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can
-  be tuned separately without rerunning Host Analysis.
+  path to build a monotonic S-curve X/Y turn intent, then combines it with a per-frame
+  Footstep Jitter impulse path and a Y-only `Walking Bob Window` band-pass path. Y
+  correction is always evaluated as Footstep Jitter first, Turn Smoothing second, and
+  Walking Bob last. Turn smoothing uses the footstep-cleaned Y baseline rather than the raw
+  frame path, and Walking Bob removes only the remaining medium-period Y band, so large
+  walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can be tuned
+  separately without rerunning Host Analysis.
 - Host Analysis cache schema `8` stores the original-size-percentage sample path with the
   far-field-prioritized multi-block motion path, confidence, and accepted-block counts. Older
   prepared caches are ignored and require a new Host Analysis run.

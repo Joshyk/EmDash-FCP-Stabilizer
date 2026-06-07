@@ -363,9 +363,21 @@ enum AutoStabilizationEstimator {
             outerRadius: microImpulseOuterRadius
         )
 
-        let turnSmoothX = timeWeightedLinearValue(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds) ??
+        let turnSmoothX = timeWeightedMonotonicSCurveValue(
+            analysis.pathX,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothWindowSeconds
+        ) ??
             timeWeightedAverage(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let turnIntentY = timeWeightedLinearValue(footstepBaselineYPath, frames: frames, indices: activeIndices, centerTime: renderSeconds) ??
+        let turnIntentY = timeWeightedMonotonicSCurveValue(
+            footstepBaselineYPath,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothWindowSeconds
+        ) ??
             timeWeightedAverage(footstepBaselineYPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let microImpulseBaselineX = outerLinearPrediction(
             analysis.pathX,
@@ -400,7 +412,7 @@ enum AutoStabilizationEstimator {
         let confidence = clamp(1.0 - (residual * 1.2), min: 0.35, max: 1.0)
         let jitterConfidence = clamp((1.0 - (residual * 0.7)) * motionConfidence, min: 0.0, max: 1.0)
         let bobConfidence = clamp((1.0 - (residual * 0.4)) * motionConfidence, min: 0.0, max: 1.0)
-        let panCorrectionStrength = clamp(Float(strengths.panStabilizationStrength), min: 0.0, max: 1.0)
+        let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
         let microXCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: jitterConfidence)
         let microYCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: jitterConfidence)
         let microRotationCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: jitterConfidence)
@@ -415,7 +427,7 @@ enum AutoStabilizationEstimator {
         let microCompensationRotation = -(analysis.pathRoll[centerIndex] - microImpulseBaselineRoll) * microRotationCorrectionStrength
         let walkingBobBandY = footstepBaselineY - bobSmoothY
         let walkingBobCompensationY = -walkingBobBandY * yScale * walkingBobCorrectionStrength
-        let macroPixelOffset = vector_float2(macroCompensationX * confidence, macroCompensationY * confidence)
+        let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
         let microPixelOffset = vector_float2(microCompensationX, microCompensationY)
         let walkingBobPixelOffset = vector_float2(0.0, walkingBobCompensationY)
         let compensationX = macroPixelOffset.x + microPixelOffset.x
@@ -1015,35 +1027,83 @@ enum AutoStabilizationEstimator {
         return weightedTotal / Float(totalWeight)
     }
 
-    private static func timeWeightedLinearValue(_ values: [Float], frames: [StabilizerAnalysisFrame], indices: [Int], centerTime: Double) -> Float? {
+    private static func timeWeightedMonotonicSCurveValue(
+        _ values: [Float],
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        centerTime: Double,
+        windowSeconds: Double
+    ) -> Float? {
         guard indices.count >= 3 else {
             return nil
         }
         let sortedIndices = indices.sorted()
-        var weightedCount: Float = 0.0
-        var sumX: Float = 0.0
-        var sumY: Float = 0.0
-        var sumXX: Float = 0.0
-        var sumXY: Float = 0.0
-
-        for index in sortedIndices {
-            let x = Float(frames[index].time - centerTime)
-            let y = values[index]
-            let weight: Float = 1.0
-            weightedCount += weight
-            sumX += x * weight
-            sumY += y * weight
-            sumXX += x * x * weight
-            sumXY += x * y * weight
+        guard let firstIndex = sortedIndices.first, let lastIndex = sortedIndices.last else {
+            return nil
         }
 
-        let denominator = (weightedCount * sumXX) - (sumX * sumX)
-        guard abs(denominator) > Float.ulpOfOne else {
-            return sumY / max(weightedCount, Float.ulpOfOne)
+        var positiveTravel: Float = 0.0
+        var negativeTravel: Float = 0.0
+        for position in 1..<sortedIndices.count {
+            let previousValue = values[sortedIndices[position - 1]]
+            let currentValue = values[sortedIndices[position]]
+            let delta = currentValue - previousValue
+            if delta >= 0.0 {
+                positiveTravel += delta
+            } else {
+                negativeTravel += -delta
+            }
         }
-        let slope = ((weightedCount * sumXY) - (sumX * sumY)) / denominator
-        let intercept = (sumY - (slope * sumX)) / weightedCount
-        return intercept
+
+        let totalTravel = positiveTravel + negativeTravel
+        guard totalTravel > 0.5 else {
+            return nil
+        }
+
+        let endpointDelta = values[lastIndex] - values[firstIndex]
+        let dominantTravel = max(positiveTravel, negativeTravel)
+        let dominantRatio = dominantTravel / max(totalTravel, Float.ulpOfOne)
+        guard dominantRatio >= 0.62 || abs(endpointDelta) >= dominantTravel * 0.35 else {
+            return nil
+        }
+
+        let direction: Float
+        if abs(endpointDelta) >= dominantTravel * 0.2 {
+            direction = endpointDelta >= 0.0 ? 1.0 : -1.0
+        } else {
+            direction = positiveTravel >= negativeTravel ? 1.0 : -1.0
+        }
+
+        let monotonicStart = values[firstIndex] * direction
+        var monotonicEnd = monotonicStart
+        for index in sortedIndices.dropFirst() {
+            monotonicEnd = max(monotonicEnd, values[index] * direction)
+        }
+
+        let monotonicTravel = monotonicEnd - monotonicStart
+        guard monotonicTravel > 0.5 else {
+            return nil
+        }
+
+        let firstTime = frames[firstIndex].time
+        let lastTime = frames[lastIndex].time
+        let windowStart = centerTime - (windowSeconds * 0.5)
+        let windowEnd = centerTime + (windowSeconds * 0.5)
+        let intentStartTime = max(firstTime, windowStart)
+        let intentEndTime = min(lastTime, windowEnd)
+        let duration = intentEndTime - intentStartTime
+        guard duration > 1e-6 else {
+            return nil
+        }
+
+        let normalizedTime = clamp(Float((centerTime - intentStartTime) / duration), min: 0.0, max: 1.0)
+        let progress = smootherStep(normalizedTime)
+        return (monotonicStart + (monotonicTravel * progress)) * direction
+    }
+
+    private static func smootherStep(_ value: Float) -> Float {
+        let t = clamp(value, min: 0.0, max: 1.0)
+        return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
     private static func timeWeightedOuterLinearPredictionAverage(

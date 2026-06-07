@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.82"
+private let stabilizerFxPlugVersion = "0.2.84"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -175,9 +175,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterID: ParameterID.panStabilizationStrength.rawValue,
             defaultValue: 1.0,
             parameterMin: 0.0,
-            parameterMax: 1.0,
+            parameterMax: 4.0,
             sliderMin: 0.0,
-            sliderMax: 1.0,
+            sliderMax: 4.0,
             delta: 0.01,
             parameterFlags: flags
         )
