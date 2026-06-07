@@ -219,6 +219,11 @@ enum AutoStabilizationEstimator {
     private static let microImpulseOuterRadius = 12
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
+    private static let motionPathJerkLimitMultiplier: Float = 3.5
+    private static let minimumTranslationAccelerationLimit: Float = 0.75
+    private static let minimumTranslationJerkLimit: Float = 0.5
+    private static let minimumRotationAccelerationLimit: Float = 0.04
+    private static let minimumRotationJerkLimit: Float = 0.03
 
     fileprivate static func metalError(_ message: String) -> NSError {
         NSError(
@@ -524,19 +529,28 @@ enum AutoStabilizationEstimator {
         guard sortedFrames.count == motions.count else {
             throw metalError("Stabilizer analysis motion count did not match frame count.")
         }
+        let rawPathX = cumulative(motions.map(\.dx))
+        let rawPathY = cumulative(motions.map(\.dy))
+        let rawPathRoll = cumulative(motions.map { radiansToDegrees($0.signedRoll) })
+        let rawPathYaw = cumulative(motions.map(\.yawProxy))
+        let rawPathPitch = cumulative(motions.map(\.pitchProxy))
+        let rawPathShearX = cumulative(motions.map(\.shearX))
+        let rawPathShearY = cumulative(motions.map(\.shearY))
+        let rawPathPerspectiveX = cumulative(motions.map(\.perspectiveX))
+        let rawPathPerspectiveY = cumulative(motions.map(\.perspectiveY))
         return StabilizerPreparedAnalysis(
             frames: sortedFrames.map { $0.withoutRetainedPixels() },
             residuals: motions.map(\.residual),
             rollMotion: motions.map(\.rollMotion),
-            pathX: cumulative(motions.map(\.dx)),
-            pathY: cumulative(motions.map(\.dy)),
-            pathRoll: cumulative(motions.map { radiansToDegrees($0.signedRoll) }),
-            pathYaw: cumulative(motions.map(\.yawProxy)),
-            pathPitch: cumulative(motions.map(\.pitchProxy)),
-            pathShearX: cumulative(motions.map(\.shearX)),
-            pathShearY: cumulative(motions.map(\.shearY)),
-            pathPerspectiveX: cumulative(motions.map(\.perspectiveX)),
-            pathPerspectiveY: cumulative(motions.map(\.perspectiveY)),
+            pathX: jerkLimitedMotionPath(rawPathX, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+            pathY: jerkLimitedMotionPath(rawPathY, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+            pathRoll: jerkLimitedMotionPath(rawPathRoll, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+            pathYaw: jerkLimitedMotionPath(rawPathYaw, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+            pathPitch: jerkLimitedMotionPath(rawPathPitch, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+            pathShearX: jerkLimitedMotionPath(rawPathShearX, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+            pathShearY: jerkLimitedMotionPath(rawPathShearY, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+            pathPerspectiveX: jerkLimitedMotionPath(rawPathPerspectiveX, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+            pathPerspectiveY: jerkLimitedMotionPath(rawPathPerspectiveY, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
             analysisConfidence: motions.map(\.analysisConfidence),
             acceptedBlockCounts: motions.map(\.acceptedBlockCount),
             totalBlockCounts: motions.map(\.totalBlockCount),
@@ -825,6 +839,72 @@ enum AutoStabilizationEstimator {
             total += value
             return total
         }
+    }
+
+    private static func jerkLimitedMotionPath(_ values: [Float], minimumAcceleration: Float, minimumJerk: Float) -> [Float] {
+        guard values.count >= 4 else {
+            return values
+        }
+
+        var accelerations: [Float] = []
+        accelerations.reserveCapacity(values.count - 2)
+        for index in 2..<values.count {
+            let current = values[index]
+            let previous = values[index - 1]
+            let beforePrevious = values[index - 2]
+            accelerations.append(current - (Float(2.0) * previous) + beforePrevious)
+        }
+        var jerks: [Float] = []
+        jerks.reserveCapacity(max(0, accelerations.count - 1))
+        for index in accelerations.indices.dropFirst() {
+            jerks.append(accelerations[index] - accelerations[index - 1])
+        }
+        let accelerationMedian = median(accelerations.map { abs($0) }) ?? 0.0
+        let jerkMedian = median(jerks.map { abs($0) }) ?? 0.0
+        let accelerationLimit = max(minimumAcceleration, accelerationMedian * motionPathJerkLimitMultiplier)
+        let jerkLimit = max(minimumJerk, jerkMedian * motionPathJerkLimitMultiplier)
+
+        guard accelerationLimit.isFinite, jerkLimit.isFinite, accelerationLimit > 0.0, jerkLimit > 0.0 else {
+            return values
+        }
+
+        var limited = values
+        var previousVelocity = values[1] - values[0]
+        var previousAcceleration = values[2] - (2.0 * values[1]) + values[0]
+
+        for index in 2..<values.count {
+            let targetVelocity = values[index] - limited[index - 1]
+            let targetAcceleration = targetVelocity - previousVelocity
+            let jerkLimitedAcceleration = clamp(
+                targetAcceleration,
+                min: previousAcceleration - jerkLimit,
+                max: previousAcceleration + jerkLimit
+            )
+            let limitedAcceleration = clamp(
+                jerkLimitedAcceleration,
+                min: Float(0.0) - accelerationLimit,
+                max: accelerationLimit
+            )
+            let candidateVelocity = previousVelocity + limitedAcceleration
+            let candidateValue = limited[index - 1] + candidateVelocity
+            let jerkExceeded = abs(targetAcceleration - previousAcceleration) > jerkLimit
+            let accelerationExceeded = abs(targetAcceleration) > accelerationLimit
+            let blend: Float = (jerkExceeded || accelerationExceeded) ? 0.7 : 0.25
+            limited[index] = (candidateValue * blend) + (values[index] * (1.0 - blend))
+            previousVelocity = limited[index] - limited[index - 1]
+            previousAcceleration = previousVelocity - (limited[index - 1] - limited[index - 2])
+        }
+
+        let endError = limited[limited.count - 1] - values[values.count - 1]
+        guard abs(endError) > Float.ulpOfOne else {
+            return limited
+        }
+        let denominator = Float(max(1, limited.count - 1))
+        for index in limited.indices {
+            let progress = Float(index) / denominator
+            limited[index] -= endError * progress
+        }
+        return limited
     }
 
     private static func closestFrameIndex(to time: Double, in frames: [StabilizerAnalysisFrame]) -> Int {
