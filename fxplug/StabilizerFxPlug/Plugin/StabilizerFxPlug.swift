@@ -24,7 +24,7 @@ private enum ParameterID: UInt32 {
     case farFieldWarpStrength = 28
 }
 
-private let stabilizerFxPlugVersion = "0.2.108"
+private let stabilizerFxPlugVersion = "0.2.109"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -597,7 +597,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | foot q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d | y turn %.1f foot %.1f bob %.1f",
+            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | foot q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d | x turn %.1f | y foot %.1f bob %.1f",
             frameCount,
             panSmoothSeconds,
             autoTransform.temporalSmoothingSampleCount,
@@ -625,7 +625,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.perspective.y,
             autoTransform.acceptedBlockCount,
             autoTransform.totalBlockCount,
-            autoTransform.macroPixelOffset.y,
+            autoTransform.macroPixelOffset.x,
             autoTransform.microPixelOffset.y,
             autoTransform.walkingBobPixelOffset.y
         )

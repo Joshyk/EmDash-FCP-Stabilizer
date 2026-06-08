@@ -107,19 +107,18 @@ playback and real panning does not become a sliding, delayed path. Short analyze
 kept in bounds while building these prepared paths so Host Analysis cleanup can finish and
 persist the cache.
 Segmented walking turns are controlled with `Turn Smoothing Strength`; higher values
-concatenate stop-and-go turn motion into a monotonic S-curve intent instead of fitting a
-straight line through the window. The slider runs up to `4.0`; values above `1.0` can push
-through low-confidence gating when the turn still looks segmented, while the applied
-correction clamps at full detected turn-band removal. Turn smoothing does not change roll.
-The macro X/Y turn correction is also soft-limited to a small output-edge budget during
-render, so a large detected pan cannot create stretched-edge jumps in the preview. Y correction is ordered as Footstep Jitter first,
-Turn Smoothing second, and Walking Bob last. The Y turn intent is measured from the
-footstep-cleaned baseline instead of the raw frame path, so short landing shock is not
-reintroduced by the turn correction.
+concatenate stop-and-go horizontal turn motion into a monotonic S-curve intent instead of
+fitting a straight line through the window. The slider runs up to `4.0`; values above `1.0`
+can push through low-confidence gating when the turn still looks segmented, while the
+applied correction clamps at full detected turn-band removal. Turn smoothing applies only
+to X translation and does not change Y or roll. The macro X turn correction is soft-limited
+to a small output-edge budget during render, so a large detected pan cannot create
+stretched-edge jumps in the preview. Y correction is handled by Footstep Jitter and Walking
+Bob only.
 Footstep vertical motion is controlled with `Walking Bob Window` and `Walking Bob Removal`,
 which remain in the same effect as the final Y-only correction stage. Walking Bob targets
-the remaining medium-period vertical band after Footstep Jitter and Turn Smoothing; it does
-not gate or reduce Footstep Jitter Y. The default removal is `0.75` to avoid overcorrecting
+the remaining medium-period vertical band after Footstep Jitter; it does not gate or reduce
+Footstep Jitter Y. The default removal is `0.75` to avoid overcorrecting
 walking footage. Shorter window values around `0.4-1.0` seconds target visible footstep
 bounce. Footstep Jitter and Walking Bob strengths are clamped at full detected-band removal
 during render, so high slider values do not add inverse shake. Values above `1.0` are useful

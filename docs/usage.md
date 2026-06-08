@@ -37,13 +37,13 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
 - `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
-  walking turns in X/Y translation only. It does not change roll. At `0`, long-window turn
+  walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
   correction is bypassed; the default is `1.0` and the maximum is `4.0`. Values above `1.0`
   push through low-confidence gating when stop-and-go panning is still visible, but render
   output still clamps at full detected turn-band removal. The turn intent is a monotonic
-  S-curve through the detection window instead of a straight-line fit. The X/Y turn bands
-  are measured from the Footstep Jitter baseline instead of the raw frame path, so short
-  landing shock is not reintroduced by turn smoothing. The macro X/Y output correction is
+  S-curve through the detection window instead of a straight-line fit. The X turn band
+  is measured from the Footstep Jitter baseline instead of the raw frame path, so short
+  landing shock is not reintroduced by turn smoothing. The macro X output correction is
   soft-limited to a small edge budget during render so large detected pans do not create
   stretched-edge jumps in the preview.
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
@@ -54,7 +54,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   total analyzed path endpoint, so real panning is not delayed into a sliding path. Short
   analyzed ranges are kept in bounds during cleanup so the prepared cache can be saved.
 - `Walking Bob Window`: Y-axis-only window for footstep bob and vertical walking shake
-  left after Footstep Jitter and Turn Smoothing. The correction uses the Y band between the
+  left after Footstep Jitter. The correction uses the Y band between the
   Footstep Jitter baseline and this walking-bob smooth path, which is computed from the same
   footstep-cleaned baseline without changing X or roll. The default is `1.5` seconds. Use
   shorter values around `0.4-1.0` seconds for visible footstep bounce and larger values for
@@ -106,8 +106,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Jitter, Walking Bob, temporal smoothing delta, and Far-field Warp while checking runtime
   behavior. When enabled, `Host Analysis Status` also shows the current raw center-frame
   transform, the smoothed transform delta, the raw `foot q`, the effective Footstep Jitter
-  X/Y/R correction strength, `warp q`, shear, yaw/pitch proxy, perspective, the Y correction
-  split into turn, footstep, and walking-bob components, plus separate `bob q` confidence.
+  X/Y/R correction strength, `warp q`, shear, yaw/pitch proxy, perspective, the X turn
+  correction plus Y footstep and walking-bob components, plus separate `bob q` confidence.
 
 ## Behavior
 
@@ -151,13 +151,11 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
-  path to build a monotonic S-curve X/Y turn intent, then combines it with a per-frame
-  Footstep Jitter impulse path and a Y-only `Walking Bob Window` band-pass path. Y
-  correction is always evaluated as Footstep Jitter first, Turn Smoothing second, and
-  Walking Bob last. Turn smoothing uses the footstep-cleaned Y baseline rather than the raw
-  frame path, and Walking Bob removes only the remaining medium-period Y band, so large
-  walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can be tuned
-  separately without rerunning Host Analysis.
+  path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
+  Footstep Jitter impulse path and a Y-only `Walking Bob Window` band-pass path. Y correction
+  is handled by Footstep Jitter first and Walking Bob last; Turn Smoothing does not apply to
+  Y. This keeps horizontal segmented turns, fine high-frequency shake, and footstep vertical
+  bobbing independently tunable without rerunning Host Analysis.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`.

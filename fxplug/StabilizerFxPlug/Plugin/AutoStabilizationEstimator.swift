@@ -237,8 +237,6 @@ enum AutoStabilizationEstimator {
     private static let rotationGain: Float = 1.0
     private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
-    private static let baseTurnSmoothingOffsetLimitY: Float = 0.08
-    private static let extraTurnSmoothingOffsetLimitY: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 15
     private static let renderTemporalSmoothingWindowSeconds = 0.55
     private static let microJitterMinimumEffectiveConfidence: Float = 0.55
@@ -439,14 +437,6 @@ enum AutoStabilizationEstimator {
             windowSeconds: smoothWindowSeconds
         ) ??
             timeWeightedAverage(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let turnIntentY = timeWeightedMonotonicSCurveValue(
-            footstepBaselineYPath,
-            frames: frames,
-            indices: activeIndices,
-            centerTime: renderSeconds,
-            windowSeconds: smoothWindowSeconds
-        ) ??
-            timeWeightedAverage(footstepBaselineYPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let pathXAtRender = interpolatedValue(analysis.pathX, using: frameInterpolation)
         let pathYAtRender = interpolatedValue(analysis.pathY, using: frameInterpolation)
         let pathRollAtRender = interpolatedValue(analysis.pathRoll, using: frameInterpolation)
@@ -480,9 +470,7 @@ enum AutoStabilizationEstimator {
         let microRotationCorrectionStrength = microJitterCorrectionFactor(strengths.microJitterRotation, confidence: jitterConfidence)
         let walkingBobCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.walkingBob, confidence: bobConfidence)
         let panBandX = microImpulseBaselineX - turnSmoothX
-        let panBandY = bobSmoothY - turnIntentY
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
-        let rawMacroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrength
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
             limit: turnSmoothingOffsetLimit(
@@ -492,15 +480,7 @@ enum AutoStabilizationEstimator {
                 strength: strengths.panStabilizationStrength
             )
         )
-        let macroCompensationY = softLimit(
-            rawMacroCompensationY,
-            limit: turnSmoothingOffsetLimit(
-                outputPixels: outputSize.y,
-                baseFraction: baseTurnSmoothingOffsetLimitY,
-                extraFraction: extraTurnSmoothingOffsetLimitY,
-                strength: strengths.panStabilizationStrength
-            )
-        )
+        let macroCompensationY: Float = 0.0
         let macroCompensationRotation: Float = 0.0
         let microCompensationX = -(pathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
         let microCompensationY = -(pathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength

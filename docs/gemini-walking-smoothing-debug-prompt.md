@@ -28,11 +28,11 @@ Current implementation to review:
 - `fxplug/StabilizerFxPlug/Plugin/AutoStabilizationEstimator.swift`
   - `estimate(preparedAnalysis:renderTime:...)` calls `temporallySmoothedEstimate`.
   - `rawEstimate` calculates the center-frame correction split into:
-    - `macroPixelOffset` for Turn Smoothing
+    - `macroPixelOffset.x` for X-only Turn Smoothing
     - `microPixelOffset` for Footstep Jitter
     - `walkingBobPixelOffset` for Walking Bob
   - `temporallySmoothedEstimate` samples neighboring render times symmetrically and blends the final automatic transform with zero phase.
-  - Turn Smoothing and Walking Bob components are temporally smoothed, but Footstep Jitter X/Y and roll use the current center-frame impulse correction so fine ridge-line shake is not averaged away.
+  - Turn Smoothing applies only to X translation and Walking Bob handles Y-only medium-period motion; Footstep Jitter X/Y and roll use the current center-frame impulse correction so fine ridge-line shake is not averaged away.
   - Footstep Jitter uses a render-time minimum effective confidence floor before applying X/Y/roll correction, still clamped at full detected-impulse removal.
   - Far-field Warp estimates conservative deskew/shear, yaw/pitch proxy, and perspective trim from upper-frame residual blocks after translation and roll are removed.
   - `StabilizerAutoTransform` now carries:
@@ -45,7 +45,7 @@ Current implementation to review:
     - sample count and smoothing window seconds
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift`
   - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Turn Smoothing, Footstep Jitter, Walking Bob, temporal smoothing delta, and Far-field Warp.
-  - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, raw `foot q`, effective Footstep Jitter X/Y/R strength, `warp q`, shear, yaw/pitch proxy, perspective, block counts, and Y component split.
+  - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, raw `foot q`, effective Footstep Jitter X/Y/R strength, `warp q`, shear, yaw/pitch proxy, perspective, block counts, X turn correction, and Y footstep/bob component split.
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerTransform.metal`
   - The overlay draws eleven rows of diagnostic bars.
 
@@ -53,7 +53,7 @@ Please review this implementation for walking-gimbal smoothing quality. Focus on
 
 1. Whether the temporal smoothing is mathematically zero-phase and does not introduce pan lag.
 2. Whether averaging the final transform can weaken Footstep Jitter impulse removal too much.
-3. Whether Turn Smoothing, Footstep Jitter, and Walking Bob remain correctly ordered for Y correction.
+3. Whether Turn Smoothing stays X-only while Footstep Jitter and Walking Bob remain correctly ordered for Y correction.
 4. Whether the debug output exposes enough information to diagnose overcorrection, undercorrection, and confidence gating.
 5. Whether the normalization of the debug bars is useful for 1080p and 4K footage.
 6. Any specific code-level changes that would make the walking footage smoother without adding fallbacks, zoom, or render-time block matching.
