@@ -72,10 +72,10 @@ Footstep Jitter is evaluated per render frame and is not a windowed or periodic 
 control. Strength values run up to `4.0`; values above `1.0` can push through low-confidence
 gating, but the applied correction still clamps at full detected-impulse removal so it does
 not add inverse shake.
-Prepared Host Analysis paths are also post-processed with a conservative jerk limiter. The
-limiter clamps abrupt acceleration changes in the saved X/Y/roll motion path while preserving
-the total analyzed turn amount, so one bad frame or stop-start segment does not create a
-new snap in playback.
+Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
+limiter only clamps isolated acceleration spikes in the saved X/Y/roll motion path while
+preserving the total analyzed turn amount, so one bad frame does not create a new snap in
+playback and real panning does not become a sliding, delayed path.
 Segmented walking turns are controlled with `Turn Smoothing Strength`; higher values
 concatenate stop-and-go turn motion into a monotonic S-curve intent instead of fitting a
 straight line through the window. The slider runs up to `4.0`; values above `1.0` can push

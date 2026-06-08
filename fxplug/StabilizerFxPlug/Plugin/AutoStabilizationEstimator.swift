@@ -219,7 +219,7 @@ enum AutoStabilizationEstimator {
     private static let microImpulseOuterRadius = 12
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
-    private static let motionPathJerkLimitMultiplier: Float = 3.5
+    private static let motionPathJerkLimitMultiplier: Float = 4.0
     private static let minimumTranslationAccelerationLimit: Float = 0.75
     private static let minimumTranslationJerkLimit: Float = 0.5
     private static let minimumRotationAccelerationLimit: Float = 0.04
@@ -869,30 +869,29 @@ enum AutoStabilizationEstimator {
         }
 
         var limited = values
-        var previousVelocity = values[1] - values[0]
-        var previousAcceleration = values[2] - (2.0 * values[1]) + values[0]
+        for index in 1..<(values.count - 1) {
+            let previousAcceleration = index >= 2
+                ? values[index - 1] - (Float(2.0) * values[index - 2]) + values[index - 3]
+                : Float(0.0)
+            let currentAcceleration = values[index + 1] - (Float(2.0) * values[index]) + values[index - 1]
+            let nextAcceleration = index + 2 < values.count
+                ? values[index + 2] - (Float(2.0) * values[index + 1]) + values[index]
+                : Float(0.0)
+            let localJerk = max(abs(currentAcceleration - previousAcceleration), abs(nextAcceleration - currentAcceleration))
+            let accelerationExceeded = abs(currentAcceleration) > accelerationLimit
+            let jerkExceeded = localJerk > jerkLimit
+            guard accelerationExceeded || jerkExceeded else {
+                continue
+            }
 
-        for index in 2..<values.count {
-            let targetVelocity = values[index] - limited[index - 1]
-            let targetAcceleration = targetVelocity - previousVelocity
-            let jerkLimitedAcceleration = clamp(
-                targetAcceleration,
-                min: previousAcceleration - jerkLimit,
-                max: previousAcceleration + jerkLimit
+            let localLinearPrediction = (values[index - 1] + values[index + 1]) * 0.5
+            let maxCorrection = max(accelerationLimit, jerkLimit)
+            let correction = clamp(
+                localLinearPrediction - values[index],
+                min: Float(0.0) - maxCorrection,
+                max: maxCorrection
             )
-            let limitedAcceleration = clamp(
-                jerkLimitedAcceleration,
-                min: Float(0.0) - accelerationLimit,
-                max: accelerationLimit
-            )
-            let candidateVelocity = previousVelocity + limitedAcceleration
-            let candidateValue = limited[index - 1] + candidateVelocity
-            let jerkExceeded = abs(targetAcceleration - previousAcceleration) > jerkLimit
-            let accelerationExceeded = abs(targetAcceleration) > accelerationLimit
-            let blend: Float = (jerkExceeded || accelerationExceeded) ? 0.7 : 0.25
-            limited[index] = (candidateValue * blend) + (values[index] * (1.0 - blend))
-            previousVelocity = limited[index] - limited[index - 1]
-            previousAcceleration = previousVelocity - (limited[index - 1] - limited[index - 2])
+            limited[index] = values[index] + (correction * 0.85)
         }
 
         let endError = limited[limited.count - 1] - values[values.count - 1]

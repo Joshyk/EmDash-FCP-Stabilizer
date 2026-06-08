@@ -84,10 +84,11 @@ multi-block Host Analysis path. Footstep Jitter strength values should be direct
 amounts with an exposed maximum of `4.0`. Values above `1.0` may compensate for
 low-confidence gating when correction is too weak, but applied correction must clamp at full
 detected-impulse removal during render so high slider values do not add inverse shake.
-Prepared Host Analysis motion paths should be post-processed with a conservative jerk limiter
-before caching. The limiter should clamp abrupt acceleration changes in X/Y/roll while
-preserving path endpoints so total analyzed turn amount is not lost. Because this changes
-prepared path semantics, bump the Host Analysis cache schema when it changes.
+Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
+before caching. The limiter should clamp isolated acceleration spikes in X/Y/roll while
+preserving path endpoints so total analyzed turn amount is not lost and real panning is not
+delayed into a sliding path. Because this changes prepared path semantics, bump the Host
+Analysis cache schema when it changes.
 Large segmented walking turns should be controlled by the render-time `Turn Smoothing
 Strength` slider, where higher values concatenate stop-and-go X/Y pan motion into a smoother
 monotonic S-curve turn intent instead of a straight-line fit. The exposed maximum is `4.0`;

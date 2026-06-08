@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.85"
+private let stabilizerFxPlugVersion = "0.2.86"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -893,8 +893,8 @@ private struct LoadedPersistentHostAnalysisCache {
 }
 
 private final class StabilizerHostAnalysisStore {
-    private static let cacheSchemaVersion = 9
-    private static let supportedCacheSchemaVersions: Set<Int> = [9]
+    private static let cacheSchemaVersion = 10
+    private static let supportedCacheSchemaVersions: Set<Int> = [10]
     private static let maxPersistentCacheEntries = 8
     private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0

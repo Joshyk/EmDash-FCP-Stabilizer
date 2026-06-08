@@ -41,9 +41,9 @@
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
   mode this is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis.
-- Prepared Host Analysis motion paths are post-processed with a conservative jerk limiter
-  before caching. It clamps abrupt acceleration changes in X/Y/roll while preserving the
-  total analyzed path endpoint, so old caches from earlier path semantics are not reused.
+- Prepared Host Analysis motion paths are post-processed with a zero-phase jerk limiter
+  before caching. It clamps isolated acceleration spikes in X/Y/roll while preserving the
+  total analyzed path endpoint, so real panning is not delayed into a sliding path.
 - `Walking Bob Window`: Y-axis-only window for footstep bob and vertical walking shake
   left after Footstep Jitter and Turn Smoothing. The correction uses the Y band between the
   Footstep Jitter baseline and this walking-bob smooth path, which is computed from the same
@@ -121,9 +121,10 @@
   frame path, and Walking Bob removes only the remaining medium-period Y band, so large
   walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can be tuned
   separately without rerunning Host Analysis.
-- Host Analysis cache schema `9` stores the original-size-percentage sample path with the
-  far-field-prioritized, jerk-limited multi-block motion path, confidence, and accepted-block
-  counts. Older prepared caches are ignored and require a new Host Analysis run.
+- Host Analysis cache schema `10` stores the original-size-percentage sample path with the
+  far-field-prioritized, zero-phase jerk-limited multi-block motion path, confidence, and
+  accepted-block counts. Older prepared caches are ignored and require a new Host Analysis
+  run.
 - Host Analysis/cache state changes update a hidden render revision parameter so Final Cut
   Pro invalidates cached preview frames and redraws from the prepared motion path.
 - Trimmed clips are supported by matching the current render frame fingerprint against the
