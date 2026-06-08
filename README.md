@@ -90,8 +90,11 @@ render time instead of snapping to the nearest analyzed frame, so panning playba
 step between frame-indexed corrections. The final automatic transform is then sampled across
 a wider symmetric render-time window and blended with zero phase. This costs more preview
 compute per frame, but it keeps the displayed pan correction as smooth as possible without
-rerunning Host Analysis. Strength values run up to `4.0`; values above `1.0` can push
-through low-confidence gating, but the applied correction still clamps at full
+rerunning Host Analysis. While `Debug Overlay` is enabled, `Host Analysis Status` shows the
+center-frame raw transform next to the temporally smoothed transform delta so smoothing can
+be tuned from visible runtime output instead of guessing from the viewer alone. Strength
+values run up to `4.0`; values above `1.0` can push through low-confidence gating, but the
+applied correction still clamps at full
 detected-impulse removal so it does not add inverse shake.
 Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
 limiter only clamps isolated acceleration spikes in the saved X/Y/roll motion path while
@@ -117,8 +120,9 @@ walking footage. Shorter window values around `0.4-1.0` seconds target visible f
 bounce. Footstep Jitter and Walking Bob strengths are clamped at full detected-band removal
 during render, so high slider values do not add inverse shake. Values above `1.0` are useful
 when confidence gating makes the detected correction visibly too weak.
-`Debug Overlay` shows top-left diagnostics, including separate `footstep q` and `bob q`
-confidence values in Host Analysis status while rendering. `Edge Display Mode` switches
+`Debug Overlay` shows top-left diagnostics for final X/Y/roll, Turn Smoothing, Footstep
+Jitter, Walking Bob, and temporal smoothing delta, including separate `footstep q` and
+`bob q` confidence values in Host Analysis status while rendering. `Edge Display Mode` switches
 preview edges between
 stretched source edges and black outside-source pixels.
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,

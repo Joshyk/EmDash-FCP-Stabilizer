@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.104"
+private let stabilizerFxPlugVersion = "0.2.105"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -578,21 +578,27 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | turn %.1fs | X %.1f Y %.1f | R %.2f | footstep q %.2f bob q %.2f blocks %d/%d | y turn %.1f foot %.1f bob %.1f | raw X %.1f Y %.1f",
+            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | q foot %.2f bob %.2f blocks %d/%d | y turn %.1f foot %.1f bob %.1f",
             frameCount,
             panSmoothSeconds,
+            autoTransform.temporalSmoothingSampleCount,
+            autoTransform.temporalSmoothingWindowSeconds,
             appliedPixelOffset.x,
             appliedPixelOffset.y,
             appliedRotationRadians * 180.0 / .pi,
+            autoTransform.rawPixelOffset.x,
+            autoTransform.rawPixelOffset.y,
+            autoTransform.rawRotationDegrees,
+            autoTransform.temporalSmoothingPixelDelta.x,
+            autoTransform.temporalSmoothingPixelDelta.y,
+            autoTransform.temporalSmoothingRotationDelta,
             autoTransform.microConfidence,
             autoTransform.bobConfidence,
             autoTransform.acceptedBlockCount,
             autoTransform.totalBlockCount,
             autoTransform.macroPixelOffset.y,
             autoTransform.microPixelOffset.y,
-            autoTransform.walkingBobPixelOffset.y,
-            autoTransform.pixelOffset.x,
-            autoTransform.pixelOffset.y
+            autoTransform.walkingBobPixelOffset.y
         )
         publishHostAnalysisStatus(statusOverride: status)
     }
@@ -676,17 +682,23 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         } else {
             autoTransform = .identity
         }
+        let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
+        let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
+        let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.03)
         let diagnostic = vector_float4(
-            min(1.0, abs(autoTransform.pixelOffset.x) / max(1.0, Float(outputWidth) * 0.05)),
-            min(1.0, abs(autoTransform.pixelOffset.y) / max(1.0, Float(outputHeight) * 0.05)),
+            min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
+            min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
             min(1.0, abs(autoTransform.rotationDegrees) / 5.0),
             0.0
         )
         let diagnostic2 = vector_float4(
-            min(1.0, simd_length(autoTransform.yawPitchProxy) / 0.10),
-            min(1.0, simd_length(autoTransform.shear) / 0.10),
-            min(1.0, simd_length(autoTransform.perspective) / 0.10),
-            min(1.0, autoTransform.blurAmount)
+            min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
+            min(1.0, max(
+                simd_length(vector_float2(autoTransform.microPixelOffset.x / diagnosticScaleX, autoTransform.microPixelOffset.y / diagnosticScaleY)),
+                abs(autoTransform.rotationDegrees) / 5.0
+            )),
+            min(1.0, abs(autoTransform.walkingBobPixelOffset.y) / diagnosticScaleY),
+            min(1.0, simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale)
         )
 
         var transform = StabilizerTransformUniforms(

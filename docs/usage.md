@@ -97,10 +97,11 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Walking Bob`,
   `Turn Smoothing`), plus completed analysis time, frame count, actual sample image size, source
   frame size, and pixel transform scale when analysis is available.
-- `Debug Overlay`: top-left diagnostics for X/Y/rotation while checking runtime behavior.
-  When enabled, `Host Analysis Status` also shows the current Y correction split into
-  turn, footstep, and walking-bob components plus separate `footstep q` and `bob q`
-  confidence values.
+- `Debug Overlay`: top-left diagnostics for final X/Y/rotation, Turn Smoothing, Footstep
+  Jitter, Walking Bob, and temporal smoothing delta while checking runtime behavior. When
+  enabled, `Host Analysis Status` also shows the current raw center-frame transform, the
+  smoothed transform delta, the Y correction split into turn, footstep, and walking-bob
+  components, plus separate `footstep q` and `bob q` confidence values.
 
 ## Behavior
 
@@ -134,7 +135,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   snap between nearest analyzed frames. The final automatic transform is also sampled across
   a wider symmetric render-time window and blended with zero phase. This increases preview
   compute per frame but makes the pan correction as smooth as possible without rerunning Host
-  Analysis.
+  Analysis. Debug output reports the raw center-frame transform and the smoothing delta so
+  visible stepping can be diagnosed from the Inspector.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.

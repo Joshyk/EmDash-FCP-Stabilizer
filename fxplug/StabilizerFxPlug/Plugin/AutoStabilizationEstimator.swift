@@ -12,6 +12,12 @@ struct StabilizerAutoTransform {
     var microPixelOffset: vector_float2
     var walkingBobPixelOffset: vector_float2
     var rotationDegrees: Float
+    var rawPixelOffset: vector_float2
+    var rawRotationDegrees: Float
+    var temporalSmoothingPixelDelta: vector_float2
+    var temporalSmoothingRotationDelta: Float
+    var temporalSmoothingSampleCount: Int32
+    var temporalSmoothingWindowSeconds: Float
     var microConfidence: Float
     var bobConfidence: Float
     var acceptedBlockCount: Int32
@@ -27,6 +33,12 @@ struct StabilizerAutoTransform {
         microPixelOffset: vector_float2(0.0, 0.0),
         walkingBobPixelOffset: vector_float2(0.0, 0.0),
         rotationDegrees: 0.0,
+        rawPixelOffset: vector_float2(0.0, 0.0),
+        rawRotationDegrees: 0.0,
+        temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
+        temporalSmoothingRotationDelta: 0.0,
+        temporalSmoothingSampleCount: 0,
+        temporalSmoothingWindowSeconds: 0.0,
         microConfidence: 0.0,
         bobConfidence: 0.0,
         acceptedBlockCount: 0,
@@ -493,6 +505,12 @@ enum AutoStabilizationEstimator {
             microPixelOffset: microPixelOffset,
             walkingBobPixelOffset: walkingBobPixelOffset,
             rotationDegrees: compensationRotation,
+            rawPixelOffset: vector_float2(compensationX, compensationY),
+            rawRotationDegrees: compensationRotation,
+            temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
+            temporalSmoothingRotationDelta: 0.0,
+            temporalSmoothingSampleCount: 1,
+            temporalSmoothingWindowSeconds: 0.0,
             microConfidence: jitterConfidence,
             bobConfidence: bobConfidence,
             acceptedBlockCount: acceptedBlockCount,
@@ -519,6 +537,14 @@ enum AutoStabilizationEstimator {
 
         let firstTime = frames[0].time
         let lastTime = frames[frames.count - 1].time
+        let rawCenterTransform = rawEstimate(
+            preparedAnalysis: analysis,
+            renderSeconds: renderSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            walkingBobWindowSeconds: walkingBobWindowSeconds,
+            strengths: strengths
+        )
         let sampleCount = max(3, renderTemporalSmoothingSampleCount)
         let centerSample = sampleCount / 2
         let halfWindow = renderTemporalSmoothingWindowSeconds * 0.5
@@ -546,7 +572,14 @@ enum AutoStabilizationEstimator {
             weightedSamples.append((transform: transform, weight: weight))
         }
 
-        return weightedAverageTransform(weightedSamples)
+        var smoothedTransform = weightedAverageTransform(weightedSamples)
+        smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
+        smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
+        smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - rawCenterTransform.pixelOffset
+        smoothedTransform.temporalSmoothingRotationDelta = smoothedTransform.rotationDegrees - rawCenterTransform.rotationDegrees
+        smoothedTransform.temporalSmoothingSampleCount = Int32(weightedSamples.count)
+        smoothedTransform.temporalSmoothingWindowSeconds = Float(renderTemporalSmoothingWindowSeconds)
+        return smoothedTransform
     }
 
     private static func weightedAverageTransform(
@@ -584,6 +617,12 @@ enum AutoStabilizationEstimator {
             microPixelOffset: vectorAverage(\.microPixelOffset),
             walkingBobPixelOffset: vectorAverage(\.walkingBobPixelOffset),
             rotationDegrees: floatAverage(\.rotationDegrees),
+            rawPixelOffset: vectorAverage(\.rawPixelOffset),
+            rawRotationDegrees: floatAverage(\.rawRotationDegrees),
+            temporalSmoothingPixelDelta: vectorAverage(\.temporalSmoothingPixelDelta),
+            temporalSmoothingRotationDelta: floatAverage(\.temporalSmoothingRotationDelta),
+            temporalSmoothingSampleCount: Int32(samples.count),
+            temporalSmoothingWindowSeconds: 0.0,
             microConfidence: floatAverage(\.microConfidence),
             bobConfidence: floatAverage(\.bobConfidence),
             acceptedBlockCount: Int32(acceptedBlockCount.rounded()),
