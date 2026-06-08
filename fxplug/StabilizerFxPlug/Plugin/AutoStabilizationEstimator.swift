@@ -19,6 +19,7 @@ struct StabilizerAutoTransform {
     var temporalSmoothingSampleCount: Int32
     var temporalSmoothingWindowSeconds: Float
     var effectiveMicroJitterStrength: vector_float3
+    var warpConfidence: Float
     var microConfidence: Float
     var bobConfidence: Float
     var acceptedBlockCount: Int32
@@ -41,6 +42,7 @@ struct StabilizerAutoTransform {
         temporalSmoothingSampleCount: 0,
         temporalSmoothingWindowSeconds: 0.0,
         effectiveMicroJitterStrength: vector_float3(0.0, 0.0, 0.0),
+        warpConfidence: 0.0,
         microConfidence: 0.0,
         bobConfidence: 0.0,
         acceptedBlockCount: 0,
@@ -58,13 +60,15 @@ struct StabilizerCorrectionStrengths {
     let microJitterRotation: Double
     let panStabilizationStrength: Double
     let walkingBob: Double
+    let farFieldWarp: Double
 
     static let defaultStrengths = StabilizerCorrectionStrengths(
         microJitterX: 1.0,
         microJitterY: 1.0,
         microJitterRotation: 1.0,
         panStabilizationStrength: 0.8,
-        walkingBob: 0.75
+        walkingBob: 0.75,
+        farFieldWarp: 1.0
     )
 }
 
@@ -145,6 +149,7 @@ struct StabilizerPreparedAnalysis {
     let pathPerspectiveX: [Float]
     let pathPerspectiveY: [Float]
     let analysisConfidence: [Float]
+    let warpConfidence: [Float]
     let acceptedBlockCounts: [Int32]
     let totalBlockCounts: [Int32]
     let blurAmounts: [Float]
@@ -163,6 +168,7 @@ fileprivate struct PairMotion {
     let perspectiveX: Float
     let perspectiveY: Float
     let analysisConfidence: Float
+    let warpConfidence: Float
     let acceptedBlockCount: Int32
     let totalBlockCount: Int32
 }
@@ -236,6 +242,9 @@ enum AutoStabilizationEstimator {
     private static let renderTemporalSmoothingSampleCount = 15
     private static let renderTemporalSmoothingWindowSeconds = 0.55
     private static let microJitterMinimumEffectiveConfidence: Float = 0.55
+    private static let maxFarFieldShear: Float = 0.008
+    private static let maxFarFieldYawPitchProxy: Float = 0.004
+    private static let maxFarFieldPerspective: Float = 0.003
     private static let microImpulseInnerRadius = 3
     private static let microImpulseOuterRadius = 12
     private static let minimumAcceptedMotionBlocks = 3
@@ -313,6 +322,7 @@ enum AutoStabilizationEstimator {
                 perspectiveX: 0.0,
                 perspectiveY: 0.0,
                 analysisConfidence: 1.0,
+                warpConfidence: 0.0,
                 acceptedBlockCount: 0,
                 totalBlockCount: 0
             )
@@ -460,6 +470,7 @@ enum AutoStabilizationEstimator {
         let motionConfidence = analysis.analysisConfidence.indices.contains(centerIndex) ? analysis.analysisConfidence[centerIndex] : 0.0
         let acceptedBlockCount = analysis.acceptedBlockCounts.indices.contains(centerIndex) ? analysis.acceptedBlockCounts[centerIndex] : 0
         let totalBlockCount = analysis.totalBlockCounts.indices.contains(centerIndex) ? analysis.totalBlockCounts[centerIndex] : 0
+        let warpConfidence = analysis.warpConfidence.indices.contains(centerIndex) ? analysis.warpConfidence[centerIndex] : 0.0
         let confidence = clamp(1.0 - (residual * 1.2), min: 0.35, max: 1.0)
         let jitterConfidence = clamp((1.0 - (residual * 0.7)) * motionConfidence, min: 0.0, max: 1.0)
         let bobConfidence = clamp((1.0 - (residual * 0.4)) * motionConfidence, min: 0.0, max: 1.0)
@@ -502,6 +513,19 @@ enum AutoStabilizationEstimator {
         let compensationX = macroPixelOffset.x + microPixelOffset.x
         let compensationY = macroPixelOffset.y + microPixelOffset.y + walkingBobPixelOffset.y
         let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation
+        let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
+        let yawPitchProxy = vector_float2(
+            clamp(interpolatedValue(analysis.pathYaw, using: frameInterpolation), min: -maxFarFieldYawPitchProxy * farFieldWarpStrength, max: maxFarFieldYawPitchProxy * farFieldWarpStrength),
+            clamp(interpolatedValue(analysis.pathPitch, using: frameInterpolation), min: -maxFarFieldYawPitchProxy * farFieldWarpStrength, max: maxFarFieldYawPitchProxy * farFieldWarpStrength)
+        )
+        let shear = vector_float2(
+            clamp(interpolatedValue(analysis.pathShearX, using: frameInterpolation), min: -maxFarFieldShear * farFieldWarpStrength, max: maxFarFieldShear * farFieldWarpStrength),
+            clamp(interpolatedValue(analysis.pathShearY, using: frameInterpolation), min: -maxFarFieldShear * farFieldWarpStrength, max: maxFarFieldShear * farFieldWarpStrength)
+        )
+        let perspective = vector_float2(
+            clamp(interpolatedValue(analysis.pathPerspectiveX, using: frameInterpolation), min: -maxFarFieldPerspective * farFieldWarpStrength, max: maxFarFieldPerspective * farFieldWarpStrength),
+            clamp(interpolatedValue(analysis.pathPerspectiveY, using: frameInterpolation), min: -maxFarFieldPerspective * farFieldWarpStrength, max: maxFarFieldPerspective * farFieldWarpStrength)
+        )
         return StabilizerAutoTransform(
             pixelOffset: vector_float2(compensationX, compensationY),
             macroPixelOffset: macroPixelOffset,
@@ -519,13 +543,14 @@ enum AutoStabilizationEstimator {
                 microYCorrectionStrength,
                 microRotationCorrectionStrength
             ),
+            warpConfidence: warpConfidence,
             microConfidence: jitterConfidence,
             bobConfidence: bobConfidence,
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount,
-            yawPitchProxy: vector_float2(0.0, 0.0),
-            shear: vector_float2(0.0, 0.0),
-            perspective: vector_float2(0.0, 0.0),
+            yawPitchProxy: yawPitchProxy,
+            shear: shear,
+            perspective: perspective,
             blurAmount: blurAmount
         )
     }
@@ -644,6 +669,7 @@ enum AutoStabilizationEstimator {
             temporalSmoothingSampleCount: Int32(samples.count),
             temporalSmoothingWindowSeconds: 0.0,
             effectiveMicroJitterStrength: vector3Average(\.effectiveMicroJitterStrength),
+            warpConfidence: floatAverage(\.warpConfidence),
             microConfidence: floatAverage(\.microConfidence),
             bobConfidence: floatAverage(\.bobConfidence),
             acceptedBlockCount: Int32(acceptedBlockCount.rounded()),
@@ -752,6 +778,7 @@ enum AutoStabilizationEstimator {
             pathPerspectiveX: jerkLimitedMotionPath(rawPathPerspectiveX, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
             pathPerspectiveY: jerkLimitedMotionPath(rawPathPerspectiveY, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
             analysisConfidence: motions.map(\.analysisConfidence),
+            warpConfidence: motions.map(\.warpConfidence),
             acceptedBlockCounts: motions.map(\.acceptedBlockCount),
             totalBlockCounts: motions.map(\.totalBlockCount),
             blurAmounts: sortedFrames.map(\.blurAmount)
@@ -816,6 +843,15 @@ enum AutoStabilizationEstimator {
         let blockAgreement = blocks.isEmpty ? 0.0 : (Float(acceptedCount) / Float(blocks.count)) * clamp(farFieldAgreement, min: 0.35, max: 1.0)
         let scoreConfidence = clamp(1.0 - ((median(motionBlocksForModel.map(\.score)) ?? global.score) * 1.8), min: 0.0, max: 1.0)
         let analysisConfidence = clamp(blockAgreement * scoreConfidence, min: 0.0, max: 1.0)
+        let warpMotion = farFieldWarpMotion(
+            shifts: motionBlocksForModel,
+            robustDx: robustDx,
+            robustDy: robustDy,
+            signedRoll: signedRoll,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
+            analysisConfidence: analysisConfidence
+        )
 
         return PairMotion(
             dx: robustDx,
@@ -823,13 +859,14 @@ enum AutoStabilizationEstimator {
             residual: median(motionBlocksForModel.map(\.score)) ?? global.score,
             signedRoll: signedRoll,
             rollMotion: rollMotion,
-            yawProxy: 0.0,
-            pitchProxy: 0.0,
-            shearX: 0.0,
-            shearY: 0.0,
-            perspectiveX: 0.0,
-            perspectiveY: 0.0,
+            yawProxy: warpMotion.yawProxy,
+            pitchProxy: warpMotion.pitchProxy,
+            shearX: warpMotion.shearX,
+            shearY: warpMotion.shearY,
+            perspectiveX: warpMotion.perspectiveX,
+            perspectiveY: warpMotion.perspectiveY,
             analysisConfidence: analysisConfidence,
+            warpConfidence: warpMotion.confidence,
             acceptedBlockCount: Int32(acceptedCount),
             totalBlockCount: Int32(blocks.count)
         )
@@ -928,6 +965,85 @@ enum AutoStabilizationEstimator {
             return []
         }
         return accepted
+    }
+
+    private static func farFieldWarpMotion(
+        shifts: [StabilizerBlockShift],
+        robustDx: Float,
+        robustDy: Float,
+        signedRoll: Float,
+        sampleWidth: Int,
+        sampleHeight: Int,
+        analysisConfidence: Float
+    ) -> (yawProxy: Float, pitchProxy: Float, shearX: Float, shearY: Float, perspectiveX: Float, perspectiveY: Float, confidence: Float) {
+        let farFieldShifts = shifts.filter { $0.block.farFieldWeight >= 0.55 }
+        guard farFieldShifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        }
+
+        let halfWidth = Float(max(1, sampleWidth)) * 0.5
+        let halfHeight = Float(max(1, sampleHeight)) * 0.5
+        var yawCandidates: [(value: Float, weight: Float)] = []
+        var pitchCandidates: [(value: Float, weight: Float)] = []
+        var shearXCandidates: [(value: Float, weight: Float)] = []
+        var shearYCandidates: [(value: Float, weight: Float)] = []
+        var perspectiveXCandidates: [(value: Float, weight: Float)] = []
+        var perspectiveYCandidates: [(value: Float, weight: Float)] = []
+
+        for shift in farFieldShifts {
+            let x = shift.block.centerX - halfWidth
+            let y = shift.block.centerY - halfHeight
+            let residualX = shift.dx - robustDx + (signedRoll * y)
+            let residualY = shift.dy - robustDy - (signedRoll * x)
+            let scoreWeight = clamp(1.0 - (shift.score * 1.8), min: 0.05, max: 1.0)
+            let weight = shift.block.farFieldWeight * scoreWeight
+            yawCandidates.append((
+                clamp(residualX / halfWidth, min: -maxFarFieldYawPitchProxy, max: maxFarFieldYawPitchProxy),
+                weight
+            ))
+            pitchCandidates.append((
+                clamp(residualY / halfHeight, min: -maxFarFieldYawPitchProxy, max: maxFarFieldYawPitchProxy),
+                weight
+            ))
+            if abs(y) > halfHeight * 0.15 {
+                shearXCandidates.append((
+                    clamp(residualX / y, min: -maxFarFieldShear, max: maxFarFieldShear),
+                    weight
+                ))
+            }
+            if abs(x) > halfWidth * 0.15 {
+                shearYCandidates.append((
+                    clamp(residualY / x, min: -maxFarFieldShear, max: maxFarFieldShear),
+                    weight
+                ))
+            }
+            let radialDenominator = max(1.0, (x * x) + (y * y))
+            let radialResidual = (residualX * x) + (residualY * y)
+            perspectiveXCandidates.append((
+                clamp((radialResidual * x) / (radialDenominator * halfWidth), min: -maxFarFieldPerspective, max: maxFarFieldPerspective),
+                weight
+            ))
+            perspectiveYCandidates.append((
+                clamp((radialResidual * y) / (radialDenominator * halfHeight), min: -maxFarFieldPerspective, max: maxFarFieldPerspective),
+                weight
+            ))
+        }
+
+        let farFieldCoverage = Float(farFieldShifts.count) / Float(max(1, shifts.count))
+        let confidence = clamp(analysisConfidence * farFieldCoverage, min: 0.0, max: 1.0)
+        guard confidence >= 0.08 else {
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, confidence)
+        }
+
+        return (
+            yawProxy: (weightedMedian(yawCandidates) ?? 0.0) * confidence,
+            pitchProxy: (weightedMedian(pitchCandidates) ?? 0.0) * confidence,
+            shearX: (weightedMedian(shearXCandidates) ?? 0.0) * confidence,
+            shearY: (weightedMedian(shearYCandidates) ?? 0.0) * confidence,
+            perspectiveX: (weightedMedian(perspectiveXCandidates) ?? 0.0) * confidence,
+            perspectiveY: (weightedMedian(perspectiveYCandidates) ?? 0.0) * confidence,
+            confidence: confidence
+        )
     }
 
     private static func estimateShift(
@@ -1609,6 +1725,7 @@ final class StreamingStabilizationAnalysisBuilder {
                 perspectiveX: 0.0,
                 perspectiveY: 0.0,
                 analysisConfidence: 1.0,
+                warpConfidence: 0.0,
                 acceptedBlockCount: 0,
                 totalBlockCount: 0
             ))

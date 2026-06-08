@@ -62,7 +62,7 @@ fragment float4 fragmentShader(
         float2 pixel = uv * transform->outputSize;
         float barX = pixel.x - 16.0;
         float barY = pixel.y - 16.0;
-        if (barX >= 0.0 && barX <= 180.0 && barY >= 0.0 && barY <= 91.0) {
+        if (barX >= 0.0 && barX <= 180.0 && barY >= 0.0 && barY <= 143.0) {
             int row = int(floor(barY / 13.0));
             float fill = 0.0;
             float3 color = float3(1.0);
@@ -87,6 +87,18 @@ fragment float4 fragmentShader(
             } else if (row == 6) {
                 fill = saturate(transform->diagnostic2.w);
                 color = float3(0.95, 0.95, 0.95);
+            } else if (row == 7) {
+                fill = saturate(transform->diagnostic3.x);
+                color = float3(0.55, 0.95, 0.25);
+            } else if (row == 8) {
+                fill = saturate(transform->diagnostic3.y);
+                color = float3(0.2, 0.65, 1.0);
+            } else if (row == 9) {
+                fill = saturate(transform->diagnostic3.z);
+                color = float3(0.75, 0.35, 1.0);
+            } else if (row == 10) {
+                fill = saturate(transform->diagnostic3.w);
+                color = float3(1.0, 0.45, 0.25);
             }
             float activeWidth = 180.0 * fill;
             float3 background = float3(0.02, 0.02, 0.02);

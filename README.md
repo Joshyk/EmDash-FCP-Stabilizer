@@ -11,7 +11,8 @@ standalone estimator, or Transform-keyframe writer.
   - Renders a transformed source texture with Metal.
   - Corrects softened X/Y translation and roll without writing Final Cut Pro Transform
     keyframes.
-  - Keeps yaw/pitch/shear/perspective compensation disabled.
+  - Adds a small-clamp `Far-field Warp Strength` for ridge-line deskew, yaw/pitch proxy,
+    and perspective trim.
   - Keeps render scale fixed at 1.0.
   - Always uses `Host Analysis`.
 
@@ -123,10 +124,16 @@ walking footage. Shorter window values around `0.4-1.0` seconds target visible f
 bounce. Footstep Jitter and Walking Bob strengths are clamped at full detected-band removal
 during render, so high slider values do not add inverse shake. Values above `1.0` are useful
 when confidence gating makes the detected correction visibly too weak.
+`Far-field Warp Strength` adds a bundled small-clamp far-field correction for walking
+landscape footage. It estimates deskew/shear, yaw/pitch proxy, and perspective/distort trim
+from upper-frame far-field residual blocks after translation and roll are removed. The
+default is `1.0`, the slider is capped at `4.0`, and render-time clamps keep each unit of
+shear, yaw/pitch, and perspective small because this path can otherwise make close grass,
+roads, water, or frame edges swim.
 `Debug Overlay` shows top-left diagnostics for final X/Y/roll, Turn Smoothing, Footstep
-Jitter, Walking Bob, and temporal smoothing delta, including separate `footstep q` and
-effective Footstep Jitter X/Y/R strength plus `bob q` confidence values in Host Analysis
-status while rendering. `Edge Display Mode` switches preview edges between
+Jitter, Walking Bob, temporal smoothing delta, and Far-field Warp, including separate
+`footstep q`, effective Footstep Jitter X/Y/R strength, `bob q`, and `warp q` values in
+Host Analysis status while rendering. `Edge Display Mode` switches preview edges between
 stretched source edges and black outside-source pixels.
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
 the active correction bands (`Footstep jitter`, `Walking Bob`, `Turn Smoothing`), and analysis

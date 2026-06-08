@@ -132,6 +132,12 @@ use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, a
 Walking Bob removal values should clamp at full
 detected-band removal during render so high slider values do not add inverse vertical
 shake, while still allowing values above `1.0` to compensate for low-confidence gating.
+`Far-field Warp Strength` should expose one bundled small-clamp control for deskew/shear,
+yaw/pitch proxy, and perspective/distort trim. It is intended only for distant ridge-line
+shake in walking landscape footage. Keep the default at `1.0`, expose up to `4.0`, keep each
+unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
+debug/status output, and bump Host Analysis cache schema when prepared warp path semantics
+change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
 Overlay`; debug overlay should only show diagnostics.

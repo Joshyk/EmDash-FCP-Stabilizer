@@ -65,6 +65,11 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
   `0.75`, which is intentionally conservative; higher values can push through low-confidence
   gating but are clamped during render to avoid adding inverse vertical shake.
+- `Far-field Warp Strength`: bundled small-clamp correction for distant ridge-line shake. It
+  uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
+  trim after translation and roll are removed. The default is `1.0`, the maximum is `4.0`,
+  and `0` fully disables warp. Pull this down if close grass, roads, water, or frame edges
+  start to swim.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
   at the original clip size. The actual pixel size is shown in `Stabilizer Info`.
@@ -98,19 +103,21 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   `Turn Smoothing`), plus completed analysis time, frame count, actual sample image size, source
   frame size, and pixel transform scale when analysis is available.
 - `Debug Overlay`: top-left diagnostics for final X/Y/rotation, Turn Smoothing, Footstep
-  Jitter, Walking Bob, and temporal smoothing delta while checking runtime behavior. When
-  enabled, `Host Analysis Status` also shows the current raw center-frame transform, the
-  smoothed transform delta, the raw `foot q`, the effective Footstep Jitter X/Y/R correction
-  strength, the Y correction split into turn, footstep, and walking-bob components, plus
-  separate `bob q` confidence.
+  Jitter, Walking Bob, temporal smoothing delta, and Far-field Warp while checking runtime
+  behavior. When enabled, `Host Analysis Status` also shows the current raw center-frame
+  transform, the smoothed transform delta, the raw `foot q`, the effective Footstep Jitter
+  X/Y/R correction strength, `warp q`, shear, yaw/pitch proxy, perspective, the Y correction
+  split into turn, footstep, and walking-bob components, plus separate `bob q` confidence.
 
 ## Behavior
 
 - The effect does not write Final Cut Pro Transform keyframes.
-- It estimates low-resolution multi-block X/Y motion and roll from FxPlug-requested source
-  frames.
+- It estimates low-resolution multi-block X/Y motion, roll, and conservative far-field warp
+  residuals from FxPlug-requested source frames.
 - It is tuned for walking-gimbal footage. The render path corrects softened X/Y translation
-  and roll only; yaw/pitch proxy, shear, and perspective compensation are disabled.
+  and roll, with optional small-clamp `Far-field Warp Strength` for deskew/shear, yaw/pitch
+  proxy, and perspective/distort trim. This warp path is intentionally low because close
+  foreground detail can otherwise swim or distort.
 - It does not apply Z correction or zoom; render scale stays fixed at 1.0.
 - The effect always uses Host Analysis. It asks Final Cut Pro to run a forward GPU
   analysis, uses Metal compute inside the FxPlug runtime to downsample source frames and
@@ -151,10 +158,13 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   frame path, and Walking Bob removes only the remaining medium-period Y band, so large
   walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can be tuned
   separately without rerunning Host Analysis.
-- Host Analysis cache schema `11` stores the original-size-percentage sample path with the
-  far-field-prioritized, zero-phase jerk-limited multi-block motion path, confidence, and
-  accepted-block counts. Older prepared caches are ignored and require a new Host Analysis
-  run.
+- `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
+  proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
+  shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`.
+- Host Analysis cache schema `12` stores the original-size-percentage sample path with the
+  far-field-prioritized, zero-phase jerk-limited multi-block motion path, warp paths,
+  confidence, and accepted-block counts. Older prepared caches are ignored and require a new
+  Host Analysis run.
 - Host Analysis/cache state changes update a hidden render revision parameter so Final Cut
   Pro invalidates cached preview frames and redraws from the prepared motion path.
 - Trimmed clips are supported by matching the current render frame fingerprint against the
