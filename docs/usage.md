@@ -9,9 +9,11 @@
    `Cache Rejected - Run Host Analysis`.
 5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
-Multiple clips can be queued for Host Analysis. The plug-in serializes explicit start
-requests: one clip analyzes at a time, and later clips show `Host Analysis Queued` until the
-active clip finishes.
+`Start Host Analysis` requests the active effect clip from Final Cut Pro. If Final Cut Pro
+reports that another analysis is already requested or running, the Inspector shows that
+host state instead of starting an internal plug-in queue.
+Debug installs clean stale `Stabilizer Transform copy...` Motion Template folders in the
+`Emdash Studios` group so Final Cut Pro does not list duplicate Stabilizer effects.
 
 ## Controls
 
@@ -79,8 +81,9 @@ active clip finishes.
   analysis is visible even when Final Cut Pro uses different FxPlug instances for analyzer
   and preview/render callbacks. `Start Host Analysis` is the only path that requests Host
   Analysis from Final Cut Pro; preview/render callbacks only read completed analysis or
-  validated persistent cache. Explicit Host Analysis starts are serialized and request
-  analysis for the effect clip.
+  validated persistent cache. If Final Cut Pro reports that Host Analysis is already
+  requested or running, the Inspector shows that state instead of queueing another start
+  inside the plug-in.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse.

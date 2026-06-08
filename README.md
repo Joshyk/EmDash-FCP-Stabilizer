@@ -28,9 +28,9 @@ In-progress analysis streams frame-to-frame motion directly through Metal and ke
 previous luma buffer needed for the next motion search, so it no longer writes per-frame
 `.luma` scratch files.
 The stabilization result is still built from the same prepared motion path.
-Host Analysis runs for separate clips are serialized by the plug-in. If another clip is
-already analyzing, an explicit `Start Host Analysis` request waits as `Host Analysis Queued`
-until the active clip finishes, then starts automatically.
+`Start Host Analysis` requests the active effect clip from Final Cut Pro. If Final Cut Pro
+reports that another analysis is already requested or running, the Inspector shows that
+host state instead of starting an internal plug-in queue.
 
 Completed Host Analysis frame sets are persisted to
 `/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` as the
@@ -53,9 +53,10 @@ Analysis uses a process-wide shared store for the active FxPlug runtime so setup
 analysis, cleanup, and render can exchange the prepared path even when Final Cut Pro calls
 them through different FxPlug instances. `Start Host Analysis` is the only path that
 requests Host Analysis from Final Cut Pro; render/preview callbacks only read completed
-analysis or validated persistent cache. Explicit start requests are queued through a
-process-wide serial gate and request Host Analysis for the effect clip. Persistent cache
-files remain shared reuse candidates after source-frame validation. When Final Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame time,
+analysis or validated persistent cache. If Final Cut Pro reports that Host Analysis is
+already requested or running, the Inspector shows that state instead of queueing another
+start inside the plug-in. Persistent cache files remain shared reuse candidates after
+source-frame validation. When Final Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame time,
 the effect maps the current render frame fingerprint back to the analyzed frame set and uses
 that offset before sampling the prepared motion paths. The Inspector shows
 `Host Analysis Status`; after a completed analysis it should read `Ready (... frames)`.
@@ -122,7 +123,9 @@ xcodebuild \
 
 The shared scheme installs each successful Debug build to
 `/Applications/StabilizerFxPlug.app`, installs the Motion Template under the user's Movies
-Motion Templates folder, and registers the embedded FxPlug with PluginKit.
+Motion Templates folder, and registers the embedded FxPlug with PluginKit. Debug installs
+remove stale `Stabilizer Transform copy...` Motion Template folders from the `Emdash Studios`
+group so Finder-created duplicates do not appear as extra effects in Final Cut Pro.
 
 Verify registration:
 

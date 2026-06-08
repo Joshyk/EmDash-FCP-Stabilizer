@@ -57,17 +57,17 @@ dominated by close grass, water, or road parallax. Motion-path algorithm changes
 prepared analysis output should bump the Host Analysis cache schema so stale caches are not
 reused.
 
-Host Analysis playback must render from prepared motion paths for the current FxPlug effect
-instance. Do not use one global mutable Host Analysis render store for all timeline clips:
-starting analysis on one clip must not reset or cancel another clip's in-progress analysis.
-Explicit `Start Host Analysis` requests across effect instances should be serialized through
-a visible queue: only one clip should call `startForwardAnalysis` at a time, queued clips
-should show `Host Analysis Queued`, and the next queued clip should start after the active
-clip's `cleanupAnalysis` completes or the active analysis fails. Persistent cache files are
-the cross-instance reuse path after source-frame validation. When an analyzer instance saves
-a completed cache, render/preview instances with no prepared analysis should notice the cache
+Host Analysis playback must render from prepared motion paths for the active FxPlug runtime.
+`Start Host Analysis` is the only path that should call `startForwardAnalysis`; render and
+preview callbacks must not auto-start Host Analysis. The active runtime uses a process-wide
+shared Host Analysis store because Final Cut Pro may call setup, frame analysis, cleanup,
+and preview/render through different FxPlug instances. Persistent cache files are the
+cross-instance reuse path after source-frame validation. When an analyzer instance saves a
+completed cache, render/preview instances with no prepared analysis should notice the cache
 generation change and reload persistent cache candidates on demand; this keeps the stabilized
-preview visible even when analyzer and render use different FxPlug instances. Do not re-run
+preview visible even when analyzer and render use different FxPlug instances. If Final Cut
+Pro reports that Host Analysis is already requested or running, surface that state in
+Inspector status instead of queueing another start inside the plug-in. Do not re-run
 full block matching across the analyzed frame set on every render frame. Keep `Host Analysis
 Status` visible in the Inspector and update it to `Ready (... frames)` after completed
 analysis. Render playback must tolerate trimmed clips whose render time differs from Host

@@ -9,6 +9,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
 MOTION_TEMPLATE_SOURCE="${PROJECT_DIR}/MotionTemplates/Effects.localized/Emdash Studios/Stabilizer Transform"
 MOTION_TEMPLATE_DEST="${HOME}/Movies/Motion Templates.localized/Effects.localized/Emdash Studios/Stabilizer Transform"
+MOTION_TEMPLATE_GROUP="${HOME}/Movies/Motion Templates.localized/Effects.localized/Emdash Studios"
 
 unset SWIFT_DEBUG_INFORMATION_FORMAT
 unset SWIFT_DEBUG_INFORMATION_VERSION
@@ -59,7 +60,13 @@ install_motion_template() {
 		fi
 	done
 
-	mkdir -p "$(dirname "$MOTION_TEMPLATE_DEST")"
+	mkdir -p "$MOTION_TEMPLATE_GROUP"
+
+	find "$MOTION_TEMPLATE_GROUP" -maxdepth 1 -type d -name 'Stabilizer Transform copy*' -print | while IFS= read -r duplicate_template; do
+		echo "Removing stale Motion Template duplicate: $duplicate_template"
+		rm -rf "$duplicate_template"
+	done
+
 	rm -rf "$MOTION_TEMPLATE_DEST"
 	ditto "$MOTION_TEMPLATE_SOURCE" "$MOTION_TEMPLATE_DEST"
 
