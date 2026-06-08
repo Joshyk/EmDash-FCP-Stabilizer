@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.105"
+private let stabilizerFxPlugVersion = "0.2.106"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -578,7 +578,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | q foot %.2f bob %.2f blocks %d/%d | y turn %.1f foot %.1f bob %.1f",
+            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | foot q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f blocks %d/%d | y turn %.1f foot %.1f bob %.1f",
             frameCount,
             panSmoothSeconds,
             autoTransform.temporalSmoothingSampleCount,
@@ -593,6 +593,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.temporalSmoothingPixelDelta.y,
             autoTransform.temporalSmoothingRotationDelta,
             autoTransform.microConfidence,
+            autoTransform.effectiveMicroJitterStrength.x,
+            autoTransform.effectiveMicroJitterStrength.y,
+            autoTransform.effectiveMicroJitterStrength.z,
             autoTransform.bobConfidence,
             autoTransform.acceptedBlockCount,
             autoTransform.totalBlockCount,

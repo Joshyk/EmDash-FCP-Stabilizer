@@ -91,6 +91,11 @@ after calculating the prepared-path transform, sample neighboring render times s
 and blend the final automatic transform with zero phase so the preview does not step between
 corrections. This render-time smoothing must not require rerunning Host Analysis or changing
 the cache schema.
+Render-time smoothing must not average away Footstep Jitter impulses or roll jitter needed
+to stabilize fine distant ridge-line shake. Smooth Turn Smoothing and Walking Bob components
+independently, then recombine them with the current render frame's Footstep Jitter X/Y/roll
+correction. Footstep Jitter debug/status output should show the raw confidence and effective
+correction strength so low-confidence gating is visible.
 Fine high-frequency shake should be handled by render-time Footstep Jitter strength controls
 that compare X/Y/rotation against an outer-frame linear prediction that skips the center
 shock region. Footstep Jitter should suppress footstep landing shock as a frame-level impulse

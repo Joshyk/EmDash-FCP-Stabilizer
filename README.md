@@ -93,7 +93,10 @@ compute per frame, but it keeps the displayed pan correction as smooth as possib
 rerunning Host Analysis. While `Debug Overlay` is enabled, `Host Analysis Status` shows the
 center-frame raw transform next to the temporally smoothed transform delta so smoothing can
 be tuned from visible runtime output instead of guessing from the viewer alone. Strength
-values run up to `4.0`; values above `1.0` can push through low-confidence gating, but the
+values run up to `4.0`; values above `1.0` can push through low-confidence gating. Footstep
+Jitter uses a render-time minimum effective confidence floor so fine ridge-line shake does
+not disappear just because block confidence is conservative, and the final temporal smoothing
+keeps the current-frame Footstep Jitter X/Y/roll impulse instead of averaging it away. The
 applied correction still clamps at full
 detected-impulse removal so it does not add inverse shake.
 Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
@@ -122,8 +125,8 @@ during render, so high slider values do not add inverse shake. Values above `1.0
 when confidence gating makes the detected correction visibly too weak.
 `Debug Overlay` shows top-left diagnostics for final X/Y/roll, Turn Smoothing, Footstep
 Jitter, Walking Bob, and temporal smoothing delta, including separate `footstep q` and
-`bob q` confidence values in Host Analysis status while rendering. `Edge Display Mode` switches
-preview edges between
+effective Footstep Jitter X/Y/R strength plus `bob q` confidence values in Host Analysis
+status while rendering. `Edge Display Mode` switches preview edges between
 stretched source edges and black outside-source pixels.
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
 the active correction bands (`Footstep jitter`, `Walking Bob`, `Turn Smoothing`), and analysis

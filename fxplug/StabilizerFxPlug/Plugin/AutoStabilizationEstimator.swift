@@ -18,6 +18,7 @@ struct StabilizerAutoTransform {
     var temporalSmoothingRotationDelta: Float
     var temporalSmoothingSampleCount: Int32
     var temporalSmoothingWindowSeconds: Float
+    var effectiveMicroJitterStrength: vector_float3
     var microConfidence: Float
     var bobConfidence: Float
     var acceptedBlockCount: Int32
@@ -39,6 +40,7 @@ struct StabilizerAutoTransform {
         temporalSmoothingRotationDelta: 0.0,
         temporalSmoothingSampleCount: 0,
         temporalSmoothingWindowSeconds: 0.0,
+        effectiveMicroJitterStrength: vector_float3(0.0, 0.0, 0.0),
         microConfidence: 0.0,
         bobConfidence: 0.0,
         acceptedBlockCount: 0,
@@ -233,6 +235,7 @@ enum AutoStabilizationEstimator {
     private static let extraTurnSmoothingOffsetLimitY: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 15
     private static let renderTemporalSmoothingWindowSeconds = 0.55
+    private static let microJitterMinimumEffectiveConfidence: Float = 0.55
     private static let microImpulseInnerRadius = 3
     private static let microImpulseOuterRadius = 12
     private static let minimumAcceptedMotionBlocks = 3
@@ -461,9 +464,9 @@ enum AutoStabilizationEstimator {
         let jitterConfidence = clamp((1.0 - (residual * 0.7)) * motionConfidence, min: 0.0, max: 1.0)
         let bobConfidence = clamp((1.0 - (residual * 0.4)) * motionConfidence, min: 0.0, max: 1.0)
         let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
-        let microXCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: jitterConfidence)
-        let microYCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: jitterConfidence)
-        let microRotationCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: jitterConfidence)
+        let microXCorrectionStrength = microJitterCorrectionFactor(strengths.microJitterX, confidence: jitterConfidence)
+        let microYCorrectionStrength = microJitterCorrectionFactor(strengths.microJitterY, confidence: jitterConfidence)
+        let microRotationCorrectionStrength = microJitterCorrectionFactor(strengths.microJitterRotation, confidence: jitterConfidence)
         let walkingBobCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.walkingBob, confidence: bobConfidence)
         let panBandX = microImpulseBaselineX - turnSmoothX
         let panBandY = bobSmoothY - turnIntentY
@@ -511,6 +514,11 @@ enum AutoStabilizationEstimator {
             temporalSmoothingRotationDelta: 0.0,
             temporalSmoothingSampleCount: 1,
             temporalSmoothingWindowSeconds: 0.0,
+            effectiveMicroJitterStrength: vector_float3(
+                microXCorrectionStrength,
+                microYCorrectionStrength,
+                microRotationCorrectionStrength
+            ),
             microConfidence: jitterConfidence,
             bobConfidence: bobConfidence,
             acceptedBlockCount: acceptedBlockCount,
@@ -573,6 +581,12 @@ enum AutoStabilizationEstimator {
         }
 
         var smoothedTransform = weightedAverageTransform(weightedSamples)
+        smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
+        smoothedTransform.rotationDegrees = rawCenterTransform.rotationDegrees
+        smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
+        smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
+            + smoothedTransform.microPixelOffset
+            + smoothedTransform.walkingBobPixelOffset
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
         smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - rawCenterTransform.pixelOffset
@@ -594,6 +608,12 @@ enum AutoStabilizationEstimator {
 
         func vectorAverage(_ keyPath: KeyPath<StabilizerAutoTransform, vector_float2>) -> vector_float2 {
             samples.reduce(vector_float2(0.0, 0.0)) { partial, sample in
+                partial + (sample.transform[keyPath: keyPath] * sample.weight)
+            } / totalWeight
+        }
+
+        func vector3Average(_ keyPath: KeyPath<StabilizerAutoTransform, vector_float3>) -> vector_float3 {
+            samples.reduce(vector_float3(0.0, 0.0, 0.0)) { partial, sample in
                 partial + (sample.transform[keyPath: keyPath] * sample.weight)
             } / totalWeight
         }
@@ -623,6 +643,7 @@ enum AutoStabilizationEstimator {
             temporalSmoothingRotationDelta: floatAverage(\.temporalSmoothingRotationDelta),
             temporalSmoothingSampleCount: Int32(samples.count),
             temporalSmoothingWindowSeconds: 0.0,
+            effectiveMicroJitterStrength: vector3Average(\.effectiveMicroJitterStrength),
             microConfidence: floatAverage(\.microConfidence),
             bobConfidence: floatAverage(\.bobConfidence),
             acceptedBlockCount: Int32(acceptedBlockCount.rounded()),
@@ -1518,6 +1539,18 @@ enum AutoStabilizationEstimator {
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
         let requestedRemoval = max(0.0, Float(strength))
         return clamp(requestedRemoval * confidence, min: 0.0, max: 1.0)
+    }
+
+    private static func microJitterCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
+        let requestedRemoval = max(0.0, Float(strength))
+        guard requestedRemoval > 0.0 else {
+            return 0.0
+        }
+        return clamp(
+            requestedRemoval * max(confidence, microJitterMinimumEffectiveConfidence),
+            min: 0.0,
+            max: 1.0
+        )
     }
 }
 

@@ -29,15 +29,18 @@ Current implementation to review:
     - `microPixelOffset` for Footstep Jitter
     - `walkingBobPixelOffset` for Walking Bob
   - `temporallySmoothedEstimate` samples neighboring render times symmetrically and blends the final automatic transform with zero phase.
+  - Turn Smoothing and Walking Bob components are temporally smoothed, but Footstep Jitter X/Y and roll use the current center-frame impulse correction so fine ridge-line shake is not averaged away.
+  - Footstep Jitter uses a render-time minimum effective confidence floor before applying X/Y/roll correction, still clamped at full detected-impulse removal.
   - `StabilizerAutoTransform` now carries:
     - final smoothed `pixelOffset` and `rotationDegrees`
     - center-frame raw `rawPixelOffset` and `rawRotationDegrees`
     - `temporalSmoothingPixelDelta`
     - `temporalSmoothingRotationDelta`
+    - effective Footstep Jitter X/Y/R strength
     - sample count and smoothing window seconds
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift`
   - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Turn Smoothing, Footstep Jitter, Walking Bob, and temporal smoothing delta.
-  - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, confidence, block counts, and Y component split.
+  - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, raw `foot q`, effective Footstep Jitter X/Y/R strength, block counts, and Y component split.
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerTransform.metal`
   - The overlay draws seven rows of diagnostic bars.
 
