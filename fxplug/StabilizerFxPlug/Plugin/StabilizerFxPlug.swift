@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.86"
+private let stabilizerFxPlugVersion = "0.2.89"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -132,27 +132,34 @@ private enum StabilizerOriginalMediaPolicy {
 
 @objc(StabilizerFxPlugPlugIn)
 final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCustomParameterViewHost_v2 {
-    private static let sharedHostAnalysisStore: StabilizerHostAnalysisStore = {
-        let store = StabilizerHostAnalysisStore()
-        store.loadPersistentCache()
-        return store
-    }()
+    private final class QueuedHostAnalysisRequest {
+        weak var plugin: StabilizerFxPlugPlugIn?
+
+        init(plugin: StabilizerFxPlugPlugIn) {
+            self.plugin = plugin
+        }
+    }
+
+    private static let hostAnalysisQueueLock = NSLock()
+    private static var activeHostAnalysisPluginID: ObjectIdentifier?
+    private static var queuedHostAnalysisRequests: [QueuedHostAnalysisRequest] = []
     private static let stabilizerInfoViewLock = NSLock()
     private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private static var latestStabilizerInfo = "No Analysis"
 
     private let apiManager: PROAPIAccessing
+    private let hostAnalysisStore = StabilizerHostAnalysisStore()
     private let statusLock = NSLock()
+    private let analysisSessionLock = NSLock()
     private var lastPublishedStatus = ""
     private var lastPublishedInfo = ""
     private var lastPublishedRenderRevision: UInt64?
-    private var hostAnalysisStore: StabilizerHostAnalysisStore {
-        Self.sharedHostAnalysisStore
-    }
+    private var activeAnalysisStore: StabilizerHostAnalysisStore?
 
     required init?(apiManager: PROAPIAccessing) {
         self.apiManager = apiManager
-        _ = Self.sharedHostAnalysisStore
+        super.init()
+        hostAnalysisStore.loadPersistentCache()
     }
 
     func addParameters() throws {
@@ -385,18 +392,100 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     @objc(clearHostAnalysisCache)
     func clearHostAnalysisCache() {
+        Self.removeQueuedSerializedHostAnalysisStart(for: self)
         hostAnalysisStore.clearPersistentCache()
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
     }
 
-    private func requestHostAnalysisIfNeeded(force: Bool = false) {
+    private static func claimSerializedHostAnalysisStart(for plugin: StabilizerFxPlugPlugIn, enqueueIfBusy: Bool) -> Bool {
+        let pluginID = ObjectIdentifier(plugin)
+        hostAnalysisQueueLock.lock()
+        queuedHostAnalysisRequests.removeAll { request in
+            request.plugin == nil
+        }
+        if activeHostAnalysisPluginID == nil || activeHostAnalysisPluginID == pluginID {
+            queuedHostAnalysisRequests.removeAll { request in
+                guard let queuedPlugin = request.plugin else {
+                    return true
+                }
+                return ObjectIdentifier(queuedPlugin) == pluginID
+            }
+            activeHostAnalysisPluginID = pluginID
+            hostAnalysisQueueLock.unlock()
+            return true
+        }
+        if enqueueIfBusy {
+            queuedHostAnalysisRequests.removeAll { request in
+                guard let queuedPlugin = request.plugin else {
+                    return true
+                }
+                return ObjectIdentifier(queuedPlugin) == pluginID
+            }
+            queuedHostAnalysisRequests.append(QueuedHostAnalysisRequest(plugin: plugin))
+        }
+        hostAnalysisQueueLock.unlock()
+        return false
+    }
+
+    private static func releaseSerializedHostAnalysisStart(for plugin: StabilizerFxPlugPlugIn) {
+        let pluginID = ObjectIdentifier(plugin)
+        var nextPlugin: StabilizerFxPlugPlugIn?
+        hostAnalysisQueueLock.lock()
+        if activeHostAnalysisPluginID == pluginID {
+            activeHostAnalysisPluginID = nil
+        }
+        while activeHostAnalysisPluginID == nil && nextPlugin == nil && !queuedHostAnalysisRequests.isEmpty {
+            let request = queuedHostAnalysisRequests.removeFirst()
+            guard let candidate = request.plugin else {
+                continue
+            }
+            let candidateID = ObjectIdentifier(candidate)
+            guard candidateID != pluginID else {
+                continue
+            }
+            activeHostAnalysisPluginID = candidateID
+            nextPlugin = candidate
+        }
+        hostAnalysisQueueLock.unlock()
+        nextPlugin?.requestHostAnalysisIfNeeded(force: true, alreadyClaimedQueueSlot: true)
+    }
+
+    private static func removeQueuedSerializedHostAnalysisStart(for plugin: StabilizerFxPlugPlugIn) {
+        let pluginID = ObjectIdentifier(plugin)
+        hostAnalysisQueueLock.lock()
+        queuedHostAnalysisRequests.removeAll { request in
+            guard let queuedPlugin = request.plugin else {
+                return true
+            }
+            return ObjectIdentifier(queuedPlugin) == pluginID
+        }
+        hostAnalysisQueueLock.unlock()
+    }
+
+    private func requestHostAnalysisIfNeeded(force: Bool = false, alreadyClaimedQueueSlot: Bool = false) {
+        if hostAnalysisStore.hasCompletedAnalysis {
+            if alreadyClaimedQueueSlot {
+                Self.releaseSerializedHostAnalysisStart(for: self)
+            }
+            return
+        }
         guard force || !hostAnalysisStore.hasCompletedAnalysis else {
+            return
+        }
+        if !alreadyClaimedQueueSlot,
+           !Self.claimSerializedHostAnalysisStart(for: self, enqueueIfBusy: force) {
+            if force {
+                hostAnalysisStore.markQueued()
+                publishHostAnalysisStatus(force: true)
+                publishStabilizerInfo(force: true)
+            }
             return
         }
         guard let analysisAPI = apiManager.api(for: FxAnalysisAPI.self) as? FxAnalysisAPI else {
             NSLog("StabilizerFxPlug: FxAnalysisAPI is unavailable; Host Analysis cannot start.")
+            Self.releaseSerializedHostAnalysisStart(for: self)
             return
         }
         let analysisState = analysisAPI.analysisStateForEffect()
@@ -408,6 +497,11 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             if force {
                 NSLog("StabilizerFxPlug: Host Analysis is already requested or running.")
             }
+            if alreadyClaimedQueueSlot {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.requestHostAnalysisIfNeeded(force: true, alreadyClaimedQueueSlot: true)
+                }
+            }
             return
         }
         do {
@@ -417,6 +511,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             publishRenderRevision(hostAnalysisStore.revision, force: true)
         } catch {
             NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
+            Self.releaseSerializedHostAnalysisStart(for: self)
         }
     }
 
@@ -519,6 +614,31 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         if !settingAPI.setFloatValue(Double(revision), toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
             NSLog("StabilizerFxPlug: failed to update Render Revision parameter.")
         }
+    }
+
+    private func setActiveAnalysisStore(_ store: StabilizerHostAnalysisStore?) {
+        analysisSessionLock.lock()
+        activeAnalysisStore = store
+        analysisSessionLock.unlock()
+    }
+
+    private func currentActiveAnalysisStore() throws -> StabilizerHostAnalysisStore {
+        analysisSessionLock.lock()
+        let store = activeAnalysisStore
+        analysisSessionLock.unlock()
+        guard let store else {
+            throw NSError(
+                domain: "com.justadev.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "Stabilizer Host Analysis received a frame without an active analysis session."]
+            )
+        }
+        return store
+    }
+
+    private func abandonActiveAnalysisAfterFailure() {
+        setActiveAnalysisStore(nil)
+        Self.releaseSerializedHostAnalysisStart(for: self)
     }
 
     private func requestedSampleScalePercent(at time: CMTime) -> Double {
@@ -703,16 +823,20 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     func setupAnalysis(for analysisRange: CMTimeRange, frameDuration: CMTime) throws {
-        hostAnalysisStore.begin(
+        let analysisStore = StabilizerHostAnalysisStore()
+        analysisStore.begin(
             range: analysisRange,
             frameDuration: frameDuration,
             requestedSampleScalePercent: requestedSampleScalePercent(at: analysisRange.start)
         )
-        publishHostAnalysisStatus(force: true)
+        setActiveAnalysisStore(analysisStore)
+        publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
     }
 
     func analyzeFrame(_ frame: FxImageTile!, at frameTime: CMTime) throws {
+        let analysisStore = try currentActiveAnalysisStore()
         guard let frame else {
+            abandonActiveAnalysisAfterFailure()
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
@@ -720,9 +844,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             )
         }
         if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: frame) {
-            hostAnalysisStore.rejectProxyAnalysis(reason: rejectionReason)
-            publishHostAnalysisStatus(force: true)
+            analysisStore.rejectProxyAnalysis(reason: rejectionReason)
+            publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
             publishStabilizerInfo(force: true)
+            abandonActiveAnalysisAfterFailure()
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
@@ -731,27 +856,39 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         guard let frameInfo = StabilizerOriginalMediaPolicy.frameInfo(for: frame) else {
             let reason = "Host Analysis could not read the original clip size for Sample Size."
-            hostAnalysisStore.rejectProxyAnalysis(reason: reason)
-            publishHostAnalysisStatus(force: true)
+            analysisStore.rejectProxyAnalysis(reason: reason)
+            publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
             publishStabilizerInfo(force: true)
+            abandonActiveAnalysisAfterFailure()
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
                 userInfo: [NSLocalizedDescriptionKey: reason]
             )
         }
-        let sampleSize = hostAnalysisStore.sampleSize(for: frameInfo)
-        let analysisFrame = try AutoStabilizationEstimator.analysisFrame(
-            from: frame,
-            at: frameTime,
-            sampleWidth: sampleSize.width,
-            sampleHeight: sampleSize.height
-        )
-        try hostAnalysisStore.append(analysisFrame, sourceInfo: frameInfo)
+        let sampleSize = analysisStore.sampleSize(for: frameInfo)
+        do {
+            let analysisFrame = try AutoStabilizationEstimator.analysisFrame(
+                from: frame,
+                at: frameTime,
+                sampleWidth: sampleSize.width,
+                sampleHeight: sampleSize.height
+            )
+            try analysisStore.append(analysisFrame, sourceInfo: frameInfo)
+        } catch {
+            abandonActiveAnalysisAfterFailure()
+            throw error
+        }
     }
 
     func cleanupAnalysis() throws {
-        try hostAnalysisStore.finish()
+        let analysisStore = try currentActiveAnalysisStore()
+        defer {
+            setActiveAnalysisStore(nil)
+            Self.releaseSerializedHostAnalysisStart(for: self)
+        }
+        try analysisStore.finish()
+        hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
@@ -823,6 +960,7 @@ private enum HostAnalysisValidationState {
 
 private enum HostAnalysisStatus {
     case needsAnalysis
+    case queued
     case requested
     case analyzing
     case cacheLoaded
@@ -895,6 +1033,8 @@ private struct LoadedPersistentHostAnalysisCache {
 private final class StabilizerHostAnalysisStore {
     private static let cacheSchemaVersion = 10
     private static let supportedCacheSchemaVersions: Set<Int> = [10]
+    private static let persistentCacheGenerationLock = NSLock()
+    private static var persistentCacheGeneration: UInt64 = 0
     private static let maxPersistentCacheEntries = 8
     private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0
@@ -923,6 +1063,7 @@ private final class StabilizerHostAnalysisStore {
     private var validationState: HostAnalysisValidationState = .notRequired
     private var status: HostAnalysisStatus = .needsAnalysis
     private var analysisRevision: UInt64 = 0
+    private var observedPersistentCacheGeneration: UInt64 = 0
     private var latestSourceFrameInfo: StabilizerSourceFrameInfo?
     private var latestSampleSize: (width: Int, height: Int)?
     private var analysisInfoText = "No Analysis"
@@ -955,6 +1096,8 @@ private final class StabilizerHostAnalysisStore {
         switch currentStatus {
         case .needsAnalysis:
             return "Needs Analysis"
+        case .queued:
+            return "Host Analysis Queued"
         case .requested:
             return "Host Analysis Requested"
         case .analyzing:
@@ -1030,6 +1173,16 @@ private final class StabilizerHostAnalysisStore {
         lock.unlock()
     }
 
+    func markQueued() {
+        lock.lock()
+        if preparedAnalysis == nil && status != .analyzing {
+            status = .queued
+            analysisInfoText = "Host Analysis queued behind another clip."
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+    }
+
     func reset(removePersistentCache shouldRemovePersistentCache: Bool = false) {
         removeLegacyAnalysisScratchDirectory()
         lock.lock()
@@ -1078,6 +1231,7 @@ private final class StabilizerHostAnalysisStore {
         bumpRevisionLocked()
         lock.unlock()
         removePersistentCache(logFailures: true)
+        Self.bumpPersistentCacheGeneration()
         NSLog("StabilizerFxPlug: cleared persisted Host Analysis cache set.")
     }
 
@@ -1159,9 +1313,36 @@ private final class StabilizerHostAnalysisStore {
         }
     }
 
+    func installCompletedAnalysis(from completedStore: StabilizerHostAnalysisStore) {
+        let snapshot = completedStore.completedAnalysisSnapshot()
+        lock.lock()
+        framesByTimeKey = Dictionary(uniqueKeysWithValues: snapshot.frames.map { (Self.timeKey($0.time), $0) })
+        streamingAnalysisBuilder = nil
+        preparedAnalysis = snapshot.preparedAnalysis
+        persistentCacheCandidates.removeAll(keepingCapacity: false)
+        activePersistentCacheFileName = nil
+        activeRange = snapshot.activeRange
+        activeFrameDuration = snapshot.activeFrameDuration
+        activeRequestedSampleScalePercent = snapshot.activeRequestedSampleScalePercent
+        renderToAnalysisOffsetSeconds = nil
+        renderToAnalysisOffsetProbeAttempted = false
+        finished = snapshot.finished
+        validationState = snapshot.validationState
+        status = snapshot.status
+        latestSourceFrameInfo = snapshot.latestSourceFrameInfo
+        latestSampleSize = snapshot.latestSampleSize
+        analysisInfoText = snapshot.analysisInfoText
+        bumpRevisionLocked()
+        lock.unlock()
+        NSLog("StabilizerFxPlug: installed completed Host Analysis session with \(snapshot.frames.count) frame(s) into shared render store.")
+    }
+
     func preparedAnalysisForRender(validating sourceImage: FxImageTile, at renderTime: CMTime) -> StabilizerPreparedAnalysis? {
         while true {
             guard let analysis = preparedAnalysisSnapshot() else {
+                if shouldReloadPersistentCacheForRender(), loadPersistentCache() {
+                    continue
+                }
                 guard activateNextPersistentCache(afterRejecting: nil) else {
                     return nil
                 }
@@ -1229,6 +1410,9 @@ private final class StabilizerHostAnalysisStore {
 
     @discardableResult
     func loadPersistentCache() -> Bool {
+        defer {
+            markCurrentPersistentCacheGenerationObserved()
+        }
         var candidateURLs = Self.persistentCacheCandidateURLs()
         while !candidateURLs.isEmpty {
             let activeURL = candidateURLs.removeFirst()
@@ -1251,6 +1435,24 @@ private final class StabilizerHostAnalysisStore {
             return true
         }
         return false
+    }
+
+    private func shouldReloadPersistentCacheForRender() -> Bool {
+        let generation = Self.currentPersistentCacheGeneration()
+        lock.lock()
+        let shouldReload = preparedAnalysis == nil
+            && persistentCacheCandidates.isEmpty
+            && status != .analyzing
+            && observedPersistentCacheGeneration < generation
+        lock.unlock()
+        return shouldReload
+    }
+
+    private func markCurrentPersistentCacheGenerationObserved() {
+        let generation = Self.currentPersistentCacheGeneration()
+        lock.lock()
+        observedPersistentCacheGeneration = generation
+        lock.unlock()
     }
 
     private func markAnalysisCompleted() {
@@ -1368,6 +1570,7 @@ private final class StabilizerHostAnalysisStore {
             if let indexEntry = Self.indexEntry(for: cache, fileName: cacheFileName, frames: snapshot.frames) {
                 try Self.updatePersistentCacheIndex(with: indexEntry)
             }
+            Self.bumpPersistentCacheGeneration()
             NSLog("StabilizerFxPlug: saved Host Analysis cache with \(snapshot.frames.count) frames to \(cacheURL.path).")
         } catch {
             NSLog("StabilizerFxPlug: failed to save Host Analysis cache: \(error.localizedDescription)")
@@ -1439,6 +1642,37 @@ private final class StabilizerHostAnalysisStore {
         let analysis = preparedAnalysis
         lock.unlock()
         return analysis
+    }
+
+    private func completedAnalysisSnapshot() -> (
+        frames: [StabilizerAnalysisFrame],
+        preparedAnalysis: StabilizerPreparedAnalysis?,
+        activeRange: CMTimeRange,
+        activeFrameDuration: CMTime,
+        activeRequestedSampleScalePercent: Double,
+        finished: Bool,
+        validationState: HostAnalysisValidationState,
+        status: HostAnalysisStatus,
+        latestSourceFrameInfo: StabilizerSourceFrameInfo?,
+        latestSampleSize: (width: Int, height: Int)?,
+        analysisInfoText: String
+    ) {
+        lock.lock()
+        let snapshot = (
+            frames: framesByTimeKey.values.sorted { $0.time < $1.time },
+            preparedAnalysis: preparedAnalysis,
+            activeRange: activeRange,
+            activeFrameDuration: activeFrameDuration,
+            activeRequestedSampleScalePercent: activeRequestedSampleScalePercent,
+            finished: finished,
+            validationState: validationState,
+            status: status,
+            latestSourceFrameInfo: latestSourceFrameInfo,
+            latestSampleSize: latestSampleSize,
+            analysisInfoText: analysisInfoText
+        )
+        lock.unlock()
+        return snapshot
     }
 
     private func framesSnapshot() -> [StabilizerAnalysisFrame] {
@@ -1640,7 +1874,21 @@ private final class StabilizerHostAnalysisStore {
         finished = true
         validationState = .pending
         status = .cacheLoaded
+        observedPersistentCacheGeneration = Self.currentPersistentCacheGeneration()
         bumpRevisionLocked()
+    }
+
+    private static func currentPersistentCacheGeneration() -> UInt64 {
+        persistentCacheGenerationLock.lock()
+        let generation = persistentCacheGeneration
+        persistentCacheGenerationLock.unlock()
+        return generation
+    }
+
+    private static func bumpPersistentCacheGeneration() {
+        persistentCacheGenerationLock.lock()
+        persistentCacheGeneration &+= 1
+        persistentCacheGenerationLock.unlock()
     }
 
     private func mappedAnalysisSeconds(forRenderSeconds renderSeconds: Double, frames: [StabilizerAnalysisFrame]) -> Double {

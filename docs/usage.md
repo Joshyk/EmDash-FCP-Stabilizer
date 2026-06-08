@@ -9,6 +9,10 @@
    `Cache Rejected - Run Host Analysis`.
 5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
+Multiple clips can be queued for Host Analysis. The plug-in serializes explicit start
+requests: one clip analyzes at a time, and later clips show `Host Analysis Queued` until the
+active clip finishes.
+
 ## Controls
 
 - `Footstep Jitter X Strength`: direct amount for horizontal footstep-jitter correction. The
@@ -70,6 +74,13 @@
 - Persistent analysis reuse is based on cache schema and current source-frame validation,
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
+- Each effect instance keeps its own active Host Analysis render store. Persistent cache
+  files can be reused across instances after validation, but explicit Host Analysis starts
+  are serialized so starting one clip does not reset or run in parallel with another clip's
+  analysis.
+- After an analyzer instance completes, render/preview instances reload newly saved cache
+  candidates on demand when their local store has no prepared analysis, so the stabilized
+  preview can appear immediately after analysis completes.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse.

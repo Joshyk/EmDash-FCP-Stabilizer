@@ -28,6 +28,9 @@ In-progress analysis streams frame-to-frame motion directly through Metal and ke
 previous luma buffer needed for the next motion search, so it no longer writes per-frame
 `.luma` scratch files.
 The stabilization result is still built from the same prepared motion path.
+Host Analysis runs for separate clips are serialized by the plug-in. If another clip is
+already analyzing, an explicit `Start Host Analysis` request waits as `Host Analysis Queued`
+until the active clip finishes, then starts automatically.
 
 Completed Host Analysis frame sets are persisted to
 `/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` as the
@@ -46,11 +49,15 @@ analysis pass.
 The cache includes prepared motion paths so playback renders from precomputed values instead
 of running block matching again on every frame. New cache files store prepared paths, frame
 timing, blur values, and fingerprints instead of every frame's luma sample. The Host
-Analysis store is shared across FxPlug analyzer/render instances in the plug-in process, so
-the render path can apply the prepared smoothing immediately after analysis completes. When
-Final Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame
-time, the effect maps the current render frame fingerprint back to the analyzed frame set and
-uses that offset before sampling the prepared motion paths. The Inspector shows
+Analysis store is kept per FxPlug effect instance so starting analysis on one timeline clip
+does not reset or cancel another clip's in-progress analysis. Explicit start requests are
+queued through a process-wide serial gate, while persistent cache files remain shared reuse
+candidates after source-frame validation. When an analyzer instance finishes and saves a new
+cache, render/preview instances notice the cache generation change and reload candidates on
+demand so the stabilized preview appears without requiring a separate re-analysis. When Final
+Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame time,
+the effect maps the current render frame fingerprint back to the analyzed frame set and uses
+that offset before sampling the prepared motion paths. The Inspector shows
 `Host Analysis Status`; after a completed analysis it should read `Ready (... frames)`.
 Analysis input still requires original media, but a validated analysis continues to drive
 the preview/render path when Final Cut Pro plays proxy media.

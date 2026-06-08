@@ -57,18 +57,28 @@ dominated by close grass, water, or road parallax. Motion-path algorithm changes
 prepared analysis output should bump the Host Analysis cache schema so stale caches are not
 reused.
 
-Host Analysis playback must render from prepared motion paths shared across FxPlug
-analyzer/render instances. Do not re-run full block matching across the analyzed frame set
-on every render frame. Keep `Host Analysis Status` visible in the Inspector and update it to
-`Ready (... frames)` after completed analysis. Render playback must tolerate trimmed clips
-whose render time differs from Host Analysis frame time by matching the current render frame
-fingerprint back to the analyzed frame set and applying that time offset before sampling the
-prepared motion paths. Once an analysis is validated, render playback should keep using the
-prepared motion path even when Final Cut Pro is playing proxy media; proxy media is rejected
-only for Host Analysis input and for validating an unvalidated persisted cache. If a saved
-Host Analysis cache is loaded while Final Cut Pro is currently playing proxy media, render
-playback should still use the loaded cache immediately rather than requiring re-analysis;
-original-media validation can happen later when original frames are available. When the
+Host Analysis playback must render from prepared motion paths for the current FxPlug effect
+instance. Do not use one global mutable Host Analysis render store for all timeline clips:
+starting analysis on one clip must not reset or cancel another clip's in-progress analysis.
+Explicit `Start Host Analysis` requests across effect instances should be serialized through
+a visible queue: only one clip should call `startForwardAnalysis` at a time, queued clips
+should show `Host Analysis Queued`, and the next queued clip should start after the active
+clip's `cleanupAnalysis` completes or the active analysis fails. Persistent cache files are
+the cross-instance reuse path after source-frame validation. When an analyzer instance saves
+a completed cache, render/preview instances with no prepared analysis should notice the cache
+generation change and reload persistent cache candidates on demand; this keeps the stabilized
+preview visible even when analyzer and render use different FxPlug instances. Do not re-run
+full block matching across the analyzed frame set on every render frame. Keep `Host Analysis
+Status` visible in the Inspector and update it to `Ready (... frames)` after completed
+analysis. Render playback must tolerate trimmed clips whose render time differs from Host
+Analysis frame time by matching the current render frame fingerprint back to the analyzed
+frame set and applying that time offset before sampling the prepared motion paths. Once an
+analysis is validated, render playback should keep using the prepared motion path even when
+Final Cut Pro is playing proxy media; proxy media is rejected only for Host Analysis input
+and for validating an unvalidated persisted cache. If a saved Host Analysis cache is loaded
+while Final Cut Pro is currently playing proxy media, render playback should still use the
+loaded cache immediately rather than requiring re-analysis; original-media validation can
+happen later when original frames are available. When the
 effective overall transform strength is zero, rendering must
 bypass prepared motion-path sampling and output an identity transform with no debug overlay.
 When Host Analysis/cache state changes, update a hidden render-affecting revision parameter
