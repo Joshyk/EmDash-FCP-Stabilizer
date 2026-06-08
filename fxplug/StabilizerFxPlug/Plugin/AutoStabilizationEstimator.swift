@@ -215,6 +215,10 @@ enum AutoStabilizationEstimator {
     private static let localSearchRadius = 5
     private static let positionGain: Float = 0.85
     private static let rotationGain: Float = 0.65
+    private static let baseTurnSmoothingOffsetLimitX: Float = 0.018
+    private static let extraTurnSmoothingOffsetLimitX: Float = 0.012
+    private static let baseTurnSmoothingOffsetLimitY: Float = 0.012
+    private static let extraTurnSmoothingOffsetLimitY: Float = 0.008
     private static let microImpulseInnerRadius = 3
     private static let microImpulseOuterRadius = 12
     private static let minimumAcceptedMotionBlocks = 3
@@ -356,14 +360,28 @@ enum AutoStabilizationEstimator {
 
         let smoothWindowSeconds = max(0.1, panSmoothSeconds)
         let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
+        let frameInterpolation = frameInterpolation(at: renderSeconds, in: frames)
         let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
         let effectiveWalkingBobWindowSeconds = min(max(0.1, walkingBobWindowSeconds), smoothWindowSeconds)
         let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }
         let walkingBobActiveIndices = walkingBobWindowIndices.isEmpty ? [centerIndex] : Array(walkingBobWindowIndices)
+        let sampledIndices = activeIndices + walkingBobActiveIndices + [centerIndex] + frameInterpolation.indices
+        let footstepBaselineXPath = outerLinearPredictionPath(
+            analysis.pathX,
+            indices: sampledIndices,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
         let footstepBaselineYPath = outerLinearPredictionPath(
             analysis.pathY,
-            indices: activeIndices + walkingBobActiveIndices + [centerIndex],
+            indices: sampledIndices,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
+        let footstepBaselineRollPath = outerLinearPredictionPath(
+            analysis.pathRoll,
+            indices: sampledIndices,
             innerRadius: microImpulseInnerRadius,
             outerRadius: microImpulseOuterRadius
         )
@@ -384,19 +402,12 @@ enum AutoStabilizationEstimator {
             windowSeconds: smoothWindowSeconds
         ) ??
             timeWeightedAverage(footstepBaselineYPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let microImpulseBaselineX = outerLinearPrediction(
-            analysis.pathX,
-            centerIndex: centerIndex,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
-        ) ?? analysis.pathX[centerIndex]
-        let footstepBaselineY = footstepBaselineYPath[centerIndex]
-        let microImpulseBaselineRoll = outerLinearPrediction(
-            analysis.pathRoll,
-            centerIndex: centerIndex,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
-        ) ?? analysis.pathRoll[centerIndex]
+        let pathXAtRender = interpolatedValue(analysis.pathX, using: frameInterpolation)
+        let pathYAtRender = interpolatedValue(analysis.pathY, using: frameInterpolation)
+        let pathRollAtRender = interpolatedValue(analysis.pathRoll, using: frameInterpolation)
+        let microImpulseBaselineX = interpolatedValue(footstepBaselineXPath, using: frameInterpolation)
+        let footstepBaselineY = interpolatedValue(footstepBaselineYPath, using: frameInterpolation)
+        let microImpulseBaselineRoll = interpolatedValue(footstepBaselineRollPath, using: frameInterpolation)
         let bobSmoothY = timeWeightedAverage(
             footstepBaselineYPath,
             frames: frames,
@@ -424,12 +435,30 @@ enum AutoStabilizationEstimator {
         let walkingBobCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.walkingBob, confidence: bobConfidence)
         let panBandX = microImpulseBaselineX - turnSmoothX
         let panBandY = bobSmoothY - turnIntentY
-        let macroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
-        let macroCompensationY = -panBandY * yScale * (positionGain * 0.5) * panCorrectionStrength
+        let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
+        let rawMacroCompensationY = -panBandY * yScale * (positionGain * 0.5) * panCorrectionStrength
+        let macroCompensationX = softLimit(
+            rawMacroCompensationX,
+            limit: turnSmoothingOffsetLimit(
+                outputPixels: outputSize.x,
+                baseFraction: baseTurnSmoothingOffsetLimitX,
+                extraFraction: extraTurnSmoothingOffsetLimitX,
+                strength: strengths.panStabilizationStrength
+            )
+        )
+        let macroCompensationY = softLimit(
+            rawMacroCompensationY,
+            limit: turnSmoothingOffsetLimit(
+                outputPixels: outputSize.y,
+                baseFraction: baseTurnSmoothingOffsetLimitY,
+                extraFraction: extraTurnSmoothingOffsetLimitY,
+                strength: strengths.panStabilizationStrength
+            )
+        )
         let macroCompensationRotation: Float = 0.0
-        let microCompensationX = -(analysis.pathX[centerIndex] - microImpulseBaselineX) * xScale * microXCorrectionStrength
-        let microCompensationY = -(analysis.pathY[centerIndex] - footstepBaselineY) * yScale * microYCorrectionStrength
-        let microCompensationRotation = -(analysis.pathRoll[centerIndex] - microImpulseBaselineRoll) * microRotationCorrectionStrength
+        let microCompensationX = -(pathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
+        let microCompensationY = -(pathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
+        let microCompensationRotation = -(pathRollAtRender - microImpulseBaselineRoll) * microRotationCorrectionStrength
         let walkingBobBandY = footstepBaselineY - bobSmoothY
         let walkingBobCompensationY = -walkingBobBandY * yScale * walkingBobCorrectionStrength
         let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
@@ -870,7 +899,7 @@ enum AutoStabilizationEstimator {
 
         var limited = values
         for index in 1..<(values.count - 1) {
-            let previousAcceleration = index >= 2
+            let previousAcceleration = index >= 3
                 ? values[index - 1] - (Float(2.0) * values[index - 2]) + values[index - 3]
                 : Float(0.0)
             let currentAcceleration = values[index + 1] - (Float(2.0) * values[index]) + values[index - 1]
@@ -917,6 +946,77 @@ enum AutoStabilizationEstimator {
             }
         }
         return bestIndex
+    }
+
+    private struct FrameInterpolation {
+        let lowerIndex: Int
+        let upperIndex: Int
+        let fraction: Float
+
+        var indices: [Int] {
+            lowerIndex == upperIndex ? [lowerIndex] : [lowerIndex, upperIndex]
+        }
+    }
+
+    private static func frameInterpolation(at time: Double, in frames: [StabilizerAnalysisFrame]) -> FrameInterpolation {
+        guard !frames.isEmpty else {
+            return FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0)
+        }
+        guard frames.count > 1 else {
+            return FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0)
+        }
+        if time <= frames[0].time {
+            return FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0)
+        }
+        let lastIndex = frames.count - 1
+        if time >= frames[lastIndex].time {
+            return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
+        }
+        for upperIndex in 1..<frames.count {
+            let upperTime = frames[upperIndex].time
+            guard time <= upperTime else {
+                continue
+            }
+            let lowerIndex = upperIndex - 1
+            let lowerTime = frames[lowerIndex].time
+            let duration = upperTime - lowerTime
+            guard duration > 1e-9 else {
+                return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: 0.0)
+            }
+            let fraction = clamp(Float((time - lowerTime) / duration), min: 0.0, max: 1.0)
+            return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction)
+        }
+        return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
+    }
+
+    private static func interpolatedValue(_ values: [Float], using interpolation: FrameInterpolation) -> Float {
+        guard values.indices.contains(interpolation.lowerIndex) else {
+            return 0.0
+        }
+        let lowerValue = values[interpolation.lowerIndex]
+        guard values.indices.contains(interpolation.upperIndex), interpolation.upperIndex != interpolation.lowerIndex else {
+            return lowerValue
+        }
+        let upperValue = values[interpolation.upperIndex]
+        return lowerValue + ((upperValue - lowerValue) * interpolation.fraction)
+    }
+
+    private static func turnSmoothingOffsetLimit(
+        outputPixels: Float,
+        baseFraction: Float,
+        extraFraction: Float,
+        strength: Double
+    ) -> Float {
+        let extraStrength = clamp(Float(strength - 1.0), min: 0.0, max: 3.0)
+        let fraction = baseFraction + (extraFraction * extraStrength)
+        return max(8.0, outputPixels * fraction)
+    }
+
+    private static func softLimit(_ value: Float, limit: Float) -> Float {
+        guard value.isFinite, limit.isFinite, limit > 0.0 else {
+            return value
+        }
+        return Float(Darwin.tanh(Double(value / limit))) * limit
     }
 
     private static func average(_ values: [Float], indices: [Int]) -> Float {

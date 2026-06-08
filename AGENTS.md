@@ -62,10 +62,12 @@ Host Analysis playback must render from prepared motion paths for the active FxP
 preview callbacks must not auto-start Host Analysis. The active runtime uses a process-wide
 shared Host Analysis store because Final Cut Pro may call setup, frame analysis, cleanup,
 and preview/render through different FxPlug instances. Persistent cache files are the
-cross-instance reuse path after source-frame validation. When an analyzer instance saves a
-completed cache, render/preview instances with no prepared analysis should notice the cache
-generation change and reload persistent cache candidates on demand; this keeps the stabilized
-preview visible even when analyzer and render use different FxPlug instances. If Final Cut
+cross-process reuse path after source-frame validation. Completed analysis should be written
+to the shared user Application Support cache path, not only to the current extension
+container. When an analyzer instance saves a completed cache, render/preview instances with
+no prepared analysis should notice cache file changes and reload persistent cache candidates
+on demand; this keeps the stabilized preview visible even when analyzer and render use
+different FxPlug processes. If Final Cut
 Pro reports that Host Analysis is already requested or running, surface that state in
 Inspector status instead of queueing another start inside the plug-in. Do not re-run
 full block matching across the analyzed frame set on every render frame. Keep `Host Analysis
@@ -104,10 +106,12 @@ Strength` slider, where higher values concatenate stop-and-go X/Y pan motion int
 monotonic S-curve turn intent instead of a straight-line fit. The exposed maximum is `4.0`;
 values above `1.0` may compensate for low-confidence gating when turn correction is too
 weak, but applied correction must clamp at full detected turn-band removal. Turn smoothing
-must not apply roll correction. The turn band should be measured from the Footstep Jitter
-baseline instead of the raw frame path, and Y correction priority must stay Footstep Jitter
-first, Turn Smoothing second, and Walking Bob last so short landing shock is not reintroduced
-by turn smoothing.
+must not apply roll correction. Macro X/Y turn correction should be soft-limited to a small
+output-edge budget during render so large detected pans do not create stretched-edge jumps
+in the preview. The turn band should be measured from the Footstep Jitter baseline instead
+of the raw frame path, and Y correction priority must stay Footstep Jitter first, Turn
+Smoothing second, and Walking Bob last so short landing shock is not reintroduced by turn
+smoothing.
 Y-axis walking bob between micro jitter and panning should be handled by the render-time
 `Walking Bob Window` and `Walking Bob Removal` path, which corrects the Y-only band between
 the Footstep Jitter baseline and the walking-bob smoothing window, also computed from the

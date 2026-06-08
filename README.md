@@ -50,13 +50,16 @@ The cache includes prepared motion paths so playback renders from precomputed va
 of running block matching again on every frame. New cache files store prepared paths, frame
 timing, blur values, and fingerprints instead of every frame's luma sample. The Host
 Analysis uses a process-wide shared store for the active FxPlug runtime so setup, frame
-analysis, cleanup, and render can exchange the prepared path even when Final Cut Pro calls
-them through different FxPlug instances. `Start Host Analysis` is the only path that
-requests Host Analysis from Final Cut Pro; render/preview callbacks only read completed
-analysis or validated persistent cache. If Final Cut Pro reports that Host Analysis is
-already requested or running, the Inspector shows that state instead of queueing another
-start inside the plug-in. Persistent cache files remain shared reuse candidates after
-source-frame validation. When Final Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame time,
+analysis, cleanup, and render can exchange the prepared path when Final Cut Pro calls them
+through different FxPlug instances in the same process. Persistent cache files are the
+cross-process handoff: completed analysis is written to the shared user Application Support
+cache, and preview/render instances with no prepared analysis detect cache file changes and
+reload validated candidates on demand. `Start Host Analysis` is the only path that requests
+Host Analysis from Final Cut Pro; render/preview callbacks only read completed analysis or
+validated persistent cache. If Final Cut Pro reports that Host Analysis is already requested
+or running, the Inspector shows that state instead of queueing another start inside the
+plug-in. Persistent cache files remain shared reuse candidates after source-frame
+validation. When Final Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame time,
 the effect maps the current render frame fingerprint back to the analyzed frame set and uses
 that offset before sampling the prepared motion paths. The Inspector shows
 `Host Analysis Status`; after a completed analysis it should read `Ready (... frames)`.
@@ -77,21 +80,27 @@ block-matched regions, prioritizes upper-frame far-field blocks for walking land
 footage, and rejects outlier blocks before building the per-frame path. This keeps distant
 mountain/background motion from being dominated by close grass, water, or road parallax.
 Footstep Jitter is evaluated per render frame and is not a windowed or periodic smoothing
-control. Strength values run up to `4.0`; values above `1.0` can push through low-confidence
-gating, but the applied correction still clamps at full detected-impulse removal so it does
-not add inverse shake.
+control. Prepared X/Y/roll paths and their footstep baselines are sampled continuously at
+render time instead of snapping to the nearest analyzed frame, so panning playback does not
+step between frame-indexed corrections. Strength values run up to `4.0`; values above `1.0`
+can push through low-confidence gating, but the applied correction still clamps at full
+detected-impulse removal so it does not add inverse shake.
 Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
 limiter only clamps isolated acceleration spikes in the saved X/Y/roll motion path while
 preserving the total analyzed turn amount, so one bad frame does not create a new snap in
-playback and real panning does not become a sliding, delayed path.
+playback and real panning does not become a sliding, delayed path. Short analyzed ranges are
+kept in bounds while building these prepared paths so Host Analysis cleanup can finish and
+persist the cache.
 Segmented walking turns are controlled with `Turn Smoothing Strength`; higher values
 concatenate stop-and-go turn motion into a monotonic S-curve intent instead of fitting a
 straight line through the window. The slider runs up to `4.0`; values above `1.0` can push
 through low-confidence gating when the turn still looks segmented, while the applied
 correction clamps at full detected turn-band removal. Turn smoothing does not change roll.
-Y correction is ordered as Footstep Jitter first, Turn Smoothing second, and Walking Bob
-last. The Y turn intent is measured from the footstep-cleaned baseline instead of the raw
-frame path, so short landing shock is not reintroduced by the turn correction.
+The macro X/Y turn correction is also soft-limited to a small output-edge budget during
+render, so a large detected pan cannot create stretched-edge jumps in the preview. Y correction is ordered as Footstep Jitter first,
+Turn Smoothing second, and Walking Bob last. The Y turn intent is measured from the
+footstep-cleaned baseline instead of the raw frame path, so short landing shock is not
+reintroduced by the turn correction.
 Footstep vertical motion is controlled with `Walking Bob Window` and `Walking Bob Removal`,
 which remain in the same effect as the final Y-only correction stage. Walking Bob targets
 the remaining medium-period vertical band after Footstep Jitter and Turn Smoothing; it does

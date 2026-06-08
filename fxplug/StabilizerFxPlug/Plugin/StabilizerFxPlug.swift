@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.97"
+private let stabilizerFxPlugVersion = "0.2.101"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -993,6 +993,7 @@ private final class StabilizerHostAnalysisStore {
     private var status: HostAnalysisStatus = .needsAnalysis
     private var analysisRevision: UInt64 = 0
     private var observedPersistentCacheGeneration: UInt64 = 0
+    private var observedPersistentCacheSignature = ""
     private var latestSourceFrameInfo: StabilizerSourceFrameInfo?
     private var latestSampleSize: (width: Int, height: Int)?
     private var analysisInfoText = "No Analysis"
@@ -1366,19 +1367,26 @@ private final class StabilizerHostAnalysisStore {
 
     private func shouldReloadPersistentCacheForRender() -> Bool {
         let generation = Self.currentPersistentCacheGeneration()
+        let signature = Self.currentPersistentCacheSignature()
         lock.lock()
         let shouldReload = preparedAnalysis == nil
             && persistentCacheCandidates.isEmpty
             && status != .analyzing
-            && observedPersistentCacheGeneration < generation
+            && status != .cacheRejected
+            && (
+                observedPersistentCacheGeneration < generation
+                    || observedPersistentCacheSignature != signature
+            )
         lock.unlock()
         return shouldReload
     }
 
     private func markCurrentPersistentCacheGenerationObserved() {
         let generation = Self.currentPersistentCacheGeneration()
+        let signature = Self.currentPersistentCacheSignature()
         lock.lock()
         observedPersistentCacheGeneration = generation
+        observedPersistentCacheSignature = signature
         lock.unlock()
     }
 
@@ -1774,6 +1782,7 @@ private final class StabilizerHostAnalysisStore {
             installPersistentCacheLocked(nextCandidate)
             let remainingCount = persistentCacheCandidates.count
             lock.unlock()
+            markCurrentPersistentCacheGenerationObserved()
 
             if let rejectionReason {
                 NSLog("StabilizerFxPlug: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(rejectionReason); trying \(nextCandidate.fileName).")
@@ -1810,6 +1819,42 @@ private final class StabilizerHostAnalysisStore {
         let generation = persistentCacheGeneration
         persistentCacheGenerationLock.unlock()
         return generation
+    }
+
+    private static func currentPersistentCacheSignature() -> String {
+        var components: [String] = []
+        var seenPaths = Set<String>()
+
+        func appendSignature(for url: URL) {
+            let standardizedURL = url.standardizedFileURL
+            guard seenPaths.insert(standardizedURL.path).inserted else {
+                return
+            }
+            guard let values = try? standardizedURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+                  let modifiedAt = values.contentModificationDate
+            else {
+                return
+            }
+            let fileSize = values.fileSize ?? 0
+            components.append("\(standardizedURL.path):\(modifiedAt.timeIntervalSince1970):\(fileSize)")
+        }
+
+        for directoryURL in cacheDirectoryURLs {
+            appendSignature(for: cacheURL(in: directoryURL))
+            appendSignature(for: cacheIndexURL(in: directoryURL))
+            let storageURL = cacheStorageDirectoryURL(in: directoryURL)
+            if let cacheURLs = try? FileManager.default.contentsOfDirectory(
+                at: storageURL,
+                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for url in cacheURLs where url.pathExtension == "json" {
+                    appendSignature(for: url)
+                }
+            }
+        }
+
+        return components.sorted().joined(separator: "|")
     }
 
     private static func bumpPersistentCacheGeneration() {
@@ -2268,7 +2313,10 @@ private final class StabilizerHostAnalysisStore {
     }
 
     private static var cacheDirectoryURL: URL {
-        cacheDirectoryURLs[0]
+        if let sharedUserCacheDirectoryURL {
+            return sharedUserCacheDirectoryURL
+        }
+        return cacheDirectoryURLs[0]
     }
 
     private static var cacheDirectoryURLs: [URL] {
@@ -2281,12 +2329,11 @@ private final class StabilizerHostAnalysisStore {
             }
         }
 
-        if let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            append(applicationSupport.appendingPathComponent(cacheDirectoryName, isDirectory: true))
+        if let sharedUserCacheDirectoryURL {
+            append(sharedUserCacheDirectoryURL)
         }
         if let homeDirectory = ProcessInfo.processInfo.environment["HOME"], !homeDirectory.isEmpty {
             let homeURL = URL(fileURLWithPath: homeDirectory, isDirectory: true)
-            append(homeURL.appendingPathComponent("Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
             append(homeURL.appendingPathComponent("Library/Containers/com.justadev.StabilizerFxPlug.Plugin/Data/Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
             for bundleIdentifier in legacyCacheBundleIdentifiers {
                 append(homeURL.appendingPathComponent("Library/Containers/\(bundleIdentifier)/Data/Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
@@ -2295,16 +2342,33 @@ private final class StabilizerHostAnalysisStore {
         let userName = NSUserName()
         if !userName.isEmpty {
             let userHomeURL = URL(fileURLWithPath: "/Users/\(userName)", isDirectory: true)
-            append(userHomeURL.appendingPathComponent("Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
             append(userHomeURL.appendingPathComponent("Library/Containers/com.justadev.StabilizerFxPlug.Plugin/Data/Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
             for bundleIdentifier in legacyCacheBundleIdentifiers {
                 append(userHomeURL.appendingPathComponent("Library/Containers/\(bundleIdentifier)/Data/Library/Application Support/\(cacheDirectoryName)", isDirectory: true))
             }
         }
+        if let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            append(applicationSupport.appendingPathComponent(cacheDirectoryName, isDirectory: true))
+        }
         if urls.isEmpty {
             append(URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(cacheDirectoryName, isDirectory: true))
         }
         return urls
+    }
+
+    private static var sharedUserCacheDirectoryURL: URL? {
+        let userName = NSUserName()
+        if !userName.isEmpty {
+            return URL(fileURLWithPath: "/Users/\(userName)", isDirectory: true)
+                .appendingPathComponent("Library/Application Support/\(cacheDirectoryName)", isDirectory: true)
+                .standardizedFileURL
+        }
+        if let homeDirectory = ProcessInfo.processInfo.environment["HOME"], !homeDirectory.isEmpty {
+            return URL(fileURLWithPath: homeDirectory, isDirectory: true)
+                .appendingPathComponent("Library/Application Support/\(cacheDirectoryName)", isDirectory: true)
+                .standardizedFileURL
+        }
+        return nil
     }
 
     private static var cacheURL: URL {

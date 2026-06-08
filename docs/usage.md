@@ -43,13 +43,16 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   output still clamps at full detected turn-band removal. The turn intent is a monotonic
   S-curve through the detection window instead of a straight-line fit. The X/Y turn bands
   are measured from the Footstep Jitter baseline instead of the raw frame path, so short
-  landing shock is not reintroduced by turn smoothing.
+  landing shock is not reintroduced by turn smoothing. The macro X/Y output correction is
+  soft-limited to a small edge budget during render so large detected pans do not create
+  stretched-edge jumps in the preview.
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
   mode this is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis.
 - Prepared Host Analysis motion paths are post-processed with a zero-phase jerk limiter
   before caching. It clamps isolated acceleration spikes in X/Y/roll while preserving the
-  total analyzed path endpoint, so real panning is not delayed into a sliding path.
+  total analyzed path endpoint, so real panning is not delayed into a sliding path. Short
+  analyzed ranges are kept in bounds during cleanup so the prepared cache can be saved.
 - `Walking Bob Window`: Y-axis-only window for footstep bob and vertical walking shake
   left after Footstep Jitter and Turn Smoothing. The correction uses the Y band between the
   Footstep Jitter baseline and this walking-bob smooth path, which is computed from the same
@@ -77,11 +80,13 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
 - Host Analysis uses a process-wide shared render store inside the active FxPlug runtime.
-  Setup, frame analysis, cleanup, and render all read/write that shared store so completed
-  analysis is visible even when Final Cut Pro uses different FxPlug instances for analyzer
-  and preview/render callbacks. `Start Host Analysis` is the only path that requests Host
-  Analysis from Final Cut Pro; preview/render callbacks only read completed analysis or
-  validated persistent cache. If Final Cut Pro reports that Host Analysis is already
+  Setup, frame analysis, cleanup, and render read/write that shared store when Final Cut Pro
+  uses different FxPlug instances in the same process. Completed analysis is also persisted
+  to the shared user Application Support cache so analyzer and preview/render processes can
+  hand off the prepared motion path through validated cache files. Preview/render callbacks
+  detect cache file changes when they have no prepared analysis, then reload candidates
+  without starting Host Analysis. `Start Host Analysis` is the only path that requests Host
+  Analysis from Final Cut Pro. If Final Cut Pro reports that Host Analysis is already
   requested or running, the Inspector shows that state instead of queueing another start
   inside the plug-in.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
@@ -123,7 +128,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   far-field blocks for walking landscape footage. This keeps distant mountains and background
   features from being overruled by close grass, water, or road parallax.
 - Playback uses prepared motion paths from completed Host Analysis. It must not run full
-  frame-to-frame block matching on every rendered playback frame.
+  frame-to-frame block matching on every rendered playback frame. Prepared X/Y/roll paths
+  and their footstep baselines are sampled continuously at render time so panning does not
+  snap between nearest analyzed frames.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.
@@ -135,7 +142,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   frame path, and Walking Bob removes only the remaining medium-period Y band, so large
   walking-gimbal sway, fine high-frequency shake, and footstep vertical bobbing can be tuned
   separately without rerunning Host Analysis.
-- Host Analysis cache schema `10` stores the original-size-percentage sample path with the
+- Host Analysis cache schema `11` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, confidence, and
   accepted-block counts. Older prepared caches are ignored and require a new Host Analysis
   run.
@@ -154,10 +161,11 @@ The latest Host Analysis cache is written to:
 /Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json
 ```
 
-In sandboxed FxPlug runs, macOS may redirect that Application Support path into the current
-plug-in container. The loader also checks current and legacy Stabilizer container cache
-locations so a bundle-id or runtime migration does not require rerunning analysis when the
-cache schema is still supported.
+Completed analysis is written to this shared user Application Support path so Final Cut
+Pro's analyzer and preview/render extension processes can reuse the same prepared motion
+path. The loader also checks current and legacy Stabilizer container cache locations so a
+bundle-id or runtime migration does not require rerunning analysis when the cache schema is
+still supported.
 
 The cache index is written to:
 
