@@ -49,13 +49,13 @@ analysis pass.
 The cache includes prepared motion paths so playback renders from precomputed values instead
 of running block matching again on every frame. New cache files store prepared paths, frame
 timing, blur values, and fingerprints instead of every frame's luma sample. The Host
-Analysis store is kept per FxPlug effect instance so starting analysis on one timeline clip
-does not reset or cancel another clip's in-progress analysis. Explicit start requests are
-queued through a process-wide serial gate, while persistent cache files remain shared reuse
-candidates after source-frame validation. When an analyzer instance finishes and saves a new
-cache, render/preview instances notice the cache generation change and reload candidates on
-demand so the stabilized preview appears without requiring a separate re-analysis. When Final
-Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame time,
+Analysis uses a process-wide shared store for the active FxPlug runtime so setup, frame
+analysis, cleanup, and render can exchange the prepared path even when Final Cut Pro calls
+them through different FxPlug instances. `Start Host Analysis` is the only path that
+requests Host Analysis from Final Cut Pro; render/preview callbacks only read completed
+analysis or validated persistent cache. Explicit start requests are queued through a
+process-wide serial gate and request Host Analysis for the effect clip. Persistent cache
+files remain shared reuse candidates after source-frame validation. When Final Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame time,
 the effect maps the current render frame fingerprint back to the analyzed frame set and uses
 that offset before sampling the prepared motion paths. The Inspector shows
 `Host Analysis Status`; after a completed analysis it should read `Ready (... frames)`.

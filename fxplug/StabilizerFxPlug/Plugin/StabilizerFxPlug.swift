@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.89"
+private let stabilizerFxPlugVersion = "0.2.96"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -143,23 +143,30 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static let hostAnalysisQueueLock = NSLock()
     private static var activeHostAnalysisPluginID: ObjectIdentifier?
     private static var queuedHostAnalysisRequests: [QueuedHostAnalysisRequest] = []
+    private static let sharedHostAnalysisStore: StabilizerHostAnalysisStore = {
+        let store = StabilizerHostAnalysisStore()
+        store.loadPersistentCache()
+        return store
+    }()
     private static let stabilizerInfoViewLock = NSLock()
     private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private static var latestStabilizerInfo = "No Analysis"
 
     private let apiManager: PROAPIAccessing
-    private let hostAnalysisStore = StabilizerHostAnalysisStore()
     private let statusLock = NSLock()
     private let analysisSessionLock = NSLock()
     private var lastPublishedStatus = ""
     private var lastPublishedInfo = ""
     private var lastPublishedRenderRevision: UInt64?
     private var activeAnalysisStore: StabilizerHostAnalysisStore?
+    private var hostAnalysisStore: StabilizerHostAnalysisStore {
+        Self.sharedHostAnalysisStore
+    }
 
     required init?(apiManager: PROAPIAccessing) {
         self.apiManager = apiManager
         super.init()
-        hostAnalysisStore.loadPersistentCache()
+        _ = Self.sharedHostAnalysisStore
     }
 
     func addParameters() throws {
@@ -369,7 +376,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         state.hostAnalysisRevision = hostAnalysisStore.revision
         paramAPI.getFloatValue(&state.renderRevision, fromParameter: ParameterID.renderRevision.rawValue, at: renderTime)
         state.renderRevision = Double(state.hostAnalysisRevision)
-        requestHostAnalysisIfNeeded()
         publishHostAnalysisStatus()
         publishStabilizerInfo(state: state)
         publishRenderRevision(state.hostAnalysisRevision)
@@ -379,6 +385,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     @objc(startHostAnalysis)
     func startHostAnalysis() {
+        publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
+        publishStabilizerInfo(force: true)
         let shouldSkipPersistentCacheReload = hostAnalysisStore.hasRejectedPersistentCache
         hostAnalysisStore.reset()
         let loadedPersistentCache = shouldSkipPersistentCacheReload ? false : hostAnalysisStore.loadPersistentCache()
@@ -485,6 +493,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         guard let analysisAPI = apiManager.api(for: FxAnalysisAPI.self) as? FxAnalysisAPI else {
             NSLog("StabilizerFxPlug: FxAnalysisAPI is unavailable; Host Analysis cannot start.")
+            hostAnalysisStore.markStartFailed(reason: "FxAnalysisAPI unavailable")
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.revision, force: true)
             Self.releaseSerializedHostAnalysisStart(for: self)
             return
         }
@@ -493,7 +505,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             || analysisState == kFxAnalysisState_AnalysisInterrupted
             || (force && analysisState == kFxAnalysisState_AnalysisCompleted)
         guard canStart else {
-            publishHostAnalysisStatus(force: force)
+            let reason = Self.analysisStateDescription(analysisState)
+            if force {
+                hostAnalysisStore.markStartFailed(reason: "Host state \(reason)")
+            }
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.revision, force: true)
             if force {
                 NSLog("StabilizerFxPlug: Host Analysis is already requested or running.")
             }
@@ -506,12 +524,35 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         do {
             try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
+            NSLog("StabilizerFxPlug: requested GPU Host Analysis for the effect clip.")
             hostAnalysisStore.markRequested()
             publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.revision, force: true)
         } catch {
             NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
+            hostAnalysisStore.markStartFailed(reason: error.localizedDescription)
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.revision, force: true)
             Self.releaseSerializedHostAnalysisStart(for: self)
+        }
+    }
+
+    private static func analysisStateDescription(_ state: FxAnalysisState) -> String {
+        switch state {
+        case kFxAnalysisState_NotAnalyzing:
+            return "NotAnalyzing"
+        case kFxAnalysisState_AnalysisRequested:
+            return "AnalysisRequested"
+        case kFxAnalysisState_AnalysisStarted:
+            return "AnalysisStarted"
+        case kFxAnalysisState_AnalysisCompleted:
+            return "AnalysisCompleted"
+        case kFxAnalysisState_AnalysisInterrupted:
+            return "AnalysisInterrupted"
+        default:
+            return "Unknown(\(state))"
         }
     }
 
@@ -823,18 +864,24 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     func setupAnalysis(for analysisRange: CMTimeRange, frameDuration: CMTime) throws {
-        let analysisStore = StabilizerHostAnalysisStore()
+        let analysisStore = hostAnalysisStore
         analysisStore.begin(
             range: analysisRange,
             frameDuration: frameDuration,
             requestedSampleScalePercent: requestedSampleScalePercent(at: analysisRange.start)
+        )
+        NSLog(
+            "StabilizerFxPlug: setup Host Analysis range %.3f+%.3f seconds, frameDuration %.6f seconds.",
+            CMTimeGetSeconds(analysisRange.start),
+            CMTimeGetSeconds(analysisRange.duration),
+            CMTimeGetSeconds(frameDuration)
         )
         setActiveAnalysisStore(analysisStore)
         publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
     }
 
     func analyzeFrame(_ frame: FxImageTile!, at frameTime: CMTime) throws {
-        let analysisStore = try currentActiveAnalysisStore()
+        let analysisStore = hostAnalysisStore
         guard let frame else {
             abandonActiveAnalysisAfterFailure()
             throw NSError(
@@ -875,6 +922,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 sampleHeight: sampleSize.height
             )
             try analysisStore.append(analysisFrame, sourceInfo: frameInfo)
+            if analysisStore.frameCount == 1 {
+                NSLog(
+                    "StabilizerFxPlug: received first Host Analysis frame at %.3f seconds, sample %dx%d.",
+                    CMTimeGetSeconds(frameTime),
+                    analysisFrame.sampleWidth,
+                    analysisFrame.sampleHeight
+                )
+            }
         } catch {
             abandonActiveAnalysisAfterFailure()
             throw error
@@ -882,13 +937,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     func cleanupAnalysis() throws {
-        let analysisStore = try currentActiveAnalysisStore()
+        let analysisStore = hostAnalysisStore
         defer {
             setActiveAnalysisStore(nil)
             Self.releaseSerializedHostAnalysisStart(for: self)
         }
         try analysisStore.finish()
-        hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
@@ -1031,8 +1085,8 @@ private struct LoadedPersistentHostAnalysisCache {
 }
 
 private final class StabilizerHostAnalysisStore {
-    private static let cacheSchemaVersion = 10
-    private static let supportedCacheSchemaVersions: Set<Int> = [10]
+    private static let cacheSchemaVersion = 11
+    private static let supportedCacheSchemaVersions: Set<Int> = [11]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let maxPersistentCacheEntries = 8
@@ -1178,6 +1232,16 @@ private final class StabilizerHostAnalysisStore {
         if preparedAnalysis == nil && status != .analyzing {
             status = .queued
             analysisInfoText = "Host Analysis queued behind another clip."
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+    }
+
+    func markStartFailed(reason: String) {
+        lock.lock()
+        if preparedAnalysis == nil {
+            status = .needsAnalysis
+            analysisInfoText = "Host Analysis start failed: \(reason)"
             bumpRevisionLocked()
         }
         lock.unlock()

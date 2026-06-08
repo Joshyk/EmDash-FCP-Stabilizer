@@ -74,13 +74,13 @@ active clip finishes.
 - Persistent analysis reuse is based on cache schema and current source-frame validation,
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
-- Each effect instance keeps its own active Host Analysis render store. Persistent cache
-  files can be reused across instances after validation, but explicit Host Analysis starts
-  are serialized so starting one clip does not reset or run in parallel with another clip's
-  analysis.
-- After an analyzer instance completes, render/preview instances reload newly saved cache
-  candidates on demand when their local store has no prepared analysis, so the stabilized
-  preview can appear immediately after analysis completes.
+- Host Analysis uses a process-wide shared render store inside the active FxPlug runtime.
+  Setup, frame analysis, cleanup, and render all read/write that shared store so completed
+  analysis is visible even when Final Cut Pro uses different FxPlug instances for analyzer
+  and preview/render callbacks. `Start Host Analysis` is the only path that requests Host
+  Analysis from Final Cut Pro; preview/render callbacks only read completed analysis or
+  validated persistent cache. Explicit Host Analysis starts are serialized and request
+  analysis for the effect clip.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse.
