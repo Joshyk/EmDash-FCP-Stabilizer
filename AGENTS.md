@@ -86,6 +86,11 @@ bypass prepared motion-path sampling and output an identity transform with no de
 When Host Analysis/cache state changes, update a hidden render-affecting revision parameter
 so Final Cut Pro invalidates the preview/render cache and the viewer reflects the prepared
 stabilization immediately.
+Render playback should favor the smoothest visible pan over low per-frame compute cost:
+after calculating the prepared-path transform, sample neighboring render times symmetrically
+and blend the final automatic transform with zero phase so the preview does not step between
+corrections. This render-time smoothing must not require rerunning Host Analysis or changing
+the cache schema.
 Fine high-frequency shake should be handled by render-time Footstep Jitter strength controls
 that compare X/Y/rotation against an outer-frame linear prediction that skips the center
 shock region. Footstep Jitter should suppress footstep landing shock as a frame-level impulse

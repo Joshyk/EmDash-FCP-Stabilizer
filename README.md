@@ -37,10 +37,13 @@ Completed Host Analysis frame sets are persisted to
 latest cache and to range-indexed files under
 `/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/`. Reapplying the
 effect can reuse a previous Host Analysis run when the analyzed range and current source
-frame validate against the saved frame fingerprints. `Start Host Analysis` first reloads a
+frame validate against the saved frame fingerprints or, for pixel-stripped cache frames, a
+tight render-time match. `Start Host Analysis` first reloads a
 saved cache when one exists and only starts a new analysis when no saved cache can be loaded.
 If that cache was rejected for the current clip, the next start skips it and requests a new
-analysis. `Clear Host Analysis Cache` is the explicit delete control and shows
+analysis. Rejected cache candidates are remembered by file name inside the active FxPlug
+runtime so the same invalid candidate is not immediately reloaded again. `Clear Host
+Analysis Cache` is the explicit delete control and shows
 `Cache Cleared` in the Inspector.
 Cache compatibility is tied to cache schema and current source-frame validation, not the
 visible FxPlug runtime version, so render-only runtime updates should not force a new
@@ -48,7 +51,9 @@ analysis pass.
 
 The cache includes prepared motion paths so playback renders from precomputed values instead
 of running block matching again on every frame. New cache files store prepared paths, frame
-timing, blur values, and fingerprints instead of every frame's luma sample. The Host
+timing, blur values, and fingerprints instead of every frame's luma sample. When a loaded
+cache frame has no retained validation pixels and needs the tight time match path, that
+choice is written to the Stabilizer log instead of happening silently. The Host
 Analysis uses a process-wide shared store for the active FxPlug runtime so setup, frame
 analysis, cleanup, and render can exchange the prepared path when Final Cut Pro calls them
 through different FxPlug instances in the same process. Persistent cache files are the
@@ -82,8 +87,11 @@ mountain/background motion from being dominated by close grass, water, or road p
 Footstep Jitter is evaluated per render frame and is not a windowed or periodic smoothing
 control. Prepared X/Y/roll paths and their footstep baselines are sampled continuously at
 render time instead of snapping to the nearest analyzed frame, so panning playback does not
-step between frame-indexed corrections. Strength values run up to `4.0`; values above `1.0`
-can push through low-confidence gating, but the applied correction still clamps at full
+step between frame-indexed corrections. The final automatic transform is then sampled across
+a wider symmetric render-time window and blended with zero phase. This costs more preview
+compute per frame, but it keeps the displayed pan correction as smooth as possible without
+rerunning Host Analysis. Strength values run up to `4.0`; values above `1.0` can push
+through low-confidence gating, but the applied correction still clamps at full
 detected-impulse removal so it does not add inverse shake.
 Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
 limiter only clamps isolated acceleration spikes in the saved X/Y/roll motion path while

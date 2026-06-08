@@ -213,12 +213,14 @@ enum AutoStabilizationEstimator {
     static let minimumSampleHeight = 24
     private static let globalSearchRadius = 16
     private static let localSearchRadius = 5
-    private static let positionGain: Float = 0.85
-    private static let rotationGain: Float = 0.65
-    private static let baseTurnSmoothingOffsetLimitX: Float = 0.018
-    private static let extraTurnSmoothingOffsetLimitX: Float = 0.012
-    private static let baseTurnSmoothingOffsetLimitY: Float = 0.012
-    private static let extraTurnSmoothingOffsetLimitY: Float = 0.008
+    private static let positionGain: Float = 1.0
+    private static let rotationGain: Float = 1.0
+    private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
+    private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
+    private static let baseTurnSmoothingOffsetLimitY: Float = 0.08
+    private static let extraTurnSmoothingOffsetLimitY: Float = 0.06
+    private static let renderTemporalSmoothingSampleCount = 15
+    private static let renderTemporalSmoothingWindowSeconds = 0.55
     private static let microImpulseInnerRadius = 3
     private static let microImpulseOuterRadius = 12
     private static let minimumAcceptedMotionBlocks = 3
@@ -353,6 +355,24 @@ enum AutoStabilizationEstimator {
             return .identity
         }
 
+        return temporallySmoothedEstimate(
+            preparedAnalysis: analysis,
+            renderSeconds: renderSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            walkingBobWindowSeconds: walkingBobWindowSeconds,
+            strengths: strengths
+        )
+    }
+
+    private static func rawEstimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        walkingBobWindowSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> StabilizerAutoTransform {
         let frames = analysis.frames
         guard frames.count >= 3 else {
             return .identity
@@ -436,7 +456,7 @@ enum AutoStabilizationEstimator {
         let panBandX = microImpulseBaselineX - turnSmoothX
         let panBandY = bobSmoothY - turnIntentY
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
-        let rawMacroCompensationY = -panBandY * yScale * (positionGain * 0.5) * panCorrectionStrength
+        let rawMacroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrength
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
             limit: turnSmoothingOffsetLimit(
@@ -481,6 +501,97 @@ enum AutoStabilizationEstimator {
             shear: vector_float2(0.0, 0.0),
             perspective: vector_float2(0.0, 0.0),
             blurAmount: blurAmount
+        )
+    }
+
+    private static func temporallySmoothedEstimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        walkingBobWindowSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> StabilizerAutoTransform {
+        let frames = analysis.frames
+        guard frames.count >= 3 else {
+            return .identity
+        }
+
+        let firstTime = frames[0].time
+        let lastTime = frames[frames.count - 1].time
+        let sampleCount = max(3, renderTemporalSmoothingSampleCount)
+        let centerSample = sampleCount / 2
+        let halfWindow = renderTemporalSmoothingWindowSeconds * 0.5
+        let denominator = Double(max(1, sampleCount - 1))
+        let sampleStep = renderTemporalSmoothingWindowSeconds / denominator
+        let sigma = max(1e-6, halfWindow * 0.5)
+        var weightedSamples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+
+        for sampleIndex in 0..<sampleCount {
+            let offset = (Double(sampleIndex - centerSample) * sampleStep)
+            let sampleSeconds = Swift.min(lastTime, Swift.max(firstTime, renderSeconds + offset))
+            let normalizedDistance = offset / sigma
+            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard weight > 0.0001 else {
+                continue
+            }
+            let transform = rawEstimate(
+                preparedAnalysis: analysis,
+                renderSeconds: sampleSeconds,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                walkingBobWindowSeconds: walkingBobWindowSeconds,
+                strengths: strengths
+            )
+            weightedSamples.append((transform: transform, weight: weight))
+        }
+
+        return weightedAverageTransform(weightedSamples)
+    }
+
+    private static func weightedAverageTransform(
+        _ samples: [(transform: StabilizerAutoTransform, weight: Float)]
+    ) -> StabilizerAutoTransform {
+        let totalWeight = samples.reduce(Float(0.0)) { partial, sample in
+            partial + sample.weight
+        }
+        guard totalWeight > 0.0 else {
+            return .identity
+        }
+
+        func vectorAverage(_ keyPath: KeyPath<StabilizerAutoTransform, vector_float2>) -> vector_float2 {
+            samples.reduce(vector_float2(0.0, 0.0)) { partial, sample in
+                partial + (sample.transform[keyPath: keyPath] * sample.weight)
+            } / totalWeight
+        }
+
+        func floatAverage(_ keyPath: KeyPath<StabilizerAutoTransform, Float>) -> Float {
+            samples.reduce(Float(0.0)) { partial, sample in
+                partial + (sample.transform[keyPath: keyPath] * sample.weight)
+            } / totalWeight
+        }
+
+        let acceptedBlockCount = samples.reduce(Float(0.0)) { partial, sample in
+            partial + (Float(sample.transform.acceptedBlockCount) * sample.weight)
+        } / totalWeight
+        let totalBlockCount = samples.reduce(Float(0.0)) { partial, sample in
+            partial + (Float(sample.transform.totalBlockCount) * sample.weight)
+        } / totalWeight
+
+        return StabilizerAutoTransform(
+            pixelOffset: vectorAverage(\.pixelOffset),
+            macroPixelOffset: vectorAverage(\.macroPixelOffset),
+            microPixelOffset: vectorAverage(\.microPixelOffset),
+            walkingBobPixelOffset: vectorAverage(\.walkingBobPixelOffset),
+            rotationDegrees: floatAverage(\.rotationDegrees),
+            microConfidence: floatAverage(\.microConfidence),
+            bobConfidence: floatAverage(\.bobConfidence),
+            acceptedBlockCount: Int32(acceptedBlockCount.rounded()),
+            totalBlockCount: Int32(totalBlockCount.rounded()),
+            yawPitchProxy: vectorAverage(\.yawPitchProxy),
+            shear: vectorAverage(\.shear),
+            perspective: vectorAverage(\.perspective),
+            blurAmount: floatAverage(\.blurAmount)
         )
     }
 

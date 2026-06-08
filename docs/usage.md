@@ -75,7 +75,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   persistent cache if one exists, and only asks Final Cut Pro to start a forward GPU
   analysis when no saved cache can be loaded. Saved cache files remain available for later
   reuse. If the previous cache was rejected for the current clip, the next start skips that
-  rejected cache and requests a new analysis.
+  rejected cache and requests a new analysis. Rejected cache file names are remembered in
+  the active FxPlug runtime so the same invalid candidate is not immediately reloaded again.
 - Persistent analysis reuse is based on cache schema and current source-frame validation,
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
@@ -130,7 +131,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - Playback uses prepared motion paths from completed Host Analysis. It must not run full
   frame-to-frame block matching on every rendered playback frame. Prepared X/Y/roll paths
   and their footstep baselines are sampled continuously at render time so panning does not
-  snap between nearest analyzed frames.
+  snap between nearest analyzed frames. The final automatic transform is also sampled across
+  a wider symmetric render-time window and blended with zero phase. This increases preview
+  compute per frame but makes the pan correction as smooth as possible without rerunning Host
+  Analysis.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.
@@ -180,8 +184,10 @@ Range-specific cache files are stored under:
 ```
 
 On load, the effect validates the current source frame against saved frame fingerprints
-before using a persisted cache. Rejected cache candidates are visible in logs/status and
-left on disk for other clips.
+before using a persisted cache. If a lightweight cache frame no longer has retained
+validation pixels, the effect only accepts the nearest cached frame when it is within the
+tight render-time tolerance and logs that path explicitly. Rejected cache candidates are
+visible in logs/status and left on disk for other clips.
 
 New cache files store prepared motion paths, per-frame timestamps, blur values, and
 fingerprints instead of every frame's full luma sample. This keeps cache reuse available

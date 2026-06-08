@@ -23,7 +23,7 @@ private enum ParameterID: UInt32 {
     case edgeDisplayMode = 27
 }
 
-private let stabilizerFxPlugVersion = "0.2.101"
+private let stabilizerFxPlugVersion = "0.2.104"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -293,7 +293,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterMin: 0.0,
             parameterMax: Double(UInt32.max),
             sliderMin: 0.0,
-            sliderMax: 1.0,
+            sliderMax: Double(UInt32.max),
             delta: 1.0,
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
         )
@@ -362,7 +362,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
         paramAPI.getFloatValue(&state.renderRevision, fromParameter: ParameterID.renderRevision.rawValue, at: renderTime)
-        state.renderRevision = Double(state.hostAnalysisRevision)
         publishHostAnalysisStatus()
         publishStabilizerInfo(state: state)
         publishRenderRevision(state.hostAnalysisRevision)
@@ -967,6 +966,7 @@ private final class StabilizerHostAnalysisStore {
     private static let maxPersistentCacheEntries = 8
     private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0
+    private static let cacheValidationTimeToleranceSeconds = 0.1
     private static let cacheDirectoryName = "StabilizerFxPlug"
     private static let cacheFileName = "host-analysis-v2.json"
     private static let cacheIndexFileName = "host-analysis-index-v2.json"
@@ -983,6 +983,7 @@ private final class StabilizerHostAnalysisStore {
     private var preparedAnalysis: StabilizerPreparedAnalysis?
     private var persistentCacheCandidates: [URL] = []
     private var activePersistentCacheFileName: String?
+    private var rejectedPersistentCacheFileNames = Set<String>()
     private var activeRange: CMTimeRange = .invalid
     private var activeFrameDuration: CMTime = .invalid
     private var activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
@@ -1066,6 +1067,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
+        rejectedPersistentCacheFileNames.removeAll(keepingCapacity: true)
         activeRange = range
         activeFrameDuration = frameDuration
         activeRequestedSampleScalePercent = requestedSampleScalePercent
@@ -1145,6 +1147,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
+        rejectedPersistentCacheFileNames.removeAll(keepingCapacity: false)
         activeRange = .invalid
         activeFrameDuration = .invalid
         activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
@@ -1249,6 +1252,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = snapshot.preparedAnalysis
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
+        rejectedPersistentCacheFileNames.removeAll(keepingCapacity: true)
         activeRange = snapshot.activeRange
         activeFrameDuration = snapshot.activeFrameDuration
         activeRequestedSampleScalePercent = snapshot.activeRequestedSampleScalePercent
@@ -1341,7 +1345,7 @@ private final class StabilizerHostAnalysisStore {
         defer {
             markCurrentPersistentCacheGenerationObserved()
         }
-        var candidateURLs = Self.persistentCacheCandidateURLs()
+        var candidateURLs = filteredPersistentCacheCandidateURLs()
         while !candidateURLs.isEmpty {
             let activeURL = candidateURLs.removeFirst()
             guard let activeCandidate = Self.loadPersistentCache(at: activeURL) else {
@@ -1369,14 +1373,12 @@ private final class StabilizerHostAnalysisStore {
         let generation = Self.currentPersistentCacheGeneration()
         let signature = Self.currentPersistentCacheSignature()
         lock.lock()
-        let shouldReload = preparedAnalysis == nil
+        let shouldReload = (preparedAnalysis == nil
+            || observedPersistentCacheSignature != signature
+            || observedPersistentCacheGeneration < generation)
             && persistentCacheCandidates.isEmpty
             && status != .analyzing
             && status != .cacheRejected
-            && (
-                observedPersistentCacheGeneration < generation
-                    || observedPersistentCacheSignature != signature
-            )
         lock.unlock()
         return shouldReload
     }
@@ -1646,6 +1648,10 @@ private final class StabilizerHostAnalysisStore {
 
     private func rejectPersistentCache(reason: String) {
         lock.lock()
+        let rejectedFileName = activePersistentCacheFileName
+        if let rejectedFileName {
+            rejectedPersistentCacheFileNames.insert(rejectedFileName)
+        }
         framesByTimeKey.removeAll(keepingCapacity: true)
         streamingAnalysisBuilder = nil
         preparedAnalysis = nil
@@ -1658,7 +1664,7 @@ private final class StabilizerHostAnalysisStore {
         status = .cacheRejected
         bumpRevisionLocked()
         lock.unlock()
-        NSLog("StabilizerFxPlug: rejected persisted Host Analysis cache: \(reason).")
+        NSLog("StabilizerFxPlug: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(reason).")
     }
 
     private func persistentCacheRejectionReason(for analysis: StabilizerPreparedAnalysis, validating sourceImage: FxImageTile, at renderTime: CMTime) -> String? {
@@ -1682,6 +1688,13 @@ private final class StabilizerHostAnalysisStore {
         updateRenderTimeMapping(renderTime: renderTime, matchedAnalysisFrame: matchedFrame)
 
         if matchedFrame.pixels.isEmpty {
+            if matchedFrame.fingerprint != currentFrame.fingerprint {
+                NSLog(
+                    "StabilizerFxPlug: accepted persisted Host Analysis cache by time proximity because retained validation pixels were not available; current fingerprint %@, cached fingerprint %@.",
+                    currentFrame.fingerprint,
+                    matchedFrame.fingerprint
+                )
+            }
             return nil
         }
 
@@ -1750,9 +1763,14 @@ private final class StabilizerHostAnalysisStore {
         guard let closestFrame = frames.min(by: { abs($0.time - currentFrame.time) < abs($1.time - currentFrame.time) }) else {
             return nil
         }
-        guard !closestFrame.pixels.isEmpty,
-              Self.meanAbsoluteDifference(currentFrame.pixels, closestFrame.pixels) <= Self.cacheValidationMeanDifferenceThreshold
-        else {
+        if closestFrame.pixels.isEmpty {
+            let timeDifference = abs(closestFrame.time - currentFrame.time)
+            guard timeDifference <= Self.cacheValidationTimeToleranceSeconds else {
+                return nil
+            }
+            return closestFrame
+        }
+        guard Self.meanAbsoluteDifference(currentFrame.pixels, closestFrame.pixels) <= Self.cacheValidationMeanDifferenceThreshold else {
             return nil
         }
         return closestFrame
@@ -1762,6 +1780,11 @@ private final class StabilizerHostAnalysisStore {
         while true {
             lock.lock()
             let rejectedFileName = activePersistentCacheFileName
+            if rejectionReason != nil,
+               let rejectedFileName {
+                rejectedPersistentCacheFileNames.insert(rejectedFileName)
+                persistentCacheCandidates.removeAll { $0.lastPathComponent == rejectedFileName }
+            }
             guard !persistentCacheCandidates.isEmpty else {
                 lock.unlock()
                 if let rejectionReason {
@@ -1812,6 +1835,22 @@ private final class StabilizerHostAnalysisStore {
         status = .cacheLoaded
         observedPersistentCacheGeneration = Self.currentPersistentCacheGeneration()
         bumpRevisionLocked()
+    }
+
+    private func filteredPersistentCacheCandidateURLs() -> [URL] {
+        let candidateURLs = Self.persistentCacheCandidateURLs()
+        lock.lock()
+        let rejectedFileNames = rejectedPersistentCacheFileNames
+        lock.unlock()
+        guard !rejectedFileNames.isEmpty else {
+            return candidateURLs
+        }
+        let filteredURLs = candidateURLs.filter { !rejectedFileNames.contains($0.lastPathComponent) }
+        let skippedCount = candidateURLs.count - filteredURLs.count
+        if skippedCount > 0 {
+            NSLog("StabilizerFxPlug: skipped \(skippedCount) rejected Host Analysis cache candidate(s) before loading persistent cache.")
+        }
+        return filteredURLs
     }
 
     private static func currentPersistentCacheGeneration() -> UInt64 {
