@@ -188,7 +188,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   transform scale when analysis is available.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
-  `T Q`), `SMTH`, and tracking-quality (`TRK`, `BLUR`, `RES`, `HIT`) diagnostics so Final
+  `T Q`), `SMTH`, and tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`) diagnostics so Final
   Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn
@@ -210,7 +210,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `W Q` Far-field Warp confidence,
   `T Q` Turn Smoothing confidence,
   `TRK` current frame tracking quality,
-  `BLUR` frame clarity quality where higher means less blur,
+  `SHRP` frame sharpness/clarity quality where higher means less blur,
   `RES` residual quality where higher means lower block-matching error, and
   `HIT` search-radius headroom quality where higher means fewer searches hit the radius edge.
-  `TRK`, `BLUR`, `RES`, and `HIT` all use the same high-is-good direction.
+  `TRK`, `SHRP`, `RES`, and `HIT` all use the same high-is-good direction.

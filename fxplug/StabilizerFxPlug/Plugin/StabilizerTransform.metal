@@ -174,10 +174,10 @@ static uint debugLabelChar(uint row, uint index) {
             if (index == 2) { return 75; } // K
             return 0;
         case 15:
-            if (index == 0) { return 66; } // B
-            if (index == 1) { return 76; } // L
-            if (index == 2) { return 85; } // U
-            if (index == 3) { return 82; } // R
+            if (index == 0) { return 83; } // S
+            if (index == 1) { return 72; } // H
+            if (index == 2) { return 82; } // R
+            if (index == 3) { return 80; } // P
             return 0;
         case 16:
             if (index == 0) { return 82; } // R
