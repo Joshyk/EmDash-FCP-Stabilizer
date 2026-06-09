@@ -283,7 +283,7 @@
 				<parameter name="Far-field Warp Strength" id="28" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Smoothing Strength" id="23" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Detection Window" id="9" flags="12884901904" default="6" value="6"/>
-				<parameter name="Sample Size" id="19" flags="12884901904" default="0" value="0"/>
+				<parameter name="Sample Size" id="19" flags="12884901904" default="4" value="4"/>
 				<parameter name="Edge Display Mode" id="27" flags="12884901904" default="0" value="0"/>
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>

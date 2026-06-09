@@ -285,6 +285,10 @@ enum AutoStabilizationEstimator {
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
+    private static let farFieldWarpTrackingGateStart: Float = 0.35
+    private static let farFieldWarpTrackingGateFull: Float = 0.75
+    private static let farFieldWarpEdgeQualityGateStart: Float = 0.45
+    private static let farFieldWarpEdgeQualityGateFull: Float = 0.85
     private static let footstepImpulseInnerWindowSeconds = 0.10
     private static let footstepImpulseOuterWindowSeconds = 1.0
     private static let farFieldWarpInnerWindowSeconds = 0.10
@@ -676,39 +680,81 @@ enum AutoStabilizationEstimator {
         let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + walkingBobPixelOffset.y
         let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
-        let farFieldWarpGate = clamp(warpConfidence, min: 0.0, max: 1.0)
+        let farFieldWarpGate = farFieldWarpRenderGate(
+            warpConfidence: warpConfidence,
+            trackingConfidence: trackingConfidence,
+            searchRadiusHitCount: searchRadiusHitCount,
+            searchRadiusTotalCount: searchRadiusTotalCount
+        )
+        let appliedWarpConfidence = clamp(warpConfidence * farFieldWarpGate, min: 0.0, max: 1.0)
         let yawPitchProxy = vector_float2(
             clamp(
-                farFieldWarpBandValue(values: analysis.pathYaw, baselineValues: farFieldBaselineYawPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                farFieldWarpBandValue(
+                    values: analysis.pathYaw,
+                    baselineValues: farFieldBaselineYawPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxFarFieldYawPitchProxy * 0.08,
+                    confidence: farFieldWarpGate
+                ),
                 min: -maxFarFieldYawPitchProxy * farFieldWarpStrength,
                 max: maxFarFieldYawPitchProxy * farFieldWarpStrength
             ),
             clamp(
-                farFieldWarpBandValue(values: analysis.pathPitch, baselineValues: farFieldBaselinePitchPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                farFieldWarpBandValue(
+                    values: analysis.pathPitch,
+                    baselineValues: farFieldBaselinePitchPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxFarFieldYawPitchProxy * 0.08,
+                    confidence: farFieldWarpGate
+                ),
                 min: -maxFarFieldYawPitchProxy * farFieldWarpStrength,
                 max: maxFarFieldYawPitchProxy * farFieldWarpStrength
             )
         )
         let shear = vector_float2(
             clamp(
-                farFieldWarpBandValue(values: analysis.pathShearX, baselineValues: farFieldBaselineShearXPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                farFieldWarpBandValue(
+                    values: analysis.pathShearX,
+                    baselineValues: farFieldBaselineShearXPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxFarFieldShear * 0.08,
+                    confidence: farFieldWarpGate
+                ),
                 min: -maxFarFieldShear * farFieldWarpStrength,
                 max: maxFarFieldShear * farFieldWarpStrength
             ),
             clamp(
-                farFieldWarpBandValue(values: analysis.pathShearY, baselineValues: farFieldBaselineShearYPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                farFieldWarpBandValue(
+                    values: analysis.pathShearY,
+                    baselineValues: farFieldBaselineShearYPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxFarFieldShear * 0.08,
+                    confidence: farFieldWarpGate
+                ),
                 min: -maxFarFieldShear * farFieldWarpStrength,
                 max: maxFarFieldShear * farFieldWarpStrength
             )
         )
         let perspective = vector_float2(
             clamp(
-                farFieldWarpBandValue(values: analysis.pathPerspectiveX, baselineValues: farFieldBaselinePerspectiveXPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                farFieldWarpBandValue(
+                    values: analysis.pathPerspectiveX,
+                    baselineValues: farFieldBaselinePerspectiveXPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxFarFieldPerspective * 0.08,
+                    confidence: farFieldWarpGate
+                ),
                 min: -maxFarFieldPerspective * farFieldWarpStrength,
                 max: maxFarFieldPerspective * farFieldWarpStrength
             ),
             clamp(
-                farFieldWarpBandValue(values: analysis.pathPerspectiveY, baselineValues: farFieldBaselinePerspectiveYPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                farFieldWarpBandValue(
+                    values: analysis.pathPerspectiveY,
+                    baselineValues: farFieldBaselinePerspectiveYPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxFarFieldPerspective * 0.08,
+                    confidence: farFieldWarpGate
+                ),
                 min: -maxFarFieldPerspective * farFieldWarpStrength,
                 max: maxFarFieldPerspective * farFieldWarpStrength
             )
@@ -738,7 +784,7 @@ enum AutoStabilizationEstimator {
                 strideYCorrectionStrength,
                 strideRotationCorrectionStrength
             ),
-            warpConfidence: warpConfidence,
+            warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             strideConfidence: strideConfidence,
             bobConfidence: bobConfidence,
@@ -1691,11 +1737,12 @@ enum AutoStabilizationEstimator {
         values: [Float],
         baselineValues: [Float],
         interpolation: FrameInterpolation,
+        deadband: Float,
         confidence: Float
     ) -> Float {
         let currentValue = interpolatedValue(values, using: interpolation)
         let baselineValue = interpolatedValue(baselineValues, using: interpolation)
-        return (currentValue - baselineValue) * confidence
+        return softDeadband(currentValue - baselineValue, threshold: deadband) * confidence
     }
 
     private static func median(_ values: [Float], indices: [Int]) -> Float? {
@@ -1880,9 +1927,55 @@ enum AutoStabilizationEstimator {
 
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
         let requestedRemoval = clamp(Float(strength), min: 0.0, max: 4.0)
-        let directRemoval = min(requestedRemoval, 1.0) * confidence
-        let confidenceBoost = max(0.0, requestedRemoval - 1.0) * 0.25 * confidence * confidence
+        let confidenceResponse = correctionConfidenceResponse(confidence)
+        let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
+        let confidenceBoost = max(0.0, requestedRemoval - 1.0)
+            * 0.20
+            * confidenceResponse
+            * (1.0 - (confidenceResponse * 0.35))
         return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
+    }
+
+    private static func correctionConfidenceResponse(_ confidence: Float) -> Float {
+        let boundedConfidence = clamp(confidence, min: 0.0, max: 1.0)
+        return boundedConfidence * (1.0 + ((1.0 - boundedConfidence) * 0.45))
+    }
+
+    private static func farFieldWarpRenderGate(
+        warpConfidence: Float,
+        trackingConfidence: Float,
+        searchRadiusHitCount: Int32,
+        searchRadiusTotalCount: Int32
+    ) -> Float {
+        guard warpConfidence > 0.0, searchRadiusTotalCount > 0 else {
+            return 0.0
+        }
+        let searchRadiusHitRatio = clamp(
+            Float(searchRadiusHitCount) / Float(searchRadiusTotalCount),
+            min: 0.0,
+            max: 1.0
+        )
+        let edgeQuality = 1.0 - searchRadiusHitRatio
+        let trackingGate = confidenceRamp(
+            trackingConfidence,
+            start: farFieldWarpTrackingGateStart,
+            full: farFieldWarpTrackingGateFull
+        )
+        let edgeGate = confidenceRamp(
+            edgeQuality,
+            start: farFieldWarpEdgeQualityGateStart,
+            full: farFieldWarpEdgeQualityGateFull
+        )
+        return clamp(trackingGate * edgeGate, min: 0.0, max: 1.0)
+    }
+
+    private static func softDeadband(_ value: Float, threshold: Float) -> Float {
+        let boundedThreshold = max(0.0, threshold)
+        let magnitude = abs(value)
+        guard magnitude > boundedThreshold else {
+            return 0.0
+        }
+        return (value >= 0.0 ? 1.0 : -1.0) * (magnitude - boundedThreshold)
     }
 
     private static func strideWobbleConfidence(

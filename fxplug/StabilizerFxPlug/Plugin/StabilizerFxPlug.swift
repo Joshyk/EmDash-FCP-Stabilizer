@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.125"
+private let stabilizerFxPlugVersion = "0.2.126"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -44,6 +44,7 @@ private enum StabilizerSampleScale: Int32 {
     case scale10 = 4
 
     static let menuEntries = ["100%", "75%", "50%", "25%", "10%"]
+    static let defaultScale: StabilizerSampleScale = .scale10
 
     var percent: Double {
         switch self {
@@ -61,7 +62,7 @@ private enum StabilizerSampleScale: Int32 {
     }
 
     static func scale(for rawValue: Int32) -> StabilizerSampleScale {
-        StabilizerSampleScale(rawValue: rawValue) ?? .original
+        StabilizerSampleScale(rawValue: rawValue) ?? defaultScale
     }
 }
 
@@ -293,7 +294,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         paramAPI.addPopupMenu(
             withName: "Sample Size",
             parameterID: ParameterID.sampleScale.rawValue,
-            defaultValue: UInt32(StabilizerSampleScale.original.rawValue),
+            defaultValue: UInt32(StabilizerSampleScale.defaultScale.rawValue),
             menuEntries: StabilizerSampleScale.menuEntries,
             parameterFlags: flags
         )
@@ -386,7 +387,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             panSmoothSeconds: 6.0,
             edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
             debugOverlay: false,
-            sampleScale: StabilizerSampleScale.original.rawValue,
+            sampleScale: StabilizerSampleScale.defaultScale.rawValue,
             hostAnalysisFrameCount: 0,
             hostAnalysisRevision: 0,
             renderRevision: 0.0
@@ -627,7 +628,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     private func requestedSampleScalePercent(at time: CMTime) -> Double {
-        var sampleScale = StabilizerSampleScale.original.rawValue
+        var sampleScale = StabilizerSampleScale.defaultScale.rawValue
         if let paramAPI = apiManager.api(for: FxParameterRetrievalAPI_v6.self) as? FxParameterRetrievalAPI_v6 {
             paramAPI.getIntValue(&sampleScale, fromParameter: ParameterID.sampleScale.rawValue, at: time)
         }
@@ -1147,7 +1148,7 @@ private final class StabilizerHostAnalysisStore {
     private var rejectedPersistentCacheFileNames = Set<String>()
     private var activeRange: CMTimeRange = .invalid
     private var activeFrameDuration: CMTime = .invalid
-    private var activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
+    private var activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
     private var renderToAnalysisOffsetSeconds: Double?
     private var renderToAnalysisOffsetProbeAttempted = false
     private var finished = false
@@ -1286,7 +1287,7 @@ private final class StabilizerHostAnalysisStore {
         activePersistentCacheFileName = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
-        activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
+        activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
         renderToAnalysisOffsetSeconds = nil
         renderToAnalysisOffsetProbeAttempted = false
         finished = false
@@ -1313,7 +1314,7 @@ private final class StabilizerHostAnalysisStore {
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: false)
         activeRange = .invalid
         activeFrameDuration = .invalid
-        activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
+        activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
         renderToAnalysisOffsetSeconds = nil
         renderToAnalysisOffsetProbeAttempted = false
         finished = false
@@ -1337,7 +1338,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
-        activeRequestedSampleScalePercent = StabilizerSampleScale.original.percent
+        activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
         renderToAnalysisOffsetSeconds = nil
         renderToAnalysisOffsetProbeAttempted = false
         finished = false

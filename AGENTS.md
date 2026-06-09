@@ -16,6 +16,8 @@ effect applies its own internal crop/scale. The native effect renders a transfor
 texture with Metal and applies automatic walking-gimbal stabilization inside the FxPlug
 render path.
 
+## Host Analysis And Cache
+
 The FxPlug uses Final Cut Pro's FxPlug `Host Analysis` infrastructure to request GPU
 analysis frames from the host. The native analysis path must use Metal compute inside the
 plug-in runtime for luma downsampling and frame-to-frame motion search. Do not add a CPU
@@ -43,9 +45,10 @@ when the cache schema is still supported. Unsupported schema candidates should s
 explicit new Host Analysis run instead of being silently ignored or deleted.
 
 Host Analysis should read user-controlled `Sample Size` once when analysis starts. The
+Inspector default should be `10%` so quick Debug Overlay tuning can start without a full
+source-size pass, while still offering `100%`, `75%`, `50%`, `25%`, and `10%` options. The
 sample image must always be derived from the original clip dimensions using the selected
-percentage option: `100%`, `75%`, `50%`, `25%`, or `10%`. Long clips should keep that
-requested percentage. In-progress analysis should stream frame-to-frame motion in memory and
+percentage option. Long clips should keep that requested percentage. In-progress analysis should stream frame-to-frame motion in memory and
 keep only the previous luma buffer needed for the next Metal motion search; do not write
 per-frame `.luma` scratch files or store analysis files inside a Final Cut Pro library/project
 bundle.
@@ -58,6 +61,9 @@ prioritize upper-frame far-field blocks so distant mountains/background motion i
 dominated by close grass, water, or road parallax. Motion-path algorithm changes that alter
 prepared analysis output should bump the Host Analysis cache schema so stale caches are not
 reused.
+
+## Diagnostics
+
 Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
 raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
 visible while tuning walking footage. Debug Overlay correction rows should keep walking
@@ -65,6 +71,8 @@ components in order before turn correction: `FJIT`, `SWOB`, `BOB`, `WARP`, then 
 confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `SHRP`,
 `RES`, and `HIT` should all be quality bars where higher means better tracking evidence
 and lower means weaker evidence.
+
+## Playback And Render
 
 Host Analysis playback must render from prepared motion paths for the active FxPlug runtime.
 `Start Host Analysis` is the only path that should call `startForwardAnalysis`; render and
@@ -105,6 +113,9 @@ to stabilize fine distant ridge-line shake. Smooth Turn Smoothing and Walking Bo
 independently, then recombine them with the current render frame's Footstep Jitter X/Y/roll
 correction. Footstep Jitter debug/status output should show the raw confidence and effective
 correction strength so low-confidence gating is visible.
+
+## Walking Correction Stages
+
 Fine high-frequency shake should be handled by render-time Footstep Jitter strength controls
 that compare X/Y/rotation against an outer-frame linear prediction using seconds-based
 windows: skip the center `0.10` second shock region and predict from outer samples up to
@@ -115,7 +126,8 @@ be corrected from the current render frame's impulse against the fixed seconds-b
 outer-frame baseline using the multi-block Host Analysis path. Footstep Jitter confidence
 should be evaluated per render frame from current tracking quality, accepted block coverage,
 blur, and whether the center frame departs from its outer-frame baseline; do not force a
-hidden minimum confidence floor.
+hidden minimum confidence floor. Medium-confidence response may be curved upward for a more
+useful debug pass, but zero confidence must still produce zero correction.
 Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
 `4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
 weak, but applied correction must clamp at full detected-impulse removal during render so
@@ -156,14 +168,20 @@ use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, a
 Walking Bob removal values should clamp at full
 detected-band removal during render so high slider values do not add inverse vertical
 shake, while still allowing values above `1.0` to compensate for low-confidence gating.
+
+## Far-Field Warp And Edges
+
 `Far-field Warp Strength` should expose one bundled small-clamp control for deskew/shear,
 yaw/pitch proxy, and perspective/distort trim. It is intended only for distant ridge-line
 shake in walking landscape footage. Keep the default at `1.0`, expose up to `4.0`, keep each
 unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
 debug/status output, and render the correction from the current frame's local deviation from
 its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long-term drift
-does not become a fixed deskew. Bump Host Analysis cache schema when prepared warp path
-semantics change.
+does not become a fixed deskew. Render should safety-gate warp by current tracking quality
+and search-radius headroom, and use a tiny render-time deadband so weak warp deltas do not
+create swimming or wave-like distortion. `W Q` should represent the applied warp confidence
+after those safety gates. Bump Host Analysis cache schema when prepared warp path semantics
+change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
 Overlay`; debug overlay should only show diagnostics.

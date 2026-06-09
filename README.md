@@ -34,7 +34,8 @@ outside-source pixels.
 ## Basic Workflow
 
 1. Apply `Stabilizer Transform` to a clip.
-2. Choose `Sample Size`.
+2. Keep the default `10%` `Sample Size` for a quick debug pass, or choose a
+   larger sample before starting analysis.
 3. Click `Start Host Analysis`.
 4. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 5. Tune the strength controls while watching the preview.
@@ -47,7 +48,8 @@ persistent cache; they do not start analysis on their own.
 
 `Sample Size` is read once when analysis starts. It is always derived from the
 original clip dimensions, with `100%`, `75%`, `50%`, `25%`, and `10%` options.
-Long clips keep the requested percentage instead of silently lowering it.
+The default is `10%` so Debug Overlay tuning can start quickly. Long clips keep
+the requested percentage instead of silently lowering it.
 
 `Overall Strength` controls the full automatic transform. Setting it to `0`
 bypasses prepared motion-path sampling, crop-safety motion, and debug overlay
@@ -81,7 +83,9 @@ The default removal is `0.75`.
 perspective trim for distant background motion. It is applied from the current
 frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
-maximum is `4.0`.
+maximum is `4.0`. The render path gates warp by current tracking quality and
+search-radius headroom, then drops tiny warp deltas through a deadband so weak
+frames do not create visible swimming or wave-like distortion.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It does not control black outside-source pixels;
@@ -183,7 +187,7 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `F Q`: Footstep Jitter confidence.
 - `S Q`: Stride Wobble confidence.
 - `B Q`: Walking Bob confidence.
-- `W Q`: Far-field Warp confidence.
+- `W Q`: applied Far-field Warp confidence after tracking and search-radius safety gates.
 - `T Q`: Turn Smoothing confidence.
 - `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
 - `SHRP`: frame sharpness/clarity quality; higher means less blur.
@@ -205,8 +209,9 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - Current warp shape values.
 
 Values above `1.0` on Footstep, Stride, and Bob controls boost low-confidence
-corrections with a curved confidence response, so saved clips at `4.0` do not
-snap medium-confidence frames straight to full correction.
+corrections with a curved confidence response. The response is more assertive for
+medium-confidence frame evidence, but still has no hidden minimum confidence
+floor: zero confidence produces zero correction.
 
 ## Build
 

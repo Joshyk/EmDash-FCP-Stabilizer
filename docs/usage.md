@@ -72,8 +72,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   trim after translation and roll are removed. Render uses only the current frame's local
   deviation from its own `0.10`/`1.0` second outer-frame linear warp baseline, so
   accumulated drift does not turn into a fixed deskew. The default is `1.0`, the maximum is
-  `4.0`, and `0` fully disables warp. Pull this down if close grass, roads, water, or frame
-  edges start to swim.
+  `4.0`, and `0` fully disables warp. Render gates warp by tracking quality and search-radius
+  headroom, then applies a tiny deadband so weak frames do not create wave-like image
+  distortion. Pull this down if close grass, roads, water, or frame edges start to swim.
 - `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
   walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
   correction is bypassed; the default is `1.0` and the maximum is `4.0`. Values above `1.0`
@@ -89,8 +90,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
-  options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
-  at the original clip size. The actual pixel size is shown in `Stabilizer Info`.
+  options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `10%` so a debug pass
+  can analyze quickly. The actual pixel size is shown in `Stabilizer Info`.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image.
@@ -136,12 +137,12 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   enabled, `Host Analysis Status` also shows the current raw center-frame transform, the
   smoothed transform delta, tracking/motion confidence, blur, residual, the raw `foot q`,
   the effective Footstep Jitter X/Y/R correction strength, `stride q`, the effective Stride
-  Wobble X/Y/R correction strength, `turn q`, `warp q`, shear, yaw/pitch proxy, perspective,
+  Wobble X/Y/R correction strength, `turn q`, applied `warp q`, shear, yaw/pitch proxy, perspective,
   edge-hit counts, the X turn and stride components plus Y footstep, stride, and walking-bob
   components, plus separate `bob q` confidence.
 - Strength values above `1.0` still compensate low-confidence Footstep, Stride Wobble, and
-  Walking Bob detections, but the render-time confidence response is curved so saved clips at
-  `4.0` do not snap medium-confidence frames straight to full correction.
+  Walking Bob detections. The render-time confidence response is more assertive for
+  medium-confidence frame evidence, but zero confidence still produces zero correction.
 
 ## Behavior
 
@@ -200,7 +201,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`. The applied
   value is the local warp band against its `0.10`/`1.0` second outer-frame linear baseline,
-  not the absolute accumulated warp path.
+  not the absolute accumulated warp path. Render also requires enough tracking quality and
+  search-radius headroom before applying warp, and drops tiny warp deltas through a deadband
+  to avoid wave-like image distortion while tuning micro jitter.
 - Host Analysis cache schema `14` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,

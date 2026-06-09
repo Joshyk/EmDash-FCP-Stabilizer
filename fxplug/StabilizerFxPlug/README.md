@@ -52,9 +52,8 @@ estimators, or Transform-keyframe writers back into this target.
   by prepared Host Analysis paths.
 - Does not write analysis files into a Final Cut Pro library or project bundle.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
-- Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation
-  and roll only, disables yaw/pitch proxy, shear, perspective compensation, and zoom, and
-  keeps render scale fixed at 1.0.
+- Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
+  roll, and optional small-clamp Far-field Warp while keeping render scale fixed at 1.0.
 - Includes a minimal wrapper app source/resource set under `WrapperApp/`.
 
 The current implementation reads host frames as Metal textures, performs analysis
@@ -129,7 +128,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 
 - `Footstep Jitter X Strength`: direct amount for horizontal frame-local footstep correction.
   The default is `1.0`; values above `1.0` can compensate for weak frame confidence but are
-  clamped during render to avoid inverse shake.
+  clamped during render to avoid inverse shake. The confidence response is more assertive for
+  medium-confidence frame evidence, but zero confidence still produces zero correction.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
   `0.10` second shock region and predicts from outer samples up to `1.0` second away for
@@ -151,7 +151,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   vertical shake.
 - `Far-field Warp Strength`: bundled small-clamp WARP correction for distant ridge-line
   shake. It uses a `0.10`/`1.0` second outer-frame linear warp baseline and applies shear,
-  yaw/pitch proxy, and perspective trim from the current frame's local deviation.
+  yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
+  gates warp by tracking quality and search-radius headroom, then applies a tiny deadband so
+  weak frames do not create wave-like image distortion.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.
@@ -159,9 +161,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   motion paths. The UI value is used as the TURN window, and the UI minimum is the fixed
   `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions.
-  Options are `100%`, `75%`, `50%`, `25%`, and `10%`; `100%` analyzes at the original clip
-  size. Host Analysis reads this value once when the analysis pass starts. The actual pixel
-  size is shown in `Stabilizer Info`.
+  Options are `100%`, `75%`, `50%`, `25%`, and `10%`; the default is `10%` so a debug pass
+  can analyze quickly. Host Analysis reads this value once when the analysis pass starts. The
+  actual pixel size is shown in `Stabilizer Info`.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.
@@ -192,7 +194,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn
-  confidence, warp confidence, edge-hit counts, and the Y correction split into footstep,
+  confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,
   stride, and walking-bob components.
   The labels mean:
   `X` final horizontal correction,
@@ -207,7 +209,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `F Q` Footstep Jitter confidence,
   `S Q` Stride Wobble confidence,
   `B Q` Walking Bob confidence,
-  `W Q` Far-field Warp confidence,
+  `W Q` applied Far-field Warp confidence after tracking and search-radius safety gates,
   `T Q` Turn Smoothing confidence,
   `TRK` current frame tracking quality,
   `SHRP` frame sharpness/clarity quality where higher means less blur,
