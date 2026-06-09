@@ -91,6 +91,8 @@ static uint debugLabelRowBits(uint code, uint y) {
             return y == 2 ? 0x2 : 0x5;
         case 89: // Y
             return y < 2 ? 0x5 : 0x2;
+        case 48: // 0
+            return (y == 0 || y == 4) ? 0x7 : 0x5;
         case 49: // 1
             return y == 4 ? 0x7 : 0x2;
         case 50: // 2
@@ -212,9 +214,8 @@ static uint debugLabelChar(uint row, uint index) {
             return 0;
         case 18:
             if (index == 0) { return 86; } // V
-            if (index == 1) { return 49; } // 1
-            if (index == 2) { return 51; } // 3
-            if (index == 3) { return 55; } // 7
+            if (index == 1) { return 48; } // 0
+            if (index == 2) { return 50; } // 2
             return 0;
         default:
             return 0;

@@ -93,7 +93,7 @@ frames do not create visible swimming or wave-like distortion. Low-confidence
 warp evidence is suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V137` row for the active
+bands and tracking state. It also includes a compact `V02` row for the active
 render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 

@@ -132,10 +132,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
-  compact `V137` row in `Debug Overlay` when confirming the active render runtime.
+  compact `V02` row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V137` bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V02` bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
