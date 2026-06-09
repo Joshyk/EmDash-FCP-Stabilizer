@@ -209,6 +209,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `T Q` Turn Smoothing confidence,
   `W Q` Far-field Warp confidence,
   `TRK` current frame tracking quality,
-  `BLUR` frame clarity where higher means less blur,
-  `RES` residual/error where higher means noisier tracking evidence, and
-  `HIT` search-radius edge-hit ratio where higher means the search radius may be too tight.
+  `BLUR` frame clarity quality where higher means less blur,
+  `RES` residual quality where higher means lower block-matching error, and
+  `HIT` search-radius headroom quality where higher means fewer searches hit the radius edge.
+  `TRK`, `BLUR`, `RES`, and `HIT` all use the same high-is-good direction.

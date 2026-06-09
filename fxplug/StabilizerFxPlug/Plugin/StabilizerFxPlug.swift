@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.119"
+private let stabilizerFxPlugVersion = "0.2.120"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -788,12 +788,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
         let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
         let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.03)
-        let searchRadiusHitRatio: Float
+        let searchRadiusQuality: Float
         if autoTransform.searchRadiusTotalCount > 0 {
-            searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
+            let searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
+            searchRadiusQuality = 1.0 - searchRadiusHitRatio
         } else {
-            searchRadiusHitRatio = 0.0
+            searchRadiusQuality = 0.0
         }
+        let residualQuality = max(0.0, 1.0 - min(1.0, autoTransform.residual * 50.0))
         let footstepJitterActivity = min(1.0, max(
             simd_length(vector_float2(
                 autoTransform.microPixelOffset.x / diagnosticScaleX,
@@ -817,7 +819,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
             min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
             min(1.0, abs(autoTransform.rotationDegrees) / 5.0),
-            searchRadiusHitRatio
+            searchRadiusQuality
         )
         let diagnostic2 = vector_float4(
             min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
@@ -835,7 +837,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             min(1.0, autoTransform.warpConfidence),
             min(1.0, autoTransform.trackingConfidence),
             min(1.0, 1.0 - autoTransform.blurAmount),
-            min(1.0, autoTransform.residual * 50.0)
+            residualQuality
         )
         let diagnostic5 = vector_float4(
             min(1.0, autoTransform.turnConfidence),

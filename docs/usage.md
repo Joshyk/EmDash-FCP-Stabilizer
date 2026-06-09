@@ -127,6 +127,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `TURN`, `WARP`, live `F Q`/`S Q`/`B Q`/`T Q`/`W Q` confidence, plus `SMTH`,
   `TRK`, `BLUR`, `RES`, and search-radius `HIT` bars while checking runtime behavior.
+  `TRK`, `BLUR`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
+  tracking evidence.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When
   enabled, `Host Analysis Status` also shows the current raw center-frame transform, the
   smoothed transform delta, tracking/motion confidence, blur, residual, the raw `foot q`,

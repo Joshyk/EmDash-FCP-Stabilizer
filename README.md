@@ -56,7 +56,9 @@ output, producing an identity transform.
 `Footstep Jitter` strengths are direct removal amounts for frame-local X, Y, and
 roll impulses. They run up to `4.0`; values above `1.0` can compensate when
 tracking confidence makes the correction too weak. The applied correction still
-clamps at full detected-impulse removal so it does not add inverse shake.
+clamps at full detected-impulse removal so it does not add inverse shake. The
+baseline uses seconds, not frame counts: it skips the center `0.10` second shock
+region and predicts from outer samples up to `0.40` seconds away.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `0.70` second render-time window. The Inspector exposes only X, Y, and rotation
@@ -75,8 +77,9 @@ around `0.4-1.0` seconds target visible footstep bounce.
 
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
-frame's local deviation from an outer-frame linear baseline, so long-term drift
-does not become a fixed deskew. The default is `1.0`, and the maximum is `4.0`.
+frame's local deviation from the same seconds-based outer-frame linear baseline,
+so long-term drift does not become a fixed deskew. The default is `1.0`, and the
+maximum is `4.0`.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It does not control black outside-source pixels;
@@ -169,7 +172,7 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `X`: final horizontal automatic correction.
 - `Y`: final vertical automatic correction.
 - `ROLL`: final automatic roll/rotation correction.
-- `FJIT`: Footstep Jitter correction activity from the fixed frame-local impulse range.
+- `FJIT`: Footstep Jitter correction activity from the fixed second-based impulse range.
 - `SWOB`: Stride Wobble correction activity from the fixed internal stride-wobble window.
 - `BOB`: Y-only Walking Bob correction.
 - `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
@@ -181,9 +184,11 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `T Q`: Turn Smoothing confidence.
 - `W Q`: Far-field Warp confidence.
 - `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
-- `BLUR`: frame clarity signal; higher means less blur.
-- `RES`: block-matching residual/error signal; higher means noisier tracking evidence.
-- `HIT`: share of searches that hit the motion search-radius edge; higher means the search radius may be too tight for that frame.
+- `BLUR`: frame clarity quality; higher means less blur.
+- `RES`: residual quality; higher means lower block-matching residual/error.
+- `HIT`: search-radius headroom quality; higher means fewer searches hit the radius edge.
+
+`TRK`, `BLUR`, `RES`, and `HIT` are all aligned as quality signals: high is good, low is bad.
 
 `Host Analysis Status` also reports:
 
