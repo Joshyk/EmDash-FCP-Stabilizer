@@ -26,10 +26,10 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.124"
+private let stabilizerFxPlugVersion = "0.2.125"
+private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.0
-private let stabilizerTurnWindowBobMarginSeconds = 0.25
-private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedWalkingBobWindowSeconds + stabilizerTurnWindowBobMarginSeconds
+private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -569,10 +569,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         var lines = ["FxPlug \(stabilizerFxPlugVersion)"]
         if let state {
             let bobWindowSeconds = stabilizerFixedWalkingBobWindowSeconds
-            let turnWindowSeconds = max(
-                max(stabilizerMinimumTurnDetectionWindowSeconds, state.panSmoothSeconds),
-                bobWindowSeconds + stabilizerTurnWindowBobMarginSeconds
-            )
+            let turnWindowSeconds = max(stabilizerMinimumTurnDetectionWindowSeconds, state.panSmoothSeconds)
             let turnStartSeconds = stabilizerMinimumTurnDetectionWindowSeconds
             lines.append(String(
                 format: "Footstep jitter <= 1s | X %.2f Y %.2f R %.2f",

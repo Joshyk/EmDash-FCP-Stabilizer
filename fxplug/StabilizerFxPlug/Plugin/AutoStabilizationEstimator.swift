@@ -290,7 +290,6 @@ enum AutoStabilizationEstimator {
     private static let farFieldWarpInnerWindowSeconds = 0.10
     private static let farFieldWarpOuterWindowSeconds = 1.0
     private static let fixedWalkingBobWindowSeconds = 2.0
-    private static let turnWindowBobMarginSeconds = 0.25
     private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
@@ -443,14 +442,13 @@ enum AutoStabilizationEstimator {
             return .identity
         }
 
+        let effectiveStrideWobbleWindowSeconds = strideWobbleWindowSeconds
         let effectiveWalkingBobWindowSeconds = fixedWalkingBobWindowSeconds
-        let requestedTurnWindowSeconds = max(0.1, panSmoothSeconds)
-        let smoothWindowSeconds = max(requestedTurnWindowSeconds, effectiveWalkingBobWindowSeconds + turnWindowBobMarginSeconds)
+        let smoothWindowSeconds = max(effectiveStrideWobbleWindowSeconds, panSmoothSeconds)
         let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
         let frameInterpolation = frameInterpolation(at: renderSeconds, in: frames)
         let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
-        let effectiveStrideWobbleWindowSeconds = strideWobbleWindowSeconds
         let strideWobbleWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveStrideWobbleWindowSeconds * 0.5 }
         let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : Array(strideWobbleWindowIndices)
         let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }

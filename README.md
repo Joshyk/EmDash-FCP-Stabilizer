@@ -69,8 +69,8 @@ the same motion is not removed twice.
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
 Y or roll, and is soft-limited to a small output-edge budget during render.
-`Turn Detection Window` starts above the fixed `2.0` second Walking Bob band plus
-margin and extends up to the UI value, so TURN remains the broader band after BOB.
+`Turn Detection Window` comes from the Inspector UI value. Its UI minimum is the
+fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
 
 `Walking Bob` uses a fixed internal `2.0` second Y-only window for the remaining
 vertical walking bounce after Footstep Jitter and Stride Wobble. The Inspector

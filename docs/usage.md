@@ -60,8 +60,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Walking Bob`: fixed internal `2.0` second Y-axis-only window for footstep bob and
   vertical walking shake left after Footstep Jitter and Stride Wobble. The correction uses
   the Y band between the stride-smoothed baseline and this walking-bob smooth path without
-  changing X or roll. There is no user-facing window control; `Turn Detection Window` starts
-  above this BOB band so TURN remains the broader band.
+  changing X or roll. There is no user-facing window control; `Turn Detection Window` has its
+  own Inspector slider.
 - `Walking Bob Removal`: direct amount for the Y-only correction. Footstep bounce
   can be reduced without changing X or roll. This is the final correction stage inside the
   same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
@@ -86,8 +86,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   not create stretched-edge jumps in the preview.
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
   mode this is evaluated against prepared motion paths during render, so changing the slider
-  does not require rebuilding analysis. The UI starts above the fixed `2.0` second Walking
-  Bob band plus margin and extends up to the user value, keeping TURN broader than BOB.
+  does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
+  is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
   at the original clip size. The actual pixel size is shown in `Stabilizer Info`.

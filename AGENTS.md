@@ -140,11 +140,11 @@ values above `1.0` may compensate for low-confidence gating when turn correction
 weak, but applied correction must clamp at full detected turn-band removal. Turn smoothing
 must not apply Y or roll correction. Macro X turn correction should be soft-limited to a
 small output-edge budget during render so large detected pans do not create stretched-edge
-jumps in the preview. `Turn Detection Window` must start above the fixed `2.0` second Walking
-Bob band plus the `0.25` second margin so TURN remains broader than BOB. The turn band should
-be measured from the stride-smoothed path instead of the raw frame path, and Y correction must
-stay Footstep Jitter first, Stride Wobble second, and Walking Bob last so short landing shock
-is not reintroduced by turn smoothing.
+jumps in the preview. `Turn Detection Window` must use the Inspector UI value, and its UI
+minimum must be the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than
+SWOB. The turn band should be measured from the stride-smoothed path instead of the raw frame
+path, and Y correction must stay Footstep Jitter first, Stride Wobble second, and Walking Bob
+last so short landing shock is not reintroduced by turn smoothing.
 Y-axis walking bob between micro jitter and panning should be handled by the render-time
 fixed `2.0` second `Walking Bob` and `Walking Bob Removal` path, which corrects the Y-only
 band between the stride-smoothed baseline and the walking-bob smoothing window, without

@@ -145,7 +145,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
 - `Walking Bob`: fixed internal `2.0` second Y-only walking bob band after FJIT and SWOB.
-  There is no user-facing BOB window control; Turn Detection starts above this band.
+  There is no user-facing BOB window control; Turn Detection has its own Inspector slider.
 - `Walking Bob Removal`: direct amount for the Y-only BOB correction. Setting it to `0` does
   not disable Footstep Jitter Y, and higher values are clamped during render to avoid inverse
   vertical shake.
@@ -156,8 +156,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
-  motion paths. The UI starts above the fixed `2.0` second Walking Bob band plus margin and
-  extends up to the user value, so TURN remains broader than BOB.
+  motion paths. The UI value is used as the TURN window, and the UI minimum is the fixed
+  `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions.
   Options are `100%`, `75%`, `50%`, `25%`, and `10%`; `100%` analyzes at the original clip
   size. Host Analysis reads this value once when the analysis pass starts. The actual pixel
