@@ -124,8 +124,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Runtime status publishing is retried until Final Cut Pro's parameter-setting API accepts
   the update, so existing clips do not keep a stale visible FxPlug version after a newly
   installed build starts rendering.
-- `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `TURN`, `F+SW`,
-  `BOB`, `SMTH`, live `F Q`/`S Q`/`B Q`/`W Q` confidence, plus `TRK`, `BLUR`, `RES`, and
+- `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `TURN`, `FJIT`,
+  `SWOB`, `BOB`, `SMTH`, live `F Q`/`S Q`/`B Q`/`W Q` confidence, plus `TRK`, `BLUR`, `RES`, and
   search-radius `HIT` bars while checking runtime behavior. Labels use raw English
   control/diagnostic abbreviations and should not be translated in the preview. When
   enabled, `Host Analysis Status` also shows the current raw center-frame transform, the

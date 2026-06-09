@@ -12,6 +12,8 @@ struct StabilizerAutoTransform {
     var microPixelOffset: vector_float2
     var strideWobblePixelOffset: vector_float2
     var walkingBobPixelOffset: vector_float2
+    var footstepJitterRotationDegrees: Float
+    var strideWobbleRotationDegrees: Float
     var rotationDegrees: Float
     var rawPixelOffset: vector_float2
     var rawRotationDegrees: Float
@@ -44,6 +46,8 @@ struct StabilizerAutoTransform {
         microPixelOffset: vector_float2(0.0, 0.0),
         strideWobblePixelOffset: vector_float2(0.0, 0.0),
         walkingBobPixelOffset: vector_float2(0.0, 0.0),
+        footstepJitterRotationDegrees: 0.0,
+        strideWobbleRotationDegrees: 0.0,
         rotationDegrees: 0.0,
         rawPixelOffset: vector_float2(0.0, 0.0),
         rawRotationDegrees: 0.0,
@@ -445,7 +449,7 @@ enum AutoStabilizationEstimator {
         let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
         let effectiveWalkingBobWindowSeconds = min(max(0.1, walkingBobWindowSeconds), smoothWindowSeconds)
-        let effectiveStrideWobbleWindowSeconds = min(strideWobbleWindowSeconds, effectiveWalkingBobWindowSeconds)
+        let effectiveStrideWobbleWindowSeconds = strideWobbleWindowSeconds
         let strideWobbleWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveStrideWobbleWindowSeconds * 0.5 }
         let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : Array(strideWobbleWindowIndices)
         let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }
@@ -704,6 +708,8 @@ enum AutoStabilizationEstimator {
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
             walkingBobPixelOffset: walkingBobPixelOffset,
+            footstepJitterRotationDegrees: microCompensationRotation,
+            strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation,
             rawPixelOffset: vector_float2(compensationX, compensationY),
             rawRotationDegrees: compensationRotation,
@@ -792,10 +798,12 @@ enum AutoStabilizationEstimator {
 
         var smoothedTransform = weightedAverageTransform(weightedSamples)
         smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
+        smoothedTransform.footstepJitterRotationDegrees = rawCenterTransform.footstepJitterRotationDegrees
         smoothedTransform.rotationDegrees = rawCenterTransform.rotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
         smoothedTransform.microConfidence = rawCenterTransform.microConfidence
         smoothedTransform.strideWobblePixelOffset = rawCenterTransform.strideWobblePixelOffset
+        smoothedTransform.strideWobbleRotationDegrees = rawCenterTransform.strideWobbleRotationDegrees
         smoothedTransform.effectiveStrideWobbleStrength = rawCenterTransform.effectiveStrideWobbleStrength
         smoothedTransform.strideConfidence = rawCenterTransform.strideConfidence
         smoothedTransform.trackingConfidence = rawCenterTransform.trackingConfidence
@@ -858,6 +866,8 @@ enum AutoStabilizationEstimator {
             microPixelOffset: vectorAverage(\.microPixelOffset),
             strideWobblePixelOffset: vectorAverage(\.strideWobblePixelOffset),
             walkingBobPixelOffset: vectorAverage(\.walkingBobPixelOffset),
+            footstepJitterRotationDegrees: floatAverage(\.footstepJitterRotationDegrees),
+            strideWobbleRotationDegrees: floatAverage(\.strideWobbleRotationDegrees),
             rotationDegrees: floatAverage(\.rotationDegrees),
             rawPixelOffset: vectorAverage(\.rawPixelOffset),
             rawRotationDegrees: floatAverage(\.rawRotationDegrees),

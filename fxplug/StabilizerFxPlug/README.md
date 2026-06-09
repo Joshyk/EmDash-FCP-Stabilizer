@@ -186,7 +186,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
-  `ROLL`, `TURN`, `F+SW`, `BOB`, `SMTH`, confidence (`F Q`, `S Q`, `B Q`, `W Q`), and
+  `ROLL`, `TURN`, `FJIT`, `SWOB`, `BOB`, `SMTH`, confidence (`F Q`, `S Q`, `B Q`, `W Q`), and
   tracking-quality (`TRK`, `BLUR`, `RES`, `HIT`) diagnostics so Final Cut Pro runtime
   analysis can be checked. These labels are raw English control/diagnostic abbreviations
   and should not be translated in the preview. It also writes current render correction
@@ -197,7 +197,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Y` final vertical correction,
   `ROLL` final roll correction,
   `TURN` X-only Turn Smoothing,
-  `F+SW` Footstep Jitter plus Stride Wobble activity,
+  `FJIT` Footstep Jitter correction activity from the fixed frame-local impulse range,
+  `SWOB` Stride Wobble correction activity from the fixed internal stride-wobble window,
   `BOB` Y-only Walking Bob,
   `SMTH` temporal smoothing delta,
   `F Q` Footstep Jitter confidence,

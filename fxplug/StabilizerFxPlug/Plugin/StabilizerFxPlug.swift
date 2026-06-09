@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.117"
+private let stabilizerFxPlugVersion = "0.2.118"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -787,41 +787,49 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
         let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
         let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.03)
-        let diagnostic = vector_float4(
-            min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
-            min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
-            min(1.0, abs(autoTransform.rotationDegrees) / 5.0),
-            0.0
-        )
-        let diagnostic2 = vector_float4(
-            min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
-            min(1.0, max(
-                simd_length(vector_float2(
-                    (autoTransform.microPixelOffset.x + autoTransform.strideWobblePixelOffset.x) / diagnosticScaleX,
-                    (autoTransform.microPixelOffset.y + autoTransform.strideWobblePixelOffset.y) / diagnosticScaleY
-                )),
-                abs(autoTransform.rotationDegrees) / 5.0
-            )),
-            min(1.0, abs(autoTransform.walkingBobPixelOffset.y) / diagnosticScaleY),
-            min(1.0, simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale)
-        )
-        let diagnostic3 = vector_float4(
-            min(1.0, autoTransform.microConfidence),
-            min(1.0, autoTransform.strideConfidence),
-            min(1.0, autoTransform.bobConfidence),
-            min(1.0, autoTransform.warpConfidence)
-        )
         let searchRadiusHitRatio: Float
         if autoTransform.searchRadiusTotalCount > 0 {
             searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
         } else {
             searchRadiusHitRatio = 0.0
         }
+        let footstepJitterActivity = min(1.0, max(
+            simd_length(vector_float2(
+                autoTransform.microPixelOffset.x / diagnosticScaleX,
+                autoTransform.microPixelOffset.y / diagnosticScaleY
+            )),
+            abs(autoTransform.footstepJitterRotationDegrees) / 5.0
+        ))
+        let strideWobbleActivity = min(1.0, max(
+            simd_length(vector_float2(
+                autoTransform.strideWobblePixelOffset.x / diagnosticScaleX,
+                autoTransform.strideWobblePixelOffset.y / diagnosticScaleY
+            )),
+            abs(autoTransform.strideWobbleRotationDegrees) / 5.0
+        ))
+        let diagnostic = vector_float4(
+            min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
+            min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
+            min(1.0, abs(autoTransform.rotationDegrees) / 5.0),
+            searchRadiusHitRatio
+        )
+        let diagnostic2 = vector_float4(
+            min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
+            footstepJitterActivity,
+            strideWobbleActivity,
+            min(1.0, abs(autoTransform.walkingBobPixelOffset.y) / diagnosticScaleY)
+        )
+        let diagnostic3 = vector_float4(
+            min(1.0, simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale),
+            min(1.0, autoTransform.microConfidence),
+            min(1.0, autoTransform.strideConfidence),
+            min(1.0, autoTransform.bobConfidence)
+        )
         let diagnostic4 = vector_float4(
+            min(1.0, autoTransform.warpConfidence),
             min(1.0, autoTransform.trackingConfidence),
             min(1.0, 1.0 - autoTransform.blurAmount),
-            min(1.0, autoTransform.residual * 50.0),
-            searchRadiusHitRatio
+            min(1.0, autoTransform.residual * 50.0)
         )
 
         var transform = StabilizerTransformUniforms(
