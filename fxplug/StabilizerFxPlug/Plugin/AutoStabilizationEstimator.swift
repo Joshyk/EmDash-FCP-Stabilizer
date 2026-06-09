@@ -31,6 +31,12 @@ struct StabilizerAutoTransform {
     var shear: vector_float2
     var perspective: vector_float2
     var blurAmount: Float
+    var trackingConfidence: Float
+    var motionConfidence: Float
+    var residual: Float
+    var footstepImpulse: vector_float3
+    var searchRadiusHitCount: Int32
+    var searchRadiusTotalCount: Int32
 
     static let identity = StabilizerAutoTransform(
         pixelOffset: vector_float2(0.0, 0.0),
@@ -56,7 +62,13 @@ struct StabilizerAutoTransform {
         yawPitchProxy: vector_float2(0.0, 0.0),
         shear: vector_float2(0.0, 0.0),
         perspective: vector_float2(0.0, 0.0),
-        blurAmount: 0.0
+        blurAmount: 0.0,
+        trackingConfidence: 0.0,
+        motionConfidence: 0.0,
+        residual: 0.0,
+        footstepImpulse: vector_float3(0.0, 0.0, 0.0),
+        searchRadiusHitCount: 0,
+        searchRadiusTotalCount: 0
     )
 }
 
@@ -168,6 +180,8 @@ struct StabilizerPreparedAnalysis {
     let acceptedBlockCounts: [Int32]
     let totalBlockCounts: [Int32]
     let blurAmounts: [Float]
+    let searchRadiusHitCounts: [Int32]
+    let searchRadiusTotalCounts: [Int32]
 }
 
 fileprivate struct PairMotion {
@@ -186,6 +200,8 @@ fileprivate struct PairMotion {
     let warpConfidence: Float
     let acceptedBlockCount: Int32
     let totalBlockCount: Int32
+    let searchRadiusHitCount: Int32
+    let searchRadiusTotalCount: Int32
 }
 
 private struct StabilizerMotionBlock {
@@ -203,6 +219,7 @@ private struct StabilizerBlockShift {
     let dx: Float
     let dy: Float
     let score: Float
+    let searchRadiusHit: Bool
 }
 
 fileprivate final class MetalAnalysisContext {
@@ -341,7 +358,9 @@ enum AutoStabilizationEstimator {
                 analysisConfidence: 1.0,
                 warpConfidence: 0.0,
                 acceptedBlockCount: 0,
-                totalBlockCount: 0
+                totalBlockCount: 0,
+                searchRadiusHitCount: 0,
+                searchRadiusTotalCount: 0
             )
         ]
         if sortedFrames.count >= 2 {
@@ -546,6 +565,8 @@ enum AutoStabilizationEstimator {
         let motionConfidence = interpolatedValue(analysis.analysisConfidence, using: frameInterpolation)
         let acceptedBlockCount = analysis.acceptedBlockCounts.indices.contains(centerIndex) ? analysis.acceptedBlockCounts[centerIndex] : 0
         let totalBlockCount = analysis.totalBlockCounts.indices.contains(centerIndex) ? analysis.totalBlockCounts[centerIndex] : 0
+        let searchRadiusHitCount = analysis.searchRadiusHitCounts.indices.contains(centerIndex) ? analysis.searchRadiusHitCounts[centerIndex] : 0
+        let searchRadiusTotalCount = analysis.searchRadiusTotalCounts.indices.contains(centerIndex) ? analysis.searchRadiusTotalCounts[centerIndex] : 0
         let warpConfidence = analysis.warpConfidence.indices.contains(centerIndex) ? analysis.warpConfidence[centerIndex] : 0.0
         let trackingConfidence = frameTrackingConfidence(
             motionConfidence: motionConfidence,
@@ -622,6 +643,11 @@ enum AutoStabilizationEstimator {
         let microCompensationX = -(footstepPathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
         let microCompensationY = -(footstepPathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
         let microCompensationRotation = -(footstepPathRollAtRender - microImpulseBaselineRoll) * microRotationCorrectionStrength
+        let footstepImpulse = vector_float3(
+            footstepPathXAtRender - microImpulseBaselineX,
+            footstepPathYAtRender - footstepBaselineY,
+            footstepPathRollAtRender - microImpulseBaselineRoll
+        )
         let strideCompensationX = -strideBandX * xScale * strideXCorrectionStrength
         let strideCompensationY = -strideBandY * yScale * strideYCorrectionStrength
         let strideCompensationRotation = -strideBandRoll * strideRotationCorrectionStrength
@@ -704,7 +730,13 @@ enum AutoStabilizationEstimator {
             yawPitchProxy: yawPitchProxy,
             shear: shear,
             perspective: perspective,
-            blurAmount: blurAmount
+            blurAmount: blurAmount,
+            trackingConfidence: trackingConfidence,
+            motionConfidence: motionConfidence,
+            residual: centerResidual,
+            footstepImpulse: footstepImpulse,
+            searchRadiusHitCount: searchRadiusHitCount,
+            searchRadiusTotalCount: searchRadiusTotalCount
         )
     }
 
@@ -766,6 +798,12 @@ enum AutoStabilizationEstimator {
         smoothedTransform.strideWobblePixelOffset = rawCenterTransform.strideWobblePixelOffset
         smoothedTransform.effectiveStrideWobbleStrength = rawCenterTransform.effectiveStrideWobbleStrength
         smoothedTransform.strideConfidence = rawCenterTransform.strideConfidence
+        smoothedTransform.trackingConfidence = rawCenterTransform.trackingConfidence
+        smoothedTransform.motionConfidence = rawCenterTransform.motionConfidence
+        smoothedTransform.residual = rawCenterTransform.residual
+        smoothedTransform.footstepImpulse = rawCenterTransform.footstepImpulse
+        smoothedTransform.searchRadiusHitCount = rawCenterTransform.searchRadiusHitCount
+        smoothedTransform.searchRadiusTotalCount = rawCenterTransform.searchRadiusTotalCount
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
             + smoothedTransform.microPixelOffset
             + smoothedTransform.strideWobblePixelOffset
@@ -838,7 +876,17 @@ enum AutoStabilizationEstimator {
             yawPitchProxy: vectorAverage(\.yawPitchProxy),
             shear: vectorAverage(\.shear),
             perspective: vectorAverage(\.perspective),
-            blurAmount: floatAverage(\.blurAmount)
+            blurAmount: floatAverage(\.blurAmount),
+            trackingConfidence: floatAverage(\.trackingConfidence),
+            motionConfidence: floatAverage(\.motionConfidence),
+            residual: floatAverage(\.residual),
+            footstepImpulse: vector3Average(\.footstepImpulse),
+            searchRadiusHitCount: Int32(samples.reduce(Float(0.0)) { partial, sample in
+                partial + (Float(sample.transform.searchRadiusHitCount) * sample.weight)
+            } / totalWeight),
+            searchRadiusTotalCount: Int32(samples.reduce(Float(0.0)) { partial, sample in
+                partial + (Float(sample.transform.searchRadiusTotalCount) * sample.weight)
+            } / totalWeight)
         )
     }
 
@@ -945,7 +993,9 @@ enum AutoStabilizationEstimator {
             warpConfidence: motions.map(\.warpConfidence),
             acceptedBlockCounts: motions.map(\.acceptedBlockCount),
             totalBlockCounts: motions.map(\.totalBlockCount),
-            blurAmounts: sortedFrames.map(\.blurAmount)
+            blurAmounts: sortedFrames.map(\.blurAmount),
+            searchRadiusHitCounts: motions.map(\.searchRadiusHitCount),
+            searchRadiusTotalCounts: motions.map(\.searchRadiusTotalCount)
         )
     }
 
@@ -983,9 +1033,15 @@ enum AutoStabilizationEstimator {
                 sampleWidth: sampleWidth,
                 sampleHeight: sampleHeight
             )
-            return StabilizerBlockShift(block: block, dx: shift.dx, dy: shift.dy, score: shift.score)
+            return StabilizerBlockShift(
+                block: block,
+                dx: shift.dx,
+                dy: shift.dy,
+                score: shift.score,
+                searchRadiusHit: shift.searchRadiusHit
+            )
         }
-        let acceptedBlocks = acceptedMotionBlocks(blockShifts, global: global)
+        let acceptedBlocks = acceptedMotionBlocks(blockShifts, global: (global.dx, global.dy, global.score))
         let motionBlocksForModel = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks : blockShifts
         let robustDx = weightedMedian(motionBlocksForModel.map { ($0.dx, $0.block.farFieldWeight) }) ?? global.dx
         let robustDy = weightedMedian(motionBlocksForModel.map { ($0.dy, $0.block.farFieldWeight) }) ?? global.dy
@@ -1007,6 +1063,8 @@ enum AutoStabilizationEstimator {
         let blockAgreement = blocks.isEmpty ? 0.0 : (Float(acceptedCount) / Float(blocks.count)) * clamp(farFieldAgreement, min: 0.35, max: 1.0)
         let scoreConfidence = clamp(1.0 - ((median(motionBlocksForModel.map(\.score)) ?? global.score) * 1.8), min: 0.0, max: 1.0)
         let analysisConfidence = clamp(blockAgreement * scoreConfidence, min: 0.0, max: 1.0)
+        let searchRadiusHitCount = (global.searchRadiusHit ? 1 : 0) + blockShifts.filter(\.searchRadiusHit).count
+        let searchRadiusTotalCount = 1 + blockShifts.count
         let warpMotion = farFieldWarpMotion(
             shifts: motionBlocksForModel,
             robustDx: robustDx,
@@ -1032,27 +1090,41 @@ enum AutoStabilizationEstimator {
             analysisConfidence: analysisConfidence,
             warpConfidence: warpMotion.confidence,
             acceptedBlockCount: Int32(acceptedCount),
-            totalBlockCount: Int32(blocks.count)
+            totalBlockCount: Int32(blocks.count),
+            searchRadiusHitCount: Int32(searchRadiusHitCount),
+            searchRadiusTotalCount: Int32(searchRadiusTotalCount)
         )
     }
 
     fileprivate static func blurAmount(_ pixels: [UInt8], sampleWidth: Int, sampleHeight: Int) -> Float {
         var totalGradient: Float = 0.0
+        var edgeSampleCount: Float = 0.0
+        var strongEdgeSampleCount: Float = 0.0
         var count: Float = 0.0
         for y in 1..<(sampleHeight - 1) {
             let row = y * sampleWidth
             for x in 1..<(sampleWidth - 1) {
                 let horizontal = abs(Int(pixels[row + x + 1]) - Int(pixels[row + x - 1]))
                 let vertical = abs(Int(pixels[row + sampleWidth + x]) - Int(pixels[row - sampleWidth + x]))
-                totalGradient += Float(horizontal + vertical) / 510.0
+                let gradient = Float(horizontal + vertical) / 510.0
+                totalGradient += gradient
+                if gradient >= 0.05 {
+                    edgeSampleCount += 1.0
+                }
+                if gradient >= 0.10 {
+                    strongEdgeSampleCount += 1.0
+                }
                 count += 1.0
             }
         }
         guard count > 0.0 else {
             return 1.0
         }
-        let sharpness = totalGradient / count
-        return 1.0 - clamp((sharpness - 0.015) / 0.11, min: 0.0, max: 1.0)
+        let meanGradient = totalGradient / count
+        let edgeCoverage = edgeSampleCount / count
+        let strongEdgeCoverage = strongEdgeSampleCount / count
+        let sharpnessEvidence = max(meanGradient, edgeCoverage * 0.45, strongEdgeCoverage * 0.9)
+        return 1.0 - clamp((sharpnessEvidence - 0.006) / 0.055, min: 0.0, max: 1.0)
     }
 
     private static func motionBlocks(sampleWidth: Int, sampleHeight: Int) -> [StabilizerMotionBlock] {
@@ -1224,7 +1296,7 @@ enum AutoStabilizationEstimator {
         stride: UInt32,
         sampleWidth: Int,
         sampleHeight: Int
-    ) throws -> (dx: Float, dy: Float, score: Float) {
+    ) throws -> (dx: Float, dy: Float, score: Float, searchRadiusHit: Bool) {
         let centerX = Int(center.0.rounded())
         let centerY = Int(center.1.rounded())
         let side = (radius * 2) + 1
@@ -1281,9 +1353,10 @@ enum AutoStabilizationEstimator {
         }
         let bestDx = Int(bestIndex % side) + centerX - radius
         let bestDy = Int(bestIndex / side) + centerY - radius
+        let searchRadiusHit = abs(bestDx - centerX) >= radius || abs(bestDy - centerY) >= radius
 
         guard refine else {
-            return (Float(bestDx), Float(bestDy), bestScore)
+            return (Float(bestDx), Float(bestDy), bestScore, searchRadiusHit)
         }
 
         func score(dx: Int, dy: Int) -> Float {
@@ -1298,7 +1371,8 @@ enum AutoStabilizationEstimator {
         return (
             Float(bestDx) + axisOffset(before: score(dx: bestDx - 1, dy: bestDy), center: bestScore, after: score(dx: bestDx + 1, dy: bestDy)),
             Float(bestDy) + axisOffset(before: score(dx: bestDx, dy: bestDy - 1), center: bestScore, after: score(dx: bestDx, dy: bestDy + 1)),
-            bestScore
+            bestScore,
+            searchRadiusHit
         )
     }
 
@@ -1857,7 +1931,7 @@ enum AutoStabilizationEstimator {
         totalBlockCount: Int32
     ) -> Float {
         let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
-        let blurQuality = clamp(1.0 - (blurAmount * 0.85), min: 0.0, max: 1.0)
+        let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
         let blockQuality: Float
         if totalBlockCount > 0 {
             blockQuality = clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0)
@@ -1988,7 +2062,9 @@ final class StreamingStabilizationAnalysisBuilder {
                 analysisConfidence: 1.0,
                 warpConfidence: 0.0,
                 acceptedBlockCount: 0,
-                totalBlockCount: 0
+                totalBlockCount: 0,
+                searchRadiusHitCount: 0,
+                searchRadiusTotalCount: 0
             ))
         }
         frames.append(frame.withoutRetainedPixels())

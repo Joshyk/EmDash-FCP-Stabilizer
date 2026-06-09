@@ -44,10 +44,10 @@ Current implementation to review:
     - `warpConfidence`, `shear`, `yawPitchProxy`, and `perspective`
     - sample count and smoothing window seconds
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift`
-  - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Turn Smoothing, Footstep Jitter, Walking Bob, temporal smoothing delta, and Far-field Warp.
-  - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, raw `foot q`, effective Footstep Jitter X/Y/R strength, `warp q`, shear, yaw/pitch proxy, perspective, block counts, X turn correction, and Y footstep/bob component split.
+  - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Turn Smoothing, Footstep/Stride, Walking Bob, temporal smoothing delta, Footstep/Stride/Bob/Warp confidence, tracking quality, blur, residual, and search-radius hits.
+  - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, tracking/motion confidence, blur, residual, raw `foot q`, effective Footstep Jitter X/Y/R strength, `stride q`, `bob q`, `warp q`, shear, yaw/pitch proxy, perspective, block counts, edge-hit counts, X turn correction, and Y footstep/stride/bob component split.
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerTransform.metal`
-  - The overlay draws eleven rows of diagnostic bars.
+  - The overlay draws fifteen labeled rows of diagnostic bars.
 
 Please review this implementation for walking-gimbal smoothing quality. Focus on:
 

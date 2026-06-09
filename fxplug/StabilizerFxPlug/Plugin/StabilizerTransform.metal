@@ -25,6 +25,178 @@ vertex RasterizerData vertexShader(
     return out;
 }
 
+static uint debugLabelRowBits(uint code, uint y) {
+    switch (code) {
+        case 66: // B
+            if (y == 0 || y == 2 || y == 4) { return 0x6; }
+            return 0x5;
+        case 69: // E
+            if (y == 0 || y == 4) { return 0x7; }
+            if (y == 2) { return 0x6; }
+            return 0x4;
+        case 70: // F
+            if (y == 0) { return 0x7; }
+            if (y == 2) { return 0x6; }
+            return 0x4;
+        case 72: // H
+            if (y == 2) { return 0x7; }
+            return 0x5;
+        case 73: // I
+            return (y == 0 || y == 4) ? 0x7 : 0x2;
+        case 75: // K
+            return y == 2 ? 0x6 : 0x5;
+        case 76: // L
+            return y == 4 ? 0x7 : 0x4;
+        case 77: // M
+            if (y == 1 || y == 2) { return 0x7; }
+            return 0x5;
+        case 78: // N
+            if (y == 1 || y == 2 || y == 3) { return 0x7; }
+            return 0x5;
+        case 79: // O
+            return (y == 0 || y == 4) ? 0x7 : 0x5;
+        case 80: // P
+            if (y == 0 || y == 2) { return 0x6; }
+            if (y == 1) { return 0x5; }
+            return 0x4;
+        case 81: // Q
+            if (y == 0) { return 0x7; }
+            if (y == 3) { return 0x7; }
+            if (y == 4) { return 0x1; }
+            return 0x5;
+        case 82: // R
+            if (y == 0 || y == 2) { return 0x6; }
+            return 0x5;
+        case 83: // S
+            if (y == 0 || y == 2 || y == 4) { return 0x7; }
+            return y == 1 ? 0x4 : 0x1;
+        case 84: // T
+            return y == 0 ? 0x7 : 0x2;
+        case 85: // U
+            return y == 4 ? 0x7 : 0x5;
+        case 87: // W
+            if (y == 2 || y == 3) { return 0x7; }
+            return 0x5;
+        case 88: // X
+            return y == 2 ? 0x2 : 0x5;
+        case 89: // Y
+            return y < 2 ? 0x5 : 0x2;
+        default:
+            return 0x0;
+    }
+}
+
+static bool debugLabelPixel(uint code, uint x, uint y) {
+    if (code == 0 || x >= 3 || y >= 5) {
+        return false;
+    }
+    uint bits = debugLabelRowBits(code, y);
+    return ((bits >> (2 - x)) & 0x1) != 0;
+}
+
+static uint debugLabelChar(uint row, uint index) {
+    switch (row) {
+        case 0:
+            return index == 0 ? 88 : 0; // X
+        case 1:
+            return index == 0 ? 89 : 0; // Y
+        case 2:
+            if (index == 0) { return 82; } // R
+            if (index == 1) { return 79; } // O
+            if (index == 2 || index == 3) { return 76; } // L
+            return 0;
+        case 3:
+            if (index == 0) { return 84; } // T
+            if (index == 1) { return 85; } // U
+            if (index == 2) { return 82; } // R
+            if (index == 3) { return 78; } // N
+            return 0;
+        case 4:
+            if (index == 0) { return 83; } // S
+            if (index == 1) { return 84; } // T
+            if (index == 2) { return 69; } // E
+            if (index == 3) { return 80; } // P
+            return 0;
+        case 5:
+            if (index == 0) { return 66; } // B
+            if (index == 1) { return 79; } // O
+            if (index == 2) { return 66; } // B
+            return 0;
+        case 6:
+            if (index == 0) { return 83; } // S
+            if (index == 1) { return 77; } // M
+            if (index == 2) { return 84; } // T
+            if (index == 3) { return 72; } // H
+            return 0;
+        case 7:
+            if (index == 0) { return 70; } // F
+            if (index == 2) { return 81; } // Q
+            return 0;
+        case 8:
+            if (index == 0) { return 83; } // S
+            if (index == 2) { return 81; } // Q
+            return 0;
+        case 9:
+            if (index == 0) { return 66; } // B
+            if (index == 2) { return 81; } // Q
+            return 0;
+        case 10:
+            if (index == 0) { return 87; } // W
+            if (index == 2) { return 81; } // Q
+            return 0;
+        case 11:
+            if (index == 0) { return 84; } // T
+            if (index == 1) { return 82; } // R
+            if (index == 2) { return 75; } // K
+            return 0;
+        case 12:
+            if (index == 0) { return 66; } // B
+            if (index == 1) { return 76; } // L
+            if (index == 2) { return 85; } // U
+            if (index == 3) { return 82; } // R
+            return 0;
+        case 13:
+            if (index == 0) { return 82; } // R
+            if (index == 1) { return 69; } // E
+            if (index == 2) { return 83; } // S
+            return 0;
+        case 14:
+            if (index == 0) { return 72; } // H
+            if (index == 1) { return 73; } // I
+            if (index == 2) { return 84; } // T
+            return 0;
+        default:
+            return 0;
+    }
+}
+
+static bool debugLabelCoverage(float panelX, float rowY, uint row) {
+    constexpr float textScale = 2.0;
+    constexpr float glyphWidth = 3.0;
+    constexpr float glyphHeight = 5.0;
+    constexpr float glyphAdvance = 4.0 * textScale;
+
+    float textX = panelX - 6.0;
+    float textY = rowY - 2.0;
+    if (textX < 0.0 || textY < 0.0 || textY >= glyphHeight * textScale) {
+        return false;
+    }
+
+    uint index = uint(floor(textX / glyphAdvance));
+    if (index >= 4) {
+        return false;
+    }
+
+    float glyphLocalX = textX - (float(index) * glyphAdvance);
+    if (glyphLocalX >= glyphWidth * textScale) {
+        return false;
+    }
+
+    uint glyphX = uint(floor(glyphLocalX / textScale));
+    uint glyphY = uint(floor(textY / textScale));
+    return debugLabelPixel(debugLabelChar(row, index), glyphX, glyphY);
+}
+
 fragment float4 fragmentShader(
     RasterizerData in [[stage_in]],
     texture2d<half> colorTexture [[texture(STI_InputImage)]],
@@ -60,10 +232,17 @@ fragment float4 fragmentShader(
 
     if (transform->debugOverlay > 0.5) {
         float2 pixel = uv * transform->outputSize;
-        float barX = pixel.x - 16.0;
-        float barY = pixel.y - 16.0;
-        if (barX >= 0.0 && barX <= 180.0 && barY >= 0.0 && barY <= 143.0) {
-            int row = int(floor(barY / 13.0));
+        float panelX = pixel.x - 16.0;
+        float panelY = pixel.y - 16.0;
+        constexpr float labelWidth = 44.0;
+        constexpr float labelGap = 6.0;
+        constexpr float barWidth = 180.0;
+        constexpr float rowHeight = 13.0;
+        constexpr float panelWidth = labelWidth + labelGap + barWidth;
+        constexpr float panelHeight = 15.0 * rowHeight;
+        if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
+            uint row = uint(floor(panelY / rowHeight));
+            float rowY = panelY - (float(row) * rowHeight);
             float fill = 0.0;
             float3 color = float3(1.0);
             if (row == 0) {
@@ -99,11 +278,34 @@ fragment float4 fragmentShader(
             } else if (row == 10) {
                 fill = saturate(transform->diagnostic3.w);
                 color = float3(1.0, 0.45, 0.25);
+            } else if (row == 11) {
+                fill = saturate(transform->diagnostic4.x);
+                color = float3(0.2, 1.0, 0.55);
+            } else if (row == 12) {
+                fill = saturate(transform->diagnostic4.y);
+                color = float3(0.75, 1.0, 0.25);
+            } else if (row == 13) {
+                fill = saturate(transform->diagnostic4.z);
+                color = float3(1.0, 0.65, 0.15);
+            } else if (row == 14) {
+                fill = saturate(transform->diagnostic4.w);
+                color = float3(1.0, 0.1, 0.1);
             }
-            float activeWidth = 180.0 * fill;
+            float barX = panelX - labelWidth - labelGap;
+            bool inBar = barX >= 0.0 && barX <= barWidth && rowY >= 2.0 && rowY <= 11.0;
+            float activeWidth = barWidth * fill;
             float3 background = float3(0.02, 0.02, 0.02);
-            float3 overlay = barX <= activeWidth ? color : background;
-            outputColor.rgb = mix(outputColor.rgb, overlay, 0.78);
+            float3 overlay = background;
+            float alpha = 0.62;
+            if (inBar) {
+                overlay = barX <= activeWidth ? color : background;
+                alpha = 0.78;
+            }
+            if (debugLabelCoverage(panelX, rowY, row)) {
+                overlay = float3(0.94, 0.96, 0.98);
+                alpha = 0.92;
+            }
+            outputColor.rgb = mix(outputColor.rgb, overlay, alpha);
             outputColor.a = 1.0;
         }
     }

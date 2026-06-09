@@ -121,14 +121,15 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Runtime status publishing is retried until Final Cut Pro's parameter-setting API accepts
   the update, so existing clips do not keep a stale visible FxPlug version after a newly
   installed build starts rendering.
-- `Debug Overlay`: top-left diagnostics for final X/Y/rotation, Turn Smoothing, Footstep
-  Jitter, Stride Wobble, Walking Bob, temporal smoothing delta, and live Footstep/Stride/Bob/Warp
-  confidence while checking runtime behavior. When enabled, `Host Analysis Status` also shows the current raw
-  center-frame transform, the smoothed transform delta, the raw `foot q`, the effective
-  Footstep Jitter X/Y/R correction strength, `stride q`, the effective Stride Wobble X/Y/R
-  correction strength, `warp q`, shear, yaw/pitch proxy, perspective, the X turn and stride
-  components plus Y footstep, stride, and walking-bob components, plus separate `bob q`
-  confidence.
+- `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `TURN`, `STEP`,
+  `BOB`, `SMTH`, live `F Q`/`S Q`/`B Q`/`W Q` confidence, plus `TRK`, `BLUR`, `RES`, and
+  search-radius `HIT` bars while checking runtime behavior. When enabled, `Host Analysis
+  Status` also shows the current raw center-frame transform, the smoothed transform delta,
+  tracking/motion confidence, blur, residual, the raw `foot q`, the effective Footstep
+  Jitter X/Y/R correction strength, `stride q`, the effective Stride Wobble X/Y/R correction
+  strength, `warp q`, shear, yaw/pitch proxy, perspective, edge-hit counts, the X turn and
+  stride components plus Y footstep, stride, and walking-bob components, plus separate
+  `bob q` confidence.
 - Strength values above `1.0` still compensate low-confidence Footstep, Stride Wobble, and
   Walking Bob detections, but the render-time confidence response is curved so saved clips at
   `4.0` do not snap medium-confidence frames straight to full correction.

@@ -146,10 +146,11 @@ from an outer-frame linear baseline, so accumulated long-term drift does not bec
 deskew. The default is `1.0`, the slider is capped at `4.0`, and render-time clamps keep
 each unit of shear, yaw/pitch, and perspective small because this path can otherwise make
 close grass, roads, water, or frame edges swim.
-`Debug Overlay` shows top-left diagnostics for final X/Y/roll, Turn Smoothing, Footstep
-Jitter, Stride Wobble, Walking Bob, temporal smoothing delta, and live Footstep/Stride/Bob/Warp
-confidence. `Host Analysis Status` also reports separate `footstep q`, effective Footstep
-Jitter X/Y/R strength, `stride q`, effective Stride Wobble X/Y/R strength, `bob q`, `warp q`,
+`Debug Overlay` shows labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `TURN`,
+`STEP`, `BOB`, `SMTH`, live `F Q`/`S Q`/`B Q`/`W Q` confidence, plus `TRK`, `BLUR`, `RES`,
+and search-radius `HIT` bars. `Host Analysis Status` also reports separate `footstep q`,
+effective Footstep Jitter X/Y/R strength, `stride q`, effective Stride Wobble X/Y/R
+strength, `bob q`, `warp q`, tracking/motion confidence, blur, residual, edge-hit counts,
 and the current warp shape values while rendering. Values above `1.0` on Footstep/Stride/Bob
 controls boost low-confidence corrections with a curved confidence response, so saved clips
 at `4.0` do not snap medium-confidence frames straight to full correction. `Edge Display Mode`

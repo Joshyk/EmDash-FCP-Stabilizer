@@ -168,7 +168,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   host analysis renders identity for that source instead of silently switching modes.
   Proxy media is rejected for Host Analysis input and for unvalidated persisted-cache
   validation, but a validated analysis continues to render during proxy playback.
-- `Debug Overlay` shows top-left diagnostics while checking runtime behavior.
+- `Debug Overlay` shows labeled top-left diagnostics while checking runtime behavior.
 - `Start Host Analysis`: clears the current in-memory host-analysis frames, reloads a saved
   persistent cache if one exists, and only asks Final Cut Pro to start a forward GPU
   analysis when no saved cache can be loaded. Saved cache files remain available for later
@@ -181,7 +181,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Panning X/Y Y-Zs`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available.
-- `Debug Overlay`: normally off. When enabled, the top-left bars visualize automatic X, Y,
-  and rotation diagnostics so Final Cut Pro runtime analysis can be checked. It also writes
-  current render correction values into `Host Analysis Status`, including the Y correction
-  split into macro, micro, and walking-bob components.
+- `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
+  `ROLL`, `TURN`, `STEP`, `BOB`, `SMTH`, confidence (`F Q`, `S Q`, `B Q`, `W Q`), and
+  tracking-quality (`TRK`, `BLUR`, `RES`, `HIT`) diagnostics so Final Cut Pro runtime
+  analysis can be checked. It also writes current render correction values into `Host
+  Analysis Status`, including tracking/motion quality, edge-hit counts, and the Y correction
+  split into footstep, stride, and walking-bob components.

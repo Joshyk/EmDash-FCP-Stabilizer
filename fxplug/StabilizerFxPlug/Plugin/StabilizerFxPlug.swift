@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.114"
+private let stabilizerFxPlugVersion = "0.2.116"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -651,7 +651,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | foot q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
+            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
             frameCount,
             panSmoothSeconds,
             autoTransform.temporalSmoothingSampleCount,
@@ -665,6 +665,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.temporalSmoothingPixelDelta.x,
             autoTransform.temporalSmoothingPixelDelta.y,
             autoTransform.temporalSmoothingRotationDelta,
+            autoTransform.trackingConfidence,
+            autoTransform.motionConfidence,
+            autoTransform.blurAmount,
+            autoTransform.residual,
+            autoTransform.footstepImpulse.x,
+            autoTransform.footstepImpulse.y,
+            autoTransform.footstepImpulse.z,
             autoTransform.microConfidence,
             autoTransform.effectiveMicroJitterStrength.x,
             autoTransform.effectiveMicroJitterStrength.y,
@@ -683,6 +690,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.perspective.y,
             autoTransform.acceptedBlockCount,
             autoTransform.totalBlockCount,
+            autoTransform.searchRadiusHitCount,
+            autoTransform.searchRadiusTotalCount,
             autoTransform.macroPixelOffset.x,
             autoTransform.strideWobblePixelOffset.x,
             autoTransform.microPixelOffset.y,
@@ -802,6 +811,18 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             min(1.0, autoTransform.bobConfidence),
             min(1.0, autoTransform.warpConfidence)
         )
+        let searchRadiusHitRatio: Float
+        if autoTransform.searchRadiusTotalCount > 0 {
+            searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
+        } else {
+            searchRadiusHitRatio = 0.0
+        }
+        let diagnostic4 = vector_float4(
+            min(1.0, autoTransform.trackingConfidence),
+            min(1.0, 1.0 - autoTransform.blurAmount),
+            min(1.0, autoTransform.residual * 50.0),
+            searchRadiusHitRatio
+        )
 
         var transform = StabilizerTransformUniforms(
             pixelOffset: autoTransform.pixelOffset * masterStrength,
@@ -811,6 +832,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             diagnostic: diagnostic,
             diagnostic2: diagnostic2,
             diagnostic3: diagnostic3,
+            diagnostic4: diagnostic4,
             shear: autoTransform.shear * masterStrength,
             perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * masterStrength,
             edgeMode: Float(state.edgeDisplayMode),
@@ -1009,6 +1031,7 @@ private enum HostAnalysisStatus {
     case cacheLoaded
     case ready
     case cacheRejected
+    case cacheUnsupported
     case cacheCleared
     case proxyRejected
 }
@@ -1041,6 +1064,12 @@ private struct PersistedHostAnalysisCache: Codable {
     let acceptedBlockCounts: [Int32]?
     let totalBlockCounts: [Int32]?
     let blurAmounts: [Float]?
+    let searchRadiusHitCounts: [Int32]?
+    let searchRadiusTotalCounts: [Int32]?
+}
+
+private struct PersistedHostAnalysisSchemaHeader: Codable {
+    let schemaVersion: Int
 }
 
 private struct PersistedHostAnalysisFrame: Codable {
@@ -1078,8 +1107,8 @@ private struct LoadedPersistentHostAnalysisCache {
 }
 
 private final class StabilizerHostAnalysisStore {
-    private static let cacheSchemaVersion = 13
-    private static let supportedCacheSchemaVersions: Set<Int> = [13]
+    private static let cacheSchemaVersion = 14
+    private static let supportedCacheSchemaVersions: Set<Int> = [14]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let maxPersistentCacheEntries = 8
@@ -1159,6 +1188,8 @@ private final class StabilizerHostAnalysisStore {
             return "Needs Analysis"
         case .cacheRejected:
             return "Cache Rejected - Run Host Analysis"
+        case .cacheUnsupported:
+            return "Cache Unsupported - Run Host Analysis"
         case .cacheCleared:
             return "Cache Cleared"
         case .proxyRejected:
@@ -1465,8 +1496,13 @@ private final class StabilizerHostAnalysisStore {
             markCurrentPersistentCacheGenerationObserved()
         }
         var candidateURLs = filteredPersistentCacheCandidateURLs()
+        var unsupportedCacheSummaries: [String] = []
         while !candidateURLs.isEmpty {
             let activeURL = candidateURLs.removeFirst()
+            if let unsupportedSummary = Self.unsupportedPersistentCacheSummary(at: activeURL) {
+                unsupportedCacheSummaries.append(unsupportedSummary)
+                continue
+            }
             guard let activeCandidate = Self.loadPersistentCache(at: activeURL) else {
                 continue
             }
@@ -1485,6 +1521,15 @@ private final class StabilizerHostAnalysisStore {
             NSLog("StabilizerFxPlug: loaded persisted Host Analysis cache \(activeCandidate.fileName) with \(activeCandidate.frames.count) frames; \(candidateURLs.count) lazy alternate cache(s) available.")
             return true
         }
+        if let unsupportedCacheSummary = unsupportedCacheSummaries.first {
+            lock.lock()
+            if preparedAnalysis == nil && status != .analyzing {
+                status = .cacheUnsupported
+                analysisInfoText = unsupportedCacheSummary
+                bumpRevisionLocked()
+            }
+            lock.unlock()
+        }
         return false
     }
 
@@ -1492,9 +1537,10 @@ private final class StabilizerHostAnalysisStore {
         let generation = Self.currentPersistentCacheGeneration()
         let signature = Self.currentPersistentCacheSignature()
         lock.lock()
-        let shouldReload = (preparedAnalysis == nil
-            || observedPersistentCacheSignature != signature
-            || observedPersistentCacheGeneration < generation)
+        let cacheChanged = observedPersistentCacheSignature != signature
+            || observedPersistentCacheGeneration < generation
+        let needsInitialLoad = preparedAnalysis == nil && status != .cacheUnsupported
+        let shouldReload = (needsInitialLoad || cacheChanged)
             && persistentCacheCandidates.isEmpty
             && status != .analyzing
             && status != .cacheRejected
@@ -1616,7 +1662,9 @@ private final class StabilizerHostAnalysisStore {
             warpConfidence: prepared.warpConfidence,
             acceptedBlockCounts: prepared.acceptedBlockCounts,
             totalBlockCounts: prepared.totalBlockCounts,
-            blurAmounts: prepared.blurAmounts
+            blurAmounts: prepared.blurAmounts,
+            searchRadiusHitCounts: prepared.searchRadiusHitCounts,
+            searchRadiusTotalCounts: prepared.searchRadiusTotalCounts
         )
 
         do {
@@ -1695,7 +1743,9 @@ private final class StabilizerHostAnalysisStore {
                 warpConfidence: analysis.warpConfidence,
                 acceptedBlockCounts: analysis.acceptedBlockCounts,
                 totalBlockCounts: analysis.totalBlockCounts,
-                blurAmounts: analysis.blurAmounts
+                blurAmounts: analysis.blurAmounts,
+                searchRadiusHitCounts: analysis.searchRadiusHitCounts,
+                searchRadiusTotalCounts: analysis.searchRadiusTotalCounts
             )
         }
         lock.unlock()
@@ -2193,7 +2243,9 @@ private final class StabilizerHostAnalysisStore {
         ]
         let countArrays = [
             cache.acceptedBlockCounts,
-            cache.totalBlockCounts
+            cache.totalBlockCounts,
+            cache.searchRadiusHitCounts,
+            cache.searchRadiusTotalCounts
         ]
         if floatArrays.allSatisfy({ $0?.count == frames.count }),
            countArrays.allSatisfy({ $0?.count == frames.count }),
@@ -2215,7 +2267,9 @@ private final class StabilizerHostAnalysisStore {
            let warpConfidence = cache.warpConfidence,
            let acceptedBlockCounts = cache.acceptedBlockCounts,
            let totalBlockCounts = cache.totalBlockCounts,
-           let blurAmounts = cache.blurAmounts {
+           let blurAmounts = cache.blurAmounts,
+           let searchRadiusHitCounts = cache.searchRadiusHitCounts,
+           let searchRadiusTotalCounts = cache.searchRadiusTotalCounts {
             return StabilizerPreparedAnalysis(
                 frames: frames.sorted { $0.time < $1.time },
                 residuals: residuals,
@@ -2236,7 +2290,9 @@ private final class StabilizerHostAnalysisStore {
                 warpConfidence: warpConfidence,
                 acceptedBlockCounts: acceptedBlockCounts,
                 totalBlockCounts: totalBlockCounts,
-                blurAmounts: blurAmounts
+                blurAmounts: blurAmounts,
+                searchRadiusHitCounts: searchRadiusHitCounts,
+                searchRadiusTotalCounts: searchRadiusTotalCounts
             )
         }
         throw NSError(
@@ -2299,6 +2355,24 @@ private final class StabilizerHostAnalysisStore {
         }
 
         return candidateURLs
+    }
+
+    private static func unsupportedPersistentCacheSummary(at url: URL) -> String? {
+        do {
+            if let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+               fileSize > maxPersistentCacheReadBytes {
+                return nil
+            }
+            let data = try Data(contentsOf: url)
+            let header = try JSONDecoder().decode(PersistedHostAnalysisSchemaHeader.self, from: data)
+            guard !supportedCacheSchemaVersions.contains(header.schemaVersion) else {
+                return nil
+            }
+            let expectedSchema = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ",")
+            return "Cache Unsupported (schema \(header.schemaVersion), need \(expectedSchema)) | \(url.lastPathComponent)"
+        } catch {
+            return nil
+        }
     }
 
     private static func loadPersistentCache(at url: URL) -> LoadedPersistentHostAnalysisCache? {
@@ -2373,7 +2447,9 @@ private final class StabilizerHostAnalysisStore {
                 warpConfidence: cache.warpConfidence,
                 acceptedBlockCounts: cache.acceptedBlockCounts,
                 totalBlockCounts: cache.totalBlockCounts,
-                blurAmounts: cache.blurAmounts
+                blurAmounts: cache.blurAmounts,
+                searchRadiusHitCounts: cache.searchRadiusHitCounts,
+                searchRadiusTotalCounts: cache.searchRadiusTotalCounts
             )
             return LoadedPersistentHostAnalysisCache(
                 fileName: url.lastPathComponent,
