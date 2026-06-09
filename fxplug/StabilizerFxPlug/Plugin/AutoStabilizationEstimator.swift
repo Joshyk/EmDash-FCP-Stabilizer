@@ -10,6 +10,7 @@ struct StabilizerAutoTransform {
     var pixelOffset: vector_float2
     var macroPixelOffset: vector_float2
     var microPixelOffset: vector_float2
+    var strideWobblePixelOffset: vector_float2
     var walkingBobPixelOffset: vector_float2
     var rotationDegrees: Float
     var rawPixelOffset: vector_float2
@@ -19,8 +20,10 @@ struct StabilizerAutoTransform {
     var temporalSmoothingSampleCount: Int32
     var temporalSmoothingWindowSeconds: Float
     var effectiveMicroJitterStrength: vector_float3
+    var effectiveStrideWobbleStrength: vector_float3
     var warpConfidence: Float
     var microConfidence: Float
+    var strideConfidence: Float
     var bobConfidence: Float
     var acceptedBlockCount: Int32
     var totalBlockCount: Int32
@@ -33,6 +36,7 @@ struct StabilizerAutoTransform {
         pixelOffset: vector_float2(0.0, 0.0),
         macroPixelOffset: vector_float2(0.0, 0.0),
         microPixelOffset: vector_float2(0.0, 0.0),
+        strideWobblePixelOffset: vector_float2(0.0, 0.0),
         walkingBobPixelOffset: vector_float2(0.0, 0.0),
         rotationDegrees: 0.0,
         rawPixelOffset: vector_float2(0.0, 0.0),
@@ -42,8 +46,10 @@ struct StabilizerAutoTransform {
         temporalSmoothingSampleCount: 0,
         temporalSmoothingWindowSeconds: 0.0,
         effectiveMicroJitterStrength: vector_float3(0.0, 0.0, 0.0),
+        effectiveStrideWobbleStrength: vector_float3(0.0, 0.0, 0.0),
         warpConfidence: 0.0,
         microConfidence: 0.0,
+        strideConfidence: 0.0,
         bobConfidence: 0.0,
         acceptedBlockCount: 0,
         totalBlockCount: 0,
@@ -58,6 +64,9 @@ struct StabilizerCorrectionStrengths {
     let microJitterX: Double
     let microJitterY: Double
     let microJitterRotation: Double
+    let strideWobbleX: Double
+    let strideWobbleY: Double
+    let strideWobbleRotation: Double
     let panStabilizationStrength: Double
     let walkingBob: Double
     let farFieldWarp: Double
@@ -66,6 +75,9 @@ struct StabilizerCorrectionStrengths {
         microJitterX: 1.0,
         microJitterY: 1.0,
         microJitterRotation: 1.0,
+        strideWobbleX: 0.65,
+        strideWobbleY: 0.35,
+        strideWobbleRotation: 0.75,
         panStabilizationStrength: 0.8,
         walkingBob: 0.75,
         farFieldWarp: 1.0
@@ -241,6 +253,9 @@ enum AutoStabilizationEstimator {
     private static let renderTemporalSmoothingWindowSeconds = 0.55
     private static let footstepImpulseFullScalePixels: Float = 0.35
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
+    private static let strideWobbleWindowSeconds = 0.70
+    private static let strideWobbleFullScalePixels: Float = 0.75
+    private static let strideWobbleFullScaleDegrees: Float = 0.16
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
@@ -408,9 +423,12 @@ enum AutoStabilizationEstimator {
         let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
         let effectiveWalkingBobWindowSeconds = min(max(0.1, walkingBobWindowSeconds), smoothWindowSeconds)
+        let effectiveStrideWobbleWindowSeconds = min(strideWobbleWindowSeconds, effectiveWalkingBobWindowSeconds)
+        let strideWobbleWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveStrideWobbleWindowSeconds * 0.5 }
+        let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : Array(strideWobbleWindowIndices)
         let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }
         let walkingBobActiveIndices = walkingBobWindowIndices.isEmpty ? [centerIndex] : Array(walkingBobWindowIndices)
-        let sampledIndices = activeIndices + walkingBobActiveIndices + [centerIndex] + frameInterpolation.indices
+        let sampledIndices = activeIndices + strideWobbleActiveIndices + walkingBobActiveIndices + [centerIndex] + frameInterpolation.indices
         let footstepBaselineXPath = outerLinearPredictionPath(
             analysis.pathX,
             indices: sampledIndices,
@@ -431,19 +449,40 @@ enum AutoStabilizationEstimator {
         )
 
         let turnSmoothX = timeWeightedMonotonicSCurveValue(
-            analysis.pathX,
+            footstepBaselineXPath,
             frames: frames,
             indices: activeIndices,
             centerTime: renderSeconds,
             windowSeconds: smoothWindowSeconds
         ) ??
-            timeWeightedAverage(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+            timeWeightedAverage(footstepBaselineXPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let pathXAtRender = interpolatedValue(analysis.pathX, using: frameInterpolation)
         let pathYAtRender = interpolatedValue(analysis.pathY, using: frameInterpolation)
         let pathRollAtRender = interpolatedValue(analysis.pathRoll, using: frameInterpolation)
         let microImpulseBaselineX = interpolatedValue(footstepBaselineXPath, using: frameInterpolation)
         let footstepBaselineY = interpolatedValue(footstepBaselineYPath, using: frameInterpolation)
         let microImpulseBaselineRoll = interpolatedValue(footstepBaselineRollPath, using: frameInterpolation)
+        let strideSmoothX = timeWeightedAverage(
+            footstepBaselineXPath,
+            frames: frames,
+            indices: strideWobbleActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let strideSmoothY = timeWeightedAverage(
+            footstepBaselineYPath,
+            frames: frames,
+            indices: strideWobbleActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let strideSmoothRoll = timeWeightedAverage(
+            footstepBaselineRollPath,
+            frames: frames,
+            indices: strideWobbleActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
         let bobSmoothY = timeWeightedAverage(
             footstepBaselineYPath,
             frames: frames,
@@ -457,6 +496,7 @@ enum AutoStabilizationEstimator {
         let xScale = outputSize.x / Float(max(1, sampleWidth))
         let yScale = outputSize.y / Float(max(1, sampleHeight))
         let turnResidual = maxValue(analysis.residuals, indices: activeIndices)
+        let strideResidual = maxValue(analysis.residuals, indices: strideWobbleActiveIndices)
         let bobResidual = maxValue(analysis.residuals, indices: walkingBobActiveIndices)
         let centerResidual = interpolatedValue(analysis.residuals, using: frameInterpolation)
         let blurAmount = timeWeightedAverage(analysis.blurAmounts, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
@@ -494,14 +534,37 @@ enum AutoStabilizationEstimator {
             fullImpulseScale: footstepImpulseFullScaleDegrees
         )
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
+        let strideBandX = microImpulseBaselineX - strideSmoothX
+        let strideBandY = footstepBaselineY - strideSmoothY
+        let strideBandRoll = microImpulseBaselineRoll - strideSmoothRoll
+        let strideTrackingConfidence = clamp((1.0 - (strideResidual * 0.6)) * trackingConfidence, min: 0.0, max: 1.0)
+        let strideXConfidence = strideWobbleConfidence(
+            bandValue: strideBandX,
+            trackingConfidence: strideTrackingConfidence,
+            fullScale: strideWobbleFullScalePixels
+        )
+        let strideYConfidence = strideWobbleConfidence(
+            bandValue: strideBandY,
+            trackingConfidence: strideTrackingConfidence,
+            fullScale: strideWobbleFullScalePixels
+        )
+        let strideRollConfidence = strideWobbleConfidence(
+            bandValue: strideBandRoll,
+            trackingConfidence: strideTrackingConfidence,
+            fullScale: strideWobbleFullScaleDegrees
+        )
+        let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
         let confidence = clamp(1.0 - (turnResidual * 1.2), min: 0.35, max: 1.0)
         let bobConfidence = clamp((1.0 - (bobResidual * 0.4)) * motionConfidence, min: 0.0, max: 1.0)
         let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
         let microXCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence)
         let microYCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence)
         let microRotationCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
+        let strideXCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.strideWobbleX, confidence: strideXConfidence)
+        let strideYCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence)
+        let strideRotationCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.strideWobbleRotation, confidence: strideRollConfidence)
         let walkingBobCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.walkingBob, confidence: bobConfidence)
-        let panBandX = microImpulseBaselineX - turnSmoothX
+        let panBandX = strideSmoothX - turnSmoothX
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
@@ -517,14 +580,18 @@ enum AutoStabilizationEstimator {
         let microCompensationX = -(pathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
         let microCompensationY = -(pathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
         let microCompensationRotation = -(pathRollAtRender - microImpulseBaselineRoll) * microRotationCorrectionStrength
-        let walkingBobBandY = footstepBaselineY - bobSmoothY
+        let strideCompensationX = -strideBandX * xScale * strideXCorrectionStrength
+        let strideCompensationY = -strideBandY * yScale * strideYCorrectionStrength
+        let strideCompensationRotation = -strideBandRoll * strideRotationCorrectionStrength
+        let walkingBobBandY = strideSmoothY - bobSmoothY
         let walkingBobCompensationY = -walkingBobBandY * yScale * walkingBobCorrectionStrength
         let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
         let microPixelOffset = vector_float2(microCompensationX, microCompensationY)
+        let strideWobblePixelOffset = vector_float2(strideCompensationX, strideCompensationY)
         let walkingBobPixelOffset = vector_float2(0.0, walkingBobCompensationY)
-        let compensationX = macroPixelOffset.x + microPixelOffset.x
-        let compensationY = macroPixelOffset.y + microPixelOffset.y + walkingBobPixelOffset.y
-        let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation
+        let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x
+        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + walkingBobPixelOffset.y
+        let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
         let yawPitchProxy = vector_float2(
             clamp(interpolatedValue(analysis.pathYaw, using: frameInterpolation), min: -maxFarFieldYawPitchProxy * farFieldWarpStrength, max: maxFarFieldYawPitchProxy * farFieldWarpStrength),
@@ -542,6 +609,7 @@ enum AutoStabilizationEstimator {
             pixelOffset: vector_float2(compensationX, compensationY),
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
+            strideWobblePixelOffset: strideWobblePixelOffset,
             walkingBobPixelOffset: walkingBobPixelOffset,
             rotationDegrees: compensationRotation,
             rawPixelOffset: vector_float2(compensationX, compensationY),
@@ -555,8 +623,14 @@ enum AutoStabilizationEstimator {
                 microYCorrectionStrength,
                 microRotationCorrectionStrength
             ),
+            effectiveStrideWobbleStrength: vector_float3(
+                strideXCorrectionStrength,
+                strideYCorrectionStrength,
+                strideRotationCorrectionStrength
+            ),
             warpConfidence: warpConfidence,
             microConfidence: jitterConfidence,
+            strideConfidence: strideConfidence,
             bobConfidence: bobConfidence,
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount,
@@ -621,8 +695,12 @@ enum AutoStabilizationEstimator {
         smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
         smoothedTransform.rotationDegrees = rawCenterTransform.rotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
+        smoothedTransform.strideWobblePixelOffset = rawCenterTransform.strideWobblePixelOffset
+        smoothedTransform.effectiveStrideWobbleStrength = rawCenterTransform.effectiveStrideWobbleStrength
+        smoothedTransform.strideConfidence = rawCenterTransform.strideConfidence
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
             + smoothedTransform.microPixelOffset
+            + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.walkingBobPixelOffset
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
@@ -672,6 +750,7 @@ enum AutoStabilizationEstimator {
             pixelOffset: vectorAverage(\.pixelOffset),
             macroPixelOffset: vectorAverage(\.macroPixelOffset),
             microPixelOffset: vectorAverage(\.microPixelOffset),
+            strideWobblePixelOffset: vectorAverage(\.strideWobblePixelOffset),
             walkingBobPixelOffset: vectorAverage(\.walkingBobPixelOffset),
             rotationDegrees: floatAverage(\.rotationDegrees),
             rawPixelOffset: vectorAverage(\.rawPixelOffset),
@@ -681,8 +760,10 @@ enum AutoStabilizationEstimator {
             temporalSmoothingSampleCount: Int32(samples.count),
             temporalSmoothingWindowSeconds: 0.0,
             effectiveMicroJitterStrength: vector3Average(\.effectiveMicroJitterStrength),
+            effectiveStrideWobbleStrength: vector3Average(\.effectiveStrideWobbleStrength),
             warpConfidence: floatAverage(\.warpConfidence),
             microConfidence: floatAverage(\.microConfidence),
+            strideConfidence: floatAverage(\.strideConfidence),
             bobConfidence: floatAverage(\.bobConfidence),
             acceptedBlockCount: Int32(acceptedBlockCount.rounded()),
             totalBlockCount: Int32(totalBlockCount.rounded()),
@@ -1667,6 +1748,21 @@ enum AutoStabilizationEstimator {
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
         let requestedRemoval = max(0.0, Float(strength))
         return clamp(requestedRemoval * confidence, min: 0.0, max: 1.0)
+    }
+
+    private static func strideWobbleConfidence(
+        bandValue: Float,
+        trackingConfidence: Float,
+        fullScale: Float
+    ) -> Float {
+        let magnitude = abs(bandValue)
+        let noiseFloor = fullScale * 0.10
+        let bandQuality = confidenceRamp(
+            magnitude,
+            start: noiseFloor,
+            full: max(noiseFloor + Float.ulpOfOne, fullScale)
+        )
+        return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
     }
 
     private static func frameTrackingConfidence(

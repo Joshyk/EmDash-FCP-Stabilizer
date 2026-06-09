@@ -35,6 +35,17 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   default is `1.0` and the maximum is `4.0`. Values above `1.0` can compensate when
   frame-local confidence makes the detected impulse visibly under-corrected, but render
   output still clamps at full detected-impulse removal to avoid inverse shake.
+- `Stride Wobble X Strength`: direct amount for medium-period horizontal walking wobble that
+  is longer than Footstep Jitter but shorter than broad Turn Smoothing. The default is
+  `0.65` and the maximum is `4.0`.
+- `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
+  default is `0.35` because Walking Bob remains the main longer vertical-cycle correction.
+  Stride Wobble uses a fixed internal `0.70` second render-time window; there is no
+  user-facing Stride Wobble window.
+- `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
+  is `0.75` and the maximum is `4.0`. The correction is measured from the
+  footstep-cleaned baseline and clamped at full detected-band removal during render, so high
+  values do not add inverse shake.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
@@ -44,10 +55,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   push through low-confidence gating when stop-and-go panning is still visible, but render
   output still clamps at full detected turn-band removal. The turn intent is a monotonic
   S-curve through the detection window instead of a straight-line fit. The X turn band
-  is measured from the Footstep Jitter baseline instead of the raw frame path, so short
-  landing shock is not reintroduced by turn smoothing. The macro X output correction is
-  soft-limited to a small edge budget during render so large detected pans do not create
-  stretched-edge jumps in the preview.
+  is measured from the stride-smoothed path instead of the raw frame path, so short landing
+  shock and medium stride wobble are not reintroduced by turn smoothing. The macro X output
+  correction is soft-limited to a small edge budget during render so large detected pans do
+  not create stretched-edge jumps in the preview.
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
   mode this is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis.
@@ -56,9 +67,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   total analyzed path endpoint, so real panning is not delayed into a sliding path. Short
   analyzed ranges are kept in bounds during cleanup so the prepared cache can be saved.
 - `Walking Bob Window`: Y-axis-only window for footstep bob and vertical walking shake
-  left after Footstep Jitter. The correction uses the Y band between the
-  Footstep Jitter baseline and this walking-bob smooth path, which is computed from the same
-  footstep-cleaned baseline without changing X or roll. The default is `1.5` seconds. Use
+  left after Footstep Jitter and Stride Wobble. The correction uses the Y band between the
+  stride-smoothed baseline and this walking-bob smooth path without changing X or roll. The
+  default is `1.5` seconds. Use
   shorter values around `0.4-1.0` seconds for visible footstep bounce and larger values for
   slower vertical sway. Values above `Turn Detection Window` are clamped to the turn window
   during render.
@@ -101,15 +112,17 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
-  loaded FxPlug version, active correction bands (`Footstep jitter`, `Walking Bob`,
-  `Turn Smoothing`), plus completed analysis time, frame count, actual sample image size, source
-  frame size, and pixel transform scale when analysis is available.
+  loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
+  `Walking Bob`, `Turn Smoothing`), plus completed analysis time, frame count, actual sample
+  image size, source frame size, and pixel transform scale when analysis is available.
 - `Debug Overlay`: top-left diagnostics for final X/Y/rotation, Turn Smoothing, Footstep
-  Jitter, Walking Bob, temporal smoothing delta, and Far-field Warp while checking runtime
-  behavior. When enabled, `Host Analysis Status` also shows the current raw center-frame
-  transform, the smoothed transform delta, the raw `foot q`, the effective Footstep Jitter
-  X/Y/R correction strength, `warp q`, shear, yaw/pitch proxy, perspective, the X turn
-  correction plus Y footstep and walking-bob components, plus separate `bob q` confidence.
+  Jitter, Stride Wobble, Walking Bob, temporal smoothing delta, and Far-field Warp while
+  checking runtime behavior. When enabled, `Host Analysis Status` also shows the current raw
+  center-frame transform, the smoothed transform delta, the raw `foot q`, the effective
+  Footstep Jitter X/Y/R correction strength, `stride q`, the effective Stride Wobble X/Y/R
+  correction strength, `warp q`, shear, yaw/pitch proxy, perspective, the X turn and stride
+  components plus Y footstep, stride, and walking-bob components, plus separate `bob q`
+  confidence.
 
 ## Behavior
 
@@ -154,12 +167,13 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   original-media validation can happen later when original frames are available.
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
-  Footstep Jitter impulse path and a Y-only `Walking Bob Window` band-pass path. Y correction
-  is handled by Footstep Jitter first and Walking Bob last; Turn Smoothing does not apply to
-  Y. This keeps horizontal segmented turns, fine high-frequency shake, and footstep vertical
-  bobbing independently tunable without rerunning Host Analysis. Footstep Jitter confidence
-  is evaluated on the current render frame instead of inheriting the worst residual from the
-  wider turn-detection window.
+  Footstep Jitter impulse path, a fixed-window Stride Wobble band, and a Y-only
+  `Walking Bob Window` band-pass path. Y correction is handled by Footstep Jitter first,
+  Stride Wobble second, and Walking Bob last; Turn Smoothing does not apply to Y. This keeps
+  horizontal segmented turns, fine high-frequency shake, medium walking wobble, and footstep
+  vertical bobbing independently tunable without rerunning Host Analysis. Footstep Jitter
+  confidence is evaluated on the current render frame instead of inheriting the worst
+  residual from the wider turn-detection window.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`.

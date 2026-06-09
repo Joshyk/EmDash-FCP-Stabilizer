@@ -167,6 +167,9 @@
 		<target object="10036" channel="./7" name="Footstep Jitter X Strength"/>
 		<target object="10036" channel="./18" name="Footstep Jitter Y Strength"/>
 		<target object="10036" channel="./8" name="Footstep Jitter Rotation Strength"/>
+		<target object="10036" channel="./29" name="Stride Wobble X Strength"/>
+		<target object="10036" channel="./30" name="Stride Wobble Y Strength"/>
+		<target object="10036" channel="./31" name="Stride Wobble Rotation Strength"/>
 		<target object="10036" channel="./23" name="Turn Smoothing Strength"/>
 		<target object="10036" channel="./9" name="Turn Detection Window"/>
 		<target object="10036" channel="./22" name="Walking Bob Window"/>
@@ -273,6 +276,9 @@
 				<parameter name="Footstep Jitter X Strength" id="7" flags="12884901904" default="1" value="1"/>
 				<parameter name="Footstep Jitter Y Strength" id="18" flags="12884901904" default="1" value="1"/>
 				<parameter name="Footstep Jitter Rotation Strength" id="8" flags="12884901904" default="1" value="1"/>
+				<parameter name="Stride Wobble X Strength" id="29" flags="12884901904" default="0.65" value="0.65"/>
+				<parameter name="Stride Wobble Y Strength" id="30" flags="12884901904" default="0.35" value="0.35"/>
+				<parameter name="Stride Wobble Rotation Strength" id="31" flags="12884901904" default="0.75" value="0.75"/>
 				<parameter name="Overall Strength" id="1" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Smoothing Strength" id="23" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Detection Window" id="9" flags="12884901904" default="6" value="6"/>

@@ -22,9 +22,12 @@ private enum ParameterID: UInt32 {
     case walkingBobStrength = 26
     case edgeDisplayMode = 27
     case farFieldWarpStrength = 28
+    case strideWobbleXStrength = 29
+    case strideWobbleYStrength = 30
+    case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.110"
+private let stabilizerFxPlugVersion = "0.2.111"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -65,6 +68,9 @@ private struct StabilizerPluginState {
     var microJitterXStrength: Double
     var microJitterYStrength: Double
     var microJitterRotationStrength: Double
+    var strideWobbleXStrength: Double
+    var strideWobbleYStrength: Double
+    var strideWobbleRotationStrength: Double
     var panStabilizationStrength: Double
     var walkingBobStrength: Double
     var farFieldWarpStrength: Double
@@ -218,6 +224,39 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
+            withName: "Stride Wobble X Strength",
+            parameterID: ParameterID.strideWobbleXStrength.rawValue,
+            defaultValue: 0.65,
+            parameterMin: 0.0,
+            parameterMax: 4.0,
+            sliderMin: 0.0,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Stride Wobble Y Strength",
+            parameterID: ParameterID.strideWobbleYStrength.rawValue,
+            defaultValue: 0.35,
+            parameterMin: 0.0,
+            parameterMax: 4.0,
+            sliderMin: 0.0,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Stride Wobble Rotation Strength",
+            parameterID: ParameterID.strideWobbleRotationStrength.rawValue,
+            defaultValue: 0.75,
+            parameterMin: 0.0,
+            parameterMax: 4.0,
+            sliderMin: 0.0,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
             withName: "Turn Detection Window",
             parameterID: ParameterID.panSmoothSeconds.rawValue,
             defaultValue: 6.0,
@@ -347,6 +386,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             microJitterXStrength: 1.0,
             microJitterYStrength: 1.0,
             microJitterRotationStrength: 1.0,
+            strideWobbleXStrength: 0.65,
+            strideWobbleYStrength: 0.35,
+            strideWobbleRotationStrength: 0.75,
             panStabilizationStrength: 1.0,
             walkingBobStrength: 0.75,
             farFieldWarpStrength: 1.0,
@@ -363,6 +405,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         paramAPI.getFloatValue(&state.microJitterXStrength, fromParameter: ParameterID.xStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.microJitterYStrength, fromParameter: ParameterID.yStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.microJitterRotationStrength, fromParameter: ParameterID.rotationStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.strideWobbleXStrength, fromParameter: ParameterID.strideWobbleXStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.strideWobbleYStrength, fromParameter: ParameterID.strideWobbleYStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.strideWobbleRotationStrength, fromParameter: ParameterID.strideWobbleRotationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panStabilizationStrength, fromParameter: ParameterID.panStabilizationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.walkingBobStrength, fromParameter: ParameterID.walkingBobStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.farFieldWarpStrength, fromParameter: ParameterID.farFieldWarpStrength.rawValue, at: renderTime)
@@ -539,6 +584,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 state.microJitterRotationStrength
             ))
             lines.append(String(
+                format: "Stride wobble | X %.2f Y %.2f R %.2f",
+                state.strideWobbleXStrength,
+                state.strideWobbleYStrength,
+                state.strideWobbleRotationStrength
+            ))
+            lines.append(String(
                 format: "Walking Bob <= %.2fs | removal %.2f",
                 state.walkingBobWindowSeconds,
                 state.walkingBobStrength
@@ -597,7 +648,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | foot q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d | x turn %.1f | y foot %.1f bob %.1f",
+            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | foot q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
             frameCount,
             panSmoothSeconds,
             autoTransform.temporalSmoothingSampleCount,
@@ -615,6 +666,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.effectiveMicroJitterStrength.x,
             autoTransform.effectiveMicroJitterStrength.y,
             autoTransform.effectiveMicroJitterStrength.z,
+            autoTransform.strideConfidence,
+            autoTransform.effectiveStrideWobbleStrength.x,
+            autoTransform.effectiveStrideWobbleStrength.y,
+            autoTransform.effectiveStrideWobbleStrength.z,
             autoTransform.bobConfidence,
             autoTransform.warpConfidence,
             autoTransform.shear.x,
@@ -626,7 +681,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.acceptedBlockCount,
             autoTransform.totalBlockCount,
             autoTransform.macroPixelOffset.x,
+            autoTransform.strideWobblePixelOffset.x,
             autoTransform.microPixelOffset.y,
+            autoTransform.strideWobblePixelOffset.y,
             autoTransform.walkingBobPixelOffset.y
         )
         publishHostAnalysisStatus(statusOverride: status)
@@ -704,6 +761,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     microJitterX: state.microJitterXStrength,
                     microJitterY: state.microJitterYStrength,
                     microJitterRotation: state.microJitterRotationStrength,
+                    strideWobbleX: state.strideWobbleXStrength,
+                    strideWobbleY: state.strideWobbleYStrength,
+                    strideWobbleRotation: state.strideWobbleRotationStrength,
                     panStabilizationStrength: state.panStabilizationStrength,
                     walkingBob: state.walkingBobStrength,
                     farFieldWarp: state.farFieldWarpStrength
@@ -724,7 +784,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let diagnostic2 = vector_float4(
             min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
             min(1.0, max(
-                simd_length(vector_float2(autoTransform.microPixelOffset.x / diagnosticScaleX, autoTransform.microPixelOffset.y / diagnosticScaleY)),
+                simd_length(vector_float2(
+                    (autoTransform.microPixelOffset.x + autoTransform.strideWobblePixelOffset.x) / diagnosticScaleX,
+                    (autoTransform.microPixelOffset.y + autoTransform.strideWobblePixelOffset.y) / diagnosticScaleY
+                )),
                 abs(autoTransform.rotationDegrees) / 5.0
             )),
             min(1.0, abs(autoTransform.walkingBobPixelOffset.y) / diagnosticScaleY),

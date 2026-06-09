@@ -102,6 +102,15 @@ weak evidence weakens the correction instead of forcing shake removal. The final
 smoothing keeps the current-frame Footstep Jitter X/Y/roll impulse instead of averaging it
 away. The applied correction still clamps at full
 detected-impulse removal so it does not add inverse shake.
+Stride Wobble sits between Footstep Jitter and Walking Bob for walking footage where each
+step creates a short follow-through shake that is longer than a landing impulse but shorter
+than broad vertical bob. It uses a fixed `0.70` second render-time window, not a user-facing
+window control. The Inspector exposes only `Stride Wobble X Strength`,
+`Stride Wobble Y Strength`, and `Stride Wobble Rotation Strength`; the defaults favor X and
+roll while keeping Y weaker so Walking Bob remains the main vertical-cycle correction.
+The correction is measured from the footstep-cleaned baseline, then longer Turn Smoothing
+and Walking Bob bands are measured from the stride-smoothed path so the same motion is not
+removed twice.
 Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
 limiter only clamps isolated acceleration spikes in the saved X/Y/roll motion path while
 preserving the total analyzed turn amount, so one bad frame does not create a new snap in
@@ -115,12 +124,12 @@ can push through low-confidence gating when the turn still looks segmented, whil
 applied correction clamps at full detected turn-band removal. Turn smoothing applies only
 to X translation and does not change Y or roll. The macro X turn correction is soft-limited
 to a small output-edge budget during render, so a large detected pan cannot create
-stretched-edge jumps in the preview. Y correction is handled by Footstep Jitter and Walking
-Bob only.
+stretched-edge jumps in the preview. Y correction is handled by Footstep Jitter, Stride
+Wobble, and Walking Bob only.
 Footstep vertical motion is controlled with `Walking Bob Window` and `Walking Bob Removal`,
 which remain in the same effect as the final Y-only correction stage. Walking Bob targets
-the remaining medium-period vertical band after Footstep Jitter; it does not gate or reduce
-Footstep Jitter Y. The default removal is `0.75` to avoid overcorrecting
+the remaining vertical band after Footstep Jitter and Stride Wobble; it does not gate or
+reduce Footstep Jitter Y. The default removal is `0.75` to avoid overcorrecting
 walking footage. Shorter window values around `0.4-1.0` seconds target visible footstep
 bounce. Footstep Jitter and Walking Bob strengths are clamped at full detected-band removal
 during render, so high slider values do not add inverse shake. Values above `1.0` are useful
@@ -132,13 +141,15 @@ default is `1.0`, the slider is capped at `4.0`, and render-time clamps keep eac
 shear, yaw/pitch, and perspective small because this path can otherwise make close grass,
 roads, water, or frame edges swim.
 `Debug Overlay` shows top-left diagnostics for final X/Y/roll, Turn Smoothing, Footstep
-Jitter, Walking Bob, temporal smoothing delta, and Far-field Warp, including separate
-`footstep q`, effective Footstep Jitter X/Y/R strength, `bob q`, and `warp q` values in
+Jitter, Stride Wobble, Walking Bob, temporal smoothing delta, and Far-field Warp, including
+separate `footstep q`, effective Footstep Jitter X/Y/R strength, `stride q`, effective
+Stride Wobble X/Y/R strength, `bob q`, and `warp q` values in
 Host Analysis status while rendering. `Edge Display Mode` switches preview edges between
 stretched source edges and black outside-source pixels.
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
-the active correction bands (`Footstep jitter`, `Walking Bob`, `Turn Smoothing`), and analysis
-metadata, so the Inspector can confirm which installed runtime Final Cut Pro is using.
+the active correction bands (`Footstep jitter`, `Stride wobble`, `Walking Bob`,
+`Turn Smoothing`), and analysis metadata, so the Inspector can confirm which installed
+runtime Final Cut Pro is using.
 
 ## Build
 
