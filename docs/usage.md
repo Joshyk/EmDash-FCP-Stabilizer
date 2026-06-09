@@ -57,7 +57,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Footstep Jitter X/Y/roll impulse paths are saved separately before the limiter is applied,
   so fine frame-level shake remains available to render-time correction. Short analyzed
   ranges are kept in bounds during cleanup so the prepared cache can be saved.
-- `Walking Bob`: fixed internal `2.0` second Y-axis-only window for footstep bob and
+- `Walking Bob`: fixed internal `4.0` second Y-axis-only baseline for footstep bob and
   vertical walking shake left after Footstep Jitter and Stride Wobble. The correction uses
   the Y band between the stride-smoothed baseline and this walking-bob smooth path without
   changing X or roll. There is no user-facing window control; `Turn Detection Window` has its
@@ -191,7 +191,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
   Footstep Jitter impulse path, a fixed `2.0` second Stride Wobble band, and a Y-only
-  fixed `2.0` second Walking Bob band-pass path. Y correction is handled by Footstep Jitter
+  fixed `4.0` second Walking Bob band-pass path. Y correction is handled by Footstep Jitter
   first, Stride Wobble second, and Walking Bob last; Turn Smoothing does not apply to Y.
   This keeps horizontal segmented turns, fine high-frequency shake, medium walking wobble,
   and footstep vertical bobbing independently tunable without rerunning Host Analysis.
@@ -199,9 +199,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   the worst residual from the wider turn-detection window.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
-  shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`. The applied
+  shear at `0.016`, yaw/pitch proxy at `0.010`, and perspective at `0.006`. The applied
   value is the local warp band against its `0.10`/`1.0` second outer-frame linear baseline,
-  not the absolute accumulated warp path. Render also requires enough tracking quality and
+  not the absolute accumulated warp path. Render also requires strong tracking quality and
   search-radius headroom before applying warp, and drops tiny warp deltas through a deadband
   to avoid wave-like image distortion while tuning micro jitter.
 - Host Analysis cache schema `14` stores the original-size-percentage sample path with the

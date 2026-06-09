@@ -74,7 +74,7 @@ Y or roll, and is soft-limited to a small output-edge budget during render.
 `Turn Detection Window` comes from the Inspector UI value. Its UI minimum is the
 fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
 
-`Walking Bob` uses a fixed internal `2.0` second Y-only window for the remaining
+`Walking Bob` uses a fixed internal `4.0` second Y-only baseline for the remaining
 vertical walking bounce after Footstep Jitter and Stride Wobble. The Inspector
 exposes only `Walking Bob Removal`; it does not gate or weaken Footstep Jitter Y.
 The default removal is `0.75`.
@@ -85,7 +85,8 @@ frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
 maximum is `4.0`. The render path gates warp by current tracking quality and
 search-radius headroom, then drops tiny warp deltas through a deadband so weak
-frames do not create visible swimming or wave-like distortion.
+frames do not create visible swimming or wave-like distortion. Low-confidence
+warp evidence is suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It does not control black outside-source pixels;
@@ -119,10 +120,10 @@ path endpoints and total analyzed turn amount. Raw X/Y/roll impulse paths are
 stored separately so Footstep Jitter can still correct frame-level shake at
 render time.
 
-Render-time smoothing samples neighboring render times symmetrically and blends
-the automatic transform with zero phase. It smooths Stride Wobble, Walking Bob,
-and Turn Smoothing bands without averaging away the current frame's Footstep
-Jitter impulse.
+Render-time smoothing samples neighboring render times symmetrically across a
+wider zero-phase window and blends the automatic transform. It smooths Stride
+Wobble, Walking Bob, Far-field Warp, and Turn Smoothing bands without averaging
+away the current frame's Footstep Jitter impulse.
 
 Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the

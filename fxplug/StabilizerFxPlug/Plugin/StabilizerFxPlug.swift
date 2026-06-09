@@ -26,9 +26,9 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.127"
+private let stabilizerFxPlugVersion = "0.2.128"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
-private let stabilizerFixedWalkingBobWindowSeconds = 2.0
+private let stabilizerFixedWalkingBobWindowSeconds = 4.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 
 private enum StabilizerEdgeDisplayMode: Int32 {
@@ -802,9 +802,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             abs(autoTransform.strideWobbleRotationDegrees) / 5.0
         ))
         let farFieldWarpActivity = min(1.0, max(
-            simd_length(autoTransform.shear) / 0.032,
-            simd_length(autoTransform.yawPitchProxy) / 0.016,
-            simd_length(autoTransform.perspective) / 0.012
+            simd_length(autoTransform.shear) / 0.016,
+            simd_length(autoTransform.yawPitchProxy) / 0.010,
+            simd_length(autoTransform.perspective) / 0.006
         ))
         let diagnostic = vector_float4(
             min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),

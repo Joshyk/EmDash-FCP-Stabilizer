@@ -146,7 +146,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
-- `Walking Bob`: fixed internal `2.0` second Y-only walking bob band after FJIT and SWOB.
+- `Walking Bob`: fixed internal `4.0` second Y-only walking bob band after FJIT and SWOB.
   There is no user-facing BOB window control; Turn Detection has its own Inspector slider.
 - `Walking Bob Removal`: direct amount for the Y-only BOB correction. Setting it to `0` does
   not disable Footstep Jitter Y, and higher values are clamped during render to avoid inverse
@@ -154,8 +154,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Far-field Warp Strength`: bundled small-clamp WARP correction for distant ridge-line
   shake. It uses a `0.10`/`1.0` second outer-frame linear warp baseline and applies shear,
   yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
-  gates warp by tracking quality and search-radius headroom, then applies a tiny deadband so
-  weak frames do not create wave-like image distortion.
+  gates warp by tracking quality and search-radius headroom, then applies a tiny deadband and
+  small render-only clamps so weak frames do not create wave-like image distortion.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.
@@ -187,7 +187,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Cache Cleared` in `Host Analysis Status`.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
   version, active correction bands (`Footstep jitter <= 1s`, `Stride wobble <= 2s`,
-  `Walking Bob <= 2s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
+  `Walking Bob <= 4s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,

@@ -275,8 +275,8 @@ enum AutoStabilizationEstimator {
     private static let rotationGain: Float = 1.0
     private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
-    private static let renderTemporalSmoothingSampleCount = 15
-    private static let renderTemporalSmoothingWindowSeconds = 0.55
+    private static let renderTemporalSmoothingSampleCount = 21
+    private static let renderTemporalSmoothingWindowSeconds = 0.85
     private static let footstepImpulseFullScalePixels: Float = 0.35
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
     private static let strideWobbleWindowSeconds = 2.0
@@ -285,15 +285,18 @@ enum AutoStabilizationEstimator {
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
-    private static let farFieldWarpTrackingGateStart: Float = 0.35
-    private static let farFieldWarpTrackingGateFull: Float = 0.75
-    private static let farFieldWarpEdgeQualityGateStart: Float = 0.45
-    private static let farFieldWarpEdgeQualityGateFull: Float = 0.85
+    private static let maxRenderedFarFieldShear: Float = 0.004
+    private static let maxRenderedFarFieldYawPitchProxy: Float = 0.0025
+    private static let maxRenderedFarFieldPerspective: Float = 0.0015
+    private static let farFieldWarpTrackingGateStart: Float = 0.50
+    private static let farFieldWarpTrackingGateFull: Float = 0.85
+    private static let farFieldWarpEdgeQualityGateStart: Float = 0.60
+    private static let farFieldWarpEdgeQualityGateFull: Float = 0.92
     private static let footstepImpulseInnerWindowSeconds = 0.10
     private static let footstepImpulseOuterWindowSeconds = 1.0
     private static let farFieldWarpInnerWindowSeconds = 0.10
     private static let farFieldWarpOuterWindowSeconds = 1.0
-    private static let fixedWalkingBobWindowSeconds = 2.0
+    private static let fixedWalkingBobWindowSeconds = 4.0
     private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
@@ -693,22 +696,22 @@ enum AutoStabilizationEstimator {
                     values: analysis.pathYaw,
                     baselineValues: farFieldBaselineYawPath,
                     interpolation: frameInterpolation,
-                    deadband: maxFarFieldYawPitchProxy * 0.08,
+                    deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
                     confidence: farFieldWarpGate
                 ),
-                min: -maxFarFieldYawPitchProxy * farFieldWarpStrength,
-                max: maxFarFieldYawPitchProxy * farFieldWarpStrength
+                min: -maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength,
+                max: maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength
             ),
             clamp(
                 farFieldWarpBandValue(
                     values: analysis.pathPitch,
                     baselineValues: farFieldBaselinePitchPath,
                     interpolation: frameInterpolation,
-                    deadband: maxFarFieldYawPitchProxy * 0.08,
+                    deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
                     confidence: farFieldWarpGate
                 ),
-                min: -maxFarFieldYawPitchProxy * farFieldWarpStrength,
-                max: maxFarFieldYawPitchProxy * farFieldWarpStrength
+                min: -maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength,
+                max: maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength
             )
         )
         let shear = vector_float2(
@@ -717,22 +720,22 @@ enum AutoStabilizationEstimator {
                     values: analysis.pathShearX,
                     baselineValues: farFieldBaselineShearXPath,
                     interpolation: frameInterpolation,
-                    deadband: maxFarFieldShear * 0.08,
+                    deadband: maxRenderedFarFieldShear * 0.08,
                     confidence: farFieldWarpGate
                 ),
-                min: -maxFarFieldShear * farFieldWarpStrength,
-                max: maxFarFieldShear * farFieldWarpStrength
+                min: -maxRenderedFarFieldShear * farFieldWarpStrength,
+                max: maxRenderedFarFieldShear * farFieldWarpStrength
             ),
             clamp(
                 farFieldWarpBandValue(
                     values: analysis.pathShearY,
                     baselineValues: farFieldBaselineShearYPath,
                     interpolation: frameInterpolation,
-                    deadband: maxFarFieldShear * 0.08,
+                    deadband: maxRenderedFarFieldShear * 0.08,
                     confidence: farFieldWarpGate
                 ),
-                min: -maxFarFieldShear * farFieldWarpStrength,
-                max: maxFarFieldShear * farFieldWarpStrength
+                min: -maxRenderedFarFieldShear * farFieldWarpStrength,
+                max: maxRenderedFarFieldShear * farFieldWarpStrength
             )
         )
         let perspective = vector_float2(
@@ -741,22 +744,22 @@ enum AutoStabilizationEstimator {
                     values: analysis.pathPerspectiveX,
                     baselineValues: farFieldBaselinePerspectiveXPath,
                     interpolation: frameInterpolation,
-                    deadband: maxFarFieldPerspective * 0.08,
+                    deadband: maxRenderedFarFieldPerspective * 0.08,
                     confidence: farFieldWarpGate
                 ),
-                min: -maxFarFieldPerspective * farFieldWarpStrength,
-                max: maxFarFieldPerspective * farFieldWarpStrength
+                min: -maxRenderedFarFieldPerspective * farFieldWarpStrength,
+                max: maxRenderedFarFieldPerspective * farFieldWarpStrength
             ),
             clamp(
                 farFieldWarpBandValue(
                     values: analysis.pathPerspectiveY,
                     baselineValues: farFieldBaselinePerspectiveYPath,
                     interpolation: frameInterpolation,
-                    deadband: maxFarFieldPerspective * 0.08,
+                    deadband: maxRenderedFarFieldPerspective * 0.08,
                     confidence: farFieldWarpGate
                 ),
-                min: -maxFarFieldPerspective * farFieldWarpStrength,
-                max: maxFarFieldPerspective * farFieldWarpStrength
+                min: -maxRenderedFarFieldPerspective * farFieldWarpStrength,
+                max: maxRenderedFarFieldPerspective * farFieldWarpStrength
             )
         )
         return StabilizerAutoTransform(

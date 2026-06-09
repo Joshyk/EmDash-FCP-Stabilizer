@@ -158,10 +158,10 @@ SWOB. The turn band should be measured from the stride-smoothed path instead of 
 path, and Y correction must stay Footstep Jitter first, Stride Wobble second, and Walking Bob
 last so short landing shock is not reintroduced by turn smoothing.
 Y-axis walking bob between micro jitter and panning should be handled by the render-time
-fixed `2.0` second `Walking Bob` and `Walking Bob Removal` path, which corrects the Y-only
-band between the stride-smoothed baseline and the walking-bob smoothing window, without
-changing X or roll and without rerunning Host Analysis. Do not expose a user-facing Walking
-Bob window control.
+fixed `4.0` second `Walking Bob` and `Walking Bob Removal` path, which corrects the Y-only
+band between the fixed `2.0` second stride-smoothed baseline and the longer walking-bob
+smoothing window, without changing X or roll and without rerunning Host Analysis. Do not
+expose a user-facing Walking Bob window control.
 Walking Bob should remain in the same effect as the final Y-only correction stage. It must
 use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, and setting
 `Walking Bob Removal` to zero must still allow Footstep Jitter Y to work.
@@ -177,11 +177,11 @@ shake in walking landscape footage. Keep the default at `1.0`, expose up to `4.0
 unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
 debug/status output, and render the correction from the current frame's local deviation from
 its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long-term drift
-does not become a fixed deskew. Render should safety-gate warp by current tracking quality
-and search-radius headroom, and use a tiny render-time deadband so weak warp deltas do not
-create swimming or wave-like distortion. `W Q` should represent the applied warp confidence
-after those safety gates. Bump Host Analysis cache schema when prepared warp path semantics
-change.
+does not become a fixed deskew. Low tracking confidence or poor search-radius headroom should
+gate Far-field Warp off instead of creating wave-like image distortion. Render should use a
+tiny render-time deadband so weak warp deltas do not create swimming or wave-like distortion.
+`W Q` should represent the applied warp confidence after those safety gates. Bump Host
+Analysis cache schema when prepared warp path semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
 Overlay`; debug overlay should only show diagnostics.
