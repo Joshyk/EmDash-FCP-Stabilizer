@@ -26,9 +26,9 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.136"
+private let stabilizerFxPlugVersion = "0.2.137"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
-private let stabilizerFixedWalkingBobWindowSeconds = 4.0
+private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 
 private enum StabilizerEdgeDisplayMode: Int32 {

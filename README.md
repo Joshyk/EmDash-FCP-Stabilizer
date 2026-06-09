@@ -93,7 +93,7 @@ frames do not create visible swimming or wave-like distortion. Low-confidence
 warp evidence is suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V136` row for the active
+bands and tracking state. It also includes a compact `V137` row for the active
 render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 
@@ -129,7 +129,7 @@ stored separately so Footstep Jitter can still correct frame-level shake at
 render time.
 
 Render-time smoothing samples neighboring render times symmetrically across a
-wider zero-phase window and blends the automatic transform. It smooths Stride
+`1.20` second zero-phase window and blends the automatic transform. It smooths Stride
 Wobble, Walking Bob, Far-field Warp, and Turn Smoothing bands without averaging
 away the current frame's Footstep Jitter impulse.
 

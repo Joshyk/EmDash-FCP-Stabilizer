@@ -132,10 +132,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
-  compact `V136` row in `Debug Overlay` when confirming the active render runtime.
+  compact `V137` row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V136` bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V137` bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
@@ -184,8 +184,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   jerk limiter used by broader pan, turn, and bob stages. Those raw footstep paths and their
   baselines are sampled continuously at render time so panning does not snap between nearest
   analyzed frames and frame-level shake is not erased before Footstep Jitter can correct it.
-  The final automatic transform is also sampled across a wider symmetric render-time window
-  and blended with zero phase. This increases preview compute per frame but makes the pan
+  The final automatic transform is also sampled across a `1.20` second symmetric render-time
+  window and blended with zero phase. This increases preview compute per frame but makes the pan
   correction as smooth as possible without rerunning Host Analysis. Debug output reports the
   raw center-frame transform and the smoothing delta so visible stepping can be diagnosed
   from the Inspector. Footstep Jitter X/Y and roll keep the current render frame's impulse

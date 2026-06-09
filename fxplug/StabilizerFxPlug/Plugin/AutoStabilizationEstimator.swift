@@ -276,7 +276,7 @@ enum AutoStabilizationEstimator {
     private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 21
-    private static let renderTemporalSmoothingWindowSeconds = 0.85
+    private static let renderTemporalSmoothingWindowSeconds = 1.20
     private static let footstepImpulseFullScalePixels: Float = 0.35
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
     private static let strideWobbleWindowSeconds = 2.0
