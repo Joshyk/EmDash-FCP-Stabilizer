@@ -131,8 +131,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   default is `0.5`; `1.0` fully removes the detected impulse, and higher values are clamped
   during render to avoid inverse shake.
 - `Micro Jitter Y Strength`: direct amount for vertical micro-jitter correction. The default
-  is `0.5`. Micro Jitter uses an outer-frame linear prediction that skips the center shock
-  region for X/Y/rotation, so footstep landing shock is treated as a frame-level impulse
+  is `0.5`. Micro Jitter uses a seconds-based outer-frame linear prediction that skips the
+  center `0.10` second shock region and predicts from outer samples up to `0.40` seconds
+  away for X/Y/rotation, so footstep landing shock is treated as a frame-level impulse
   instead of being averaged back into the smooth path. `1.0` fully removes the detected
   impulse, and higher values are clamped during render to avoid inverse shake.
 - `Micro Jitter Rotation Strength`: direct amount for roll micro-jitter correction. The
@@ -197,7 +198,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `X` final horizontal correction,
   `Y` final vertical correction,
   `ROLL` final roll correction,
-  `FJIT` Footstep Jitter correction activity from the fixed frame-local impulse range,
+  `FJIT` Footstep Jitter correction activity from the fixed second-based impulse range,
   `SWOB` Stride Wobble correction activity from the fixed internal stride-wobble window,
   `BOB` Y-only Walking Bob,
   `TURN` X-only Turn Smoothing,

@@ -106,14 +106,16 @@ independently, then recombine them with the current render frame's Footstep Jitt
 correction. Footstep Jitter debug/status output should show the raw confidence and effective
 correction strength so low-confidence gating is visible.
 Fine high-frequency shake should be handled by render-time Footstep Jitter strength controls
-that compare X/Y/rotation against an outer-frame linear prediction that skips the center
-shock region. Footstep Jitter should suppress footstep landing shock as a frame-level impulse
-rather than treating it as periodic smoothing, and it should not require rerunning Host
-Analysis. Do not add or expose a Footstep Jitter window; fine jitter should be corrected from
-the current render frame's impulse against the predicted outer-frame baseline using the
-multi-block Host Analysis path. Footstep Jitter confidence should be evaluated per render
-frame from current tracking quality, accepted block coverage, blur, and whether the center
-frame departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
+that compare X/Y/rotation against an outer-frame linear prediction using seconds-based
+windows: skip the center `0.10` second shock region and predict from outer samples up to
+`0.40` seconds away. Footstep Jitter should suppress footstep landing shock as a frame-level
+impulse rather than treating it as periodic smoothing, and it should not require rerunning
+Host Analysis. Do not add or expose a user-facing Footstep Jitter window; fine jitter should
+be corrected from the current render frame's impulse against the fixed seconds-based
+outer-frame baseline using the multi-block Host Analysis path. Footstep Jitter confidence
+should be evaluated per render frame from current tracking quality, accepted block coverage,
+blur, and whether the center frame departs from its outer-frame baseline; do not force a
+hidden minimum confidence floor.
 Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
 `4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
 weak, but applied correction must clamp at full detected-impulse removal during render so
@@ -155,8 +157,9 @@ yaw/pitch proxy, and perspective/distort trim. It is intended only for distant r
 shake in walking landscape footage. Keep the default at `1.0`, expose up to `4.0`, keep each
 unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
 debug/status output, and render the correction from the current frame's local deviation from
-an outer-frame linear warp baseline so accumulated long-term drift does not become a fixed
-deskew. Bump Host Analysis cache schema when prepared warp path semantics change.
+the same `0.10`/`0.40` second outer-frame linear warp baseline so accumulated long-term drift
+does not become a fixed deskew. Bump Host Analysis cache schema when prepared warp path
+semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
 Overlay`; debug overlay should only show diagnostics.

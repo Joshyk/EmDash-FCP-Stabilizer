@@ -23,8 +23,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   still clamps at full detected-impulse removal to avoid inverse shake.
 - `Footstep Jitter Y Strength`: direct amount for vertical footstep-jitter correction. The
   default is `1.0` and the maximum is `4.0`. Footstep Jitter uses an outer-frame linear
-  prediction that skips the center shock region for X/Y/rotation, so footstep landing shock
-  is treated as a frame-level impulse instead of being averaged back into the smooth path.
+  prediction with seconds-based windows: it skips the center `0.10` second shock region
+  and predicts from outer samples up to `0.40` seconds away for X/Y/rotation, so footstep
+  landing shock is treated as a frame-level impulse instead of being averaged back into the
+  smooth path.
   Host Analysis builds that path from multiple Metal block-matched regions with outlier
   blocks rejected before render. Footstep Jitter is gated per frame from current tracking
   quality, block coverage, blur, and whether the center frame actually departs from its
@@ -83,9 +85,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Far-field Warp Strength`: bundled small-clamp correction for distant ridge-line shake. It
   uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
   trim after translation and roll are removed. Render uses only the current frame's local
-  deviation from an outer-frame linear warp baseline, so accumulated drift does not turn into
-  a fixed deskew. The default is `1.0`, the maximum is `4.0`, and `0` fully disables warp.
-  Pull this down if close grass, roads, water, or frame edges start to swim.
+  deviation from the same `0.10`/`0.40` second outer-frame linear warp baseline, so
+  accumulated drift does not turn into a fixed deskew. The default is `1.0`, the maximum is
+  `4.0`, and `0` fully disables warp. Pull this down if close grass, roads, water, or frame
+  edges start to swim.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
   at the original clip size. The actual pixel size is shown in `Stabilizer Info`.
@@ -186,7 +189,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   original-media validation can happen later when original frames are available.
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
-  Footstep Jitter impulse path, a fixed-window Stride Wobble band, and a Y-only
+  Footstep Jitter impulse path, a fixed `0.70` second Stride Wobble band, and a Y-only
   `Walking Bob Window` band-pass path. Y correction is handled by Footstep Jitter first,
   Stride Wobble second, and Walking Bob last; Turn Smoothing does not apply to Y. This keeps
   horizontal segmented turns, fine high-frequency shake, medium walking wobble, and footstep
@@ -196,8 +199,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`. The applied
-  value is the local warp band against an outer-frame linear baseline, not the absolute
-  accumulated warp path.
+  value is the local warp band against the same seconds-based outer-frame linear baseline,
+  not the absolute accumulated warp path.
 - Host Analysis cache schema `14` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,

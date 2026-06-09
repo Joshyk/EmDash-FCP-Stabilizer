@@ -285,8 +285,9 @@ enum AutoStabilizationEstimator {
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
-    private static let microImpulseInnerRadius = 3
-    private static let microImpulseOuterRadius = 12
+    private static let impulseBaselineInnerWindowSeconds = 0.10
+    private static let impulseBaselineOuterWindowSeconds = 0.40
+    private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
     private static let motionPathJerkLimitMultiplier: Float = 4.0
@@ -459,57 +460,66 @@ enum AutoStabilizationEstimator {
         let sampledIndices = activeIndices + strideWobbleActiveIndices + walkingBobActiveIndices + [centerIndex] + frameInterpolation.indices
         let footstepBaselineXPath = outerLinearPredictionPath(
             analysis.footstepPathX,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
         let footstepBaselineYPath = outerLinearPredictionPath(
             analysis.footstepPathY,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
         let footstepBaselineRollPath = outerLinearPredictionPath(
             analysis.footstepPathRoll,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
         let farFieldBaselineYawPath = outerLinearPredictionPath(
             analysis.pathYaw,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
         let farFieldBaselinePitchPath = outerLinearPredictionPath(
             analysis.pathPitch,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
         let farFieldBaselineShearXPath = outerLinearPredictionPath(
             analysis.pathShearX,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
         let farFieldBaselineShearYPath = outerLinearPredictionPath(
             analysis.pathShearY,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
         let farFieldBaselinePerspectiveXPath = outerLinearPredictionPath(
             analysis.pathPerspectiveX,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
         let farFieldBaselinePerspectiveYPath = outerLinearPredictionPath(
             analysis.pathPerspectiveY,
+            frames: frames,
             indices: sampledIndices,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
         )
 
         let turnSmoothX = timeWeightedMonotonicSCurveValue(
@@ -584,6 +594,7 @@ enum AutoStabilizationEstimator {
         let footstepXConfidence = footstepFrameConfidence(
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
+            frames: frames,
             interpolation: frameInterpolation,
             trackingConfidence: trackingConfidence,
             fullImpulseScale: footstepImpulseFullScalePixels
@@ -591,6 +602,7 @@ enum AutoStabilizationEstimator {
         let footstepYConfidence = footstepFrameConfidence(
             values: analysis.footstepPathY,
             baselineValues: footstepBaselineYPath,
+            frames: frames,
             interpolation: frameInterpolation,
             trackingConfidence: trackingConfidence,
             fullImpulseScale: footstepImpulseFullScalePixels
@@ -598,6 +610,7 @@ enum AutoStabilizationEstimator {
         let footstepRollConfidence = footstepFrameConfidence(
             values: analysis.footstepPathRoll,
             baselineValues: footstepBaselineRollPath,
+            frames: frames,
             interpolation: frameInterpolation,
             trackingConfidence: trackingConfidence,
             fullImpulseScale: footstepImpulseFullScaleDegrees
@@ -1576,61 +1589,73 @@ enum AutoStabilizationEstimator {
         return values.reduce(Float(0.0), +) / Float(values.count)
     }
 
-    private static func centeredIndices(around centerIndex: Int, radius: Int, inCount count: Int) -> [Int] {
-        guard count > 0 else {
+    private static func indicesWithinTimeWindow(
+        around centerIndex: Int,
+        frames: [StabilizerAnalysisFrame],
+        windowSeconds: Double
+    ) -> [Int] {
+        guard frames.indices.contains(centerIndex), windowSeconds.isFinite, windowSeconds >= 0.0 else {
             return []
         }
-        let start = Swift.max(0, centerIndex - radius)
-        let end = Swift.min(count - 1, centerIndex + radius)
-        guard start <= end else {
-            return []
+        let centerTime = frames[centerIndex].time
+        let maxDistance = windowSeconds + timeWindowSelectionEpsilon
+        return frames.indices.filter { index in
+            abs(frames[index].time - centerTime) <= maxDistance
         }
-        return Array(start...end)
     }
 
-    private static func surroundingIndicesExcludingCenter(around centerIndex: Int, innerRadius: Int, outerRadius: Int, inCount count: Int) -> [Int] {
-        guard count > 0 else {
+    private static func surroundingIndicesExcludingCenter(
+        around centerIndex: Int,
+        frames: [StabilizerAnalysisFrame],
+        innerWindowSeconds: Double,
+        outerWindowSeconds: Double
+    ) -> [Int] {
+        guard frames.indices.contains(centerIndex), innerWindowSeconds.isFinite, outerWindowSeconds.isFinite else {
             return []
         }
-        let outerStart = Swift.max(0, centerIndex - outerRadius)
-        let outerEnd = Swift.min(count - 1, centerIndex + outerRadius)
-        let innerStart = Swift.max(0, centerIndex - innerRadius)
-        let innerEnd = Swift.min(count - 1, centerIndex + innerRadius)
-        let indices = (outerStart...outerEnd).filter { index in
-            index < innerStart || index > innerEnd
+        let innerWindow = max(0.0, min(innerWindowSeconds, outerWindowSeconds))
+        let outerWindow = max(innerWindow, outerWindowSeconds)
+        let centerTime = frames[centerIndex].time
+        let indices = frames.indices.filter { index in
+            let distance = abs(frames[index].time - centerTime)
+            return distance <= outerWindow + timeWindowSelectionEpsilon
+                && distance > innerWindow + timeWindowSelectionEpsilon
         }
         if indices.count >= 3 {
-            return indices
+            return Array(indices)
         }
-        return centeredIndices(around: centerIndex, radius: outerRadius, inCount: count)
+        return indicesWithinTimeWindow(around: centerIndex, frames: frames, windowSeconds: outerWindow)
     }
 
-    private static func outerLinearPrediction(_ values: [Float], centerIndex: Int, innerRadius: Int, outerRadius: Int) -> Float? {
-        guard !values.isEmpty else {
+    private static func outerLinearPrediction(
+        _ values: [Float],
+        frames: [StabilizerAnalysisFrame],
+        centerIndex: Int,
+        innerWindowSeconds: Double,
+        outerWindowSeconds: Double
+    ) -> Float? {
+        guard values.indices.contains(centerIndex), frames.indices.contains(centerIndex) else {
             return nil
         }
-        let preEnd = Swift.max(0, centerIndex - innerRadius)
-        let preStart = Swift.max(0, centerIndex - outerRadius)
-        let postStart = Swift.min(values.count, centerIndex + innerRadius + 1)
-        let postEnd = Swift.min(values.count, centerIndex + outerRadius + 1)
+        let innerWindow = max(0.0, min(innerWindowSeconds, outerWindowSeconds))
+        let outerWindow = max(innerWindow, outerWindowSeconds)
+        let centerTime = frames[centerIndex].time
         var points: [(x: Float, y: Float)] = []
-        if preStart < preEnd {
-            for index in preStart..<preEnd {
-                points.append((x: Float(index - centerIndex), y: values[index]))
-            }
-        }
-        if postStart < postEnd {
-            for index in postStart..<postEnd {
-                points.append((x: Float(index - centerIndex), y: values[index]))
+        for index in frames.indices where values.indices.contains(index) {
+            let offsetSeconds = frames[index].time - centerTime
+            let distance = abs(offsetSeconds)
+            if distance <= outerWindow + timeWindowSelectionEpsilon
+                && distance > innerWindow + timeWindowSelectionEpsilon {
+                points.append((x: Float(offsetSeconds), y: values[index]))
             }
         }
         guard points.count >= 3 else {
             let indices = surroundingIndicesExcludingCenter(
                 around: centerIndex,
-                innerRadius: Swift.max(1, innerRadius),
-                outerRadius: outerRadius,
-                inCount: values.count
-            )
+                frames: frames,
+                innerWindowSeconds: innerWindow,
+                outerWindowSeconds: outerWindow
+            ).filter { values.indices.contains($0) }
             return median(values, indices: indices)
         }
 
@@ -1646,17 +1671,24 @@ enum AutoStabilizationEstimator {
         return ((sumY * sumXX) - (sumX * sumXY)) / denominator
     }
 
-    private static func outerLinearPredictionPath(_ values: [Float], indices: [Int], innerRadius: Int, outerRadius: Int) -> [Float] {
+    private static func outerLinearPredictionPath(
+        _ values: [Float],
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        innerWindowSeconds: Double,
+        outerWindowSeconds: Double
+    ) -> [Float] {
         guard !values.isEmpty else {
             return values
         }
         var predictedValues = values
-        for index in Set(indices) where values.indices.contains(index) {
+        for index in Set(indices) where values.indices.contains(index) && frames.indices.contains(index) {
             predictedValues[index] = outerLinearPrediction(
                 values,
+                frames: frames,
                 centerIndex: index,
-                innerRadius: innerRadius,
-                outerRadius: outerRadius
+                innerWindowSeconds: innerWindowSeconds,
+                outerWindowSeconds: outerWindowSeconds
             ) ?? values[index]
         }
         return predictedValues
@@ -1836,69 +1868,6 @@ enum AutoStabilizationEstimator {
         return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
-    private static func timeWeightedOuterLinearPredictionAverage(
-        _ values: [Float],
-        frames: [StabilizerAnalysisFrame],
-        indices: [Int],
-        centerTime: Double,
-        windowSeconds: Double,
-        innerRadius: Int,
-        outerRadius: Int
-    ) -> Float {
-        guard !indices.isEmpty else {
-            return 0.0
-        }
-        guard indices.count > 1 else {
-            return outerLinearPrediction(
-                values,
-                centerIndex: indices[0],
-                innerRadius: innerRadius,
-                outerRadius: outerRadius
-            ) ?? values[indices[0]]
-        }
-
-        let sortedIndices = indices.sorted()
-        let windowStart = centerTime - (windowSeconds * 0.5)
-        let windowEnd = centerTime + (windowSeconds * 0.5)
-        var weightedTotal: Float = 0.0
-        var totalWeight: Double = 0.0
-
-        for (position, index) in sortedIndices.enumerated() {
-            let currentTime = frames[index].time
-            let leftBoundary: Double
-            if position > 0 {
-                leftBoundary = max(windowStart, (frames[sortedIndices[position - 1]].time + currentTime) * 0.5)
-            } else {
-                leftBoundary = windowStart
-            }
-
-            let rightBoundary: Double
-            if position + 1 < sortedIndices.count {
-                rightBoundary = min(windowEnd, (currentTime + frames[sortedIndices[position + 1]].time) * 0.5)
-            } else {
-                rightBoundary = windowEnd
-            }
-
-            let weight = max(0.0, rightBoundary - leftBoundary)
-            let predictedValue = outerLinearPrediction(
-                values,
-                centerIndex: index,
-                innerRadius: innerRadius,
-                outerRadius: outerRadius
-            ) ?? values[index]
-            weightedTotal += predictedValue * Float(weight)
-            totalWeight += weight
-        }
-
-        guard totalWeight > 1e-9 else {
-            let predictedValues = indices.map {
-                outerLinearPrediction(values, centerIndex: $0, innerRadius: innerRadius, outerRadius: outerRadius) ?? values[$0]
-            }
-            return predictedValues.reduce(Float(0.0), +) / Float(predictedValues.count)
-        }
-        return weightedTotal / Float(totalWeight)
-    }
-
     private static func maxValue(_ values: [Float], indices: [Int]) -> Float {
         guard !indices.isEmpty else {
             return 0.0
@@ -1960,6 +1929,7 @@ enum AutoStabilizationEstimator {
     private static func footstepFrameConfidence(
         values: [Float],
         baselineValues: [Float],
+        frames: [StabilizerAnalysisFrame],
         interpolation: FrameInterpolation,
         trackingConfidence: Float,
         fullImpulseScale: Float
@@ -1967,6 +1937,7 @@ enum AutoStabilizationEstimator {
         let lowerConfidence = footstepFrameConfidenceAtIndex(
             values: values,
             baselineValues: baselineValues,
+            frames: frames,
             index: interpolation.lowerIndex,
             trackingConfidence: trackingConfidence,
             fullImpulseScale: fullImpulseScale
@@ -1977,6 +1948,7 @@ enum AutoStabilizationEstimator {
         let upperConfidence = footstepFrameConfidenceAtIndex(
             values: values,
             baselineValues: baselineValues,
+            frames: frames,
             index: interpolation.upperIndex,
             trackingConfidence: trackingConfidence,
             fullImpulseScale: fullImpulseScale
@@ -1987,6 +1959,7 @@ enum AutoStabilizationEstimator {
     private static func footstepFrameConfidenceAtIndex(
         values: [Float],
         baselineValues: [Float],
+        frames: [StabilizerAnalysisFrame],
         index: Int,
         trackingConfidence: Float,
         fullImpulseScale: Float
@@ -1997,10 +1970,10 @@ enum AutoStabilizationEstimator {
         let impulse = abs(values[index] - baselineValues[index])
         let surroundingIndices = surroundingIndicesExcludingCenter(
             around: index,
-            innerRadius: microImpulseInnerRadius,
-            outerRadius: microImpulseOuterRadius,
-            inCount: min(values.count, baselineValues.count)
-        )
+            frames: frames,
+            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
+            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+        ).filter { values.indices.contains($0) && baselineValues.indices.contains($0) }
         let surroundingNoise = median(surroundingIndices.map { abs(values[$0] - baselineValues[$0]) }) ?? 0.0
         let noiseFloor = max(fullImpulseScale * 0.12, surroundingNoise * 1.4)
         let impulseQuality = confidenceRamp(
