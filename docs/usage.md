@@ -58,12 +58,13 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Footstep Jitter X/Y/roll impulse paths are saved separately before the limiter is applied,
   so fine frame-level shake remains available to render-time correction. Short analyzed
   ranges are kept in bounds during cleanup so the prepared cache can be saved.
-- `Walking Bob`: fixed internal `4.0` second Y-axis-only baseline for footstep bob and
+- `Walking Bob`: fixed internal `2.5` second Y-axis-only baseline for footstep bob and
   vertical walking shake left after Footstep Jitter and Stride Wobble. The correction uses
-  the Y band between the stride-smoothed baseline and this walking-bob smooth path without
-  changing X or roll. There is no user-facing window control; `Turn Detection Window` has its
-  own Inspector slider. Its confidence uses tracking quality and symmetric window support,
-  so weak block coverage or one-sided clip-edge windows do not create large vertical waves.
+  the Y band between the stride-smoothed baseline and this slightly longer walking-bob
+  smooth path without changing X or roll. There is no user-facing window control; `Turn
+  Detection Window` has its own Inspector slider. Its confidence uses tracking quality and
+  symmetric window support, so weak block coverage or one-sided clip-edge windows do not
+  create large vertical waves.
 - `Walking Bob Removal`: direct amount for the Y-only correction. Footstep bounce
   can be reduced without changing X or roll. This is the final correction stage inside the
   same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
@@ -130,10 +131,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
-  compact `V134` row in `Debug Overlay` when confirming the active render runtime.
+  compact `V135` row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V134` bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V135` bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
@@ -195,7 +196,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
   Footstep Jitter impulse path, a fixed `2.0` second Stride Wobble band, and a Y-only
-  fixed `4.0` second Walking Bob band-pass path. Y correction is handled by Footstep Jitter
+  fixed `2.5` second Walking Bob band-pass path. Y correction is handled by Footstep Jitter
   first, Stride Wobble second, and Walking Bob last; Turn Smoothing does not apply to Y.
   This keeps horizontal segmented turns, fine high-frequency shake, medium walking wobble,
   and footstep vertical bobbing independently tunable without rerunning Host Analysis.

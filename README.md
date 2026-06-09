@@ -75,8 +75,9 @@ Y or roll, and is soft-limited to a small output-edge budget during render.
 `Turn Detection Window` comes from the Inspector UI value. Its UI minimum is the
 fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
 
-`Walking Bob` uses a fixed internal `4.0` second Y-only baseline for the remaining
-vertical walking bounce after Footstep Jitter and Stride Wobble. The Inspector
+`Walking Bob` uses a fixed internal `2.5` second Y-only baseline for the remaining
+vertical walking bounce after Footstep Jitter and Stride Wobble. The shorter window keeps
+BOB from turning weak vertical evidence into a slow image wave. The Inspector
 exposes only `Walking Bob Removal`; it does not gate or weaken Footstep Jitter Y.
 Its confidence uses current tracking quality and symmetric window support so weak
 tracking or one-sided clip-edge windows do not create large vertical waves. The
@@ -92,7 +93,7 @@ frames do not create visible swimming or wave-like distortion. Low-confidence
 warp evidence is suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V134` row for the active
+bands and tracking state. It also includes a compact `V135` row for the active
 render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 

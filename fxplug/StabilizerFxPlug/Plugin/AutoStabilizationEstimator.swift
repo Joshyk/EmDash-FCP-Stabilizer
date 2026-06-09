@@ -296,7 +296,7 @@ enum AutoStabilizationEstimator {
     private static let footstepImpulseOuterWindowSeconds = 1.0
     private static let farFieldWarpInnerWindowSeconds = 0.10
     private static let farFieldWarpOuterWindowSeconds = 1.0
-    private static let fixedWalkingBobWindowSeconds = 4.0
+    private static let fixedWalkingBobWindowSeconds = 2.5
     private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
