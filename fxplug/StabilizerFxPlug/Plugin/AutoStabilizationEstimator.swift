@@ -154,6 +154,9 @@ struct StabilizerPreparedAnalysis {
     let pathX: [Float]
     let pathY: [Float]
     let pathRoll: [Float]
+    let footstepPathX: [Float]
+    let footstepPathY: [Float]
+    let footstepPathRoll: [Float]
     let pathYaw: [Float]
     let pathPitch: [Float]
     let pathShearX: [Float]
@@ -430,19 +433,19 @@ enum AutoStabilizationEstimator {
         let walkingBobActiveIndices = walkingBobWindowIndices.isEmpty ? [centerIndex] : Array(walkingBobWindowIndices)
         let sampledIndices = activeIndices + strideWobbleActiveIndices + walkingBobActiveIndices + [centerIndex] + frameInterpolation.indices
         let footstepBaselineXPath = outerLinearPredictionPath(
-            analysis.pathX,
+            analysis.footstepPathX,
             indices: sampledIndices,
             innerRadius: microImpulseInnerRadius,
             outerRadius: microImpulseOuterRadius
         )
         let footstepBaselineYPath = outerLinearPredictionPath(
-            analysis.pathY,
+            analysis.footstepPathY,
             indices: sampledIndices,
             innerRadius: microImpulseInnerRadius,
             outerRadius: microImpulseOuterRadius
         )
         let footstepBaselineRollPath = outerLinearPredictionPath(
-            analysis.pathRoll,
+            analysis.footstepPathRoll,
             indices: sampledIndices,
             innerRadius: microImpulseInnerRadius,
             outerRadius: microImpulseOuterRadius
@@ -485,42 +488,45 @@ enum AutoStabilizationEstimator {
         )
 
         let turnSmoothX = timeWeightedMonotonicSCurveValue(
-            footstepBaselineXPath,
+            analysis.pathX,
             frames: frames,
             indices: activeIndices,
             centerTime: renderSeconds,
             windowSeconds: smoothWindowSeconds
         ) ??
-            timeWeightedAverage(footstepBaselineXPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let pathXAtRender = interpolatedValue(analysis.pathX, using: frameInterpolation)
-        let pathYAtRender = interpolatedValue(analysis.pathY, using: frameInterpolation)
-        let pathRollAtRender = interpolatedValue(analysis.pathRoll, using: frameInterpolation)
+            timeWeightedAverage(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let broadPathXAtRender = interpolatedValue(analysis.pathX, using: frameInterpolation)
+        let broadPathYAtRender = interpolatedValue(analysis.pathY, using: frameInterpolation)
+        let broadPathRollAtRender = interpolatedValue(analysis.pathRoll, using: frameInterpolation)
+        let footstepPathXAtRender = interpolatedValue(analysis.footstepPathX, using: frameInterpolation)
+        let footstepPathYAtRender = interpolatedValue(analysis.footstepPathY, using: frameInterpolation)
+        let footstepPathRollAtRender = interpolatedValue(analysis.footstepPathRoll, using: frameInterpolation)
         let microImpulseBaselineX = interpolatedValue(footstepBaselineXPath, using: frameInterpolation)
         let footstepBaselineY = interpolatedValue(footstepBaselineYPath, using: frameInterpolation)
         let microImpulseBaselineRoll = interpolatedValue(footstepBaselineRollPath, using: frameInterpolation)
         let strideSmoothX = timeWeightedAverage(
-            footstepBaselineXPath,
+            analysis.pathX,
             frames: frames,
             indices: strideWobbleActiveIndices,
             centerTime: renderSeconds,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
         let strideSmoothY = timeWeightedAverage(
-            footstepBaselineYPath,
+            analysis.pathY,
             frames: frames,
             indices: strideWobbleActiveIndices,
             centerTime: renderSeconds,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
         let strideSmoothRoll = timeWeightedAverage(
-            footstepBaselineRollPath,
+            analysis.pathRoll,
             frames: frames,
             indices: strideWobbleActiveIndices,
             centerTime: renderSeconds,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
         let bobSmoothY = timeWeightedAverage(
-            footstepBaselineYPath,
+            analysis.pathY,
             frames: frames,
             indices: walkingBobActiveIndices,
             centerTime: renderSeconds,
@@ -549,30 +555,30 @@ enum AutoStabilizationEstimator {
             totalBlockCount: totalBlockCount
         )
         let footstepXConfidence = footstepFrameConfidence(
-            values: analysis.pathX,
+            values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
             interpolation: frameInterpolation,
             trackingConfidence: trackingConfidence,
             fullImpulseScale: footstepImpulseFullScalePixels
         )
         let footstepYConfidence = footstepFrameConfidence(
-            values: analysis.pathY,
+            values: analysis.footstepPathY,
             baselineValues: footstepBaselineYPath,
             interpolation: frameInterpolation,
             trackingConfidence: trackingConfidence,
             fullImpulseScale: footstepImpulseFullScalePixels
         )
         let footstepRollConfidence = footstepFrameConfidence(
-            values: analysis.pathRoll,
+            values: analysis.footstepPathRoll,
             baselineValues: footstepBaselineRollPath,
             interpolation: frameInterpolation,
             trackingConfidence: trackingConfidence,
             fullImpulseScale: footstepImpulseFullScaleDegrees
         )
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
-        let strideBandX = microImpulseBaselineX - strideSmoothX
-        let strideBandY = footstepBaselineY - strideSmoothY
-        let strideBandRoll = microImpulseBaselineRoll - strideSmoothRoll
+        let strideBandX = broadPathXAtRender - strideSmoothX
+        let strideBandY = broadPathYAtRender - strideSmoothY
+        let strideBandRoll = broadPathRollAtRender - strideSmoothRoll
         let strideTrackingConfidence = clamp((1.0 - (strideResidual * 0.6)) * trackingConfidence, min: 0.0, max: 1.0)
         let strideXConfidence = strideWobbleConfidence(
             bandValue: strideBandX,
@@ -613,9 +619,9 @@ enum AutoStabilizationEstimator {
         )
         let macroCompensationY: Float = 0.0
         let macroCompensationRotation: Float = 0.0
-        let microCompensationX = -(pathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
-        let microCompensationY = -(pathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
-        let microCompensationRotation = -(pathRollAtRender - microImpulseBaselineRoll) * microRotationCorrectionStrength
+        let microCompensationX = -(footstepPathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
+        let microCompensationY = -(footstepPathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
+        let microCompensationRotation = -(footstepPathRollAtRender - microImpulseBaselineRoll) * microRotationCorrectionStrength
         let strideCompensationX = -strideBandX * xScale * strideXCorrectionStrength
         let strideCompensationY = -strideBandY * yScale * strideYCorrectionStrength
         let strideCompensationRotation = -strideBandRoll * strideRotationCorrectionStrength
@@ -756,6 +762,7 @@ enum AutoStabilizationEstimator {
         smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
         smoothedTransform.rotationDegrees = rawCenterTransform.rotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
+        smoothedTransform.microConfidence = rawCenterTransform.microConfidence
         smoothedTransform.strideWobblePixelOffset = rawCenterTransform.strideWobblePixelOffset
         smoothedTransform.effectiveStrideWobbleStrength = rawCenterTransform.effectiveStrideWobbleStrength
         smoothedTransform.strideConfidence = rawCenterTransform.strideConfidence
@@ -925,6 +932,9 @@ enum AutoStabilizationEstimator {
             pathX: jerkLimitedMotionPath(rawPathX, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
             pathY: jerkLimitedMotionPath(rawPathY, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
             pathRoll: jerkLimitedMotionPath(rawPathRoll, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+            footstepPathX: rawPathX,
+            footstepPathY: rawPathY,
+            footstepPathRoll: rawPathRoll,
             pathYaw: jerkLimitedMotionPath(rawPathYaw, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
             pathPitch: jerkLimitedMotionPath(rawPathPitch, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
             pathShearX: jerkLimitedMotionPath(rawPathShearX, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),

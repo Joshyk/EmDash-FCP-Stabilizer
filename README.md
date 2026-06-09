@@ -86,12 +86,15 @@ block-matched regions, prioritizes upper-frame far-field blocks for walking land
 footage, and rejects outlier blocks before building the per-frame path. This keeps distant
 mountain/background motion from being dominated by close grass, water, or road parallax.
 Footstep Jitter is evaluated per render frame and is not a windowed or periodic smoothing
-control. Prepared X/Y/roll paths and their footstep baselines are sampled continuously at
-render time instead of snapping to the nearest analyzed frame, so panning playback does not
-step between frame-indexed corrections. The final automatic transform is then sampled across
-a wider symmetric render-time window and blended with zero phase. This costs more preview
-compute per frame, but it keeps the displayed pan correction as smooth as possible without
-rerunning Host Analysis. While `Debug Overlay` is enabled, `Host Analysis Status` shows the
+control. Host Analysis now stores raw X/Y/roll impulse paths for Footstep Jitter separately
+from the jerk-limited prepared paths used by longer pan, turn, and bob stages, so the broad
+motion cleanup does not erase frame-level shake before render-time correction. Those raw
+footstep paths and their baselines are sampled continuously at render time instead of
+snapping to the nearest analyzed frame, so panning playback does not step between
+frame-indexed corrections. The final automatic transform is then sampled across a wider
+symmetric render-time window and blended with zero phase. This costs more preview compute
+per frame, but it keeps the displayed pan correction as smooth as possible without rerunning
+Host Analysis. While `Debug Overlay` is enabled, `Host Analysis Status` shows the
 center-frame raw transform next to the temporally smoothed transform delta so smoothing can
 be tuned from visible runtime output instead of guessing from the viewer alone. Strength
 values run up to `4.0`; values above `1.0` can push through weak frame evidence when the
@@ -114,9 +117,10 @@ removed twice.
 Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
 limiter only clamps isolated acceleration spikes in the saved X/Y/roll motion path while
 preserving the total analyzed turn amount, so one bad frame does not create a new snap in
-playback and real panning does not become a sliding, delayed path. Short analyzed ranges are
-kept in bounds while building these prepared paths so Host Analysis cleanup can finish and
-persist the cache.
+playback and real panning does not become a sliding, delayed path. The raw Footstep Jitter
+impulse paths are saved separately before that limiter is applied. Short analyzed ranges
+are kept in bounds while building these prepared paths so Host Analysis cleanup can finish
+and persist the cache.
 Segmented walking turns are controlled with `Turn Smoothing Strength`; higher values
 concatenate stop-and-go horizontal turn motion into a monotonic S-curve intent instead of
 fitting a straight line through the window. The slider runs up to `4.0`; values above `1.0`

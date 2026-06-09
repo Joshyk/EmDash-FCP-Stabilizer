@@ -64,8 +64,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   does not require rebuilding analysis.
 - Prepared Host Analysis motion paths are post-processed with a zero-phase jerk limiter
   before caching. It clamps isolated acceleration spikes in X/Y/roll while preserving the
-  total analyzed path endpoint, so real panning is not delayed into a sliding path. Short
-  analyzed ranges are kept in bounds during cleanup so the prepared cache can be saved.
+  total analyzed path endpoint, so real panning is not delayed into a sliding path. Raw
+  Footstep Jitter X/Y/roll impulse paths are saved separately before the limiter is applied,
+  so fine frame-level shake remains available to render-time correction. Short analyzed
+  ranges are kept in bounds during cleanup so the prepared cache can be saved.
 - `Walking Bob Window`: Y-axis-only window for footstep bob and vertical walking shake
   left after Footstep Jitter and Stride Wobble. The correction uses the Y band between the
   stride-smoothed baseline and this walking-bob smooth path without changing X or roll. The
@@ -160,15 +162,18 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   far-field blocks for walking landscape footage. This keeps distant mountains and background
   features from being overruled by close grass, water, or road parallax.
 - Playback uses prepared motion paths from completed Host Analysis. It must not run full
-  frame-to-frame block matching on every rendered playback frame. Prepared X/Y/roll paths
-  and their footstep baselines are sampled continuously at render time so panning does not
-  snap between nearest analyzed frames. The final automatic transform is also sampled across
-  a wider symmetric render-time window and blended with zero phase. This increases preview
-  compute per frame but makes the pan correction as smooth as possible without rerunning Host
-  Analysis. Debug output reports the raw center-frame transform and the smoothing delta so
-  visible stepping can be diagnosed from the Inspector. Footstep Jitter X/Y and roll keep
-  the current render frame's impulse correction after the wider Turn/Bob smoothing pass, so
-  fine distant ridge-line shake is not averaged out by temporal smoothing.
+  frame-to-frame block matching on every rendered playback frame. Host Analysis stores
+  separate raw X/Y/roll impulse paths for Footstep Jitter before applying the zero-phase
+  jerk limiter used by broader pan, turn, and bob stages. Those raw footstep paths and their
+  baselines are sampled continuously at render time so panning does not snap between nearest
+  analyzed frames and frame-level shake is not erased before Footstep Jitter can correct it.
+  The final automatic transform is also sampled across a wider symmetric render-time window
+  and blended with zero phase. This increases preview compute per frame but makes the pan
+  correction as smooth as possible without rerunning Host Analysis. Debug output reports the
+  raw center-frame transform and the smoothing delta so visible stepping can be diagnosed
+  from the Inspector. Footstep Jitter X/Y and roll keep the current render frame's impulse
+  correction after the wider Turn/Bob smoothing pass, so fine distant ridge-line shake is not
+  averaged out by temporal smoothing.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.
@@ -186,10 +191,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`. The applied
   value is the local warp band against an outer-frame linear baseline, not the absolute
   accumulated warp path.
-- Host Analysis cache schema `12` stores the original-size-percentage sample path with the
-  far-field-prioritized, zero-phase jerk-limited multi-block motion path, warp paths,
-  confidence, and accepted-block counts. Older prepared caches are ignored and require a new
-  Host Analysis run.
+- Host Analysis cache schema `13` stores the original-size-percentage sample path with the
+  far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
+  Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, and accepted-block counts.
+  Older prepared caches are ignored and require a new Host Analysis run.
 - Host Analysis/cache state changes update a hidden render revision parameter so Final Cut
   Pro invalidates cached preview frames and redraws from the prepared motion path.
 - Trimmed clips are supported by matching the current render frame fingerprint against the

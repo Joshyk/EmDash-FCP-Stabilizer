@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.113"
+private let stabilizerFxPlugVersion = "0.2.114"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -1027,6 +1027,9 @@ private struct PersistedHostAnalysisCache: Codable {
     let pathX: [Float]?
     let pathY: [Float]?
     let pathRoll: [Float]?
+    let footstepPathX: [Float]?
+    let footstepPathY: [Float]?
+    let footstepPathRoll: [Float]?
     let pathYaw: [Float]?
     let pathPitch: [Float]?
     let pathShearX: [Float]?
@@ -1075,8 +1078,8 @@ private struct LoadedPersistentHostAnalysisCache {
 }
 
 private final class StabilizerHostAnalysisStore {
-    private static let cacheSchemaVersion = 12
-    private static let supportedCacheSchemaVersions: Set<Int> = [12]
+    private static let cacheSchemaVersion = 13
+    private static let supportedCacheSchemaVersions: Set<Int> = [13]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let maxPersistentCacheEntries = 8
@@ -1600,6 +1603,9 @@ private final class StabilizerHostAnalysisStore {
             pathX: prepared.pathX,
             pathY: prepared.pathY,
             pathRoll: prepared.pathRoll,
+            footstepPathX: prepared.footstepPathX,
+            footstepPathY: prepared.footstepPathY,
+            footstepPathRoll: prepared.footstepPathRoll,
             pathYaw: prepared.pathYaw,
             pathPitch: prepared.pathPitch,
             pathShearX: prepared.pathShearX,
@@ -1676,6 +1682,9 @@ private final class StabilizerHostAnalysisStore {
                 pathX: analysis.pathX,
                 pathY: analysis.pathY,
                 pathRoll: analysis.pathRoll,
+                footstepPathX: analysis.footstepPathX,
+                footstepPathY: analysis.footstepPathY,
+                footstepPathRoll: analysis.footstepPathRoll,
                 pathYaw: analysis.pathYaw,
                 pathPitch: analysis.pathPitch,
                 pathShearX: analysis.pathShearX,
@@ -2169,6 +2178,9 @@ private final class StabilizerHostAnalysisStore {
             cache.pathX,
             cache.pathY,
             cache.pathRoll,
+            cache.footstepPathX,
+            cache.footstepPathY,
+            cache.footstepPathRoll,
             cache.pathYaw,
             cache.pathPitch,
             cache.pathShearX,
@@ -2190,6 +2202,9 @@ private final class StabilizerHostAnalysisStore {
            let pathX = cache.pathX,
            let pathY = cache.pathY,
            let pathRoll = cache.pathRoll,
+           let footstepPathX = cache.footstepPathX,
+           let footstepPathY = cache.footstepPathY,
+           let footstepPathRoll = cache.footstepPathRoll,
            let pathYaw = cache.pathYaw,
            let pathPitch = cache.pathPitch,
            let pathShearX = cache.pathShearX,
@@ -2208,6 +2223,9 @@ private final class StabilizerHostAnalysisStore {
                 pathX: pathX,
                 pathY: pathY,
                 pathRoll: pathRoll,
+                footstepPathX: footstepPathX,
+                footstepPathY: footstepPathY,
+                footstepPathRoll: footstepPathRoll,
                 pathYaw: pathYaw,
                 pathPitch: pathPitch,
                 pathShearX: pathShearX,
@@ -2342,6 +2360,9 @@ private final class StabilizerHostAnalysisStore {
                 pathX: cache.pathX,
                 pathY: cache.pathY,
                 pathRoll: cache.pathRoll,
+                footstepPathX: cache.footstepPathX,
+                footstepPathY: cache.footstepPathY,
+                footstepPathRoll: cache.footstepPathRoll,
                 pathYaw: cache.pathYaw,
                 pathPitch: cache.pathPitch,
                 pathShearX: cache.pathShearX,

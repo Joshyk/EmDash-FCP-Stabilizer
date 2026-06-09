@@ -117,8 +117,10 @@ bands from the stride-smoothed path so the same band is not removed twice.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
 before caching. The limiter should clamp isolated acceleration spikes in X/Y/roll while
 preserving path endpoints so total analyzed turn amount is not lost and real panning is not
-delayed into a sliding path. Because this changes prepared path semantics, bump the Host
-Analysis cache schema when it changes.
+delayed into a sliding path. Keep separate raw X/Y/roll impulse paths for Footstep Jitter so
+the jerk limiter does not erase frame-level shake before render-time footstep correction.
+Because this changes prepared path semantics, bump the Host Analysis cache schema when it
+changes.
 Large segmented walking turns should be controlled by the render-time `Turn Smoothing
 Strength` slider, where higher values concatenate stop-and-go X-axis pan motion into a
 smoother monotonic S-curve turn intent instead of a straight-line fit. The exposed maximum is `4.0`;
