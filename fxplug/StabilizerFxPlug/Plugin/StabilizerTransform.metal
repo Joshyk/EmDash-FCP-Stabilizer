@@ -131,16 +131,16 @@ static uint debugLabelChar(uint row, uint index) {
             if (index == 2) { return 66; } // B
             return 0;
         case 6:
-            if (index == 0) { return 84; } // T
-            if (index == 1) { return 85; } // U
-            if (index == 2) { return 82; } // R
-            if (index == 3) { return 78; } // N
-            return 0;
-        case 7:
             if (index == 0) { return 87; } // W
             if (index == 1) { return 65; } // A
             if (index == 2) { return 82; } // R
             if (index == 3) { return 80; } // P
+            return 0;
+        case 7:
+            if (index == 0) { return 84; } // T
+            if (index == 1) { return 85; } // U
+            if (index == 2) { return 82; } // R
+            if (index == 3) { return 78; } // N
             return 0;
         case 8:
             if (index == 0) { return 70; } // F
@@ -155,11 +155,11 @@ static uint debugLabelChar(uint row, uint index) {
             if (index == 2) { return 81; } // Q
             return 0;
         case 11:
-            if (index == 0) { return 84; } // T
+            if (index == 0) { return 87; } // W
             if (index == 2) { return 81; } // Q
             return 0;
         case 12:
-            if (index == 0) { return 87; } // W
+            if (index == 0) { return 84; } // T
             if (index == 2) { return 81; } // Q
             return 0;
         case 13:
@@ -288,11 +288,11 @@ fragment float4 fragmentShader(
                 fill = saturate(transform->diagnostic2.w);
                 color = float3(0.2, 0.95, 1.0);
             } else if (row == 6) {
-                fill = saturate(transform->diagnostic2.x);
-                color = float3(0.1, 0.55, 1.0);
-            } else if (row == 7) {
                 fill = saturate(transform->diagnostic5.y);
                 color = float3(1.0, 0.45, 0.25);
+            } else if (row == 7) {
+                fill = saturate(transform->diagnostic2.x);
+                color = float3(0.1, 0.55, 1.0);
             } else if (row == 8) {
                 fill = saturate(transform->diagnostic3.y);
                 color = float3(0.55, 0.95, 0.25);
@@ -303,11 +303,11 @@ fragment float4 fragmentShader(
                 fill = saturate(transform->diagnostic3.w);
                 color = float3(0.75, 0.35, 1.0);
             } else if (row == 11) {
-                fill = saturate(transform->diagnostic5.x);
-                color = float3(0.1, 0.55, 1.0);
-            } else if (row == 12) {
                 fill = saturate(transform->diagnostic4.x);
                 color = float3(1.0, 0.45, 0.25);
+            } else if (row == 12) {
+                fill = saturate(transform->diagnostic5.x);
+                color = float3(0.1, 0.55, 1.0);
             } else if (row == 13) {
                 fill = saturate(transform->diagnostic3.x);
                 color = float3(0.95, 0.95, 0.95);

@@ -187,8 +187,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
-  `ROLL`, `FJIT`, `SWOB`, `BOB`, `TURN`, `WARP`, confidence (`F Q`, `S Q`, `B Q`, `T Q`,
-  `W Q`), `SMTH`, and tracking-quality (`TRK`, `BLUR`, `RES`, `HIT`) diagnostics so Final
+  `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
+  `T Q`), `SMTH`, and tracking-quality (`TRK`, `BLUR`, `RES`, `HIT`) diagnostics so Final
   Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn
@@ -201,14 +201,14 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `FJIT` Footstep Jitter correction activity from the fixed second-based impulse range,
   `SWOB` Stride Wobble correction activity from the fixed internal stride-wobble window,
   `BOB` Y-only Walking Bob,
-  `TURN` X-only Turn Smoothing,
   `WARP` Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim,
+  `TURN` X-only Turn Smoothing,
   `SMTH` temporal smoothing delta,
   `F Q` Footstep Jitter confidence,
   `S Q` Stride Wobble confidence,
   `B Q` Walking Bob confidence,
-  `T Q` Turn Smoothing confidence,
   `W Q` Far-field Warp confidence,
+  `T Q` Turn Smoothing confidence,
   `TRK` current frame tracking quality,
   `BLUR` frame clarity quality where higher means less blur,
   `RES` residual quality where higher means lower block-matching error, and

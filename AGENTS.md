@@ -61,8 +61,8 @@ reused.
 Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
 raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
 visible while tuning walking footage. Debug Overlay correction rows should keep walking
-components in order before turn correction: `FJIT`, `SWOB`, `BOB`, `TURN`, then `WARP`;
-confidence rows should match as `F Q`, `S Q`, `B Q`, `T Q`, `W Q`. `TRK`, `BLUR`,
+components in order before turn correction: `FJIT`, `SWOB`, `BOB`, `WARP`, then `TURN`;
+confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `BLUR`,
 `RES`, and `HIT` should all be quality bars where higher means better tracking evidence
 and lower means weaker evidence.
 

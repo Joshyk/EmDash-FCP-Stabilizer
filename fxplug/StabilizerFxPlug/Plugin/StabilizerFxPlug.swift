@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.120"
+private let stabilizerFxPlugVersion = "0.2.121"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -180,17 +180,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Turn Smoothing Strength",
-            parameterID: ParameterID.panStabilizationStrength.rawValue,
-            defaultValue: 1.0,
-            parameterMin: 0.0,
-            parameterMax: 4.0,
-            sliderMin: 0.0,
-            sliderMax: 4.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
             withName: "Footstep Jitter X Strength",
             parameterID: ParameterID.xStrength.rawValue,
             defaultValue: 1.0,
@@ -257,17 +246,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Turn Detection Window",
-            parameterID: ParameterID.panSmoothSeconds.rawValue,
-            defaultValue: 6.0,
-            parameterMin: 0.1,
-            parameterMax: 120.0,
-            sliderMin: 0.1,
-            sliderMax: 30.0,
-            delta: 0.25,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
             withName: "Walking Bob Window",
             parameterID: ParameterID.walkingBobWindowSeconds.rawValue,
             defaultValue: 1.5,
@@ -298,6 +276,28 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             sliderMin: 0.0,
             sliderMax: 4.0,
             delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Turn Smoothing Strength",
+            parameterID: ParameterID.panStabilizationStrength.rawValue,
+            defaultValue: 1.0,
+            parameterMin: 0.0,
+            parameterMax: 4.0,
+            sliderMin: 0.0,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Turn Detection Window",
+            parameterID: ParameterID.panSmoothSeconds.rawValue,
+            defaultValue: 6.0,
+            parameterMin: 0.1,
+            parameterMax: 120.0,
+            sliderMin: 0.1,
+            sliderMax: 30.0,
+            delta: 0.25,
             parameterFlags: flags
         )
         paramAPI.addPopupMenu(
@@ -598,14 +598,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 state.walkingBobStrength
             ))
             lines.append(String(
+                format: "Far-field Warp | strength %.2f",
+                state.farFieldWarpStrength
+            ))
+            lines.append(String(
                 format: "Turn Smoothing %.2f-%.2fs | strength %.2f",
                 state.walkingBobWindowSeconds,
                 state.panSmoothSeconds,
                 state.panStabilizationStrength
-            ))
-            lines.append(String(
-                format: "Far-field Warp | strength %.2f",
-                state.farFieldWarpStrength
             ))
         }
         if analysisInfo != "No Analysis" {
@@ -651,8 +651,15 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
+            format: "Ready (%d) | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
             frameCount,
+            autoTransform.warpConfidence,
+            autoTransform.shear.x,
+            autoTransform.shear.y,
+            autoTransform.yawPitchProxy.x,
+            autoTransform.yawPitchProxy.y,
+            autoTransform.perspective.x,
+            autoTransform.perspective.y,
             panSmoothSeconds,
             autoTransform.turnConfidence,
             autoTransform.temporalSmoothingSampleCount,
@@ -682,13 +689,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.effectiveStrideWobbleStrength.y,
             autoTransform.effectiveStrideWobbleStrength.z,
             autoTransform.bobConfidence,
-            autoTransform.warpConfidence,
-            autoTransform.shear.x,
-            autoTransform.shear.y,
-            autoTransform.yawPitchProxy.x,
-            autoTransform.yawPitchProxy.y,
-            autoTransform.perspective.x,
-            autoTransform.perspective.y,
             autoTransform.acceptedBlockCount,
             autoTransform.totalBlockCount,
             autoTransform.searchRadiusHitCount,

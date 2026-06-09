@@ -22,10 +22,10 @@ The main correction stages are:
 - `Footstep Jitter`: frame-local X/Y/roll impulse removal for landing shock.
 - `Stride Wobble`: medium-period X/Y/roll cleanup between footstep shock and
   broad bob.
-- `Turn Smoothing`: X-only smoothing for stop-and-go walking turns.
 - `Walking Bob`: Y-only correction for longer vertical walking bounce.
 - `Far-field Warp Strength`: small-clamp deskew, yaw/pitch proxy, and
   perspective trim for distant background shake.
+- `Turn Smoothing`: X-only smoothing for stop-and-go walking turns.
 
 The effect keeps render scale fixed at `1.0`. Edge fill is controlled separately
 by `Edge Display Mode`, which switches between stretched source edges and black
@@ -162,8 +162,8 @@ changes and reload validated candidates on demand.
 
 ## Diagnostics
 
-`Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `BOB`, `TURN`, `WARP`,
-live `F Q`/`S Q`/`B Q`/`T Q`/`W Q` confidence, `SMTH`, `TRK`, `BLUR`, `RES`, and
+`Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`,
+live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `BLUR`, `RES`, and
 search-radius `HIT` bars. Labels use raw English control/diagnostic abbreviations;
 do not translate them in the preview.
 
@@ -175,14 +175,14 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `FJIT`: Footstep Jitter correction activity from the fixed second-based impulse range.
 - `SWOB`: Stride Wobble correction activity from the fixed internal stride-wobble window.
 - `BOB`: Y-only Walking Bob correction.
-- `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
 - `WARP`: Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim.
+- `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
 - `SMTH`: render-time temporal smoothing delta.
 - `F Q`: Footstep Jitter confidence.
 - `S Q`: Stride Wobble confidence.
 - `B Q`: Walking Bob confidence.
-- `T Q`: Turn Smoothing confidence.
 - `W Q`: Far-field Warp confidence.
+- `T Q`: Turn Smoothing confidence.
 - `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
 - `BLUR`: frame clarity quality; higher means less blur.
 - `RES`: residual quality; higher means lower block-matching residual/error.

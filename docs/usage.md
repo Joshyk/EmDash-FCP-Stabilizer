@@ -51,19 +51,6 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
-- `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
-  walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
-  correction is bypassed; the default is `1.0` and the maximum is `4.0`. Values above `1.0`
-  push through low-confidence gating when stop-and-go panning is still visible, but render
-  output still clamps at full detected turn-band removal. The turn intent is a monotonic
-  S-curve through the detection window instead of a straight-line fit. The X turn band
-  is measured from the stride-smoothed path instead of the raw frame path, so short landing
-  shock and medium stride wobble are not reintroduced by turn smoothing. The macro X output
-  correction is soft-limited to a small edge budget during render so large detected pans do
-  not create stretched-edge jumps in the preview.
-- `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
-  mode this is evaluated against prepared motion paths during render, so changing the slider
-  does not require rebuilding analysis.
 - Prepared Host Analysis motion paths are post-processed with a zero-phase jerk limiter
   before caching. It clamps isolated acceleration spikes in X/Y/roll while preserving the
   total analyzed path endpoint, so real panning is not delayed into a sliding path. Raw
@@ -89,6 +76,19 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   accumulated drift does not turn into a fixed deskew. The default is `1.0`, the maximum is
   `4.0`, and `0` fully disables warp. Pull this down if close grass, roads, water, or frame
   edges start to swim.
+- `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
+  walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
+  correction is bypassed; the default is `1.0` and the maximum is `4.0`. Values above `1.0`
+  push through low-confidence gating when stop-and-go panning is still visible, but render
+  output still clamps at full detected turn-band removal. The turn intent is a monotonic
+  S-curve through the detection window instead of a straight-line fit. The X turn band
+  is measured from the stride-smoothed path instead of the raw frame path, so short landing
+  shock and medium stride wobble are not reintroduced by turn smoothing. The macro X output
+  correction is soft-limited to a small edge budget during render so large detected pans do
+  not create stretched-edge jumps in the preview.
+- `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
+  mode this is evaluated against prepared motion paths during render, so changing the slider
+  does not require rebuilding analysis.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
   at the original clip size. The actual pixel size is shown in `Stabilizer Info`.
@@ -122,13 +122,14 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Host Analysis Status`: read-only status for analysis and cache reuse.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
-  `Walking Bob`, `Turn Smoothing`), plus completed analysis time, frame count, actual sample
-  image size, source frame size, and pixel transform scale when analysis is available.
+  `Walking Bob`, `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame
+  count, actual sample image size, source frame size, and pixel transform scale when analysis
+  is available.
   Runtime status publishing is retried until Final Cut Pro's parameter-setting API accepts
   the update, so existing clips do not keep a stale visible FxPlug version after a newly
   installed build starts rendering.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
-  `BOB`, `TURN`, `WARP`, live `F Q`/`S Q`/`B Q`/`T Q`/`W Q` confidence, plus `SMTH`,
+  `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `BLUR`, `RES`, and search-radius `HIT` bars while checking runtime behavior.
   `TRK`, `BLUR`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
