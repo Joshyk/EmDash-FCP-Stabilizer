@@ -62,7 +62,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   vertical walking shake left after Footstep Jitter and Stride Wobble. The correction uses
   the Y band between the stride-smoothed baseline and this walking-bob smooth path without
   changing X or roll. There is no user-facing window control; `Turn Detection Window` has its
-  own Inspector slider.
+  own Inspector slider. Its confidence uses tracking quality and symmetric window support,
+  so weak block coverage or one-sided clip-edge windows do not create large vertical waves.
 - `Walking Bob Removal`: direct amount for the Y-only correction. Footstep bounce
   can be reduced without changing X or roll. This is the final correction stage inside the
   same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
@@ -129,10 +130,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
-  compact `V133` row in `Debug Overlay` when confirming the active render runtime.
+  compact `V134` row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V133` bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V134` bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.

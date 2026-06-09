@@ -78,7 +78,9 @@ fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
 `Walking Bob` uses a fixed internal `4.0` second Y-only baseline for the remaining
 vertical walking bounce after Footstep Jitter and Stride Wobble. The Inspector
 exposes only `Walking Bob Removal`; it does not gate or weaken Footstep Jitter Y.
-The default removal is `0.75`.
+Its confidence uses current tracking quality and symmetric window support so weak
+tracking or one-sided clip-edge windows do not create large vertical waves. The
+default removal is `0.75`.
 
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
@@ -90,7 +92,7 @@ frames do not create visible swimming or wave-like distortion. Low-confidence
 warp evidence is suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V133` row for the active
+bands and tracking state. It also includes a compact `V134` row for the active
 render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 

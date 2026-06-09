@@ -171,6 +171,9 @@ expose a user-facing Walking Bob window control.
 Walking Bob should remain in the same effect as the final Y-only correction stage. It must
 use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, and setting
 `Walking Bob Removal` to zero must still allow Footstep Jitter Y to work.
+Walking Bob confidence should be based on current tracking evidence and symmetric window
+support so weak block coverage or one-sided clip-edge windows do not create large vertical
+image waves.
 Walking Bob removal values should clamp at full
 detected-band removal during render so high slider values do not add inverse vertical
 shake, while still allowing values above `1.0` to compensate for low-confidence gating.

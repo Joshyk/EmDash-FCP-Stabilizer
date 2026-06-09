@@ -644,7 +644,12 @@ enum AutoStabilizationEstimator {
         )
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
         let confidence = clamp(1.0 - (turnResidual * 1.2), min: 0.35, max: 1.0)
-        let bobConfidence = clamp((1.0 - (bobResidual * 0.4)) * motionConfidence, min: 0.0, max: 1.0)
+        let bobWindowSupport = symmetricWindowSupport(
+            frames: frames,
+            centerTime: renderSeconds,
+            windowSeconds: effectiveWalkingBobWindowSeconds
+        )
+        let bobConfidence = clamp((1.0 - (bobResidual * 0.4)) * trackingConfidence * bobWindowSupport, min: 0.0, max: 1.0)
         let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
         let microXCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence)
         let microYCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence)
@@ -1613,6 +1618,24 @@ enum AutoStabilizationEstimator {
             return value
         }
         return Float(Darwin.tanh(Double(value / limit))) * limit
+    }
+
+    private static func symmetricWindowSupport(
+        frames: [StabilizerAnalysisFrame],
+        centerTime: Double,
+        windowSeconds: Double
+    ) -> Float {
+        guard windowSeconds.isFinite,
+              windowSeconds > 0.0,
+              let firstTime = frames.first?.time,
+              let lastTime = frames.last?.time
+        else {
+            return 0.0
+        }
+        let halfWindow = windowSeconds * 0.5
+        let leftSupport = centerTime - firstTime
+        let rightSupport = lastTime - centerTime
+        return clamp(Float(min(leftSupport, rightSupport) / halfWindow), min: 0.0, max: 1.0)
     }
 
     private static func average(_ values: [Float], indices: [Int]) -> Float {

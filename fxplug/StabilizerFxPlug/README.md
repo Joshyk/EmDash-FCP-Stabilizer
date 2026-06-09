@@ -149,6 +149,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   overlay output.
 - `Walking Bob`: fixed internal `4.0` second Y-only walking bob band after FJIT and SWOB.
   There is no user-facing BOB window control; Turn Detection has its own Inspector slider.
+  Its confidence uses tracking quality and symmetric window support so weak tracking or
+  one-sided clip-edge windows do not create large vertical waves.
 - `Walking Bob Removal`: direct amount for the Y-only BOB correction. Setting it to `0` does
   not disable Footstep Jitter Y, and higher values are clamped during render to avoid inverse
   vertical shake.
@@ -193,12 +195,12 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Walking Bob <= 4s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available. Older saved timeline instances may keep
-  stale saved Inspector strings, so use the compact `V133` row in `Debug Overlay` to
+  stale saved Inspector strings, so use the compact `V134` row in `Debug Overlay` to
   confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), and compact runtime
-  `V133` diagnostics so Final
+  `V134` diagnostics so Final
   Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn
