@@ -108,7 +108,7 @@ correction strength so low-confidence gating is visible.
 Fine high-frequency shake should be handled by render-time Footstep Jitter strength controls
 that compare X/Y/rotation against an outer-frame linear prediction using seconds-based
 windows: skip the center `0.10` second shock region and predict from outer samples up to
-`0.40` seconds away. Footstep Jitter should suppress footstep landing shock as a frame-level
+`1.0` second away. Footstep Jitter should suppress footstep landing shock as a frame-level
 impulse rather than treating it as periodic smoothing, and it should not require rerunning
 Host Analysis. Do not add or expose a user-facing Footstep Jitter window; fine jitter should
 be corrected from the current render frame's impulse against the fixed seconds-based
@@ -122,9 +122,10 @@ weak, but applied correction must clamp at full detected-impulse removal during 
 high slider values do not add inverse shake.
 Medium-period walking shake that is longer than Footstep Jitter but shorter than Walking
 Bob should be handled by the render-time `Stride Wobble` stage. Keep its time window fixed
-inside the implementation, expose only X/Y/Rotation strength controls with maximum `4.0`,
-compute it from the footstep-cleaned baseline, and feed longer Turn Smoothing / Walking Bob
-bands from the stride-smoothed path so the same band is not removed twice.
+inside the implementation at `2.0` seconds, expose only X/Y/Rotation strength controls with
+maximum `4.0`, do not add a user-facing Stride Wobble window, compute it from the
+footstep-cleaned baseline, and feed longer Turn Smoothing / Walking Bob bands from the
+stride-smoothed path so the same band is not removed twice.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
 before caching. The limiter should clamp isolated acceleration spikes in X/Y/roll while
 preserving path endpoints so total analyzed turn amount is not lost and real panning is not
@@ -139,9 +140,11 @@ values above `1.0` may compensate for low-confidence gating when turn correction
 weak, but applied correction must clamp at full detected turn-band removal. Turn smoothing
 must not apply Y or roll correction. Macro X turn correction should be soft-limited to a
 small output-edge budget during render so large detected pans do not create stretched-edge
-jumps in the preview. The turn band should be measured from the stride-smoothed path instead
-of the raw frame path, and Y correction must stay Footstep Jitter first, Stride Wobble
-second, and Walking Bob last so short landing shock is not reintroduced by turn smoothing.
+jumps in the preview. `Turn Detection Window` must start above the fixed `2.0` second Walking
+Bob band plus the `0.25` second margin so TURN remains broader than BOB. The turn band should
+be measured from the stride-smoothed path instead of the raw frame path, and Y correction must
+stay Footstep Jitter first, Stride Wobble second, and Walking Bob last so short landing shock
+is not reintroduced by turn smoothing.
 Y-axis walking bob between micro jitter and panning should be handled by the render-time
 fixed `2.0` second `Walking Bob` and `Walking Bob Removal` path, which corrects the Y-only
 band between the stride-smoothed baseline and the walking-bob smoothing window, without
@@ -158,7 +161,7 @@ yaw/pitch proxy, and perspective/distort trim. It is intended only for distant r
 shake in walking landscape footage. Keep the default at `1.0`, expose up to `4.0`, keep each
 unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
 debug/status output, and render the correction from the current frame's local deviation from
-the same `0.10`/`0.40` second outer-frame linear warp baseline so accumulated long-term drift
+its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long-term drift
 does not become a fixed deskew. Bump Host Analysis cache schema when prepared warp path
 semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
