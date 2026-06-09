@@ -5,8 +5,8 @@
 1. Build the FxPlug wrapper app.
 2. Restart Final Cut Pro if it was already open.
 3. Apply `Stabilizer Transform` from the `Emdash Studios` effects group.
-4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis` or
-   `Cache Rejected - Run Host Analysis`.
+4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis`,
+   `Cache Rejected - Run Host Analysis`, or `Cache Unsupported - Run Host Analysis`.
 5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
 `Start Host Analysis` requests the active effect clip from Final Cut Pro. If Final Cut Pro
@@ -98,6 +98,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   reuse. If the previous cache was rejected for the current clip, the next start skips that
   rejected cache and requests a new analysis. Rejected cache file names are remembered in
   the active FxPlug runtime so the same invalid candidate is not immediately reloaded again.
+  If a saved cache uses an unsupported schema, the Inspector shows
+  `Cache Unsupported - Run Host Analysis`; the file remains on disk and the button starts a
+  new Host Analysis run for the current build.
 - Persistent analysis reuse is based on cache schema and current source-frame validation,
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
@@ -192,10 +195,11 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`. The applied
   value is the local warp band against an outer-frame linear baseline, not the absolute
   accumulated warp path.
-- Host Analysis cache schema `13` stores the original-size-percentage sample path with the
+- Host Analysis cache schema `14` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
-  Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, and accepted-block counts.
-  Older prepared caches are ignored and require a new Host Analysis run.
+  Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,
+  blur values, and search-radius edge-hit counts. Older prepared caches are marked
+  unsupported and require a new Host Analysis run.
 - Host Analysis/cache state changes update a hidden render revision parameter so Final Cut
   Pro invalidates cached preview frames and redraws from the prepared motion path.
 - Trimmed clips are supported by matching the current render frame fingerprint against the
@@ -233,11 +237,14 @@ On load, the effect validates the current source frame against saved frame finge
 before using a persisted cache. If a lightweight cache frame no longer has retained
 validation pixels, the effect only accepts the nearest cached frame when it is within the
 tight render-time tolerance and logs that path explicitly. Rejected cache candidates are
-visible in logs/status and left on disk for other clips.
+visible in logs/status and left on disk for other clips. Unsupported schema candidates are
+also left on disk, but the Inspector shows `Cache Unsupported - Run Host Analysis` so a
+current-build analysis is explicitly required.
 
-New cache files store prepared motion paths, per-frame timestamps, blur values, and
-fingerprints instead of every frame's full luma sample. This keeps cache reuse available
-without writing long-clip `Sample Size` pixel buffers into JSON.
+New cache files store prepared motion paths, per-frame timestamps, blur values,
+search-radius edge-hit counts, and fingerprints instead of every frame's full luma sample.
+This keeps cache reuse available without writing long-clip `Sample Size` pixel buffers into
+JSON.
 
 The effect does not store analysis files inside a Final Cut Pro library or project bundle.
 The FCP bundle path is host-owned, and moving large scratch files there would still consume

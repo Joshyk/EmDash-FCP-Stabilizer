@@ -38,7 +38,9 @@ Persistent cache compatibility is based on cache schema and current source-frame
 validation, not the visible FxPlug runtime version. Render-only version bumps should reuse
 saved Host Analysis cache candidates. The loader should also consider current and legacy
 Stabilizer container cache locations so bundle-id migrations do not force a new analysis
-when the cache schema is still supported.
+when the cache schema is still supported. Unsupported schema candidates should surface
+`Cache Unsupported - Run Host Analysis` in the Inspector, remain on disk, and require an
+explicit new Host Analysis run instead of being silently ignored or deleted.
 
 Host Analysis should read user-controlled `Sample Size` once when analysis starts. The
 sample image must always be derived from the original clip dimensions using the selected
@@ -56,6 +58,9 @@ prioritize upper-frame far-field blocks so distant mountains/background motion i
 dominated by close grass, water, or road parallax. Motion-path algorithm changes that alter
 prepared analysis output should bump the Host Analysis cache schema so stale caches are not
 reused.
+Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
+raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
+visible while tuning walking footage.
 
 Host Analysis playback must render from prepared motion paths for the active FxPlug runtime.
 `Start Host Analysis` is the only path that should call `startForwardAnalysis`; render and

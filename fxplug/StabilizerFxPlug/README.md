@@ -22,10 +22,12 @@ estimators, or Transform-keyframe writers back into this target.
 - Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema
   and current source-frame validation still match. The loader checks current and legacy
   Stabilizer container cache locations so bundle-id migrations do not force analysis again.
+  Unsupported schema candidates are reported in the Inspector and left on disk.
 - Streams in-progress Host Analysis motion directly through Metal and keeps only the
   previous luma buffer needed for the next frame-to-frame motion search. It does not write
   per-frame `.luma` scratch files.
-- Stores prepared motion paths, frame timing, blur values, and fingerprints in new
+- Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
+  and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
 - Reuses persisted analysis only after the current source frame validates against saved
   frame fingerprints.
@@ -173,7 +175,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   persistent cache if one exists, and only asks Final Cut Pro to start a forward GPU
   analysis when no saved cache can be loaded. Saved cache files remain available for later
   reuse. If the previous cache was rejected for the current clip, the next start skips that
-  rejected cache and requests a new analysis.
+  rejected cache and requests a new analysis. If a saved cache uses an unsupported schema,
+  the Inspector shows `Cache Unsupported - Run Host Analysis`; the file remains on disk and
+  the next start requests new analysis for the current build.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug

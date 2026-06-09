@@ -48,13 +48,16 @@ Analysis Cache` is the explicit delete control and shows
 `Cache Cleared` in the Inspector.
 Cache compatibility is tied to cache schema and current source-frame validation, not the
 visible FxPlug runtime version, so render-only runtime updates should not force a new
-analysis pass.
+analysis pass. Unsupported schema candidates show `Cache Unsupported - Run Host Analysis`
+instead of being deleted silently, so the stale cache can remain available for older builds
+while the current effect asks for a new analysis.
 
 The cache includes prepared motion paths so playback renders from precomputed values instead
 of running block matching again on every frame. New cache files store prepared paths, frame
-timing, blur values, and fingerprints instead of every frame's luma sample. When a loaded
-cache frame has no retained validation pixels and needs the tight time match path, that
-choice is written to the Stabilizer log instead of happening silently. The Host
+timing, blur values, search-radius edge-hit counts, and fingerprints instead of every
+frame's luma sample. When a loaded cache frame has no retained validation pixels and needs
+the tight time match path, that choice is written to the Stabilizer log instead of happening
+silently. The Host
 Analysis uses a process-wide shared store for the active FxPlug runtime so setup, frame
 analysis, cleanup, and render can exchange the prepared path when Final Cut Pro calls them
 through different FxPlug instances in the same process. Persistent cache files are the
