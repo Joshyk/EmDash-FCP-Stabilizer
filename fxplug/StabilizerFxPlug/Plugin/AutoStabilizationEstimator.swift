@@ -27,6 +27,7 @@ struct StabilizerAutoTransform {
     var microConfidence: Float
     var strideConfidence: Float
     var bobConfidence: Float
+    var turnConfidence: Float
     var acceptedBlockCount: Int32
     var totalBlockCount: Int32
     var yawPitchProxy: vector_float2
@@ -61,6 +62,7 @@ struct StabilizerAutoTransform {
         microConfidence: 0.0,
         strideConfidence: 0.0,
         bobConfidence: 0.0,
+        turnConfidence: 0.0,
         acceptedBlockCount: 0,
         totalBlockCount: 0,
         yawPitchProxy: vector_float2(0.0, 0.0),
@@ -731,6 +733,7 @@ enum AutoStabilizationEstimator {
             microConfidence: jitterConfidence,
             strideConfidence: strideConfidence,
             bobConfidence: bobConfidence,
+            turnConfidence: confidence,
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount,
             yawPitchProxy: yawPitchProxy,
@@ -806,6 +809,7 @@ enum AutoStabilizationEstimator {
         smoothedTransform.strideWobbleRotationDegrees = rawCenterTransform.strideWobbleRotationDegrees
         smoothedTransform.effectiveStrideWobbleStrength = rawCenterTransform.effectiveStrideWobbleStrength
         smoothedTransform.strideConfidence = rawCenterTransform.strideConfidence
+        smoothedTransform.turnConfidence = rawCenterTransform.turnConfidence
         smoothedTransform.trackingConfidence = rawCenterTransform.trackingConfidence
         smoothedTransform.motionConfidence = rawCenterTransform.motionConfidence
         smoothedTransform.residual = rawCenterTransform.residual
@@ -881,6 +885,7 @@ enum AutoStabilizationEstimator {
             microConfidence: floatAverage(\.microConfidence),
             strideConfidence: floatAverage(\.strideConfidence),
             bobConfidence: floatAverage(\.bobConfidence),
+            turnConfidence: floatAverage(\.turnConfidence),
             acceptedBlockCount: Int32(acceptedBlockCount.rounded()),
             totalBlockCount: Int32(totalBlockCount.rounded()),
             yawPitchProxy: vectorAverage(\.yawPitchProxy),

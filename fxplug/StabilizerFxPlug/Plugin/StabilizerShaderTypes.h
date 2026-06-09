@@ -61,6 +61,7 @@ typedef struct StabilizerTransformUniforms {
     vector_float4 diagnostic2;
     vector_float4 diagnostic3;
     vector_float4 diagnostic4;
+    vector_float4 diagnostic5;
     vector_float2 shear;
     vector_float2 perspective;
     float edgeMode;

@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.118"
+private let stabilizerFxPlugVersion = "0.2.119"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -651,9 +651,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | turn %.1fs smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
+            format: "Ready (%d) | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
             frameCount,
             panSmoothSeconds,
+            autoTransform.turnConfidence,
             autoTransform.temporalSmoothingSampleCount,
             autoTransform.temporalSmoothingWindowSeconds,
             appliedPixelOffset.x,
@@ -807,6 +808,11 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             )),
             abs(autoTransform.strideWobbleRotationDegrees) / 5.0
         ))
+        let farFieldWarpActivity = min(1.0, max(
+            simd_length(autoTransform.shear) / 0.032,
+            simd_length(autoTransform.yawPitchProxy) / 0.016,
+            simd_length(autoTransform.perspective) / 0.012
+        ))
         let diagnostic = vector_float4(
             min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
             min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
@@ -831,6 +837,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             min(1.0, 1.0 - autoTransform.blurAmount),
             min(1.0, autoTransform.residual * 50.0)
         )
+        let diagnostic5 = vector_float4(
+            min(1.0, autoTransform.turnConfidence),
+            farFieldWarpActivity,
+            0.0,
+            0.0
+        )
 
         var transform = StabilizerTransformUniforms(
             pixelOffset: autoTransform.pixelOffset * masterStrength,
@@ -841,6 +853,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             diagnostic2: diagnostic2,
             diagnostic3: diagnostic3,
             diagnostic4: diagnostic4,
+            diagnostic5: diagnostic5,
             shear: autoTransform.shear * masterStrength,
             perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * masterStrength,
             edgeMode: Float(state.edgeDisplayMode),

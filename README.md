@@ -159,8 +159,8 @@ changes and reload validated candidates on demand.
 
 ## Diagnostics
 
-`Debug Overlay` reports final `X`/`Y`/`ROLL`, `TURN`, `FJIT`, `SWOB`, `BOB`, `SMTH`,
-live `F Q`/`S Q`/`B Q`/`W Q` confidence, `TRK`, `BLUR`, `RES`, and
+`Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `BOB`, `TURN`, `WARP`,
+live `F Q`/`S Q`/`B Q`/`T Q`/`W Q` confidence, `SMTH`, `TRK`, `BLUR`, `RES`, and
 search-radius `HIT` bars. Labels use raw English control/diagnostic abbreviations;
 do not translate them in the preview.
 
@@ -169,14 +169,16 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `X`: final horizontal automatic correction.
 - `Y`: final vertical automatic correction.
 - `ROLL`: final automatic roll/rotation correction.
-- `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
 - `FJIT`: Footstep Jitter correction activity from the fixed frame-local impulse range.
 - `SWOB`: Stride Wobble correction activity from the fixed internal stride-wobble window.
 - `BOB`: Y-only Walking Bob correction.
+- `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
+- `WARP`: Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim.
 - `SMTH`: render-time temporal smoothing delta.
 - `F Q`: Footstep Jitter confidence.
 - `S Q`: Stride Wobble confidence.
 - `B Q`: Walking Bob confidence.
+- `T Q`: Turn Smoothing confidence.
 - `W Q`: Far-field Warp confidence.
 - `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
 - `BLUR`: frame clarity signal; higher means less blur.
@@ -188,6 +190,7 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `footstep q` and effective Footstep Jitter X/Y/R strength.
 - `stride q` and effective Stride Wobble X/Y/R strength.
 - `bob q`.
+- `turn q`.
 - `warp q`.
 - Tracking and motion confidence.
 - Blur and residual error.

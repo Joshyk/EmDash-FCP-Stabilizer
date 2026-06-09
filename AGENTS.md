@@ -60,7 +60,9 @@ prepared analysis output should bump the Host Analysis cache schema so stale cac
 reused.
 Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
 raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
-visible while tuning walking footage.
+visible while tuning walking footage. Debug Overlay correction rows should keep walking
+components in order before turn correction: `FJIT`, `SWOB`, `BOB`, `TURN`, then `WARP`;
+confidence rows should match as `F Q`, `S Q`, `B Q`, `T Q`, `W Q`.
 
 Host Analysis playback must render from prepared motion paths for the active FxPlug runtime.
 `Start Host Analysis` is the only path that should call `startForwardAnalysis`; render and
