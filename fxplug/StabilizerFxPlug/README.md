@@ -40,7 +40,9 @@ estimators, or Transform-keyframe writers back into this target.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
 - Combines per-frame Footstep Jitter, fixed-window Stride Wobble, fixed-window Walking Bob,
   Far-field Warp, and broader Turn Smoothing bands so walking-gimbal shake is separated by
-  time scale without rerunning Host Analysis.
+  time scale without rerunning Host Analysis. Only Footstep Jitter keeps the current
+  render frame's raw impulse after zero-phase smoothing; Stride Wobble stays in the wider
+  smoothed transform.
 - `Edge Display Mode` switches preview edges between stretched source edges and black
   outside-source pixels, making stabilization movement visible when needed.
 - Updates a hidden render revision parameter when Host Analysis/cache state changes so Final

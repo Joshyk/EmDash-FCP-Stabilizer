@@ -854,13 +854,8 @@ enum AutoStabilizationEstimator {
         var smoothedTransform = weightedAverageTransform(weightedSamples)
         smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
         smoothedTransform.footstepJitterRotationDegrees = rawCenterTransform.footstepJitterRotationDegrees
-        smoothedTransform.rotationDegrees = rawCenterTransform.rotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
         smoothedTransform.microConfidence = rawCenterTransform.microConfidence
-        smoothedTransform.strideWobblePixelOffset = rawCenterTransform.strideWobblePixelOffset
-        smoothedTransform.strideWobbleRotationDegrees = rawCenterTransform.strideWobbleRotationDegrees
-        smoothedTransform.effectiveStrideWobbleStrength = rawCenterTransform.effectiveStrideWobbleStrength
-        smoothedTransform.strideConfidence = rawCenterTransform.strideConfidence
         smoothedTransform.turnConfidence = rawCenterTransform.turnConfidence
         smoothedTransform.trackingConfidence = rawCenterTransform.trackingConfidence
         smoothedTransform.motionConfidence = rawCenterTransform.motionConfidence
@@ -872,6 +867,8 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.microPixelOffset
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.walkingBobPixelOffset
+        smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
+            + smoothedTransform.strideWobbleRotationDegrees
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
         smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - rawCenterTransform.pixelOffset

@@ -120,8 +120,9 @@ stored separately so Footstep Jitter can still correct frame-level shake at
 render time.
 
 Render-time smoothing samples neighboring render times symmetrically and blends
-the automatic transform with zero phase. It smooths Turn Smoothing and Walking
-Bob bands without averaging away the current frame's Footstep Jitter impulse.
+the automatic transform with zero phase. It smooths Stride Wobble, Walking Bob,
+and Turn Smoothing bands without averaging away the current frame's Footstep
+Jitter impulse.
 
 Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
