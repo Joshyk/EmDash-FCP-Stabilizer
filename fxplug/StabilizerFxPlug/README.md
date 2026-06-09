@@ -186,16 +186,21 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   the next start requests new analysis for the current build.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
+- `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
+  runtime version when Final Cut Pro accepts status parameter updates.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
   version, active correction bands (`Footstep jitter <= 1s`, `Stride wobble <= 2s`,
   `Walking Bob <= 4s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
-  transform scale when analysis is available.
+  transform scale when analysis is available. Older saved timeline instances may keep
+  stale saved Inspector strings, so use the compact `V133` row in `Debug Overlay` to
+  confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
-  `T Q`), `SMTH`, and tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`) diagnostics so Final
+  `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), and compact runtime
+  `V133` diagnostics so Final
   Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
-  abbreviations and should not be translated in the preview. It also writes current render
+  abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,
   stride, and walking-bob components.

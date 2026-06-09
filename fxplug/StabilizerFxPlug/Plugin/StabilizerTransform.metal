@@ -82,6 +82,8 @@ static uint debugLabelRowBits(uint code, uint y) {
             return y == 0 ? 0x7 : 0x2;
         case 85: // U
             return y == 4 ? 0x7 : 0x5;
+        case 86: // V
+            return y == 4 ? 0x2 : 0x5;
         case 87: // W
             if (y == 2 || y == 3) { return 0x7; }
             return 0x5;
@@ -89,6 +91,14 @@ static uint debugLabelRowBits(uint code, uint y) {
             return y == 2 ? 0x2 : 0x5;
         case 89: // Y
             return y < 2 ? 0x5 : 0x2;
+        case 49: // 1
+            return y == 4 ? 0x7 : 0x2;
+        case 50: // 2
+            if (y == 0 || y == 2 || y == 4) { return 0x7; }
+            return y == 1 ? 0x1 : 0x4;
+        case 51: // 3
+            if (y == 0 || y == 2 || y == 4) { return 0x7; }
+            return 0x1;
         default:
             return 0x0;
     }
@@ -189,6 +199,12 @@ static uint debugLabelChar(uint row, uint index) {
             if (index == 1) { return 73; } // I
             if (index == 2) { return 84; } // T
             return 0;
+        case 18:
+            if (index == 0) { return 86; } // V
+            if (index == 1) { return 49; } // 1
+            if (index == 2) { return 51; } // 3
+            if (index == 3) { return 51; } // 3
+            return 0;
         default:
             return 0;
     }
@@ -263,7 +279,7 @@ fragment float4 fragmentShader(
         constexpr float barWidth = 180.0;
         constexpr float rowHeight = 13.0;
         constexpr float panelWidth = labelWidth + labelGap + barWidth;
-        constexpr float panelHeight = 18.0 * rowHeight;
+        constexpr float panelHeight = 19.0 * rowHeight;
         if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
@@ -323,6 +339,9 @@ fragment float4 fragmentShader(
             } else if (row == 17) {
                 fill = saturate(transform->diagnostic.w);
                 color = float3(1.0, 0.1, 0.1);
+            } else if (row == 18) {
+                fill = 1.0;
+                color = float3(0.94, 0.96, 0.98);
             }
             float barX = panelX - labelWidth - labelGap;
             bool inBar = barX >= 0.0 && barX <= barWidth && rowY >= 2.0 && rowY <= 11.0;

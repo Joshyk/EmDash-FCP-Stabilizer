@@ -120,22 +120,24 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   inside the plug-in.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
-- `Host Analysis Status`: read-only status for analysis and cache reuse.
+- `Host Analysis Status`: read-only status for analysis and cache reuse. It appends
+  the current FxPlug runtime version when Final Cut Pro accepts status parameter
+  updates.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
   `Walking Bob`, `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
-  Runtime status publishing is retried until Final Cut Pro's parameter-setting API accepts
-  the update, so existing clips do not keep a stale visible FxPlug version after a newly
-  installed build starts rendering.
+  Older saved timeline instances can keep stale saved Inspector strings, so check the
+  compact `V133` row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, and search-radius `HIT` bars while checking runtime behavior.
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V133` bars while
+  checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When
-  enabled, `Host Analysis Status` also shows the current raw center-frame transform, the
+  enabled, `Host Analysis Status` also shows the current FxPlug version, the raw center-frame transform, the
   smoothed transform delta, tracking/motion confidence, blur, residual, the raw `foot q`,
   the effective Footstep Jitter X/Y/R correction strength, `stride q`, the effective Stride
   Wobble X/Y/R correction strength, `turn q`, applied `warp q`, shear, yaw/pitch proxy, perspective,

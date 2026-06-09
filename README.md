@@ -90,12 +90,16 @@ frames do not create visible swimming or wave-like distortion. Low-confidence
 warp evidence is suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It does not control black outside-source pixels;
+bands and tracking state. It also includes a compact `V133` row for the active
+render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 
-`Stabilizer Info` is a scrollable read-only status box. It shows the loaded
-FxPlug version, active correction bands, and analysis metadata so Final Cut Pro
-can confirm which installed runtime is actually rendering the effect.
+`Host Analysis Status` appends the current FxPlug version when Final Cut Pro
+accepts status parameter updates. For existing timeline instances that keep
+stale saved Inspector strings, `Debug Overlay` is the live render-runtime
+indicator. `Stabilizer Info` is a scrollable read-only status box for active
+correction bands and analysis metadata; older saved timeline instances may still
+display a stale saved info string until the effect is reapplied.
 
 ## Host Analysis
 
@@ -201,6 +205,7 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 
 `Host Analysis Status` also reports:
 
+- The current FxPlug runtime version.
 - `footstep q` and effective Footstep Jitter X/Y/R strength.
 - `stride q` and effective Stride Wobble X/Y/R strength.
 - `bob q`.

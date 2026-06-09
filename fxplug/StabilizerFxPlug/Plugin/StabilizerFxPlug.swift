@@ -12,7 +12,7 @@ private enum ParameterID: UInt32 {
     case debugOverlay = 10
     case startHostAnalysis = 14
     case hostAnalysisStatus = 15
-    case stabilizerInfo = 16
+    case stabilizerInfo = 32
     case clearHostAnalysisCache = 17
     case yStrength = 18
     case sampleScale = 19
@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.129"
+private let stabilizerFxPlugVersion = "0.2.133"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 4.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -328,7 +328,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             withName: "Stabilizer Info",
             parameterID: ParameterID.stabilizerInfo.rawValue,
             defaultValue: "No Analysis",
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DONT_SAVE | kFxParameterFlag_CUSTOM_UI | kFxParameterFlag_USE_FULL_VIEW_WIDTH)
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE | kFxParameterFlag_CUSTOM_UI | kFxParameterFlag_USE_FULL_VIEW_WIDTH)
         )
         paramAPI.addFloatSlider(
             withName: "Render Revision",
@@ -509,7 +509,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     private func publishHostAnalysisStatus(force: Bool = false, statusOverride: String? = nil) {
-        let status = statusOverride ?? hostAnalysisStore.statusText
+        let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
         statusLock.lock()
         let shouldPublish = force || status != lastPublishedStatus
         statusLock.unlock()
@@ -644,8 +644,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
+            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
             frameCount,
+            stabilizerFxPlugVersion,
             autoTransform.warpConfidence,
             autoTransform.shear.x,
             autoTransform.shear.y,
@@ -693,6 +694,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.walkingBobPixelOffset.y
         )
         publishHostAnalysisStatus(statusOverride: status)
+    }
+
+    private static func hostAnalysisStatusText(_ status: String) -> String {
+        if status.contains("FxPlug \(stabilizerFxPlugVersion)") {
+            return status
+        }
+        return "\(status) | FxPlug \(stabilizerFxPlugVersion)"
     }
 
     func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {

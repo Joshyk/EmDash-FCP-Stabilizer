@@ -179,7 +179,7 @@
 		<target object="10036" channel="./14" name="Start Host Analysis"/>
 		<target object="10036" channel="./17" name="Clear Host Analysis Cache"/>
 		<target object="10036" channel="./15" name="Host Analysis Status"/>
-		<target object="10036" channel="./16" name="Stabilizer Info"/>
+			<target object="10036" channel="./32" name="Stabilizer Info"/>
 		<target object="10036" channel="./10" name="Debug Overlay"/>
 	</publishSettings>
 	<currentFrame>215040 153600 1 0</currentFrame>
@@ -288,8 +288,8 @@
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
-				<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis" value="Needs Analysis"/>
-				<parameter name="Stabilizer Info" id="16" flags="12884904017" default="No Analysis" value="No Analysis"/>
+				<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.2.133" value="Needs Analysis | FxPlug 0.2.133"/>
+				<parameter name="Stabilizer Info" id="32" flags="12884904021" default="No Analysis" value="No Analysis"/>
 				<parameter name="Render Revision" id="20" flags="12884901906" default="0" value="0"/>
 				<parameter name="Mix" id="10001" flags="12884901888" default="1" value="1"/>
 				<parameter name="Flip" id="10002" flags="12889161760" default="0" value="0"/>

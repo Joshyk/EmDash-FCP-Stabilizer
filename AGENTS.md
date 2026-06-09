@@ -70,7 +70,8 @@ visible while tuning walking footage. Debug Overlay correction rows should keep 
 components in order before turn correction: `FJIT`, `SWOB`, `BOB`, `WARP`, then `TURN`;
 confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `SHRP`,
 `RES`, and `HIT` should all be quality bars where higher means better tracking evidence
-and lower means weaker evidence.
+and lower means weaker evidence. Debug Overlay should also expose a compact active runtime
+version row so stale saved Inspector strings do not hide which binary is rendering.
 
 ## Playback And Render
 
@@ -88,8 +89,11 @@ different FxPlug processes. If Final Cut
 Pro reports that Host Analysis is already requested or running, surface that state in
 Inspector status instead of queueing another start inside the plug-in. Do not re-run
 full block matching across the analyzed frame set on every render frame. Keep `Host Analysis
-Status` visible in the Inspector and update it to `Ready (... frames)` after completed
-analysis. Render playback must tolerate trimmed clips whose render time differs from Host
+Status` visible in the Inspector, update it to `Ready (... frames)` after completed
+analysis, and include the active FxPlug version there when Final Cut Pro accepts status
+parameter updates. Debug Overlay should remain the live render-runtime indicator because
+older saved Inspector strings can remain stale on existing timeline instances.
+Render playback must tolerate trimmed clips whose render time differs from Host
 Analysis frame time by matching the current render frame fingerprint back to the analyzed
 frame set and applying that time offset before sampling the prepared motion paths. Once an
 analysis is validated, render playback should keep using the prepared motion path even when
@@ -221,7 +225,8 @@ native effect against real timeline clips in Final Cut Pro.
 Keep `stabilizerFxPlugVersion` in
 `fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift` aligned with
 `CFBundleShortVersionString` in the wrapper app and plug-in plist files. User-visible
-FxPlug behavior changes should bump the version value used by `Stabilizer Info`.
+FxPlug behavior changes should bump the version value used by `Stabilizer Info`,
+`Host Analysis Status`, and the compact Debug Overlay runtime row.
 
 ## Verification
 
