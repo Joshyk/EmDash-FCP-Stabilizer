@@ -191,3 +191,19 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   analysis can be checked. It also writes current render correction values into `Host
   Analysis Status`, including tracking/motion quality, edge-hit counts, and the Y correction
   split into footstep, stride, and walking-bob components.
+  The labels mean:
+  `X` final horizontal correction,
+  `Y` final vertical correction,
+  `ROLL` final roll correction,
+  `TURN` X-only Turn Smoothing,
+  `STEP` Footstep Jitter plus Stride Wobble activity,
+  `BOB` Y-only Walking Bob,
+  `SMTH` temporal smoothing delta,
+  `F Q` Footstep Jitter confidence,
+  `S Q` Stride Wobble confidence,
+  `B Q` Walking Bob confidence,
+  `W Q` Far-field Warp confidence,
+  `TRK` current frame tracking quality,
+  `BLUR` frame clarity where higher means less blur,
+  `RES` residual/error where higher means noisier tracking evidence, and
+  `HIT` search-radius edge-hit ratio where higher means the search radius may be too tight.

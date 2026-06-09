@@ -163,6 +163,24 @@ changes and reload validated candidates on demand.
 live `F Q`/`S Q`/`B Q`/`W Q` confidence, `TRK`, `BLUR`, `RES`, and
 search-radius `HIT` bars.
 
+The overlay bars are normalized magnitudes or quality signals, not signed directions:
+
+- `X`: final horizontal automatic correction.
+- `Y`: final vertical automatic correction.
+- `ROLL`: final automatic roll/rotation correction.
+- `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
+- `STEP`: short/medium footstep correction activity from Footstep Jitter plus Stride Wobble.
+- `BOB`: Y-only Walking Bob correction.
+- `SMTH`: render-time temporal smoothing delta.
+- `F Q`: Footstep Jitter confidence.
+- `S Q`: Stride Wobble confidence.
+- `B Q`: Walking Bob confidence.
+- `W Q`: Far-field Warp confidence.
+- `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
+- `BLUR`: frame clarity signal; higher means less blur.
+- `RES`: block-matching residual/error signal; higher means noisier tracking evidence.
+- `HIT`: share of searches that hit the motion search-radius edge; higher means the search radius may be too tight for that frame.
+
 `Host Analysis Status` also reports:
 
 - `footstep q` and effective Footstep Jitter X/Y/R strength.
