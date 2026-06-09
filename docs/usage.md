@@ -47,7 +47,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
   is `0.75` and the maximum is `4.0`. The correction is measured from the
   footstep-cleaned baseline and clamped at full detected-band removal during render, so high
-  values do not add inverse shake.
+  values do not add inverse shake. It is not measured from the raw or jerk-limited broad path,
+  so Footstep Jitter shock is not removed a second time.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.

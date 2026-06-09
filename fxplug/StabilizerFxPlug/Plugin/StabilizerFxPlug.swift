@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.128"
+private let stabilizerFxPlugVersion = "0.2.129"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 4.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -164,6 +164,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         self.apiManager = apiManager
         super.init()
         _ = Self.sharedHostAnalysisStore
+        NSLog("StabilizerFxPlug: runtime initialized version \(stabilizerFxPlugVersion).")
     }
 
     func addParameters() throws {

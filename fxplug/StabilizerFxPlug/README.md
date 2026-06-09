@@ -142,7 +142,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   under-corrected, but output remains clamped at full detected-impulse removal.
 - `Stride Wobble X/Y/Rotation Strength`: direct amount for medium-period walking wobble. The
   render-time window is fixed at `2.0` seconds; there is no user-facing SWOB window. It is
-  measured from the footstep-cleaned path so it does not erase FJIT twice.
+  measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
+  not erase FJIT twice.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.

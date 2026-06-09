@@ -525,46 +525,50 @@ enum AutoStabilizationEstimator {
             outerWindowSeconds: farFieldWarpOuterWindowSeconds
         )
 
+        let footstepCleanXPath = footstepBaselineXPath
+        let footstepCleanYPath = footstepBaselineYPath
+        let footstepCleanRollPath = footstepBaselineRollPath
+        let strideSmoothedXPath = locallyTimeWeightedAveragePath(
+            footstepCleanXPath,
+            frames: frames,
+            targetIndices: sampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let strideSmoothedYPath = locallyTimeWeightedAveragePath(
+            footstepCleanYPath,
+            frames: frames,
+            targetIndices: sampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let strideSmoothedRollPath = locallyTimeWeightedAveragePath(
+            footstepCleanRollPath,
+            frames: frames,
+            targetIndices: sampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+
         let turnSmoothX = timeWeightedMonotonicSCurveValue(
-            analysis.pathX,
+            strideSmoothedXPath,
             frames: frames,
             indices: activeIndices,
             centerTime: renderSeconds,
             windowSeconds: smoothWindowSeconds
         ) ??
-            timeWeightedAverage(analysis.pathX, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let broadPathXAtRender = interpolatedValue(analysis.pathX, using: frameInterpolation)
-        let broadPathYAtRender = interpolatedValue(analysis.pathY, using: frameInterpolation)
-        let broadPathRollAtRender = interpolatedValue(analysis.pathRoll, using: frameInterpolation)
+            timeWeightedAverage(strideSmoothedXPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let footstepCleanXAtRender = interpolatedValue(footstepCleanXPath, using: frameInterpolation)
+        let footstepCleanYAtRender = interpolatedValue(footstepCleanYPath, using: frameInterpolation)
+        let footstepCleanRollAtRender = interpolatedValue(footstepCleanRollPath, using: frameInterpolation)
         let footstepPathXAtRender = interpolatedValue(analysis.footstepPathX, using: frameInterpolation)
         let footstepPathYAtRender = interpolatedValue(analysis.footstepPathY, using: frameInterpolation)
         let footstepPathRollAtRender = interpolatedValue(analysis.footstepPathRoll, using: frameInterpolation)
         let microImpulseBaselineX = interpolatedValue(footstepBaselineXPath, using: frameInterpolation)
         let footstepBaselineY = interpolatedValue(footstepBaselineYPath, using: frameInterpolation)
         let microImpulseBaselineRoll = interpolatedValue(footstepBaselineRollPath, using: frameInterpolation)
-        let strideSmoothX = timeWeightedAverage(
-            analysis.pathX,
-            frames: frames,
-            indices: strideWobbleActiveIndices,
-            centerTime: renderSeconds,
-            windowSeconds: effectiveStrideWobbleWindowSeconds
-        )
-        let strideSmoothY = timeWeightedAverage(
-            analysis.pathY,
-            frames: frames,
-            indices: strideWobbleActiveIndices,
-            centerTime: renderSeconds,
-            windowSeconds: effectiveStrideWobbleWindowSeconds
-        )
-        let strideSmoothRoll = timeWeightedAverage(
-            analysis.pathRoll,
-            frames: frames,
-            indices: strideWobbleActiveIndices,
-            centerTime: renderSeconds,
-            windowSeconds: effectiveStrideWobbleWindowSeconds
-        )
+        let strideSmoothX = interpolatedValue(strideSmoothedXPath, using: frameInterpolation)
+        let strideSmoothY = interpolatedValue(strideSmoothedYPath, using: frameInterpolation)
+        let strideSmoothRoll = interpolatedValue(strideSmoothedRollPath, using: frameInterpolation)
         let bobSmoothY = timeWeightedAverage(
-            analysis.pathY,
+            strideSmoothedYPath,
             frames: frames,
             indices: walkingBobActiveIndices,
             centerTime: renderSeconds,
@@ -619,9 +623,9 @@ enum AutoStabilizationEstimator {
             fullImpulseScale: footstepImpulseFullScaleDegrees
         )
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
-        let strideBandX = broadPathXAtRender - strideSmoothX
-        let strideBandY = broadPathYAtRender - strideSmoothY
-        let strideBandRoll = broadPathRollAtRender - strideSmoothRoll
+        let strideBandX = footstepCleanXAtRender - strideSmoothX
+        let strideBandY = footstepCleanYAtRender - strideSmoothY
+        let strideBandRoll = footstepCleanRollAtRender - strideSmoothRoll
         let strideTrackingConfidence = clamp((1.0 - (strideResidual * 0.6)) * trackingConfidence, min: 0.0, max: 1.0)
         let strideXConfidence = strideWobbleConfidence(
             bandValue: strideBandX,
@@ -1827,6 +1831,34 @@ enum AutoStabilizationEstimator {
             return average(values, indices: indices)
         }
         return weightedTotal / Float(totalWeight)
+    }
+
+    private static func locallyTimeWeightedAveragePath(
+        _ values: [Float],
+        frames: [StabilizerAnalysisFrame],
+        targetIndices: [Int],
+        windowSeconds: Double
+    ) -> [Float] {
+        guard !values.isEmpty else {
+            return values
+        }
+        var smoothedValues = values
+        let halfWindowSeconds = max(0.0, windowSeconds * 0.5)
+        for index in Set(targetIndices) where values.indices.contains(index) && frames.indices.contains(index) {
+            let centerTime = frames[index].time
+            let localIndices = frames.indices.filter { candidate in
+                abs(frames[candidate].time - centerTime) <= halfWindowSeconds + timeWindowSelectionEpsilon
+            }
+            let activeIndices = localIndices.isEmpty ? [index] : Array(localIndices)
+            smoothedValues[index] = timeWeightedAverage(
+                values,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: centerTime,
+                windowSeconds: windowSeconds
+            )
+        }
+        return smoothedValues
     }
 
     private static func timeWeightedMonotonicSCurveValue(

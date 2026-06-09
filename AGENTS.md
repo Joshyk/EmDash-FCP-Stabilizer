@@ -138,6 +138,8 @@ inside the implementation at `2.0` seconds, expose only X/Y/Rotation strength co
 maximum `4.0`, do not add a user-facing Stride Wobble window, compute it from the
 footstep-cleaned baseline, and feed longer Turn Smoothing / Walking Bob bands from the
 stride-smoothed path so the same band is not removed twice.
+The render path must not compute Stride Wobble from the raw or jerk-limited broad path,
+because that reintroduces Footstep Jitter shock into the medium-period band.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
 before caching. The limiter should clamp isolated acceleration spikes in X/Y/roll while
 preserving path endpoints so total analyzed turn amount is not lost and real panning is not

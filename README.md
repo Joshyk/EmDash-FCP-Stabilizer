@@ -66,7 +66,8 @@ region and predicts from outer samples up to `1.0` second away.
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
 strengths. It is measured from the footstep-cleaned path, then longer Turn
 Smoothing and Walking Bob bands are measured from the stride-smoothed path so
-the same motion is not removed twice.
+the same motion is not removed twice. It does not use the raw or jerk-limited
+broad path as its band input.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
