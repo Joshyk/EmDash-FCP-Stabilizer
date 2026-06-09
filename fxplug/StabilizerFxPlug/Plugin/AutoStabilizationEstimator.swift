@@ -279,14 +279,18 @@ enum AutoStabilizationEstimator {
     private static let renderTemporalSmoothingWindowSeconds = 0.55
     private static let footstepImpulseFullScalePixels: Float = 0.35
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
-    private static let strideWobbleWindowSeconds = 0.70
+    private static let strideWobbleWindowSeconds = 2.0
     private static let strideWobbleFullScalePixels: Float = 0.75
     private static let strideWobbleFullScaleDegrees: Float = 0.16
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
-    private static let impulseBaselineInnerWindowSeconds = 0.10
-    private static let impulseBaselineOuterWindowSeconds = 0.40
+    private static let footstepImpulseInnerWindowSeconds = 0.10
+    private static let footstepImpulseOuterWindowSeconds = 1.0
+    private static let farFieldWarpInnerWindowSeconds = 0.10
+    private static let farFieldWarpOuterWindowSeconds = 1.0
+    private static let maxWalkingBobWindowSeconds = 3.0
+    private static let turnWindowBobMarginSeconds = 0.25
     private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
@@ -446,12 +450,13 @@ enum AutoStabilizationEstimator {
             return .identity
         }
 
-        let smoothWindowSeconds = max(0.1, panSmoothSeconds)
+        let effectiveWalkingBobWindowSeconds = min(max(0.1, walkingBobWindowSeconds), maxWalkingBobWindowSeconds)
+        let requestedTurnWindowSeconds = max(0.1, panSmoothSeconds)
+        let smoothWindowSeconds = max(requestedTurnWindowSeconds, effectiveWalkingBobWindowSeconds + turnWindowBobMarginSeconds)
         let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
         let frameInterpolation = frameInterpolation(at: renderSeconds, in: frames)
         let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
-        let effectiveWalkingBobWindowSeconds = min(max(0.1, walkingBobWindowSeconds), smoothWindowSeconds)
         let effectiveStrideWobbleWindowSeconds = strideWobbleWindowSeconds
         let strideWobbleWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveStrideWobbleWindowSeconds * 0.5 }
         let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : Array(strideWobbleWindowIndices)
@@ -462,64 +467,64 @@ enum AutoStabilizationEstimator {
             analysis.footstepPathX,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: footstepImpulseInnerWindowSeconds,
+            outerWindowSeconds: footstepImpulseOuterWindowSeconds
         )
         let footstepBaselineYPath = outerLinearPredictionPath(
             analysis.footstepPathY,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: footstepImpulseInnerWindowSeconds,
+            outerWindowSeconds: footstepImpulseOuterWindowSeconds
         )
         let footstepBaselineRollPath = outerLinearPredictionPath(
             analysis.footstepPathRoll,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: footstepImpulseInnerWindowSeconds,
+            outerWindowSeconds: footstepImpulseOuterWindowSeconds
         )
         let farFieldBaselineYawPath = outerLinearPredictionPath(
             analysis.pathYaw,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds
         )
         let farFieldBaselinePitchPath = outerLinearPredictionPath(
             analysis.pathPitch,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds
         )
         let farFieldBaselineShearXPath = outerLinearPredictionPath(
             analysis.pathShearX,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds
         )
         let farFieldBaselineShearYPath = outerLinearPredictionPath(
             analysis.pathShearY,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds
         )
         let farFieldBaselinePerspectiveXPath = outerLinearPredictionPath(
             analysis.pathPerspectiveX,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds
         )
         let farFieldBaselinePerspectiveYPath = outerLinearPredictionPath(
             analysis.pathPerspectiveY,
             frames: frames,
             indices: sampledIndices,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds
         )
 
         let turnSmoothX = timeWeightedMonotonicSCurveValue(
@@ -1971,8 +1976,8 @@ enum AutoStabilizationEstimator {
         let surroundingIndices = surroundingIndicesExcludingCenter(
             around: index,
             frames: frames,
-            innerWindowSeconds: impulseBaselineInnerWindowSeconds,
-            outerWindowSeconds: impulseBaselineOuterWindowSeconds
+            innerWindowSeconds: footstepImpulseInnerWindowSeconds,
+            outerWindowSeconds: footstepImpulseOuterWindowSeconds
         ).filter { values.indices.contains($0) && baselineValues.indices.contains($0) }
         let surroundingNoise = median(surroundingIndices.map { abs(values[$0] - baselineValues[$0]) }) ?? 0.0
         let noiseFloor = max(fullImpulseScale * 0.12, surroundingNoise * 1.4)

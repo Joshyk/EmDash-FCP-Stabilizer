@@ -38,9 +38,9 @@ estimators, or Transform-keyframe writers back into this target.
   `Proxy Media Rejected - Use Original Media`; switch Final Cut Pro back to original media
   and rerun Host Analysis.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
-- Combines the long pan smoothing path with a short micro-jitter path and a Y-only walking
-  bob path so fine shake and 1-2 second vertical bobbing can be tuned independently from
-  large walking-gimbal sway.
+- Combines per-frame Footstep Jitter, fixed-window Stride Wobble, capped Walking Bob,
+  Far-field Warp, and broader Turn Smoothing bands so walking-gimbal shake is separated by
+  time scale without rerunning Host Analysis.
 - `Edge Display Mode` switches preview edges between stretched source edges and black
   outside-source pixels, making stabilization movement visible when needed.
 - Updates a hidden render revision parameter when Host Analysis/cache state changes so Final
@@ -127,37 +127,37 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 
 ## Stabilization Model
 
-- `Micro Jitter X Strength`: direct amount for horizontal micro-jitter correction. The
-  default is `0.5`; `1.0` fully removes the detected impulse, and higher values are clamped
-  during render to avoid inverse shake.
-- `Micro Jitter Y Strength`: direct amount for vertical micro-jitter correction. The default
-  is `0.5`. Micro Jitter uses a seconds-based outer-frame linear prediction that skips the
-  center `0.10` second shock region and predicts from outer samples up to `0.40` seconds
-  away for X/Y/rotation, so footstep landing shock is treated as a frame-level impulse
-  instead of being averaged back into the smooth path. `1.0` fully removes the detected
-  impulse, and higher values are clamped during render to avoid inverse shake.
-- `Micro Jitter Rotation Strength`: direct amount for roll micro-jitter correction. The
-  default is `0.35`; `1.0` fully removes the detected impulse, and higher values are
+- `Footstep Jitter X Strength`: direct amount for horizontal frame-local footstep correction.
+  The default is `1.0`; values above `1.0` can compensate for weak frame confidence but are
   clamped during render to avoid inverse shake.
+- `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
+  Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
+  `0.10` second shock region and predicts from outer samples up to `1.0` second away for
+  X/Y/rotation, so landing shock is treated as a frame-level impulse instead of being
+  averaged back into the smooth path.
+- `Footstep Jitter Rotation Strength`: direct amount for roll footstep correction. Values
+  above `1.0` can compensate when frame-local confidence makes the detected impulse visibly
+  under-corrected, but output remains clamped at full detected-impulse removal.
+- `Stride Wobble X/Y/Rotation Strength`: direct amount for medium-period walking wobble. The
+  render-time window is fixed at `2.0` seconds; there is no user-facing SWOB window. It is
+  measured from the footstep-cleaned path so it does not erase FJIT twice.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
-- `Panning X/Y Strength`: controls how strongly the stabilizer corrects large intentional
-  pans in X/Y translation only. It does not change roll. At `0`, long-window correction is
-  bypassed; at `1`, long-window correction is strongest. The pan band is measured from the
-  Micro Jitter baseline, and the Y pan band is measured after removing Y Axis
-  Stabilization, so short landing shock is not reintroduced by the pan correction.
-- `Panning X/Y Window`: centered panning window. In Host Analysis mode this slider
-  is evaluated during render against the prepared analysis path, so changing it does not
-  require rebuilding analysis.
-- `Y Axis Stabilization Window`: Y-axis-only window for footstep bob and vertical shake
-  between micro jitter and large panning. It corrects the Y band between the Micro Jitter
-  baseline and this Y stabilization smooth path, which is also computed from the Micro
-  Jitter baseline without changing X or roll. Use shorter values around `0.4-1.0` seconds
-  for visible footstep bounce and larger values for slower vertical sway.
-- `Y Axis Stabilization Strength`: direct amount for the Y-only correction. `1.0` fully
-  removes the detected Y-axis band, and higher values are clamped during render to avoid
-  adding inverse vertical shake.
+- `Walking Bob Window`: Y-only walking bob band after FJIT and SWOB. The default is `1.5`
+  seconds and the maximum is `3.0` seconds, below Turn Detection.
+- `Walking Bob Removal`: direct amount for the Y-only BOB correction. Setting it to `0` does
+  not disable Footstep Jitter Y, and higher values are clamped during render to avoid inverse
+  vertical shake.
+- `Far-field Warp Strength`: bundled small-clamp WARP correction for distant ridge-line
+  shake. It uses a `0.10`/`1.0` second outer-frame linear warp baseline and applies shear,
+  yaw/pitch proxy, and perspective trim from the current frame's local deviation.
+- `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
+  It does not change Y or roll, and the macro correction is soft-limited to a small
+  output-edge budget.
+- `Turn Detection Window`: centered TURN window evaluated during render against prepared
+  motion paths. The UI starts above the `3.0` second Walking Bob cap and extends up to the
+  user value, so TURN remains broader than BOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions.
   Options are `100%`, `75%`, `50%`, `25%`, and `10%`; `100%` analyzes at the original clip
   size. Host Analysis reads this value once when the analysis pass starts. The actual pixel
@@ -182,8 +182,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
-  version, active correction bands (`Jitter impulse`, `Y Axis Stabilization <= Ys`,
-  `Panning X/Y Y-Zs`), plus latest
+  version, active correction bands (`Footstep jitter <= 1s`, `Stride wobble <= 2s`,
+  `Walking Bob <= 3s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,

@@ -58,10 +58,10 @@ roll impulses. They run up to `4.0`; values above `1.0` can compensate when
 tracking confidence makes the correction too weak. The applied correction still
 clamps at full detected-impulse removal so it does not add inverse shake. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
-region and predicts from outer samples up to `0.40` seconds away.
+region and predicts from outer samples up to `1.0` second away.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
-`0.70` second render-time window. The Inspector exposes only X, Y, and rotation
+`2.0` second render-time window. The Inspector exposes only X, Y, and rotation
 strengths. It is measured from the footstep-cleaned path, then longer Turn
 Smoothing and Walking Bob bands are measured from the stride-smoothed path so
 the same motion is not removed twice.
@@ -69,15 +69,18 @@ the same motion is not removed twice.
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
 Y or roll, and is soft-limited to a small output-edge budget during render.
+`Turn Detection Window` starts above the `3.0` second Walking Bob cap and extends
+up to the UI value, so TURN remains the broader band after BOB.
 
 `Walking Bob Window` and `Walking Bob Removal` target the remaining vertical
 walking bounce after Footstep Jitter and Stride Wobble. Walking Bob does not gate
-or weaken Footstep Jitter Y. The default removal is `0.75`; shorter windows
-around `0.4-1.0` seconds target visible footstep bounce.
+or weaken Footstep Jitter Y. The window is capped at `3.0` seconds, below the
+Turn Detection range. The default removal is `0.75`; shorter windows around
+`0.4-1.0` seconds target visible footstep bounce.
 
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
-frame's local deviation from the same seconds-based outer-frame linear baseline,
+frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
 maximum is `4.0`.
 

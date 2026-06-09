@@ -24,7 +24,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Footstep Jitter Y Strength`: direct amount for vertical footstep-jitter correction. The
   default is `1.0` and the maximum is `4.0`. Footstep Jitter uses an outer-frame linear
   prediction with seconds-based windows: it skips the center `0.10` second shock region
-  and predicts from outer samples up to `0.40` seconds away for X/Y/rotation, so footstep
+  and predicts from outer samples up to `1.0` second away for X/Y/rotation, so footstep
   landing shock is treated as a frame-level impulse instead of being averaged back into the
   smooth path.
   Host Analysis builds that path from multiple Metal block-matched regions with outlier
@@ -42,7 +42,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   `0.65` and the maximum is `4.0`.
 - `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
   default is `0.35` because Walking Bob remains the main longer vertical-cycle correction.
-  Stride Wobble uses a fixed internal `0.70` second render-time window; there is no
+  Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
   user-facing Stride Wobble window.
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
   is `0.75` and the maximum is `4.0`. The correction is measured from the
@@ -60,10 +60,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Walking Bob Window`: Y-axis-only window for footstep bob and vertical walking shake
   left after Footstep Jitter and Stride Wobble. The correction uses the Y band between the
   stride-smoothed baseline and this walking-bob smooth path without changing X or roll. The
-  default is `1.5` seconds. Use
+  default is `1.5` seconds, and the maximum is `3.0` seconds. Use
   shorter values around `0.4-1.0` seconds for visible footstep bounce and larger values for
-  slower vertical sway. Values above `Turn Detection Window` are clamped to the turn window
-  during render.
+  slower vertical sway. The UI keeps this below `Turn Detection Window` so BOB remains the
+  shorter vertical band.
 - `Walking Bob Removal`: direct amount for the Y-only correction. Footstep bounce
   can be reduced without changing X or roll. This is the final correction stage inside the
   same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
@@ -72,7 +72,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Far-field Warp Strength`: bundled small-clamp correction for distant ridge-line shake. It
   uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
   trim after translation and roll are removed. Render uses only the current frame's local
-  deviation from the same `0.10`/`0.40` second outer-frame linear warp baseline, so
+  deviation from its own `0.10`/`1.0` second outer-frame linear warp baseline, so
   accumulated drift does not turn into a fixed deskew. The default is `1.0`, the maximum is
   `4.0`, and `0` fully disables warp. Pull this down if close grass, roads, water, or frame
   edges start to swim.
@@ -88,7 +88,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   not create stretched-edge jumps in the preview.
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
   mode this is evaluated against prepared motion paths during render, so changing the slider
-  does not require rebuilding analysis.
+  does not require rebuilding analysis. The UI starts above the `3.0` second Walking Bob cap
+  and extends up to the user value, keeping TURN broader than BOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
   at the original clip size. The actual pixel size is shown in `Stabilizer Info`.
@@ -190,7 +191,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   original-media validation can happen later when original frames are available.
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
-  Footstep Jitter impulse path, a fixed `0.70` second Stride Wobble band, and a Y-only
+  Footstep Jitter impulse path, a fixed `2.0` second Stride Wobble band, and a Y-only
   `Walking Bob Window` band-pass path. Y correction is handled by Footstep Jitter first,
   Stride Wobble second, and Walking Bob last; Turn Smoothing does not apply to Y. This keeps
   horizontal segmented turns, fine high-frequency shake, medium walking wobble, and footstep
@@ -200,7 +201,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`. The applied
-  value is the local warp band against the same seconds-based outer-frame linear baseline,
+  value is the local warp band against its `0.10`/`1.0` second outer-frame linear baseline,
   not the absolute accumulated warp path.
 - Host Analysis cache schema `14` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw

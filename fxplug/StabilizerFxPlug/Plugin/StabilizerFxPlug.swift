@@ -27,7 +27,10 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.121"
+private let stabilizerFxPlugVersion = "0.2.122"
+private let stabilizerMaxWalkingBobWindowSeconds = 3.0
+private let stabilizerTurnWindowBobMarginSeconds = 0.25
+private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerMaxWalkingBobWindowSeconds + stabilizerTurnWindowBobMarginSeconds
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -250,9 +253,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterID: ParameterID.walkingBobWindowSeconds.rawValue,
             defaultValue: 1.5,
             parameterMin: 0.1,
-            parameterMax: 30.0,
+            parameterMax: stabilizerMaxWalkingBobWindowSeconds,
             sliderMin: 0.1,
-            sliderMax: 6.0,
+            sliderMax: stabilizerMaxWalkingBobWindowSeconds,
             delta: 0.05,
             parameterFlags: flags
         )
@@ -293,9 +296,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             withName: "Turn Detection Window",
             parameterID: ParameterID.panSmoothSeconds.rawValue,
             defaultValue: 6.0,
-            parameterMin: 0.1,
+            parameterMin: stabilizerMinimumTurnDetectionWindowSeconds,
             parameterMax: 120.0,
-            sliderMin: 0.1,
+            sliderMin: stabilizerMinimumTurnDetectionWindowSeconds,
             sliderMax: 30.0,
             delta: 0.25,
             parameterFlags: flags
@@ -580,31 +583,36 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
         var lines = ["FxPlug \(stabilizerFxPlugVersion)"]
         if let state {
+            let bobWindowSeconds = min(max(0.1, state.walkingBobWindowSeconds), stabilizerMaxWalkingBobWindowSeconds)
+            let turnWindowSeconds = max(
+                max(stabilizerMinimumTurnDetectionWindowSeconds, state.panSmoothSeconds),
+                bobWindowSeconds + stabilizerTurnWindowBobMarginSeconds
+            )
             lines.append(String(
-                format: "Footstep jitter | X %.2f Y %.2f R %.2f",
+                format: "Footstep jitter <= 1s | X %.2f Y %.2f R %.2f",
                 state.microJitterXStrength,
                 state.microJitterYStrength,
                 state.microJitterRotationStrength
             ))
             lines.append(String(
-                format: "Stride wobble | X %.2f Y %.2f R %.2f",
+                format: "Stride wobble <= 2s | X %.2f Y %.2f R %.2f",
                 state.strideWobbleXStrength,
                 state.strideWobbleYStrength,
                 state.strideWobbleRotationStrength
             ))
             lines.append(String(
                 format: "Walking Bob <= %.2fs | removal %.2f",
-                state.walkingBobWindowSeconds,
+                bobWindowSeconds,
                 state.walkingBobStrength
             ))
             lines.append(String(
-                format: "Far-field Warp | strength %.2f",
+                format: "Far-field Warp <= 1s | strength %.2f",
                 state.farFieldWarpStrength
             ))
             lines.append(String(
                 format: "Turn Smoothing %.2f-%.2fs | strength %.2f",
-                state.walkingBobWindowSeconds,
-                state.panSmoothSeconds,
+                bobWindowSeconds,
+                turnWindowSeconds,
                 state.panStabilizationStrength
             ))
         }
