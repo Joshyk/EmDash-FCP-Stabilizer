@@ -102,10 +102,13 @@ shock region. Footstep Jitter should suppress footstep landing shock as a frame-
 rather than treating it as periodic smoothing, and it should not require rerunning Host
 Analysis. Do not add or expose a Footstep Jitter window; fine jitter should be corrected from
 the current render frame's impulse against the predicted outer-frame baseline using the
-multi-block Host Analysis path. Footstep Jitter strength values should be direct removal
-amounts with an exposed maximum of `4.0`. Values above `1.0` may compensate for
-low-confidence gating when correction is too weak, but applied correction must clamp at full
-detected-impulse removal during render so high slider values do not add inverse shake.
+multi-block Host Analysis path. Footstep Jitter confidence should be evaluated per render
+frame from current tracking quality, accepted block coverage, blur, and whether the center
+frame departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
+Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
+`4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
+weak, but applied correction must clamp at full detected-impulse removal during render so
+high slider values do not add inverse shake.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
 before caching. The limiter should clamp isolated acceleration spikes in X/Y/roll while
 preserving path endpoints so total analyzed turn amount is not lost and real panning is not

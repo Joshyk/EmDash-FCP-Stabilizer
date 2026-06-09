@@ -239,7 +239,8 @@ enum AutoStabilizationEstimator {
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 15
     private static let renderTemporalSmoothingWindowSeconds = 0.55
-    private static let microJitterMinimumEffectiveConfidence: Float = 0.55
+    private static let footstepImpulseFullScalePixels: Float = 0.35
+    private static let footstepImpulseFullScaleDegrees: Float = 0.08
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
@@ -455,19 +456,50 @@ enum AutoStabilizationEstimator {
         let sampleHeight = frames[centerIndex].sampleHeight
         let xScale = outputSize.x / Float(max(1, sampleWidth))
         let yScale = outputSize.y / Float(max(1, sampleHeight))
-        let residual = maxValue(analysis.residuals, indices: activeIndices)
+        let turnResidual = maxValue(analysis.residuals, indices: activeIndices)
+        let bobResidual = maxValue(analysis.residuals, indices: walkingBobActiveIndices)
+        let centerResidual = interpolatedValue(analysis.residuals, using: frameInterpolation)
         let blurAmount = timeWeightedAverage(analysis.blurAmounts, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let motionConfidence = analysis.analysisConfidence.indices.contains(centerIndex) ? analysis.analysisConfidence[centerIndex] : 0.0
+        let centerBlurAmount = interpolatedValue(analysis.blurAmounts, using: frameInterpolation)
+        let motionConfidence = interpolatedValue(analysis.analysisConfidence, using: frameInterpolation)
         let acceptedBlockCount = analysis.acceptedBlockCounts.indices.contains(centerIndex) ? analysis.acceptedBlockCounts[centerIndex] : 0
         let totalBlockCount = analysis.totalBlockCounts.indices.contains(centerIndex) ? analysis.totalBlockCounts[centerIndex] : 0
         let warpConfidence = analysis.warpConfidence.indices.contains(centerIndex) ? analysis.warpConfidence[centerIndex] : 0.0
-        let confidence = clamp(1.0 - (residual * 1.2), min: 0.35, max: 1.0)
-        let jitterConfidence = clamp((1.0 - (residual * 0.7)) * motionConfidence, min: 0.0, max: 1.0)
-        let bobConfidence = clamp((1.0 - (residual * 0.4)) * motionConfidence, min: 0.0, max: 1.0)
+        let trackingConfidence = frameTrackingConfidence(
+            motionConfidence: motionConfidence,
+            residual: centerResidual,
+            blurAmount: centerBlurAmount,
+            acceptedBlockCount: acceptedBlockCount,
+            totalBlockCount: totalBlockCount
+        )
+        let footstepXConfidence = footstepFrameConfidence(
+            values: analysis.pathX,
+            baselineValues: footstepBaselineXPath,
+            interpolation: frameInterpolation,
+            trackingConfidence: trackingConfidence,
+            fullImpulseScale: footstepImpulseFullScalePixels
+        )
+        let footstepYConfidence = footstepFrameConfidence(
+            values: analysis.pathY,
+            baselineValues: footstepBaselineYPath,
+            interpolation: frameInterpolation,
+            trackingConfidence: trackingConfidence,
+            fullImpulseScale: footstepImpulseFullScalePixels
+        )
+        let footstepRollConfidence = footstepFrameConfidence(
+            values: analysis.pathRoll,
+            baselineValues: footstepBaselineRollPath,
+            interpolation: frameInterpolation,
+            trackingConfidence: trackingConfidence,
+            fullImpulseScale: footstepImpulseFullScaleDegrees
+        )
+        let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
+        let confidence = clamp(1.0 - (turnResidual * 1.2), min: 0.35, max: 1.0)
+        let bobConfidence = clamp((1.0 - (bobResidual * 0.4)) * motionConfidence, min: 0.0, max: 1.0)
         let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
-        let microXCorrectionStrength = microJitterCorrectionFactor(strengths.microJitterX, confidence: jitterConfidence)
-        let microYCorrectionStrength = microJitterCorrectionFactor(strengths.microJitterY, confidence: jitterConfidence)
-        let microRotationCorrectionStrength = microJitterCorrectionFactor(strengths.microJitterRotation, confidence: jitterConfidence)
+        let microXCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence)
+        let microYCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence)
+        let microRotationCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
         let walkingBobCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.walkingBob, confidence: bobConfidence)
         let panBandX = microImpulseBaselineX - turnSmoothX
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
@@ -1637,16 +1669,85 @@ enum AutoStabilizationEstimator {
         return clamp(requestedRemoval * confidence, min: 0.0, max: 1.0)
     }
 
-    private static func microJitterCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
-        let requestedRemoval = max(0.0, Float(strength))
-        guard requestedRemoval > 0.0 else {
+    private static func frameTrackingConfidence(
+        motionConfidence: Float,
+        residual: Float,
+        blurAmount: Float,
+        acceptedBlockCount: Int32,
+        totalBlockCount: Int32
+    ) -> Float {
+        let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
+        let blurQuality = clamp(1.0 - (blurAmount * 0.85), min: 0.0, max: 1.0)
+        let blockQuality: Float
+        if totalBlockCount > 0 {
+            blockQuality = clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0)
+        } else {
+            blockQuality = 0.0
+        }
+        let combinedEvidence = motionConfidence * residualQuality * blurQuality * blockQuality
+        return clamp(Darwin.sqrtf(max(0.0, combinedEvidence)), min: 0.0, max: 1.0)
+    }
+
+    private static func footstepFrameConfidence(
+        values: [Float],
+        baselineValues: [Float],
+        interpolation: FrameInterpolation,
+        trackingConfidence: Float,
+        fullImpulseScale: Float
+    ) -> Float {
+        let lowerConfidence = footstepFrameConfidenceAtIndex(
+            values: values,
+            baselineValues: baselineValues,
+            index: interpolation.lowerIndex,
+            trackingConfidence: trackingConfidence,
+            fullImpulseScale: fullImpulseScale
+        )
+        guard interpolation.upperIndex != interpolation.lowerIndex else {
+            return lowerConfidence
+        }
+        let upperConfidence = footstepFrameConfidenceAtIndex(
+            values: values,
+            baselineValues: baselineValues,
+            index: interpolation.upperIndex,
+            trackingConfidence: trackingConfidence,
+            fullImpulseScale: fullImpulseScale
+        )
+        return lowerConfidence + ((upperConfidence - lowerConfidence) * interpolation.fraction)
+    }
+
+    private static func footstepFrameConfidenceAtIndex(
+        values: [Float],
+        baselineValues: [Float],
+        index: Int,
+        trackingConfidence: Float,
+        fullImpulseScale: Float
+    ) -> Float {
+        guard values.indices.contains(index), baselineValues.indices.contains(index) else {
             return 0.0
         }
-        return clamp(
-            requestedRemoval * max(confidence, microJitterMinimumEffectiveConfidence),
-            min: 0.0,
-            max: 1.0
+        let impulse = abs(values[index] - baselineValues[index])
+        let surroundingIndices = surroundingIndicesExcludingCenter(
+            around: index,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius,
+            inCount: min(values.count, baselineValues.count)
         )
+        let surroundingNoise = median(surroundingIndices.map { abs(values[$0] - baselineValues[$0]) }) ?? 0.0
+        let noiseFloor = max(fullImpulseScale * 0.12, surroundingNoise * 1.4)
+        let impulseQuality = confidenceRamp(
+            impulse,
+            start: noiseFloor,
+            full: max(noiseFloor + Float.ulpOfOne, fullImpulseScale)
+        )
+        return clamp(trackingConfidence * impulseQuality, min: 0.0, max: 1.0)
+    }
+
+    private static func confidenceRamp(_ value: Float, start: Float, full: Float) -> Float {
+        guard value.isFinite, start.isFinite, full.isFinite, full > start else {
+            return 0.0
+        }
+        let normalized = clamp((value - start) / (full - start), min: 0.0, max: 1.0)
+        return normalized * normalized * (3.0 - (2.0 * normalized))
     }
 }
 

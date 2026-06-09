@@ -94,11 +94,13 @@ compute per frame, but it keeps the displayed pan correction as smooth as possib
 rerunning Host Analysis. While `Debug Overlay` is enabled, `Host Analysis Status` shows the
 center-frame raw transform next to the temporally smoothed transform delta so smoothing can
 be tuned from visible runtime output instead of guessing from the viewer alone. Strength
-values run up to `4.0`; values above `1.0` can push through low-confidence gating. Footstep
-Jitter uses a render-time minimum effective confidence floor so fine ridge-line shake does
-not disappear just because block confidence is conservative, and the final temporal smoothing
-keeps the current-frame Footstep Jitter X/Y/roll impulse instead of averaging it away. The
-applied correction still clamps at full
+values run up to `4.0`; values above `1.0` can push through weak frame evidence when the
+detected impulse is visibly under-corrected. Footstep Jitter uses a per-frame confidence
+score from current tracking quality, block coverage, blur, and whether the center frame
+actually departs from its outer-frame baseline. There is no hidden minimum confidence floor;
+weak evidence weakens the correction instead of forcing shake removal. The final temporal
+smoothing keeps the current-frame Footstep Jitter X/Y/roll impulse instead of averaging it
+away. The applied correction still clamps at full
 detected-impulse removal so it does not add inverse shake.
 Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
 limiter only clamps isolated acceleration spikes in the saved X/Y/roll motion path while
@@ -122,7 +124,7 @@ Footstep Jitter Y. The default removal is `0.75` to avoid overcorrecting
 walking footage. Shorter window values around `0.4-1.0` seconds target visible footstep
 bounce. Footstep Jitter and Walking Bob strengths are clamped at full detected-band removal
 during render, so high slider values do not add inverse shake. Values above `1.0` are useful
-when confidence gating makes the detected correction visibly too weak.
+when frame evidence makes the detected correction visibly too weak.
 `Far-field Warp Strength` adds a bundled small-clamp far-field correction for walking
 landscape footage. It estimates deskew/shear, yaw/pitch proxy, and perspective/distort trim
 from upper-frame far-field residual blocks after translation and roll are removed. The

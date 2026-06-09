@@ -24,7 +24,7 @@ private enum ParameterID: UInt32 {
     case farFieldWarpStrength = 28
 }
 
-private let stabilizerFxPlugVersion = "0.2.109"
+private let stabilizerFxPlugVersion = "0.2.110"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0

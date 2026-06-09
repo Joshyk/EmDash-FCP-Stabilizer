@@ -18,21 +18,23 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 ## Controls
 
 - `Footstep Jitter X Strength`: direct amount for horizontal footstep-jitter correction. The
-  default is `1.0` and the maximum is `4.0`. Values above `1.0` push through low-confidence
-  gating when the detected impulse is visibly under-corrected, but render output still
-  clamps at full detected-impulse removal to avoid inverse shake.
+  default is `1.0` and the maximum is `4.0`. Values above `1.0` can push through weak
+  frame evidence when the detected impulse is visibly under-corrected, but render output
+  still clamps at full detected-impulse removal to avoid inverse shake.
 - `Footstep Jitter Y Strength`: direct amount for vertical footstep-jitter correction. The
   default is `1.0` and the maximum is `4.0`. Footstep Jitter uses an outer-frame linear
   prediction that skips the center shock region for X/Y/rotation, so footstep landing shock
   is treated as a frame-level impulse instead of being averaged back into the smooth path.
   Host Analysis builds that path from multiple Metal block-matched regions with outlier
-  blocks rejected before render. Values above `1.0` push through low-confidence gating when
-  the detected impulse is visibly under-corrected, but render output still clamps at full
+  blocks rejected before render. Footstep Jitter is gated per frame from current tracking
+  quality, block coverage, blur, and whether the center frame actually departs from its
+  outer-frame baseline. Values above `1.0` can compensate when that frame-local score makes
+  the detected impulse visibly under-corrected, but render output still clamps at full
   detected-impulse removal to avoid inverse shake.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
-  default is `1.0` and the maximum is `4.0`. Values above `1.0` push through low-confidence
-  gating when the detected impulse is visibly under-corrected, but render output still
-  clamps at full detected-impulse removal to avoid inverse shake.
+  default is `1.0` and the maximum is `4.0`. Values above `1.0` can compensate when
+  frame-local confidence makes the detected impulse visibly under-corrected, but render
+  output still clamps at full detected-impulse removal to avoid inverse shake.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
@@ -155,7 +157,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Footstep Jitter impulse path and a Y-only `Walking Bob Window` band-pass path. Y correction
   is handled by Footstep Jitter first and Walking Bob last; Turn Smoothing does not apply to
   Y. This keeps horizontal segmented turns, fine high-frequency shake, and footstep vertical
-  bobbing independently tunable without rerunning Host Analysis.
+  bobbing independently tunable without rerunning Host Analysis. Footstep Jitter confidence
+  is evaluated on the current render frame instead of inheriting the worst residual from the
+  wider turn-detection window.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`.
