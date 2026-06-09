@@ -38,7 +38,7 @@ estimators, or Transform-keyframe writers back into this target.
   `Proxy Media Rejected - Use Original Media`; switch Final Cut Pro back to original media
   and rerun Host Analysis.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
-- Combines per-frame Footstep Jitter, fixed-window Stride Wobble, capped Walking Bob,
+- Combines per-frame Footstep Jitter, fixed-window Stride Wobble, fixed-window Walking Bob,
   Far-field Warp, and broader Turn Smoothing bands so walking-gimbal shake is separated by
   time scale without rerunning Host Analysis.
 - `Edge Display Mode` switches preview edges between stretched source edges and black
@@ -144,8 +144,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
-- `Walking Bob Window`: Y-only walking bob band after FJIT and SWOB. The default is `1.5`
-  seconds and the maximum is `3.0` seconds, below Turn Detection.
+- `Walking Bob`: fixed internal `2.0` second Y-only walking bob band after FJIT and SWOB.
+  There is no user-facing BOB window control; Turn Detection starts above this band.
 - `Walking Bob Removal`: direct amount for the Y-only BOB correction. Setting it to `0` does
   not disable Footstep Jitter Y, and higher values are clamped during render to avoid inverse
   vertical shake.
@@ -156,8 +156,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
-  motion paths. The UI starts above the `3.0` second Walking Bob cap and extends up to the
-  user value, so TURN remains broader than BOB.
+  motion paths. The UI starts above the fixed `2.0` second Walking Bob band plus margin and
+  extends up to the user value, so TURN remains broader than BOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions.
   Options are `100%`, `75%`, `50%`, `25%`, and `10%`; `100%` analyzes at the original clip
   size. Host Analysis reads this value once when the analysis pass starts. The actual pixel
@@ -183,7 +183,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Cache Cleared` in `Host Analysis Status`.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
   version, active correction bands (`Footstep jitter <= 1s`, `Stride wobble <= 2s`,
-  `Walking Bob <= 3s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
+  `Walking Bob <= 2s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,

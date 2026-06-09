@@ -57,13 +57,11 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Footstep Jitter X/Y/roll impulse paths are saved separately before the limiter is applied,
   so fine frame-level shake remains available to render-time correction. Short analyzed
   ranges are kept in bounds during cleanup so the prepared cache can be saved.
-- `Walking Bob Window`: Y-axis-only window for footstep bob and vertical walking shake
-  left after Footstep Jitter and Stride Wobble. The correction uses the Y band between the
-  stride-smoothed baseline and this walking-bob smooth path without changing X or roll. The
-  default is `1.5` seconds, and the maximum is `3.0` seconds. Use
-  shorter values around `0.4-1.0` seconds for visible footstep bounce and larger values for
-  slower vertical sway. The UI keeps this below `Turn Detection Window` so BOB remains the
-  shorter vertical band.
+- `Walking Bob`: fixed internal `2.0` second Y-axis-only window for footstep bob and
+  vertical walking shake left after Footstep Jitter and Stride Wobble. The correction uses
+  the Y band between the stride-smoothed baseline and this walking-bob smooth path without
+  changing X or roll. There is no user-facing window control; `Turn Detection Window` starts
+  above this BOB band so TURN remains the broader band.
 - `Walking Bob Removal`: direct amount for the Y-only correction. Footstep bounce
   can be reduced without changing X or roll. This is the final correction stage inside the
   same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
@@ -88,8 +86,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   not create stretched-edge jumps in the preview.
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
   mode this is evaluated against prepared motion paths during render, so changing the slider
-  does not require rebuilding analysis. The UI starts above the `3.0` second Walking Bob cap
-  and extends up to the user value, keeping TURN broader than BOB.
+  does not require rebuilding analysis. The UI starts above the fixed `2.0` second Walking
+  Bob band plus margin and extends up to the user value, keeping TURN broader than BOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
   at the original clip size. The actual pixel size is shown in `Stabilizer Info`.
@@ -192,12 +190,12 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
   Footstep Jitter impulse path, a fixed `2.0` second Stride Wobble band, and a Y-only
-  `Walking Bob Window` band-pass path. Y correction is handled by Footstep Jitter first,
-  Stride Wobble second, and Walking Bob last; Turn Smoothing does not apply to Y. This keeps
-  horizontal segmented turns, fine high-frequency shake, medium walking wobble, and footstep
-  vertical bobbing independently tunable without rerunning Host Analysis. Footstep Jitter
-  confidence is evaluated on the current render frame instead of inheriting the worst
-  residual from the wider turn-detection window.
+  fixed `2.0` second Walking Bob band-pass path. Y correction is handled by Footstep Jitter
+  first, Stride Wobble second, and Walking Bob last; Turn Smoothing does not apply to Y.
+  This keeps horizontal segmented turns, fine high-frequency shake, medium walking wobble,
+  and footstep vertical bobbing independently tunable without rerunning Host Analysis.
+  Footstep Jitter confidence is evaluated on the current render frame instead of inheriting
+  the worst residual from the wider turn-detection window.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
   shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`. The applied

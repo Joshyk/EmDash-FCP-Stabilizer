@@ -289,7 +289,7 @@ enum AutoStabilizationEstimator {
     private static let footstepImpulseOuterWindowSeconds = 1.0
     private static let farFieldWarpInnerWindowSeconds = 0.10
     private static let farFieldWarpOuterWindowSeconds = 1.0
-    private static let maxWalkingBobWindowSeconds = 3.0
+    private static let fixedWalkingBobWindowSeconds = 2.0
     private static let turnWindowBobMarginSeconds = 0.25
     private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
@@ -313,7 +313,6 @@ enum AutoStabilizationEstimator {
         renderTime: CMTime,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        walkingBobWindowSeconds: Double,
         strengths: StabilizerCorrectionStrengths = .defaultStrengths
     ) throws -> StabilizerAutoTransform {
         let frames = try sourceImages
@@ -325,7 +324,6 @@ enum AutoStabilizationEstimator {
             renderTime: renderTime,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            walkingBobWindowSeconds: walkingBobWindowSeconds,
             strengths: strengths
         )
     }
@@ -400,7 +398,6 @@ enum AutoStabilizationEstimator {
         renderTime: CMTime,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        walkingBobWindowSeconds: Double,
         strengths: StabilizerCorrectionStrengths = .defaultStrengths
     ) throws -> StabilizerAutoTransform {
         let preparedAnalysis = try prepare(analysisFrames: frames)
@@ -409,7 +406,6 @@ enum AutoStabilizationEstimator {
             renderTime: renderTime,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            walkingBobWindowSeconds: walkingBobWindowSeconds,
             strengths: strengths
         )
     }
@@ -419,7 +415,6 @@ enum AutoStabilizationEstimator {
         renderTime: CMTime,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        walkingBobWindowSeconds: Double,
         strengths: StabilizerCorrectionStrengths = .defaultStrengths
     ) -> StabilizerAutoTransform {
         let renderSeconds = CMTimeGetSeconds(renderTime)
@@ -432,7 +427,6 @@ enum AutoStabilizationEstimator {
             renderSeconds: renderSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            walkingBobWindowSeconds: walkingBobWindowSeconds,
             strengths: strengths
         )
     }
@@ -442,7 +436,6 @@ enum AutoStabilizationEstimator {
         renderSeconds: Double,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        walkingBobWindowSeconds: Double,
         strengths: StabilizerCorrectionStrengths
     ) -> StabilizerAutoTransform {
         let frames = analysis.frames
@@ -450,7 +443,7 @@ enum AutoStabilizationEstimator {
             return .identity
         }
 
-        let effectiveWalkingBobWindowSeconds = min(max(0.1, walkingBobWindowSeconds), maxWalkingBobWindowSeconds)
+        let effectiveWalkingBobWindowSeconds = fixedWalkingBobWindowSeconds
         let requestedTurnWindowSeconds = max(0.1, panSmoothSeconds)
         let smoothWindowSeconds = max(requestedTurnWindowSeconds, effectiveWalkingBobWindowSeconds + turnWindowBobMarginSeconds)
         let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
@@ -772,7 +765,6 @@ enum AutoStabilizationEstimator {
         renderSeconds: Double,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        walkingBobWindowSeconds: Double,
         strengths: StabilizerCorrectionStrengths
     ) -> StabilizerAutoTransform {
         let frames = analysis.frames
@@ -787,7 +779,6 @@ enum AutoStabilizationEstimator {
             renderSeconds: renderSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            walkingBobWindowSeconds: walkingBobWindowSeconds,
             strengths: strengths
         )
         let sampleCount = max(3, renderTemporalSmoothingSampleCount)
@@ -811,7 +802,6 @@ enum AutoStabilizationEstimator {
                 renderSeconds: sampleSeconds,
                 outputSize: outputSize,
                 panSmoothSeconds: panSmoothSeconds,
-                walkingBobWindowSeconds: walkingBobWindowSeconds,
                 strengths: strengths
             )
             weightedSamples.append((transform: transform, weight: weight))

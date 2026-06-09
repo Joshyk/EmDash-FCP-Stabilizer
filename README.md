@@ -69,14 +69,13 @@ the same motion is not removed twice.
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
 Y or roll, and is soft-limited to a small output-edge budget during render.
-`Turn Detection Window` starts above the `3.0` second Walking Bob cap and extends
-up to the UI value, so TURN remains the broader band after BOB.
+`Turn Detection Window` starts above the fixed `2.0` second Walking Bob band plus
+margin and extends up to the UI value, so TURN remains the broader band after BOB.
 
-`Walking Bob Window` and `Walking Bob Removal` target the remaining vertical
-walking bounce after Footstep Jitter and Stride Wobble. Walking Bob does not gate
-or weaken Footstep Jitter Y. The window is capped at `3.0` seconds, below the
-Turn Detection range. The default removal is `0.75`; shorter windows around
-`0.4-1.0` seconds target visible footstep bounce.
+`Walking Bob` uses a fixed internal `2.0` second Y-only window for the remaining
+vertical walking bounce after Footstep Jitter and Stride Wobble. The Inspector
+exposes only `Walking Bob Removal`; it does not gate or weaken Footstep Jitter Y.
+The default removal is `0.75`.
 
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current

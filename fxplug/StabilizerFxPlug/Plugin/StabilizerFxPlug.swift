@@ -17,7 +17,6 @@ private enum ParameterID: UInt32 {
     case yStrength = 18
     case sampleScale = 19
     case renderRevision = 20
-    case walkingBobWindowSeconds = 22
     case panStabilizationStrength = 23
     case walkingBobStrength = 26
     case edgeDisplayMode = 27
@@ -27,10 +26,10 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.123"
-private let stabilizerMaxWalkingBobWindowSeconds = 3.0
+private let stabilizerFxPlugVersion = "0.2.124"
+private let stabilizerFixedWalkingBobWindowSeconds = 2.0
 private let stabilizerTurnWindowBobMarginSeconds = 0.25
-private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerMaxWalkingBobWindowSeconds + stabilizerTurnWindowBobMarginSeconds
+private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedWalkingBobWindowSeconds + stabilizerTurnWindowBobMarginSeconds
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -78,7 +77,6 @@ private struct StabilizerPluginState {
     var walkingBobStrength: Double
     var farFieldWarpStrength: Double
     var panSmoothSeconds: Double
-    var walkingBobWindowSeconds: Double
     var edgeDisplayMode: Int32
     var debugOverlay: Bool
     var sampleScale: Int32
@@ -249,17 +247,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Walking Bob Window",
-            parameterID: ParameterID.walkingBobWindowSeconds.rawValue,
-            defaultValue: 1.5,
-            parameterMin: 0.1,
-            parameterMax: stabilizerMaxWalkingBobWindowSeconds,
-            sliderMin: 0.1,
-            sliderMax: stabilizerMaxWalkingBobWindowSeconds,
-            delta: 0.05,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
             withName: "Walking Bob Removal",
             parameterID: ParameterID.walkingBobStrength.rawValue,
             defaultValue: 0.75,
@@ -397,7 +384,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             walkingBobStrength: 0.75,
             farFieldWarpStrength: 1.0,
             panSmoothSeconds: 6.0,
-            walkingBobWindowSeconds: 1.5,
             edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
             debugOverlay: false,
             sampleScale: StabilizerSampleScale.original.rawValue,
@@ -416,7 +402,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         paramAPI.getFloatValue(&state.walkingBobStrength, fromParameter: ParameterID.walkingBobStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.farFieldWarpStrength, fromParameter: ParameterID.farFieldWarpStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.walkingBobWindowSeconds, fromParameter: ParameterID.walkingBobWindowSeconds.rawValue, at: renderTime)
         paramAPI.getIntValue(&state.edgeDisplayMode, fromParameter: ParameterID.edgeDisplayMode.rawValue, at: renderTime)
         var debugOverlay = ObjCBool(state.debugOverlay)
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
@@ -583,11 +568,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
         var lines = ["FxPlug \(stabilizerFxPlugVersion)"]
         if let state {
-            let bobWindowSeconds = min(max(0.1, state.walkingBobWindowSeconds), stabilizerMaxWalkingBobWindowSeconds)
+            let bobWindowSeconds = stabilizerFixedWalkingBobWindowSeconds
             let turnWindowSeconds = max(
                 max(stabilizerMinimumTurnDetectionWindowSeconds, state.panSmoothSeconds),
                 bobWindowSeconds + stabilizerTurnWindowBobMarginSeconds
             )
+            let turnStartSeconds = stabilizerMinimumTurnDetectionWindowSeconds
             lines.append(String(
                 format: "Footstep jitter <= 1s | X %.2f Y %.2f R %.2f",
                 state.microJitterXStrength,
@@ -611,7 +597,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             ))
             lines.append(String(
                 format: "Turn Smoothing %.2f-%.2fs | strength %.2f",
-                bobWindowSeconds,
+                turnStartSeconds,
                 turnWindowSeconds,
                 state.panStabilizationStrength
             ))
@@ -777,7 +763,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 renderTime: analysisRenderTime,
                 outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
                 panSmoothSeconds: state.panSmoothSeconds,
-                walkingBobWindowSeconds: state.walkingBobWindowSeconds,
                 strengths: StabilizerCorrectionStrengths(
                     microJitterX: state.microJitterXStrength,
                     microJitterY: state.microJitterYStrength,

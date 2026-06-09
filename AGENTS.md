@@ -143,9 +143,10 @@ jumps in the preview. The turn band should be measured from the stride-smoothed 
 of the raw frame path, and Y correction must stay Footstep Jitter first, Stride Wobble
 second, and Walking Bob last so short landing shock is not reintroduced by turn smoothing.
 Y-axis walking bob between micro jitter and panning should be handled by the render-time
-`Walking Bob Window` and `Walking Bob Removal` path, which corrects the Y-only band between
-the stride-smoothed baseline and the walking-bob smoothing window, without changing X or
-roll and without rerunning Host Analysis.
+fixed `2.0` second `Walking Bob` and `Walking Bob Removal` path, which corrects the Y-only
+band between the stride-smoothed baseline and the walking-bob smoothing window, without
+changing X or roll and without rerunning Host Analysis. Do not expose a user-facing Walking
+Bob window control.
 Walking Bob should remain in the same effect as the final Y-only correction stage. It must
 use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, and setting
 `Walking Bob Removal` to zero must still allow Footstep Jitter Y to work.

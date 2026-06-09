@@ -14,12 +14,15 @@ Repository context:
   - `Footstep Jitter X Strength`
   - `Footstep Jitter Y Strength`
   - `Footstep Jitter Rotation Strength`
-  - `Turn Smoothing Strength`
-  - `Walking Bob Window`
+  - `Stride Wobble X Strength`
+  - `Stride Wobble Y Strength`
+  - `Stride Wobble Rotation Strength`
   - `Walking Bob Removal`
   - `Far-field Warp Strength`
+  - `Turn Smoothing Strength`
   - `Far-field Warp Strength` defaults to `1.0` and exposes up to `4.0`.
 - Do not add a Footstep Jitter window.
+- Do not expose a Walking Bob window; Walking Bob uses a fixed internal `2.0` second window.
 - Do not rerun Host Analysis during render.
 - Host Analysis cache schema should be bumped when prepared analysis output semantics change.
 
@@ -44,10 +47,10 @@ Current implementation to review:
     - `warpConfidence`, `shear`, `yawPitchProxy`, and `perspective`
     - sample count and smoothing window seconds
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift`
-  - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Turn Smoothing, separate Footstep Jitter and Stride Wobble activity, Walking Bob, temporal smoothing delta, Footstep/Stride/Bob/Warp confidence, tracking quality, blur, residual, and search-radius hits.
+  - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Footstep Jitter, Stride Wobble, Walking Bob, Far-field Warp, Turn Smoothing, temporal smoothing delta, Footstep/Stride/Bob/Warp/Turn confidence, tracking quality, sharpness, residual quality, and search-radius headroom.
   - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, tracking/motion confidence, blur, residual, raw `foot q`, effective Footstep Jitter X/Y/R strength, `stride q`, `bob q`, `warp q`, shear, yaw/pitch proxy, perspective, block counts, edge-hit counts, X turn correction, and Y footstep/stride/bob component split.
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerTransform.metal`
-  - The overlay draws sixteen labeled rows of diagnostic bars.
+  - The overlay draws eighteen labeled rows of diagnostic bars.
 
 Please review this implementation for walking-gimbal smoothing quality. Focus on:
 
