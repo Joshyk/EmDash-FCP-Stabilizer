@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.111"
+private let stabilizerFxPlugVersion = "0.2.112"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -794,10 +794,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             min(1.0, simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale)
         )
         let diagnostic3 = vector_float4(
-            min(1.0, autoTransform.warpConfidence),
-            min(1.0, simd_length(autoTransform.shear) / 0.008),
-            min(1.0, simd_length(autoTransform.yawPitchProxy) / 0.004),
-            min(1.0, simd_length(autoTransform.perspective) / 0.003)
+            min(1.0, autoTransform.microConfidence),
+            min(1.0, autoTransform.strideConfidence),
+            min(1.0, autoTransform.bobConfidence),
+            min(1.0, autoTransform.warpConfidence)
         )
 
         var transform = StabilizerTransformUniforms(

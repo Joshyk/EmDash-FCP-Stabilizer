@@ -141,11 +141,13 @@ default is `1.0`, the slider is capped at `4.0`, and render-time clamps keep eac
 shear, yaw/pitch, and perspective small because this path can otherwise make close grass,
 roads, water, or frame edges swim.
 `Debug Overlay` shows top-left diagnostics for final X/Y/roll, Turn Smoothing, Footstep
-Jitter, Stride Wobble, Walking Bob, temporal smoothing delta, and Far-field Warp, including
-separate `footstep q`, effective Footstep Jitter X/Y/R strength, `stride q`, effective
-Stride Wobble X/Y/R strength, `bob q`, and `warp q` values in
-Host Analysis status while rendering. `Edge Display Mode` switches preview edges between
-stretched source edges and black outside-source pixels.
+Jitter, Stride Wobble, Walking Bob, temporal smoothing delta, and live Footstep/Stride/Bob/Warp
+confidence. `Host Analysis Status` also reports separate `footstep q`, effective Footstep
+Jitter X/Y/R strength, `stride q`, effective Stride Wobble X/Y/R strength, `bob q`, `warp q`,
+and the current warp shape values while rendering. Values above `1.0` on Footstep/Stride/Bob
+controls boost low-confidence corrections with a curved confidence response, so saved clips
+at `4.0` do not snap medium-confidence frames straight to full correction. `Edge Display Mode`
+switches preview edges between stretched source edges and black outside-source pixels.
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
 the active correction bands (`Footstep jitter`, `Stride wobble`, `Walking Bob`,
 `Turn Smoothing`), and analysis metadata, so the Inspector can confirm which installed

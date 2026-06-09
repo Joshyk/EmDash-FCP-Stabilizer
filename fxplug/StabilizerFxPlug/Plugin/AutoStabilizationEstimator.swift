@@ -1746,8 +1746,10 @@ enum AutoStabilizationEstimator {
     }
 
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
-        let requestedRemoval = max(0.0, Float(strength))
-        return clamp(requestedRemoval * confidence, min: 0.0, max: 1.0)
+        let requestedRemoval = clamp(Float(strength), min: 0.0, max: 4.0)
+        let directRemoval = min(requestedRemoval, 1.0) * confidence
+        let confidenceBoost = max(0.0, requestedRemoval - 1.0) * 0.25 * confidence * confidence
+        return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
     }
 
     private static func strideWobbleConfidence(
