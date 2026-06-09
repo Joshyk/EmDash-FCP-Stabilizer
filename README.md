@@ -1,169 +1,182 @@
 # Final Cut Pro Stabilizer
 
-Native FxPlug 4 effect for walking-gimbal stabilization in Final Cut Pro and Motion.
+Native FxPlug 4 effect for Final Cut Pro and Motion, tuned for walking footage
+shot on a gimbal.
 
-This repo is FxPlug-only. It no longer contains or supports a separate automation runtime,
-standalone estimator, or Transform-keyframe writer.
+This repo is FxPlug-only. It does not contain or support a CommandPost runtime,
+standalone estimator, cache generator, or Transform-keyframe writer.
 
-## Effect
+## What It Does
 
-- `Stabilizer Transform`
-  - Renders a transformed source texture with Metal.
-  - Corrects softened X/Y translation and roll without writing Final Cut Pro Transform
-    keyframes.
-  - Adds a small-clamp `Far-field Warp Strength` for ridge-line deskew, yaw/pitch proxy,
-    and perspective trim.
-  - Keeps render scale fixed at 1.0.
-  - Always uses `Host Analysis`.
+`Stabilizer Transform` renders the source clip through Metal and applies
+automatic stabilization inside the FxPlug render path. It avoids Final Cut Pro's
+built-in Stabilization effect because that effect applies its own internal crop
+and scale.
 
-`Host Analysis` uses Final Cut Pro's FxPlug analysis infrastructure to request GPU analysis
-frames from the host. The FxPlug runtime then uses Metal compute to downsample luma samples
-and run frame-to-frame block matching while preparing motion paths. If those Metal analysis
-resources are unavailable, Host Analysis fails visibly instead of falling back to CPU
-analysis.
+The effect is designed for outdoor walking shots where the camera is already on
+a gimbal but still has step shock, short wobble, vertical bob, segmented turns,
+and distant ridge-line shake.
 
-Host Analysis reads `Sample Size` once when an analysis pass starts. The sample image is
-always derived from the original clip dimensions, with options for `100%`, `75%`, `50%`,
-`25%`, and `10%`. The default is `100%`, which analyzes at the original clip size.
-In-progress analysis streams frame-to-frame motion directly through Metal and keeps only the
-previous luma buffer needed for the next motion search, so it no longer writes per-frame
-`.luma` scratch files.
-The stabilization result is still built from the same prepared motion path.
-`Start Host Analysis` requests the active effect clip from Final Cut Pro. If Final Cut Pro
-reports that another analysis is already requested or running, the Inspector shows that
-host state instead of starting an internal plug-in queue.
+The main correction stages are:
 
-Completed Host Analysis frame sets are persisted to
-`/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` as the
-latest cache and to range-indexed files under
-`/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/`. Reapplying the
-effect can reuse a previous Host Analysis run when the analyzed range and current source
-frame validate against the saved frame fingerprints or, for pixel-stripped cache frames, a
-tight render-time match. `Start Host Analysis` first reloads a
-saved cache when one exists and only starts a new analysis when no saved cache can be loaded.
-If that cache was rejected for the current clip, the next start skips it and requests a new
-analysis. Rejected cache candidates are remembered by file name inside the active FxPlug
-runtime so the same invalid candidate is not immediately reloaded again. `Clear Host
-Analysis Cache` is the explicit delete control and shows
-`Cache Cleared` in the Inspector.
-Cache compatibility is tied to cache schema and current source-frame validation, not the
-visible FxPlug runtime version, so render-only runtime updates should not force a new
-analysis pass. Unsupported schema candidates show `Cache Unsupported - Run Host Analysis`
-instead of being deleted silently, so the stale cache can remain available for older builds
-while the current effect asks for a new analysis.
+- `Footstep Jitter`: frame-local X/Y/roll impulse removal for landing shock.
+- `Stride Wobble`: medium-period X/Y/roll cleanup between footstep shock and
+  broad bob.
+- `Turn Smoothing`: X-only smoothing for stop-and-go walking turns.
+- `Walking Bob`: Y-only correction for longer vertical walking bounce.
+- `Far-field Warp Strength`: small-clamp deskew, yaw/pitch proxy, and
+  perspective trim for distant background shake.
 
-The cache includes prepared motion paths so playback renders from precomputed values instead
-of running block matching again on every frame. New cache files store prepared paths, frame
-timing, blur values, search-radius edge-hit counts, and fingerprints instead of every
-frame's luma sample. When a loaded cache frame has no retained validation pixels and needs
-the tight time match path, that choice is written to the Stabilizer log instead of happening
-silently. The Host
-Analysis uses a process-wide shared store for the active FxPlug runtime so setup, frame
-analysis, cleanup, and render can exchange the prepared path when Final Cut Pro calls them
-through different FxPlug instances in the same process. Persistent cache files are the
-cross-process handoff: completed analysis is written to the shared user Application Support
-cache, and preview/render instances with no prepared analysis detect cache file changes and
-reload validated candidates on demand. `Start Host Analysis` is the only path that requests
-Host Analysis from Final Cut Pro; render/preview callbacks only read completed analysis or
-validated persistent cache. If Final Cut Pro reports that Host Analysis is already requested
-or running, the Inspector shows that state instead of queueing another start inside the
-plug-in. Persistent cache files remain shared reuse candidates after source-frame
-validation. When Final Cut Pro renders a trimmed clip with a render time that differs from Host Analysis frame time,
-the effect maps the current render frame fingerprint back to the analyzed frame set and uses
-that offset before sampling the prepared motion paths. The Inspector shows
-`Host Analysis Status`; after a completed analysis it should read `Ready (... frames)`.
-Analysis input still requires original media, but a validated analysis continues to drive
-the preview/render path when Final Cut Pro plays proxy media.
-If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
-media, render playback uses that loaded cache immediately instead of requiring re-analysis;
-original-media validation can happen later when original frames are available.
-Setting `Overall Strength` to `0` fully bypasses the automatic transform path, including
-crop-safety motion and debug overlay output.
-The plug-in also updates a hidden render revision whenever Host Analysis or cache state
-changes so Final Cut Pro refreshes the preview from the prepared motion paths.
-Fine high-frequency shake is controlled separately with the Footstep Jitter strength sliders.
-Footstep Jitter treats X/Y/rotation shake as a frame-level impulse against an outer-frame
-linear prediction that skips the center shock region, so footstep landing shock is not
-averaged back into the smooth path. Host Analysis estimates motion from multiple Metal
-block-matched regions, prioritizes upper-frame far-field blocks for walking landscape
-footage, and rejects outlier blocks before building the per-frame path. This keeps distant
-mountain/background motion from being dominated by close grass, water, or road parallax.
-Footstep Jitter is evaluated per render frame and is not a windowed or periodic smoothing
-control. Host Analysis now stores raw X/Y/roll impulse paths for Footstep Jitter separately
-from the jerk-limited prepared paths used by longer pan, turn, and bob stages, so the broad
-motion cleanup does not erase frame-level shake before render-time correction. Those raw
-footstep paths and their baselines are sampled continuously at render time instead of
-snapping to the nearest analyzed frame, so panning playback does not step between
-frame-indexed corrections. The final automatic transform is then sampled across a wider
-symmetric render-time window and blended with zero phase. This costs more preview compute
-per frame, but it keeps the displayed pan correction as smooth as possible without rerunning
-Host Analysis. While `Debug Overlay` is enabled, `Host Analysis Status` shows the
-center-frame raw transform next to the temporally smoothed transform delta so smoothing can
-be tuned from visible runtime output instead of guessing from the viewer alone. Strength
-values run up to `4.0`; values above `1.0` can push through weak frame evidence when the
-detected impulse is visibly under-corrected. Footstep Jitter uses a per-frame confidence
-score from current tracking quality, block coverage, blur, and whether the center frame
-actually departs from its outer-frame baseline. There is no hidden minimum confidence floor;
-weak evidence weakens the correction instead of forcing shake removal. The final temporal
-smoothing keeps the current-frame Footstep Jitter X/Y/roll impulse instead of averaging it
-away. The applied correction still clamps at full
-detected-impulse removal so it does not add inverse shake.
-Stride Wobble sits between Footstep Jitter and Walking Bob for walking footage where each
-step creates a short follow-through shake that is longer than a landing impulse but shorter
-than broad vertical bob. It uses a fixed `0.70` second render-time window, not a user-facing
-window control. The Inspector exposes only `Stride Wobble X Strength`,
-`Stride Wobble Y Strength`, and `Stride Wobble Rotation Strength`; the defaults favor X and
-roll while keeping Y weaker so Walking Bob remains the main vertical-cycle correction.
-The correction is measured from the footstep-cleaned baseline, then longer Turn Smoothing
-and Walking Bob bands are measured from the stride-smoothed path so the same motion is not
-removed twice.
-Prepared Host Analysis paths are also post-processed with a zero-phase jerk limiter. The
-limiter only clamps isolated acceleration spikes in the saved X/Y/roll motion path while
-preserving the total analyzed turn amount, so one bad frame does not create a new snap in
-playback and real panning does not become a sliding, delayed path. The raw Footstep Jitter
-impulse paths are saved separately before that limiter is applied. Short analyzed ranges
-are kept in bounds while building these prepared paths so Host Analysis cleanup can finish
-and persist the cache.
-Segmented walking turns are controlled with `Turn Smoothing Strength`; higher values
-concatenate stop-and-go horizontal turn motion into a monotonic S-curve intent instead of
-fitting a straight line through the window. The slider runs up to `4.0`; values above `1.0`
-can push through low-confidence gating when the turn still looks segmented, while the
-applied correction clamps at full detected turn-band removal. Turn smoothing applies only
-to X translation and does not change Y or roll. The macro X turn correction is soft-limited
-to a small output-edge budget during render, so a large detected pan cannot create
-stretched-edge jumps in the preview. Y correction is handled by Footstep Jitter, Stride
-Wobble, and Walking Bob only.
-Footstep vertical motion is controlled with `Walking Bob Window` and `Walking Bob Removal`,
-which remain in the same effect as the final Y-only correction stage. Walking Bob targets
-the remaining vertical band after Footstep Jitter and Stride Wobble; it does not gate or
-reduce Footstep Jitter Y. The default removal is `0.75` to avoid overcorrecting
-walking footage. Shorter window values around `0.4-1.0` seconds target visible footstep
-bounce. Footstep Jitter and Walking Bob strengths are clamped at full detected-band removal
-during render, so high slider values do not add inverse shake. Values above `1.0` are useful
-when frame evidence makes the detected correction visibly too weak.
-`Far-field Warp Strength` adds a bundled small-clamp far-field correction for walking
-landscape footage. It estimates deskew/shear, yaw/pitch proxy, and perspective/distort trim
-from upper-frame far-field residual blocks after translation and roll are removed. During
-render, those prepared warp paths are applied only as the current frame's local deviation
-from an outer-frame linear baseline, so accumulated long-term drift does not become a fixed
-deskew. The default is `1.0`, the slider is capped at `4.0`, and render-time clamps keep
-each unit of shear, yaw/pitch, and perspective small because this path can otherwise make
-close grass, roads, water, or frame edges swim.
-`Debug Overlay` shows labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `TURN`,
-`STEP`, `BOB`, `SMTH`, live `F Q`/`S Q`/`B Q`/`W Q` confidence, plus `TRK`, `BLUR`, `RES`,
-and search-radius `HIT` bars. `Host Analysis Status` also reports separate `footstep q`,
-effective Footstep Jitter X/Y/R strength, `stride q`, effective Stride Wobble X/Y/R
-strength, `bob q`, `warp q`, tracking/motion confidence, blur, residual, edge-hit counts,
-and the current warp shape values while rendering. Values above `1.0` on Footstep/Stride/Bob
-controls boost low-confidence corrections with a curved confidence response, so saved clips
-at `4.0` do not snap medium-confidence frames straight to full correction. `Edge Display Mode`
-switches preview edges between stretched source edges and black outside-source pixels.
-`Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
-the active correction bands (`Footstep jitter`, `Stride wobble`, `Walking Bob`,
-`Turn Smoothing`), and analysis metadata, so the Inspector can confirm which installed
-runtime Final Cut Pro is using. Runtime status publishing is retried until Final Cut Pro's
-parameter-setting API accepts the update, so existing clips do not keep a stale visible
-FxPlug version after a newly installed build starts rendering.
+The effect keeps render scale fixed at `1.0`. Edge fill is controlled separately
+by `Edge Display Mode`, which switches between stretched source edges and black
+outside-source pixels.
+
+## Basic Workflow
+
+1. Apply `Stabilizer Transform` to a clip.
+2. Choose `Sample Size`.
+3. Click `Start Host Analysis`.
+4. Wait for `Host Analysis Status` to show `Ready (... frames)`.
+5. Tune the strength controls while watching the preview.
+
+`Start Host Analysis` is the only path that asks Final Cut Pro to analyze the
+clip. Preview and render callbacks only read completed analysis or a validated
+persistent cache; they do not start analysis on their own.
+
+## Inspector Controls
+
+`Sample Size` is read once when analysis starts. It is always derived from the
+original clip dimensions, with `100%`, `75%`, `50%`, `25%`, and `10%` options.
+Long clips keep the requested percentage instead of silently lowering it.
+
+`Overall Strength` controls the full automatic transform. Setting it to `0`
+bypasses prepared motion-path sampling, crop-safety motion, and debug overlay
+output, producing an identity transform.
+
+`Footstep Jitter` strengths are direct removal amounts for frame-local X, Y, and
+roll impulses. They run up to `4.0`; values above `1.0` can compensate when
+tracking confidence makes the correction too weak. The applied correction still
+clamps at full detected-impulse removal so it does not add inverse shake.
+
+`Stride Wobble` removes step follow-through shake using a fixed internal
+`0.70` second render-time window. The Inspector exposes only X, Y, and rotation
+strengths. It is measured from the footstep-cleaned path, then longer Turn
+Smoothing and Walking Bob bands are measured from the stride-smoothed path so
+the same motion is not removed twice.
+
+`Turn Smoothing Strength` smooths segmented horizontal walking turns into a
+more continuous S-curve intent. It applies only to X translation, does not change
+Y or roll, and is soft-limited to a small output-edge budget during render.
+
+`Walking Bob Window` and `Walking Bob Removal` target the remaining vertical
+walking bounce after Footstep Jitter and Stride Wobble. Walking Bob does not gate
+or weaken Footstep Jitter Y. The default removal is `0.75`; shorter windows
+around `0.4-1.0` seconds target visible footstep bounce.
+
+`Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
+perspective trim for distant background motion. It is applied from the current
+frame's local deviation from an outer-frame linear baseline, so long-term drift
+does not become a fixed deskew. The default is `1.0`, and the maximum is `4.0`.
+
+`Debug Overlay` shows labeled top-left diagnostics for the active correction
+bands and tracking state. It does not control black outside-source pixels;
+`Edge Display Mode` controls that separately.
+
+`Stabilizer Info` is a scrollable read-only status box. It shows the loaded
+FxPlug version, active correction bands, and analysis metadata so Final Cut Pro
+can confirm which installed runtime is actually rendering the effect.
+
+## Host Analysis
+
+Host Analysis uses Final Cut Pro's FxPlug analysis infrastructure to request GPU
+analysis frames from the host. The plug-in then uses Metal compute to downsample
+luma and run frame-to-frame block matching. If Metal analysis resources are not
+available, the Host Analysis path fails visibly in status/log output instead of
+falling back to CPU analysis.
+
+The analysis path:
+
+- Streams frame-to-frame motion through Metal.
+- Keeps only the previous luma buffer needed for the next motion search.
+- Does not write per-frame `.luma` scratch files.
+- Prioritizes upper-frame far-field blocks for walking landscape footage.
+- Rejects outlier blocks before building the frame path.
+- Exposes low tracking confidence instead of hiding it behind coarse fallback
+  motion.
+
+Prepared paths are post-processed with a zero-phase jerk limiter before caching.
+The limiter clamps isolated acceleration spikes in X/Y/roll while preserving
+path endpoints and total analyzed turn amount. Raw X/Y/roll impulse paths are
+stored separately so Footstep Jitter can still correct frame-level shake at
+render time.
+
+Render-time smoothing samples neighboring render times symmetrically and blends
+the automatic transform with zero phase. It smooths Turn Smoothing and Walking
+Bob bands without averaging away the current frame's Footstep Jitter impulse.
+
+Trimmed clips are handled by matching the current render frame fingerprint back
+to the analyzed frame set and applying that time offset before sampling the
+prepared motion paths. A validated analysis continues to drive preview/render
+when Final Cut Pro plays proxy media; proxy media is rejected only for Host
+Analysis input and for validating an unvalidated cache.
+
+## Cache Behavior
+
+Completed Host Analysis is written to the shared user cache:
+
+```text
+/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json
+/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-index-v2.json
+/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/
+```
+
+Cache files store prepared paths, frame timing, blur values, search-radius
+edge-hit counts, warp values, confidence metadata, and fingerprints instead of
+every frame's full luma sample.
+
+`Start Host Analysis` first tries to reload a saved cache. It starts a new host
+analysis only when no compatible saved cache can be loaded. It must not delete
+saved cache files.
+
+Cache reuse is based on cache schema and current source-frame validation, not
+the visible FxPlug runtime version. Render-only version bumps should reuse
+compatible Host Analysis caches.
+
+Rejected cache candidates are visible in status/log output and are remembered by
+file identity inside the active runtime, so the same invalid candidate is not
+loaded again on the next start. Rejected files remain on disk. `Clear Host
+Analysis Cache` is the explicit delete path and shows `Cache Cleared`.
+
+Unsupported schema candidates show `Cache Unsupported - Run Host Analysis`
+instead of being silently ignored or deleted. This keeps stale caches available
+for older builds while the current effect asks for a new analysis.
+
+The active runtime uses a process-wide shared Host Analysis store because Final
+Cut Pro may call setup, frame analysis, cleanup, preview, and render through
+different FxPlug instances. Persistent cache files are the cross-process reuse
+path. Preview/render instances with no prepared analysis watch for cache file
+changes and reload validated candidates on demand.
+
+## Diagnostics
+
+`Debug Overlay` reports final `X`/`Y`/`ROLL`, `TURN`, `STEP`, `BOB`, `SMTH`,
+live `F Q`/`S Q`/`B Q`/`W Q` confidence, `TRK`, `BLUR`, `RES`, and
+search-radius `HIT` bars.
+
+`Host Analysis Status` also reports:
+
+- `footstep q` and effective Footstep Jitter X/Y/R strength.
+- `stride q` and effective Stride Wobble X/Y/R strength.
+- `bob q`.
+- `warp q`.
+- Tracking and motion confidence.
+- Blur and residual error.
+- Search-radius edge-hit counts.
+- Current warp shape values.
+
+Values above `1.0` on Footstep, Stride, and Bob controls boost low-confidence
+corrections with a curved confidence response, so saved clips at `4.0` do not
+snap medium-confidence frames straight to full correction.
 
 ## Build
 
@@ -178,11 +191,17 @@ xcodebuild \
   build
 ```
 
-The shared scheme installs each successful Debug build to
-`/Applications/StabilizerFxPlug.app`, installs the Motion Template under the user's Movies
-Motion Templates folder, and registers the embedded FxPlug with PluginKit. Debug installs
-remove stale `Stabilizer Transform copy...` Motion Template folders from the `Emdash Studios`
-group so Finder-created duplicates do not appear as extra effects in Final Cut Pro.
+The shared scheme installs each successful Debug build to:
+
+```text
+/Applications/StabilizerFxPlug.app
+```
+
+It also installs the Motion Template under the user's Movies Motion Templates
+folder and registers the embedded FxPlug with PluginKit. Debug installs remove
+stale `Stabilizer Transform copy...` Motion Template folders from the
+`Emdash Studios` group so Finder-created duplicates do not appear as extra
+effects in Final Cut Pro.
 
 Verify registration:
 
