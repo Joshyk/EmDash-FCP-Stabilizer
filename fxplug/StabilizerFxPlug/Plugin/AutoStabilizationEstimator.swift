@@ -847,7 +847,10 @@ enum AutoStabilizationEstimator {
 
         for sampleIndex in 0..<sampleCount {
             let offset = (Double(sampleIndex - centerSample) * sampleStep)
-            let sampleSeconds = Swift.min(lastTime, Swift.max(firstTime, renderSeconds + offset))
+            let sampleSeconds = renderSeconds + offset
+            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                continue
+            }
             let normalizedDistance = offset / sigma
             let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
             guard weight > 0.0001 else {
@@ -863,6 +866,9 @@ enum AutoStabilizationEstimator {
             weightedSamples.append((transform: transform, weight: weight))
         }
 
+        guard !weightedSamples.isEmpty else {
+            return rawCenterTransform
+        }
         var smoothedTransform = weightedAverageTransform(weightedSamples)
         smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
         smoothedTransform.footstepJitterRotationDegrees = rawCenterTransform.footstepJitterRotationDegrees

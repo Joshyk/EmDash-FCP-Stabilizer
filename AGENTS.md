@@ -110,8 +110,10 @@ stabilization immediately.
 Render playback should favor the smoothest visible pan over low per-frame compute cost:
 after calculating the prepared-path transform, sample neighboring render times symmetrically
 and blend the final automatic transform with zero phase so the preview does not step between
-corrections. This render-time smoothing must not require rerunning Host Analysis or changing
-the cache schema.
+corrections. Near clip edges, average only in-range neighboring samples instead of clamping
+out-of-range samples to the first or last analysis frame, so end frames are not over-weighted.
+This render-time smoothing must not require rerunning Host Analysis or changing the cache
+schema.
 Render-time smoothing must not average away Footstep Jitter impulses or roll jitter needed
 to stabilize fine distant ridge-line shake. Smooth Turn Smoothing, Stride Wobble, and Walking
 Bob components independently, then recombine them with the current render frame's Footstep

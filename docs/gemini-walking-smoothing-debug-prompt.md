@@ -22,7 +22,7 @@ Repository context:
   - `Turn Smoothing Strength`
   - `Far-field Warp Strength` defaults to `1.0` and exposes up to `4.0`.
 - Do not add a Footstep Jitter window.
-- Do not expose a Walking Bob window; Walking Bob uses a fixed internal `2.0` second window.
+- Do not expose a Walking Bob window; Walking Bob uses a fixed internal `2.5` second window.
 - Do not rerun Host Analysis during render.
 - Host Analysis cache schema should be bumped when prepared analysis output semantics change.
 
@@ -30,13 +30,15 @@ Current implementation to review:
 
 - `fxplug/StabilizerFxPlug/Plugin/AutoStabilizationEstimator.swift`
   - `estimate(preparedAnalysis:renderTime:...)` calls `temporallySmoothedEstimate`.
+  - `temporallySmoothedEstimate` skips out-of-range neighboring samples at clip edges
+    instead of clamping them to the first or last analysis frame.
   - `rawEstimate` calculates the center-frame correction split into:
     - `macroPixelOffset.x` for X-only Turn Smoothing
     - `microPixelOffset` for Footstep Jitter
     - `walkingBobPixelOffset` for Walking Bob
   - `temporallySmoothedEstimate` samples neighboring render times symmetrically and blends the final automatic transform with zero phase.
   - Turn Smoothing applies only to X translation and Walking Bob handles Y-only medium-period motion; Footstep Jitter X/Y and roll use the current center-frame impulse correction so fine ridge-line shake is not averaged away.
-  - Footstep Jitter uses a render-time minimum effective confidence floor before applying X/Y/roll correction, still clamped at full detected-impulse removal.
+  - Footstep Jitter uses per-frame confidence without a hidden minimum floor before applying X/Y/roll correction, still clamped at full detected-impulse removal.
   - Far-field Warp estimates conservative deskew/shear, yaw/pitch proxy, and perspective trim from upper-frame residual blocks after translation and roll are removed.
   - `StabilizerAutoTransform` now carries:
     - final smoothed `pixelOffset` and `rotationDegrees`
