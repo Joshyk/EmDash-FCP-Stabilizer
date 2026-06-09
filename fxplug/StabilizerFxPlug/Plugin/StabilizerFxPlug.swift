@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.2.112"
+private let stabilizerFxPlugVersion = "0.2.113"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -147,7 +147,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }()
     private static let stabilizerInfoViewLock = NSLock()
     private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
-    private static var latestStabilizerInfo = "No Analysis"
+    private static var latestStabilizerInfo = "FxPlug \(stabilizerFxPlugVersion)\nNo Analysis"
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -375,6 +375,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         let view = StabilizerInfoScrollView()
         Self.registerStabilizerInfoView(view)
+        publishStabilizerInfo(force: true)
         return view
     }
 
@@ -521,16 +522,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let status = statusOverride ?? hostAnalysisStore.statusText
         statusLock.lock()
         let shouldPublish = force || status != lastPublishedStatus
-        if shouldPublish {
-            lastPublishedStatus = status
-        }
         statusLock.unlock()
         guard shouldPublish,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
         }
-        if !settingAPI.setStringParameterValue(status, toParameter: ParameterID.hostAnalysisStatus.rawValue) {
+        if settingAPI.setStringParameterValue(status, toParameter: ParameterID.hostAnalysisStatus.rawValue) {
+            statusLock.lock()
+            lastPublishedStatus = status
+            statusLock.unlock()
+        } else {
             NSLog("StabilizerFxPlug: failed to update Host Analysis Status parameter.")
         }
     }
@@ -539,9 +541,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let info = Self.stabilizerInfoText(analysisInfo: hostAnalysisStore.infoText, state: state)
         statusLock.lock()
         let shouldPublish = force || info != lastPublishedInfo
-        if shouldPublish {
-            lastPublishedInfo = info
-        }
         statusLock.unlock()
         guard shouldPublish else {
             return
@@ -551,7 +550,11 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         else {
             return
         }
-        if !settingAPI.setStringParameterValue(info, toParameter: ParameterID.stabilizerInfo.rawValue) {
+        if settingAPI.setStringParameterValue(info, toParameter: ParameterID.stabilizerInfo.rawValue) {
+            statusLock.lock()
+            lastPublishedInfo = info
+            statusLock.unlock()
+        } else {
             NSLog("StabilizerFxPlug: failed to update Stabilizer Info parameter.")
         }
     }

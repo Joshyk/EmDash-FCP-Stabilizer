@@ -80,9 +80,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   gating but are clamped during render to avoid adding inverse vertical shake.
 - `Far-field Warp Strength`: bundled small-clamp correction for distant ridge-line shake. It
   uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
-  trim after translation and roll are removed. The default is `1.0`, the maximum is `4.0`,
-  and `0` fully disables warp. Pull this down if close grass, roads, water, or frame edges
-  start to swim.
+  trim after translation and roll are removed. Render uses only the current frame's local
+  deviation from an outer-frame linear warp baseline, so accumulated drift does not turn into
+  a fixed deskew. The default is `1.0`, the maximum is `4.0`, and `0` fully disables warp.
+  Pull this down if close grass, roads, water, or frame edges start to swim.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%`, which analyzes
   at the original clip size. The actual pixel size is shown in `Stabilizer Info`.
@@ -115,6 +116,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
   `Walking Bob`, `Turn Smoothing`), plus completed analysis time, frame count, actual sample
   image size, source frame size, and pixel transform scale when analysis is available.
+  Runtime status publishing is retried until Final Cut Pro's parameter-setting API accepts
+  the update, so existing clips do not keep a stale visible FxPlug version after a newly
+  installed build starts rendering.
 - `Debug Overlay`: top-left diagnostics for final X/Y/rotation, Turn Smoothing, Footstep
   Jitter, Stride Wobble, Walking Bob, temporal smoothing delta, and live Footstep/Stride/Bob/Warp
   confidence while checking runtime behavior. When enabled, `Host Analysis Status` also shows the current raw
@@ -179,7 +183,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   residual from the wider turn-detection window.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
-  shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`.
+  shear at `0.032`, yaw/pitch proxy at `0.016`, and perspective at `0.012`. The applied
+  value is the local warp band against an outer-frame linear baseline, not the absolute
+  accumulated warp path.
 - Host Analysis cache schema `12` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, warp paths,
   confidence, and accepted-block counts. Older prepared caches are ignored and require a new

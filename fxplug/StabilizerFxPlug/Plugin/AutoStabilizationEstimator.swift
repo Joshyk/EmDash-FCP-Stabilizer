@@ -447,6 +447,42 @@ enum AutoStabilizationEstimator {
             innerRadius: microImpulseInnerRadius,
             outerRadius: microImpulseOuterRadius
         )
+        let farFieldBaselineYawPath = outerLinearPredictionPath(
+            analysis.pathYaw,
+            indices: sampledIndices,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
+        let farFieldBaselinePitchPath = outerLinearPredictionPath(
+            analysis.pathPitch,
+            indices: sampledIndices,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
+        let farFieldBaselineShearXPath = outerLinearPredictionPath(
+            analysis.pathShearX,
+            indices: sampledIndices,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
+        let farFieldBaselineShearYPath = outerLinearPredictionPath(
+            analysis.pathShearY,
+            indices: sampledIndices,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
+        let farFieldBaselinePerspectiveXPath = outerLinearPredictionPath(
+            analysis.pathPerspectiveX,
+            indices: sampledIndices,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
+        let farFieldBaselinePerspectiveYPath = outerLinearPredictionPath(
+            analysis.pathPerspectiveY,
+            indices: sampledIndices,
+            innerRadius: microImpulseInnerRadius,
+            outerRadius: microImpulseOuterRadius
+        )
 
         let turnSmoothX = timeWeightedMonotonicSCurveValue(
             footstepBaselineXPath,
@@ -593,17 +629,42 @@ enum AutoStabilizationEstimator {
         let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + walkingBobPixelOffset.y
         let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
+        let farFieldWarpGate = clamp(warpConfidence, min: 0.0, max: 1.0)
         let yawPitchProxy = vector_float2(
-            clamp(interpolatedValue(analysis.pathYaw, using: frameInterpolation), min: -maxFarFieldYawPitchProxy * farFieldWarpStrength, max: maxFarFieldYawPitchProxy * farFieldWarpStrength),
-            clamp(interpolatedValue(analysis.pathPitch, using: frameInterpolation), min: -maxFarFieldYawPitchProxy * farFieldWarpStrength, max: maxFarFieldYawPitchProxy * farFieldWarpStrength)
+            clamp(
+                farFieldWarpBandValue(values: analysis.pathYaw, baselineValues: farFieldBaselineYawPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                min: -maxFarFieldYawPitchProxy * farFieldWarpStrength,
+                max: maxFarFieldYawPitchProxy * farFieldWarpStrength
+            ),
+            clamp(
+                farFieldWarpBandValue(values: analysis.pathPitch, baselineValues: farFieldBaselinePitchPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                min: -maxFarFieldYawPitchProxy * farFieldWarpStrength,
+                max: maxFarFieldYawPitchProxy * farFieldWarpStrength
+            )
         )
         let shear = vector_float2(
-            clamp(interpolatedValue(analysis.pathShearX, using: frameInterpolation), min: -maxFarFieldShear * farFieldWarpStrength, max: maxFarFieldShear * farFieldWarpStrength),
-            clamp(interpolatedValue(analysis.pathShearY, using: frameInterpolation), min: -maxFarFieldShear * farFieldWarpStrength, max: maxFarFieldShear * farFieldWarpStrength)
+            clamp(
+                farFieldWarpBandValue(values: analysis.pathShearX, baselineValues: farFieldBaselineShearXPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                min: -maxFarFieldShear * farFieldWarpStrength,
+                max: maxFarFieldShear * farFieldWarpStrength
+            ),
+            clamp(
+                farFieldWarpBandValue(values: analysis.pathShearY, baselineValues: farFieldBaselineShearYPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                min: -maxFarFieldShear * farFieldWarpStrength,
+                max: maxFarFieldShear * farFieldWarpStrength
+            )
         )
         let perspective = vector_float2(
-            clamp(interpolatedValue(analysis.pathPerspectiveX, using: frameInterpolation), min: -maxFarFieldPerspective * farFieldWarpStrength, max: maxFarFieldPerspective * farFieldWarpStrength),
-            clamp(interpolatedValue(analysis.pathPerspectiveY, using: frameInterpolation), min: -maxFarFieldPerspective * farFieldWarpStrength, max: maxFarFieldPerspective * farFieldWarpStrength)
+            clamp(
+                farFieldWarpBandValue(values: analysis.pathPerspectiveX, baselineValues: farFieldBaselinePerspectiveXPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                min: -maxFarFieldPerspective * farFieldWarpStrength,
+                max: maxFarFieldPerspective * farFieldWarpStrength
+            ),
+            clamp(
+                farFieldWarpBandValue(values: analysis.pathPerspectiveY, baselineValues: farFieldBaselinePerspectiveYPath, interpolation: frameInterpolation, confidence: farFieldWarpGate),
+                min: -maxFarFieldPerspective * farFieldWarpStrength,
+                max: maxFarFieldPerspective * farFieldWarpStrength
+            )
         )
         return StabilizerAutoTransform(
             pixelOffset: vector_float2(compensationX, compensationY),
@@ -1500,6 +1561,17 @@ enum AutoStabilizationEstimator {
             ) ?? values[index]
         }
         return predictedValues
+    }
+
+    private static func farFieldWarpBandValue(
+        values: [Float],
+        baselineValues: [Float],
+        interpolation: FrameInterpolation,
+        confidence: Float
+    ) -> Float {
+        let currentValue = interpolatedValue(values, using: interpolation)
+        let baselineValue = interpolatedValue(baselineValues, using: interpolation)
+        return (currentValue - baselineValue) * confidence
     }
 
     private static func median(_ values: [Float], indices: [Int]) -> Float? {

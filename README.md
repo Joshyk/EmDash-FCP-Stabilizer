@@ -136,10 +136,12 @@ during render, so high slider values do not add inverse shake. Values above `1.0
 when frame evidence makes the detected correction visibly too weak.
 `Far-field Warp Strength` adds a bundled small-clamp far-field correction for walking
 landscape footage. It estimates deskew/shear, yaw/pitch proxy, and perspective/distort trim
-from upper-frame far-field residual blocks after translation and roll are removed. The
-default is `1.0`, the slider is capped at `4.0`, and render-time clamps keep each unit of
-shear, yaw/pitch, and perspective small because this path can otherwise make close grass,
-roads, water, or frame edges swim.
+from upper-frame far-field residual blocks after translation and roll are removed. During
+render, those prepared warp paths are applied only as the current frame's local deviation
+from an outer-frame linear baseline, so accumulated long-term drift does not become a fixed
+deskew. The default is `1.0`, the slider is capped at `4.0`, and render-time clamps keep
+each unit of shear, yaw/pitch, and perspective small because this path can otherwise make
+close grass, roads, water, or frame edges swim.
 `Debug Overlay` shows top-left diagnostics for final X/Y/roll, Turn Smoothing, Footstep
 Jitter, Stride Wobble, Walking Bob, temporal smoothing delta, and live Footstep/Stride/Bob/Warp
 confidence. `Host Analysis Status` also reports separate `footstep q`, effective Footstep
@@ -151,7 +153,9 @@ switches preview edges between stretched source edges and black outside-source p
 `Stabilizer Info` is a scrollable read-only text box. It shows the loaded FxPlug version,
 the active correction bands (`Footstep jitter`, `Stride wobble`, `Walking Bob`,
 `Turn Smoothing`), and analysis metadata, so the Inspector can confirm which installed
-runtime Final Cut Pro is using.
+runtime Final Cut Pro is using. Runtime status publishing is retried until Final Cut Pro's
+parameter-setting API accepts the update, so existing clips do not keep a stale visible
+FxPlug version after a newly installed build starts rendering.
 
 ## Build
 

@@ -143,8 +143,9 @@ shake, while still allowing values above `1.0` to compensate for low-confidence 
 yaw/pitch proxy, and perspective/distort trim. It is intended only for distant ridge-line
 shake in walking landscape footage. Keep the default at `1.0`, expose up to `4.0`, keep each
 unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
-debug/status output, and bump Host Analysis cache schema when prepared warp path semantics
-change.
+debug/status output, and render the correction from the current frame's local deviation from
+an outer-frame linear warp baseline so accumulated long-term drift does not become a fixed
+deskew. Bump Host Analysis cache schema when prepared warp path semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug
 Overlay`; debug overlay should only show diagnostics.

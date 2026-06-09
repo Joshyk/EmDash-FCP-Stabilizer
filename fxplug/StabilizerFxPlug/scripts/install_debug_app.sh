@@ -51,20 +51,21 @@ install_motion_template() {
 		exit 1
 	fi
 
-	for legacy_template in \
-		"${HOME}/Movies/Motion Templates.localized/Effects.localized/Stabilizer/Stabilizer Transform" \
-		"${HOME}/Movies/Motion Templates.localized/Effects.localized/CommandPost Em Dash/Stabilizer Transform"
-	do
-		if [ "$legacy_template" != "$MOTION_TEMPLATE_DEST" ] && [ -e "$legacy_template" ]; then
-			rm -rf "$legacy_template"
-		fi
-	done
-
 	mkdir -p "$MOTION_TEMPLATE_GROUP"
 
-	find "$MOTION_TEMPLATE_GROUP" -maxdepth 1 -type d -name 'Stabilizer Transform copy*' -print | while IFS= read -r duplicate_template; do
-		echo "Removing stale Motion Template duplicate: $duplicate_template"
-		rm -rf "$duplicate_template"
+	for template_group in \
+		"$MOTION_TEMPLATE_GROUP" \
+		"${HOME}/Movies/Motion Templates.localized/Effects.localized/Stabilizer" \
+		"${HOME}/Movies/Motion Templates.localized/Effects.localized/CommandPost Em Dash"
+	do
+		if [ -d "$template_group" ]; then
+			find "$template_group" -maxdepth 1 -type d -name 'Stabilizer Transform*' -print | while IFS= read -r duplicate_template; do
+				if [ "$duplicate_template" != "$MOTION_TEMPLATE_DEST" ]; then
+					echo "Removing stale Motion Template duplicate: $duplicate_template"
+					rm -rf "$duplicate_template"
+				fi
+			done
+		fi
 	done
 
 	rm -rf "$MOTION_TEMPLATE_DEST"
