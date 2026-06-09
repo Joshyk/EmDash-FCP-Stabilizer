@@ -188,7 +188,8 @@ debug/status output, and render the correction from the current frame's local de
 its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long-term drift
 does not become a fixed deskew. Low tracking confidence or poor search-radius headroom should
 gate Far-field Warp off instead of creating wave-like image distortion. Render should use a
-tiny render-time deadband so weak warp deltas do not create swimming or wave-like distortion.
+walking-footage tracking gate tuned for 25% Host Analysis samples plus a tiny render-time
+deadband so weak warp deltas do not create swimming or wave-like distortion.
 `W Q` should represent the applied warp confidence after those safety gates. Bump Host
 Analysis cache schema when prepared warp path semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original

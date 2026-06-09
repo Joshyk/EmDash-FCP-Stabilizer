@@ -87,13 +87,13 @@ default removal is `0.75`.
 perspective trim for distant background motion. It is applied from the current
 frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
-maximum is `4.0`. The render path gates warp by current tracking quality and
+maximum is `4.0`. The render path gates warp with walking-footage tracking quality and
 search-radius headroom, then drops tiny warp deltas through a deadband so weak
 frames do not create visible swimming or wave-like distortion. Low-confidence
 warp evidence is suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V135` row for the active
+bands and tracking state. It also includes a compact `V136` row for the active
 render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 
