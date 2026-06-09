@@ -159,9 +159,10 @@ changes and reload validated candidates on demand.
 
 ## Diagnostics
 
-`Debug Overlay` reports final `X`/`Y`/`ROLL`, `TURN`, `STEP`, `BOB`, `SMTH`,
+`Debug Overlay` reports final `X`/`Y`/`ROLL`, `TURN`, `F+SW`, `BOB`, `SMTH`,
 live `F Q`/`S Q`/`B Q`/`W Q` confidence, `TRK`, `BLUR`, `RES`, and
-search-radius `HIT` bars.
+search-radius `HIT` bars. Labels use raw English control/diagnostic abbreviations;
+do not translate them in the preview.
 
 The overlay bars are normalized magnitudes or quality signals, not signed directions:
 
@@ -169,7 +170,7 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `Y`: final vertical automatic correction.
 - `ROLL`: final automatic roll/rotation correction.
 - `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
-- `STEP`: short/medium footstep correction activity from Footstep Jitter plus Stride Wobble.
+- `F+SW`: combined Footstep Jitter plus Stride Wobble correction activity.
 - `BOB`: Y-only Walking Bob correction.
 - `SMTH`: render-time temporal smoothing delta.
 - `F Q`: Footstep Jitter confidence.

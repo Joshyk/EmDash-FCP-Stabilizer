@@ -27,6 +27,8 @@ vertex RasterizerData vertexShader(
 
 static uint debugLabelRowBits(uint code, uint y) {
     switch (code) {
+        case 43: // +
+            return y == 2 ? 0x7 : 0x2;
         case 66: // B
             if (y == 0 || y == 2 || y == 4) { return 0x6; }
             return 0x5;
@@ -112,10 +114,10 @@ static uint debugLabelChar(uint row, uint index) {
             if (index == 3) { return 78; } // N
             return 0;
         case 4:
-            if (index == 0) { return 83; } // S
-            if (index == 1) { return 84; } // T
-            if (index == 2) { return 69; } // E
-            if (index == 3) { return 80; } // P
+            if (index == 0) { return 70; } // F
+            if (index == 1) { return 43; } // +
+            if (index == 2) { return 83; } // S
+            if (index == 3) { return 87; } // W
             return 0;
         case 5:
             if (index == 0) { return 66; } // B
