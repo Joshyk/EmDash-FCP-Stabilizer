@@ -164,6 +164,10 @@ should use robust window evidence instead of the single worst frame in the windo
 bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
 full confidence sooner than the broad UI scale, and the default Y strength should remain high
 enough to remove step follow-through before the longer Walking Bob pass.
+Footstep Jitter, Stride Wobble, and Walking Bob may use a count-aware walking-band tracking
+gate that eases block coverage only when enough motion blocks were accepted. Far-field Warp
+and Turn Smoothing should keep the stricter tracking gate so weak evidence does not create
+swimming warp or false turn smoothing.
 The render path must not compute Stride Wobble from the raw or jerk-limited broad path,
 because that reintroduces Footstep Jitter shock into the medium-period band.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter

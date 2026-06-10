@@ -213,6 +213,7 @@ private struct FrameAssessment {
     let absoluteTime: Double
     let clipTime: Double
     let trackingConfidence: Float
+    let walkingTrackingConfidence: Float
     let motionConfidence: Float
     let residual: Float
     let blur: Float
@@ -432,6 +433,13 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
         totalBlockCount: analysis.totalBlockCounts[index]
     )
     let tracking = frameTrackingConfidence(quality)
+    let walkingTracking = walkingBandTrackingConfidence(
+        motionConfidence: analysis.analysisConfidence[index],
+        residual: centerResidual,
+        blurAmount: analysis.blurAmounts[index],
+        acceptedBlockCount: analysis.acceptedBlockCounts[index],
+        totalBlockCount: analysis.totalBlockCounts[index]
+    )
 
     let footstepCleanXPath = outerLinearPredictionPath(
         analysis.footstepPathX,
@@ -486,16 +494,16 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let strideResidual = percentileValue(analysis.residuals, indices: strideIndices, percentile: 0.70)
     let bobResidual = percentileValue(analysis.residuals, indices: bobIndices, percentile: 0.70)
     let turnResidual = percentileValue(analysis.residuals, indices: turnIndices, percentile: 0.75)
-    let strideTracking = residualAdjustedTrackingConfidence(tracking, residual: strideResidual, multiplier: 0.6)
-    let bobTracking = residualAdjustedTrackingConfidence(tracking, residual: bobResidual, multiplier: 0.4)
+    let strideTracking = residualAdjustedTrackingConfidence(walkingTracking, residual: strideResidual, multiplier: 0.6)
+    let bobTracking = residualAdjustedTrackingConfidence(walkingTracking, residual: bobResidual, multiplier: 0.4)
     let turnTracking = residualAdjustedTrackingConfidence(tracking, residual: turnResidual, multiplier: 0.9)
 
     let footX = analysis.footstepPathX[index] - footstepBaseX
     let footY = analysis.footstepPathY[index] - footstepBaseY
     let footR = analysis.footstepPathRoll[index] - footstepBaseR
-    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: footstepCleanXPath, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScalePixels)
-    let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: footstepCleanYPath, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScalePixels)
-    let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: footstepCleanRPath, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScaleDegrees)
+    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: footstepCleanXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
+    let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: footstepCleanYPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
+    let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: footstepCleanRPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScaleDegrees)
     let footAppliedX = abs(footX * xScale) * correctionFactor(options.strengths.microX, confidence: footQX)
     let footAppliedY = abs(footY * yScale) * correctionFactor(options.strengths.microY, confidence: footQY)
     let footAppliedR = abs(footR) * correctionFactor(options.strengths.microR, confidence: footQR)
@@ -585,6 +593,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
         absoluteTime: frame.time,
         clipTime: frame.time - analysis.rangeStartSeconds,
         trackingConfidence: tracking,
+        walkingTrackingConfidence: walkingTracking,
         motionConfidence: analysis.analysisConfidence[index],
         residual: centerResidual,
         blur: analysis.blurAmounts[index],
@@ -871,6 +880,30 @@ private func frameTrackingConfidence(_ quality: (residualQuality: Float, blurQua
     clamp(sqrtf(max(0.0, quality.combinedEvidence)), min: 0.0, max: 1.0)
 }
 
+private func walkingBandTrackingConfidence(
+    motionConfidence: Float,
+    residual: Float,
+    blurAmount: Float,
+    acceptedBlockCount: Int32,
+    totalBlockCount: Int32
+) -> Float {
+    let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
+    let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+    let blockQuality = walkingBandBlockQuality(acceptedBlockCount: acceptedBlockCount, totalBlockCount: totalBlockCount)
+    let evidence = motionConfidence * residualQuality * blurQuality * blockQuality
+    return clamp(sqrtf(max(0.0, evidence)), min: 0.0, max: 1.0)
+}
+
+private func walkingBandBlockQuality(acceptedBlockCount: Int32, totalBlockCount: Int32) -> Float {
+    guard acceptedBlockCount > 0, totalBlockCount > 0 else {
+        return 0.0
+    }
+    let coverage = clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0)
+    let countSupport = confidenceRamp(Float(acceptedBlockCount), start: 4.0, full: 10.0)
+    let coverageLift = 0.35 * countSupport * (1.0 - coverage)
+    return clamp(coverage + coverageLift, min: 0.0, max: 1.0)
+}
+
 private func residualAdjustedTrackingConfidence(_ trackingConfidence: Float, residual: Float, multiplier: Float) -> Float {
     let residualQuality = clamp(1.0 - (residual * multiplier), min: 0.0, max: 1.0)
     return clamp(trackingConfidence * residualQuality, min: 0.0, max: 1.0)
@@ -990,8 +1023,9 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
         let top = assessment.topBand
         let severity = top.remaining >= 1.0 ? "notable" : (top.remaining >= 0.35 ? "mild" : "low")
         print(String(format: "At %.3fs clip-relative: %@ remaining %@ shake, likely %@", assessment.clipTime, severity, top.name, top.name))
-        print(String(format: "  tracking %.2f motion %.2f residual %.4f blur %.2f blocks %d/%d edge %d/%d",
+        print(String(format: "  tracking %.2f walking %.2f motion %.2f residual %.4f blur %.2f blocks %d/%d edge %d/%d",
                      assessment.trackingConfidence,
+                     assessment.walkingTrackingConfidence,
                      assessment.motionConfidence,
                      assessment.residual,
                      assessment.blur,
@@ -1036,6 +1070,7 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
                 "clipTime": assessment.clipTime,
                 "absoluteTime": assessment.absoluteTime,
                 "trackingConfidence": assessment.trackingConfidence,
+                "walkingTrackingConfidence": assessment.walkingTrackingConfidence,
                 "motionConfidence": assessment.motionConfidence,
                 "residual": assessment.residual,
                 "blur": assessment.blur,

@@ -35,7 +35,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   center-frame impulse against surrounding footstep noise, so one unsupported edge frame does
   not produce a strong correction by itself. Moderate landing impulses reach useful
   confidence a little sooner than the surrounding-noise floor, while zero evidence remains
-  zero. Values above `1.0` can compensate when that
+  zero. Walking-band correction eases block coverage only when enough blocks were accepted;
+  Far-field Warp and Turn Smoothing keep the stricter gate. Values above `1.0` can compensate when that
   frame-local score makes the detected impulse visibly under-corrected, but render output
   still clamps at full detected-impulse removal to avoid inverse shake.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
@@ -196,8 +197,9 @@ The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
 paths and ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
 bands. It follows the same band order as render: `FJIT` is measured against the
 outer-frame baseline, then `SWOB`, `BOB`, and `TURN` are measured from that
-footstep-cleaned path. It prints FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
-the raw impulse or band values. It also prints BOB tracking/window support so short
+footstep-cleaned path. It prints strict tracking and walking-band tracking separately,
+FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
+the raw impulse or band values, and BOB tracking/window support so short
 or one-sided analysis ranges are distinguishable from weak vertical motion. `WARP` `q` matches the applied `W Q` confidence shown by
 Debug Overlay. The report also prints residual quality, blur quality, block coverage,
 edge quality, and WARP tracking/edge gate values so conservative gating can be separated

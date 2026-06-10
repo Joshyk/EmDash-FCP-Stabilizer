@@ -65,6 +65,9 @@ based on current tracking evidence, local baseline support, and the center
 frame's impulse relative to surrounding footstep noise. Moderate landing impulses now reach
 useful confidence a little sooner, while zero evidence and noisy unsupported frames still
 produce zero correction.
+FJIT, SWOB, and BOB use a walking-band tracking gate that slightly eases block coverage only
+when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
+avoid swimming or false turn smoothing.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
@@ -273,7 +276,7 @@ block coverage, and search-radius edge-hit counts. The band split mirrors the
 render path: `FJIT` is measured first against the outer-frame baseline, then
 `SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. `WARP`
 `q` matches the applied `W Q` confidence shown by Debug Overlay, and the report
-includes FJIT and SWOB per-axis confidence, BOB tracking/window support,
+includes strict tracking, walking-band tracking, FJIT and SWOB per-axis confidence, BOB tracking/window support,
 residual, blur, block coverage, edge quality, and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
 Analysis run with the current FxPlug instead of trying to repair the data.

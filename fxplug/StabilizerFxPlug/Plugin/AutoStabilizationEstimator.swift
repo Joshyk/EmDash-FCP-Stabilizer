@@ -604,12 +604,19 @@ enum AutoStabilizationEstimator {
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount
         )
+        let walkingTrackingConfidence = walkingBandTrackingConfidence(
+            motionConfidence: motionConfidence,
+            residual: centerResidual,
+            blurAmount: centerBlurAmount,
+            acceptedBlockCount: acceptedBlockCount,
+            totalBlockCount: totalBlockCount
+        )
         let footstepXConfidence = footstepFrameConfidence(
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
             frames: frames,
             interpolation: frameInterpolation,
-            trackingConfidence: trackingConfidence,
+            trackingConfidence: walkingTrackingConfidence,
             fullImpulseScale: footstepImpulseFullScalePixels
         )
         let footstepYConfidence = footstepFrameConfidence(
@@ -617,7 +624,7 @@ enum AutoStabilizationEstimator {
             baselineValues: footstepBaselineYPath,
             frames: frames,
             interpolation: frameInterpolation,
-            trackingConfidence: trackingConfidence,
+            trackingConfidence: walkingTrackingConfidence,
             fullImpulseScale: footstepImpulseFullScalePixels
         )
         let footstepRollConfidence = footstepFrameConfidence(
@@ -625,7 +632,7 @@ enum AutoStabilizationEstimator {
             baselineValues: footstepBaselineRollPath,
             frames: frames,
             interpolation: frameInterpolation,
-            trackingConfidence: trackingConfidence,
+            trackingConfidence: walkingTrackingConfidence,
             fullImpulseScale: footstepImpulseFullScaleDegrees
         )
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
@@ -634,7 +641,7 @@ enum AutoStabilizationEstimator {
         let strideBandRoll = footstepCleanRollAtRender - strideSmoothRoll
         let panBandX = strideSmoothX - turnSmoothX
         let walkingBobBandY = strideSmoothY - bobSmoothY
-        let strideTrackingConfidence = residualAdjustedTrackingConfidence(trackingConfidence, residual: strideResidual, multiplier: 0.6)
+        let strideTrackingConfidence = residualAdjustedTrackingConfidence(walkingTrackingConfidence, residual: strideResidual, multiplier: 0.6)
         let strideXConfidence = strideWobbleConfidence(
             bandValue: strideBandX,
             trackingConfidence: strideTrackingConfidence,
@@ -661,7 +668,7 @@ enum AutoStabilizationEstimator {
             centerTime: renderSeconds,
             windowSeconds: effectiveWalkingBobWindowSeconds
         )
-        let bobTrackingConfidence = residualAdjustedTrackingConfidence(trackingConfidence, residual: bobResidual, multiplier: 0.4)
+        let bobTrackingConfidence = residualAdjustedTrackingConfidence(walkingTrackingConfidence, residual: bobResidual, multiplier: 0.4)
         let bobConfidence = walkingBobConfidence(
             bandValue: walkingBobBandY,
             trackingConfidence: bobTrackingConfidence,
@@ -2136,6 +2143,30 @@ enum AutoStabilizationEstimator {
         }
         let combinedEvidence = motionConfidence * residualQuality * blurQuality * blockQuality
         return clamp(Darwin.sqrtf(max(0.0, combinedEvidence)), min: 0.0, max: 1.0)
+    }
+
+    private static func walkingBandTrackingConfidence(
+        motionConfidence: Float,
+        residual: Float,
+        blurAmount: Float,
+        acceptedBlockCount: Int32,
+        totalBlockCount: Int32
+    ) -> Float {
+        let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
+        let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+        let blockQuality = walkingBandBlockQuality(acceptedBlockCount: acceptedBlockCount, totalBlockCount: totalBlockCount)
+        let combinedEvidence = motionConfidence * residualQuality * blurQuality * blockQuality
+        return clamp(Darwin.sqrtf(max(0.0, combinedEvidence)), min: 0.0, max: 1.0)
+    }
+
+    private static func walkingBandBlockQuality(acceptedBlockCount: Int32, totalBlockCount: Int32) -> Float {
+        guard acceptedBlockCount > 0, totalBlockCount > 0 else {
+            return 0.0
+        }
+        let coverage = clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0)
+        let countSupport = confidenceRamp(Float(acceptedBlockCount), start: 4.0, full: 10.0)
+        let coverageLift = 0.35 * countSupport * (1.0 - coverage)
+        return clamp(coverage + coverageLift, min: 0.0, max: 1.0)
     }
 
     private static func footstepFrameConfidence(
