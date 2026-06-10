@@ -252,8 +252,8 @@ Analysis Cache` is the explicit delete path and shows `Cache Cleared`.
 Unsupported schema candidates show `Cache Unsupported - Run Host Analysis`
 instead of being silently ignored or deleted. This keeps stale caches available
 for older builds while the current effect asks for a new analysis. Supported-schema
-caches with incomplete prepared path arrays show `Cache Incomplete - Run Host Analysis`
-so older incomplete analysis is not silently ignored.
+caches with incomplete prepared path arrays or too few frames for the saved analysis range
+show `Cache Incomplete - Run Host Analysis` so incomplete analysis is not silently reused.
 
 The active runtime uses per-clip stores for in-progress Host Analysis and a
 process-wide shared render/cache store after analysis completes. Persistent

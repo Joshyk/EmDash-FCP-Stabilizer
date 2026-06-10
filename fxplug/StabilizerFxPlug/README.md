@@ -207,8 +207,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   reuse. If the previous cache was rejected for the current clip, the next start skips that
   rejected cache and requests a new analysis. If a saved cache uses an unsupported schema,
   the Inspector shows `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has
-  incomplete prepared paths, it shows `Cache Incomplete - Run Host Analysis`. The file remains
-  on disk and the next start requests new analysis for the current build.
+  incomplete prepared paths or too few frames for its saved analysis range, it shows
+  `Cache Incomplete - Run Host Analysis`. The file remains on disk and the next start
+  requests new analysis for the current build.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug

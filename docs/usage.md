@@ -163,8 +163,9 @@ fallbacks.
   the active FxPlug runtime so the same invalid candidate is not immediately reloaded again.
   If a saved cache uses an unsupported schema, the Inspector shows
   `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has incomplete prepared
-  paths, the Inspector shows `Cache Incomplete - Run Host Analysis`. In both cases the file
-  remains on disk and the button starts a new Host Analysis run for the current build.
+  paths or too few frames for its saved analysis range, the Inspector shows
+  `Cache Incomplete - Run Host Analysis`. In both cases the file remains on disk and the
+  button starts a new Host Analysis run for the current build.
 - Persistent analysis reuse is based on cache schema and current source-frame validation,
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
@@ -389,7 +390,8 @@ tight render-time tolerance and logs that path explicitly. Rejected cache candid
 visible in logs/status and left on disk for other clips. Unsupported schema candidates are
 also left on disk, but the Inspector shows `Cache Unsupported - Run Host Analysis` so a
 current-build analysis is explicitly required. Supported-schema caches with incomplete
-prepared path arrays show `Cache Incomplete - Run Host Analysis` for the same reason.
+prepared path arrays or incomplete frame coverage show `Cache Incomplete - Run Host
+Analysis` for the same reason.
 
 New cache files store prepared motion paths, per-frame timestamps, blur values,
 search-radius edge-hit counts, and fingerprints instead of every frame's full luma sample.

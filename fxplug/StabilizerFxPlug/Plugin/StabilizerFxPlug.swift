@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.3.1"
+private let stabilizerFxPlugVersion = "0.3.2"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1647,6 +1647,7 @@ private final class StabilizerHostAnalysisStore {
     func finish() throws {
         do {
             try rebuildPreparedAnalysis(markFinished: true)
+            try validateCompletedFrameCoverage()
             markAnalysisCompleted()
             persistIfCompleted()
             releaseRetainedAnalysisPixels()
@@ -1656,7 +1657,7 @@ private final class StabilizerHostAnalysisStore {
             preparedAnalysis = nil
             streamingAnalysisBuilder = nil
             finished = false
-            status = .needsAnalysis
+            status = error.localizedDescription.contains("incomplete frame coverage") ? .cacheIncomplete : .needsAnalysis
             analysisInfoText = "Analysis failed: \(error.localizedDescription)"
             bumpRevisionLocked()
             lock.unlock()
@@ -2473,6 +2474,62 @@ private final class StabilizerHostAnalysisStore {
         return deltas[deltas.count / 2]
     }
 
+    private func validateCompletedFrameCoverage() throws {
+        let snapshot: (frames: [StabilizerAnalysisFrame], range: CMTimeRange, frameDuration: CMTime) = {
+            lock.lock()
+            let frames = (preparedAnalysis?.frames ?? Array(framesByTimeKey.values)).sorted { $0.time < $1.time }
+            let range = activeRange
+            let frameDuration = activeFrameDuration
+            lock.unlock()
+            return (frames, range, frameDuration)
+        }()
+        let frameDurationSeconds = Self.validFrameDurationSeconds(snapshot.frameDuration, frames: snapshot.frames)
+        let rangeDurationSeconds = CMTimeGetSeconds(snapshot.range.duration)
+        guard let reason = Self.frameCoverageMismatchReason(
+            frameCount: snapshot.frames.count,
+            rangeDurationSeconds: rangeDurationSeconds,
+            frameDurationSeconds: frameDurationSeconds
+        ) else {
+            return
+        }
+        throw NSError(
+            domain: "com.justadev.StabilizerFxPlug",
+            code: Int(kFxError_AnalysisError),
+            userInfo: [NSLocalizedDescriptionKey: "Host Analysis had incomplete frame coverage: \(reason)"]
+        )
+    }
+
+    private static func persistentFrameCoverageMismatchReason(for cache: PersistedHostAnalysisCache, frameCount: Int) -> String? {
+        frameCoverageMismatchReason(
+            frameCount: frameCount,
+            rangeDurationSeconds: cache.rangeDurationSeconds,
+            frameDurationSeconds: cache.frameDurationSeconds
+        )
+    }
+
+    private static func frameCoverageMismatchReason(
+        frameCount: Int,
+        rangeDurationSeconds: Double,
+        frameDurationSeconds: Double
+    ) -> String? {
+        guard rangeDurationSeconds.isFinite,
+              frameDurationSeconds.isFinite,
+              rangeDurationSeconds > 0.0,
+              frameDurationSeconds > 0.0
+        else {
+            return nil
+        }
+        let expectedFrameCount = max(1, Int((rangeDurationSeconds / frameDurationSeconds).rounded(.down)) + 1)
+        guard expectedFrameCount > 3 else {
+            return frameCount >= 3 ? nil : "only \(frameCount) frames for a short analyzed range"
+        }
+        let minimumFrameCount = max(3, Int((Double(expectedFrameCount) * 0.90).rounded(.down)))
+        guard frameCount < minimumFrameCount else {
+            return nil
+        }
+        return "only \(frameCount) frames for \(String(format: "%.2f", rangeDurationSeconds))s at \(String(format: "%.6f", frameDurationSeconds))s/frame; expected about \(expectedFrameCount)"
+    }
+
     private static func plausiblePersistedFrameCountLimit(for cache: PersistedHostAnalysisCache) -> Int? {
         guard cache.rangeDurationSeconds.isFinite,
               cache.frameDurationSeconds.isFinite,
@@ -2518,6 +2575,13 @@ private final class StabilizerHostAnalysisStore {
     }
 
     private static func preparedAnalysis(from cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) throws -> StabilizerPreparedAnalysis {
+        if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frames.count) {
+            throw NSError(
+                domain: "com.justadev.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "persisted Host Analysis cache frame coverage is incomplete: \(coverageReason)"]
+            )
+        }
         if let mismatchReason = preparedPathArrayMismatchReason(for: cache, frameCount: frames.count) {
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
@@ -2738,6 +2802,9 @@ private final class StabilizerHostAnalysisStore {
             guard frameCount >= 3 else {
                 return "Cache Incomplete (only \(frameCount) frames) | \(url.lastPathComponent)"
             }
+            if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frameCount) {
+                return "Cache Incomplete (\(coverageReason)) | \(url.lastPathComponent)"
+            }
             if let mismatchReason = preparedPathArrayMismatchReason(for: cache, frameCount: frameCount) {
                 return "Cache Incomplete (\(mismatchReason)) | \(url.lastPathComponent)"
             }
@@ -2785,6 +2852,10 @@ private final class StabilizerHostAnalysisStore {
             }
             guard frames.count >= 3 else {
                 NSLog("StabilizerFxPlug: ignoring Host Analysis cache with too few frames at \(url.path).")
+                return nil
+            }
+            if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frames.count) {
+                NSLog("StabilizerFxPlug: ignoring incomplete Host Analysis cache at \(url.path): \(coverageReason).")
                 return nil
             }
             guard persistentCacheIdentity(for: cache, frames: frames) != nil else {
