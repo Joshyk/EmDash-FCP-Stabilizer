@@ -16,6 +16,36 @@ host state instead of starting an internal plug-in queue.
 Debug installs clean stale `Stabilizer Transform copy...` Motion Template folders in the
 `Emdash Studios` group so Final Cut Pro does not list duplicate Stabilizer effects.
 
+## Optional UI Shortcuts
+
+Use `fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript` when
+binding helper actions in Keyboard Maestro, Automator Quick Actions, or another
+keyboard shortcut runner:
+
+```sh
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript apply
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript start-analysis
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+```
+
+- `apply`: reveals the Effects Browser, searches `Stabilizer Transform`, and
+  presses the matching result for the selected clip.
+- `start-analysis`: reveals the Inspector and presses `Start Host Analysis`.
+- `toggle-debug-overlay`: reveals the Inspector and toggles `Debug Overlay`.
+- `focus-inspector`: reveals or focuses the Inspector with Command-4.
+
+The script uses Final Cut Pro Accessibility UI scripting. Grant Accessibility
+permission to the app that runs it. If FCP's UI labels are different on the
+current machine, run:
+
+```sh
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
+```
+
+and use the printed roles/names to tune the script instead of adding hidden
+fallbacks.
+
 ## Controls
 
 - `Footstep Jitter X Strength`: direct amount for horizontal footstep-jitter correction. The

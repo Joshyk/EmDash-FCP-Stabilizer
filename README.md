@@ -44,6 +44,24 @@ outside-source pixels.
 clip. Preview and render callbacks only read completed analysis or a validated
 persistent cache; they do not start analysis on their own.
 
+## Optional Final Cut Pro Shortcuts
+
+`fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript` provides
+UI-scripted helper actions for Keyboard Maestro, Automator Quick Actions, or
+manual `osascript` runs:
+
+```sh
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript apply
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript start-analysis
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
+osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+```
+
+These actions use Final Cut Pro Accessibility UI scripting. Grant Accessibility
+permission to the app that runs the script. `start-analysis` and
+`toggle-debug-overlay` fail visibly if the selected clip does not have
+`Stabilizer Transform` applied or the Inspector control is not accessible.
+
 ## Inspector Controls
 
 `Sample Size` is read once when analysis starts. It is always derived from the
