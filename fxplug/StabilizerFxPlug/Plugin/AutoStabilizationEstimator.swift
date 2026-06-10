@@ -298,6 +298,8 @@ enum AutoStabilizationEstimator {
     private static let maxRenderedFarFieldPerspective: Float = 0.0015
     private static let farFieldWarpTrackingGateStart: Float = 0.26
     private static let farFieldWarpTrackingGateFull: Float = 0.56
+    private static let farFieldWarpTrackingGateMedianBlend: Float = 0.45
+    private static let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
     private static let farFieldWarpEdgeQualityGateStart: Float = 0.55
     private static let farFieldWarpEdgeQualityGateFull: Float = 0.86
     private static let footstepImpulseInnerWindowSeconds = 0.10
@@ -468,6 +470,8 @@ enum AutoStabilizationEstimator {
         let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : Array(strideWobbleWindowIndices)
         let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }
         let walkingBobActiveIndices = walkingBobWindowIndices.isEmpty ? [centerIndex] : Array(walkingBobWindowIndices)
+        let farFieldWarpGateWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= farFieldWarpOuterWindowSeconds * 0.5 }
+        let farFieldWarpGateActiveIndices = farFieldWarpGateWindowIndices.isEmpty ? [centerIndex] : Array(farFieldWarpGateWindowIndices)
         let sampledIndices = activeIndices + strideWobbleActiveIndices + walkingBobActiveIndices + [centerIndex] + frameInterpolation.indices
         let footstepBaselineXPath = outerLinearPredictionPath(
             analysis.footstepPathX,
@@ -716,11 +720,21 @@ enum AutoStabilizationEstimator {
         let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + walkingBobPixelOffset.y
         let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
+        let farFieldWarpTrackingConfidence = stableFarFieldWarpTrackingConfidence(
+            analysis: analysis,
+            indices: farFieldWarpGateActiveIndices,
+            currentTrackingConfidence: trackingConfidence
+        )
+        let farFieldWarpEdgeQuality = stableFarFieldWarpEdgeQuality(
+            analysis: analysis,
+            indices: farFieldWarpGateActiveIndices,
+            currentSearchRadiusHitCount: searchRadiusHitCount,
+            currentSearchRadiusTotalCount: searchRadiusTotalCount
+        )
         let farFieldWarpGate = farFieldWarpRenderGate(
             warpConfidence: warpConfidence,
-            trackingConfidence: trackingConfidence,
-            searchRadiusHitCount: searchRadiusHitCount,
-            searchRadiusTotalCount: searchRadiusTotalCount
+            trackingConfidence: farFieldWarpTrackingConfidence,
+            edgeQuality: farFieldWarpEdgeQuality
         )
         let appliedWarpConfidence = clamp(warpConfidence * farFieldWarpGate, min: 0.0, max: 1.0)
         let yawPitchProxy = vector_float2(
@@ -2043,18 +2057,11 @@ enum AutoStabilizationEstimator {
     private static func farFieldWarpRenderGate(
         warpConfidence: Float,
         trackingConfidence: Float,
-        searchRadiusHitCount: Int32,
-        searchRadiusTotalCount: Int32
+        edgeQuality: Float
     ) -> Float {
-        guard warpConfidence > 0.0, searchRadiusTotalCount > 0 else {
+        guard warpConfidence > 0.0 else {
             return 0.0
         }
-        let searchRadiusHitRatio = clamp(
-            Float(searchRadiusHitCount) / Float(searchRadiusTotalCount),
-            min: 0.0,
-            max: 1.0
-        )
-        let edgeQuality = 1.0 - searchRadiusHitRatio
         let trackingGate = confidenceRamp(
             trackingConfidence,
             start: farFieldWarpTrackingGateStart,
@@ -2067,6 +2074,79 @@ enum AutoStabilizationEstimator {
         )
         let gate = clamp(trackingGate * edgeGate, min: 0.0, max: 1.0)
         return correctionConfidenceResponse(gate)
+    }
+
+    private static func stableFarFieldWarpTrackingConfidence(
+        analysis: StabilizerPreparedAnalysis,
+        indices: [Int],
+        currentTrackingConfidence: Float
+    ) -> Float {
+        let localTrackingValues = indices.compactMap { index -> Float? in
+            guard analysis.frames.indices.contains(index),
+                  analysis.residuals.indices.contains(index),
+                  analysis.blurAmounts.indices.contains(index),
+                  analysis.analysisConfidence.indices.contains(index),
+                  analysis.acceptedBlockCounts.indices.contains(index),
+                  analysis.totalBlockCounts.indices.contains(index)
+            else {
+                return nil
+            }
+            return frameTrackingConfidence(
+                motionConfidence: analysis.analysisConfidence[index],
+                residual: analysis.residuals[index],
+                blurAmount: analysis.blurAmounts[index],
+                acceptedBlockCount: analysis.acceptedBlockCounts[index],
+                totalBlockCount: analysis.totalBlockCounts[index]
+            )
+        }
+        guard let localMedianTrackingConfidence = median(localTrackingValues) else {
+            return currentTrackingConfidence
+        }
+        if localMedianTrackingConfidence < farFieldWarpTrackingGateStart {
+            return min(currentTrackingConfidence, localMedianTrackingConfidence)
+        }
+        let blendedTrackingConfidence = (currentTrackingConfidence * (1.0 - farFieldWarpTrackingGateMedianBlend))
+            + (localMedianTrackingConfidence * farFieldWarpTrackingGateMedianBlend)
+        return clamp(
+            blendedTrackingConfidence,
+            min: max(0.0, currentTrackingConfidence - farFieldWarpTrackingGateStabilityLimit),
+            max: min(1.0, currentTrackingConfidence + farFieldWarpTrackingGateStabilityLimit)
+        )
+    }
+
+    private static func stableFarFieldWarpEdgeQuality(
+        analysis: StabilizerPreparedAnalysis,
+        indices: [Int],
+        currentSearchRadiusHitCount: Int32,
+        currentSearchRadiusTotalCount: Int32
+    ) -> Float {
+        let currentEdgeQuality = searchRadiusEdgeQuality(
+            hitCount: currentSearchRadiusHitCount,
+            totalCount: currentSearchRadiusTotalCount
+        )
+        let localEdgeQualityValues = indices.compactMap { index -> Float? in
+            guard analysis.searchRadiusHitCounts.indices.contains(index),
+                  analysis.searchRadiusTotalCounts.indices.contains(index)
+            else {
+                return nil
+            }
+            return searchRadiusEdgeQuality(
+                hitCount: analysis.searchRadiusHitCounts[index],
+                totalCount: analysis.searchRadiusTotalCounts[index]
+            )
+        }
+        guard let localMedianEdgeQuality = median(localEdgeQualityValues) else {
+            return currentEdgeQuality
+        }
+        return min(currentEdgeQuality, localMedianEdgeQuality)
+    }
+
+    private static func searchRadiusEdgeQuality(hitCount: Int32, totalCount: Int32) -> Float {
+        guard totalCount > 0 else {
+            return 0.0
+        }
+        let hitRatio = clamp(Float(hitCount) / Float(totalCount), min: 0.0, max: 1.0)
+        return 1.0 - hitRatio
     }
 
     private static func softDeadband(_ value: Float, threshold: Float) -> Float {

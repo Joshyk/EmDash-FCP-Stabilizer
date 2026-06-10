@@ -103,10 +103,11 @@ frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
 maximum is `4.0`. The render path gates warp with walking-footage tracking quality and
 search-radius headroom. The tracking gate starts early enough for moderate
-25% Host Analysis evidence but reaches full response more gradually, then
-drops tiny warp deltas through a deadband so useful ridge-line correction is
-less likely to disappear while high-side gate jumps and low-confidence warp evidence are suppressed
-instead of producing a wavy image.
+25% Host Analysis evidence but reaches full response more gradually, uses short
+local tracking support to reduce single-frame gate flicker, then drops tiny warp
+deltas through a deadband so useful ridge-line correction is less likely to
+disappear while high-side gate jumps and low-confidence warp evidence are
+suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime-version row for the
@@ -279,7 +280,7 @@ render path: `FJIT` is measured first against the outer-frame baseline, then
 `SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. `WARP`
 `q` matches the applied `W Q` confidence shown by Debug Overlay, and the report
 includes strict tracking, walking-band tracking, FJIT and SWOB per-axis confidence, BOB tracking/window support,
-residual, blur, block coverage, edge quality, and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
+residual, blur, block coverage, edge quality, stable WARP tracking support, and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
 Analysis run with the current FxPlug instead of trying to repair the data.
 

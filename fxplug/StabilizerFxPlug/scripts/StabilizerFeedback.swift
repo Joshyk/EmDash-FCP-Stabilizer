@@ -225,6 +225,7 @@ private struct FrameAssessment {
     let edgeHits: Int32
     let edgeTotal: Int32
     let edgeQuality: Float
+    let warpTrackingConfidence: Float
     let warpTrackingGate: Float
     let warpEdgeGate: Float
     let warpGate: Float
@@ -258,6 +259,8 @@ private let walkingBobFullScalePixels: Float = 0.65
 private let turnFullScalePixels: Float = 2.0
 private let farFieldWarpTrackingGateStart: Float = 0.26
 private let farFieldWarpTrackingGateFull: Float = 0.56
+private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
+private let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
 private let supportedCacheSchemaVersion = 14
@@ -423,6 +426,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let bobIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
     let turnWindowSeconds = max(strideWindowSeconds, 6.0)
     let turnIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: turnWindowSeconds)
+    let warpGateIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: farFieldOuterWindowSeconds)
     let sampledIndices = Array(Set(strideIndices + bobIndices + turnIndices + [index]))
     let centerResidual = analysis.residuals[index]
     let quality = frameTrackingQuality(
@@ -534,11 +538,21 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let turnApplied = turnDetected * correctionFactor(options.strengths.turn, confidence: turnQ)
 
     let rawWarpConfidence = analysis.warpConfidence[index]
+    let warpTracking = stableFarFieldWarpTrackingConfidence(
+        analysis: analysis,
+        indices: warpGateIndices,
+        currentTrackingConfidence: tracking
+    )
+    let warpEdgeQuality = stableFarFieldWarpEdgeQuality(
+        analysis: analysis,
+        indices: warpGateIndices,
+        currentSearchRadiusHitCount: analysis.searchRadiusHitCounts[index],
+        currentSearchRadiusTotalCount: analysis.searchRadiusTotalCounts[index]
+    )
     let warpGateComponents = farFieldWarpGateComponents(
         warpConfidence: rawWarpConfidence,
-        trackingConfidence: tracking,
-        searchRadiusHitCount: analysis.searchRadiusHitCounts[index],
-        searchRadiusTotalCount: analysis.searchRadiusTotalCounts[index]
+        trackingConfidence: warpTracking,
+        edgeQuality: warpEdgeQuality
     )
     let warpGate = warpGateComponents.gate
     let appliedWarpConfidence = clamp(rawWarpConfidence * warpGate, min: 0.0, max: 1.0)
@@ -584,7 +598,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
             applied: warpApplied,
             remaining: max(0.0, warpDetected - warpApplied),
             confidence: appliedWarpConfidence,
-            note: String(format: "dimensionless warp band raw q %.2f gate %.2f trkGate %.2f edgeGate %.2f", rawWarpConfidence, warpGate, warpGateComponents.trackingGate, warpGateComponents.edgeGate)
+            note: String(format: "dimensionless warp band raw q %.2f gate %.2f trkGate %.2f edgeGate %.2f stableTrk %.2f", rawWarpConfidence, warpGate, warpGateComponents.trackingGate, warpGateComponents.edgeGate, warpTracking)
         )
     ].sorted { $0.remaining > $1.remaining }
 
@@ -605,6 +619,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
         edgeHits: analysis.searchRadiusHitCounts[index],
         edgeTotal: analysis.searchRadiusTotalCounts[index],
         edgeQuality: warpGateComponents.edgeQuality,
+        warpTrackingConfidence: warpTracking,
         warpTrackingGate: warpGateComponents.trackingGate,
         warpEdgeGate: warpGateComponents.edgeGate,
         warpGate: warpGate,
@@ -849,17 +864,89 @@ private func turnConfidence(bandValue: Float, trackingConfidence: Float) -> Floa
 private func farFieldWarpGateComponents(
     warpConfidence: Float,
     trackingConfidence: Float,
-    searchRadiusHitCount: Int32,
-    searchRadiusTotalCount: Int32
+    edgeQuality: Float
 ) -> (edgeQuality: Float, trackingGate: Float, edgeGate: Float, gate: Float) {
-    guard warpConfidence > 0.0, searchRadiusTotalCount > 0 else {
-        return (0.0, 0.0, 0.0, 0.0)
+    guard warpConfidence > 0.0 else {
+        return (edgeQuality, 0.0, 0.0, 0.0)
     }
-    let edgeQuality = 1.0 - clamp(Float(searchRadiusHitCount) / Float(searchRadiusTotalCount), min: 0.0, max: 1.0)
     let trackingGate = confidenceRamp(trackingConfidence, start: farFieldWarpTrackingGateStart, full: farFieldWarpTrackingGateFull)
     let edgeGate = confidenceRamp(edgeQuality, start: farFieldWarpEdgeQualityGateStart, full: farFieldWarpEdgeQualityGateFull)
     let gate = correctionConfidenceResponse(clamp(trackingGate * edgeGate, min: 0.0, max: 1.0))
     return (edgeQuality, trackingGate, edgeGate, gate)
+}
+
+private func stableFarFieldWarpTrackingConfidence(
+    analysis: Analysis,
+    indices: [Int],
+    currentTrackingConfidence: Float
+) -> Float {
+    let localTrackingValues = indices.compactMap { index -> Float? in
+        guard analysis.frames.indices.contains(index),
+              analysis.residuals.indices.contains(index),
+              analysis.blurAmounts.indices.contains(index),
+              analysis.analysisConfidence.indices.contains(index),
+              analysis.acceptedBlockCounts.indices.contains(index),
+              analysis.totalBlockCounts.indices.contains(index)
+        else {
+            return nil
+        }
+        let quality = frameTrackingQuality(
+            motionConfidence: analysis.analysisConfidence[index],
+            residual: analysis.residuals[index],
+            blurAmount: analysis.blurAmounts[index],
+            acceptedBlockCount: analysis.acceptedBlockCounts[index],
+            totalBlockCount: analysis.totalBlockCounts[index]
+        )
+        return frameTrackingConfidence(quality)
+    }
+    guard let localMedianTrackingConfidence = median(localTrackingValues) else {
+        return currentTrackingConfidence
+    }
+    if localMedianTrackingConfidence < farFieldWarpTrackingGateStart {
+        return min(currentTrackingConfidence, localMedianTrackingConfidence)
+    }
+    let blendedTrackingConfidence = (currentTrackingConfidence * (1.0 - farFieldWarpTrackingGateMedianBlend))
+        + (localMedianTrackingConfidence * farFieldWarpTrackingGateMedianBlend)
+    return clamp(
+        blendedTrackingConfidence,
+        min: max(0.0, currentTrackingConfidence - farFieldWarpTrackingGateStabilityLimit),
+        max: min(1.0, currentTrackingConfidence + farFieldWarpTrackingGateStabilityLimit)
+    )
+}
+
+private func stableFarFieldWarpEdgeQuality(
+    analysis: Analysis,
+    indices: [Int],
+    currentSearchRadiusHitCount: Int32,
+    currentSearchRadiusTotalCount: Int32
+) -> Float {
+    let currentEdgeQuality = searchRadiusEdgeQuality(
+        hitCount: currentSearchRadiusHitCount,
+        totalCount: currentSearchRadiusTotalCount
+    )
+    let localEdgeQualityValues = indices.compactMap { index -> Float? in
+        guard analysis.searchRadiusHitCounts.indices.contains(index),
+              analysis.searchRadiusTotalCounts.indices.contains(index)
+        else {
+            return nil
+        }
+        return searchRadiusEdgeQuality(
+            hitCount: analysis.searchRadiusHitCounts[index],
+            totalCount: analysis.searchRadiusTotalCounts[index]
+        )
+    }
+    guard let localMedianEdgeQuality = median(localEdgeQualityValues) else {
+        return currentEdgeQuality
+    }
+    return min(currentEdgeQuality, localMedianEdgeQuality)
+}
+
+private func searchRadiusEdgeQuality(hitCount: Int32, totalCount: Int32) -> Float {
+    guard totalCount > 0 else {
+        return 0.0
+    }
+    let hitRatio = clamp(Float(hitCount) / Float(totalCount), min: 0.0, max: 1.0)
+    return 1.0 - hitRatio
 }
 
 private func frameTrackingQuality(
@@ -1033,13 +1120,14 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
                      assessment.totalBlocks,
                      assessment.edgeHits,
                      assessment.edgeTotal))
-        print(String(format: "  quality residualQ %.2f blurQ %.2f blockQ %.2f edgeQ %.2f warpGate %.2f (trk %.2f edge %.2f)",
+        print(String(format: "  quality residualQ %.2f blurQ %.2f blockQ %.2f edgeQ %.2f warpGate %.2f (trk %.2f stable %.2f edge %.2f)",
                      assessment.residualQuality,
                      assessment.blurQuality,
                      assessment.blockCoverage,
                      assessment.edgeQuality,
                      assessment.warpGate,
                      assessment.warpTrackingGate,
+                     assessment.warpTrackingConfidence,
                      assessment.warpEdgeGate))
         for band in assessment.bands {
             print(String(format: "  %-4@ detected %.3f applied %.3f remaining %.3f q %.2f | %@",
@@ -1082,6 +1170,7 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
                 "edgeHits": assessment.edgeHits,
                 "edgeTotal": assessment.edgeTotal,
                 "edgeQuality": assessment.edgeQuality,
+                "warpTrackingConfidence": assessment.warpTrackingConfidence,
                 "warpTrackingGate": assessment.warpTrackingGate,
                 "warpEdgeGate": assessment.warpEdgeGate,
                 "warpGate": assessment.warpGate,

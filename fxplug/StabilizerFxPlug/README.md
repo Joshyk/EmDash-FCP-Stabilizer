@@ -169,8 +169,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
   gates warp with walking-footage tracking quality and search-radius headroom, starts the
   tracking gate early enough for moderate 25% Host Analysis evidence, reaches full response
-  more gradually, then applies a tiny deadband and small render-only clamps so weak frames do
-  not create wave-like image distortion.
+  more gradually, uses short local tracking support to reduce single-frame gate flicker, then
+  applies a tiny deadband and small render-only clamps so weak frames do not create wave-like
+  image distortion.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.
@@ -263,7 +264,7 @@ motion paths and tracking diagnostics. It uses the same footstep-first band
 split as render, so `SWOB`, `BOB`, and `TURN` diagnostics are computed from the
 footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band
-tracking confidence, FJIT per-axis and SWOB per-axis confidence, BOB tracking/window support, residual quality, blur quality, block coverage, edge quality, and WARP
+tracking confidence, FJIT per-axis and SWOB per-axis confidence, BOB tracking/window support, residual quality, blur quality, block coverage, edge quality, stable WARP tracking support, and WARP
 tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.

@@ -87,8 +87,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   accumulated drift does not turn into a fixed deskew. The default is `1.0`, the maximum is
   `4.0`, and `0` fully disables warp. Render gates warp with walking-footage tracking
   quality and search-radius headroom. The tracking gate starts early enough for moderate
-  25% Host Analysis evidence but reaches full response more gradually, then applies a tiny
-  deadband so weak frames and high-side gate jumps do not create wave-like image distortion.
+  25% Host Analysis evidence but reaches full response more gradually, uses short local
+  tracking support to reduce single-frame gate flicker, then applies a tiny deadband so
+  weak frames and high-side gate jumps do not create wave-like image distortion.
   Pull this down if close grass, roads, water, or frame edges start to swim.
 - `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
   walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
@@ -202,7 +203,7 @@ FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
 the raw impulse or band values, and BOB tracking/window support so short
 or one-sided analysis ranges are distinguishable from weak vertical motion. `WARP` `q` matches the applied `W Q` confidence shown by
 Debug Overlay. The report also prints residual quality, blur quality, block coverage,
-edge quality, and WARP tracking/edge gate values so conservative gating can be separated
+edge quality, stable WARP tracking support, and WARP tracking/edge gate values so conservative gating can be separated
 from weak detected motion. If the cache was written by an older build with mismatched frame/path
 arrays, it fails visibly and asks for a new Host Analysis run with the current
 FxPlug.
@@ -269,9 +270,9 @@ FxPlug.
   value is the local warp band against its `0.10`/`1.0` second outer-frame linear baseline,
   not the absolute accumulated warp path. Render also requires walking-footage tracking
   quality and search-radius headroom before applying warp, starts its tracking gate earlier
-  for moderate 25% Host Analysis evidence, curves medium-confidence gates upward, and drops
-  tiny warp deltas through a deadband to avoid wave-like image distortion while tuning
-  micro jitter.
+  for moderate 25% Host Analysis evidence, stabilizes that gate with short local tracking
+  support, and drops tiny warp deltas through a deadband to avoid wave-like image distortion
+  while tuning micro jitter.
 - Host Analysis cache schema `14` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,
