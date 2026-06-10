@@ -247,6 +247,8 @@ scripts/stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
 
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP` bands from the prepared
-motion paths and tracking diagnostics. It fails visibly on unsupported or
+motion paths and tracking diagnostics. It uses the same footstep-first band
+split as render, so `SWOB`, `BOB`, and `TURN` diagnostics are computed from the
+footstep-cleaned path rather than the raw footstep path. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.

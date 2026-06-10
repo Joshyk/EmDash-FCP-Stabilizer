@@ -254,7 +254,9 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
 
     let strideIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: strideWindowSeconds)
     let bobIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
-    let turnIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: max(strideWindowSeconds, 6.0))
+    let turnWindowSeconds = max(strideWindowSeconds, 6.0)
+    let turnIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: turnWindowSeconds)
+    let sampledIndices = Array(Set(strideIndices + bobIndices + turnIndices + [index]))
     let centerResidual = analysis.residuals[index]
     let tracking = frameTrackingConfidence(
         motionConfidence: analysis.analysisConfidence[index],
@@ -264,16 +266,55 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
         totalBlockCount: analysis.totalBlockCounts[index]
     )
 
-    let footstepBaseX = outerLinearPrediction(analysis.footstepPathX, frames: analysis.frames, centerIndex: index, innerWindowSeconds: footstepInnerWindowSeconds, outerWindowSeconds: footstepOuterWindowSeconds) ?? analysis.footstepPathX[index]
-    let footstepBaseY = outerLinearPrediction(analysis.footstepPathY, frames: analysis.frames, centerIndex: index, innerWindowSeconds: footstepInnerWindowSeconds, outerWindowSeconds: footstepOuterWindowSeconds) ?? analysis.footstepPathY[index]
-    let footstepBaseR = outerLinearPrediction(analysis.footstepPathRoll, frames: analysis.frames, centerIndex: index, innerWindowSeconds: footstepInnerWindowSeconds, outerWindowSeconds: footstepOuterWindowSeconds) ?? analysis.footstepPathRoll[index]
+    let footstepCleanXPath = outerLinearPredictionPath(
+        analysis.footstepPathX,
+        frames: analysis.frames,
+        targetIndices: sampledIndices,
+        innerWindowSeconds: footstepInnerWindowSeconds,
+        outerWindowSeconds: footstepOuterWindowSeconds
+    )
+    let footstepCleanYPath = outerLinearPredictionPath(
+        analysis.footstepPathY,
+        frames: analysis.frames,
+        targetIndices: sampledIndices,
+        innerWindowSeconds: footstepInnerWindowSeconds,
+        outerWindowSeconds: footstepOuterWindowSeconds
+    )
+    let footstepCleanRPath = outerLinearPredictionPath(
+        analysis.footstepPathRoll,
+        frames: analysis.frames,
+        targetIndices: sampledIndices,
+        innerWindowSeconds: footstepInnerWindowSeconds,
+        outerWindowSeconds: footstepOuterWindowSeconds
+    )
+    let strideSmoothedXPath = locallyTimeWeightedAveragePath(
+        footstepCleanXPath,
+        frames: analysis.frames,
+        targetIndices: sampledIndices,
+        windowSeconds: strideWindowSeconds
+    )
+    let strideSmoothedYPath = locallyTimeWeightedAveragePath(
+        footstepCleanYPath,
+        frames: analysis.frames,
+        targetIndices: sampledIndices,
+        windowSeconds: strideWindowSeconds
+    )
+    let strideSmoothedRPath = locallyTimeWeightedAveragePath(
+        footstepCleanRPath,
+        frames: analysis.frames,
+        targetIndices: sampledIndices,
+        windowSeconds: strideWindowSeconds
+    )
 
-    let strideSmoothX = localAverage(analysis.footstepPathX, frames: analysis.frames, centerIndex: index, windowSeconds: strideWindowSeconds)
-    let strideSmoothY = localAverage(analysis.footstepPathY, frames: analysis.frames, centerIndex: index, windowSeconds: strideWindowSeconds)
-    let strideSmoothR = localAverage(analysis.footstepPathRoll, frames: analysis.frames, centerIndex: index, windowSeconds: strideWindowSeconds)
-    let bobSmoothY = timeWeightedAverage(analysis.footstepPathY, frames: analysis.frames, indices: bobIndices, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
-    let turnSmoothX = timeWeightedMonotonicSCurveValue(analysis.footstepPathX, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: max(strideWindowSeconds, 6.0))
-        ?? timeWeightedAverage(analysis.footstepPathX, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: max(strideWindowSeconds, 6.0))
+    let footstepBaseX = footstepCleanXPath[index]
+    let footstepBaseY = footstepCleanYPath[index]
+    let footstepBaseR = footstepCleanRPath[index]
+    let strideSmoothX = strideSmoothedXPath[index]
+    let strideSmoothY = strideSmoothedYPath[index]
+    let strideSmoothR = strideSmoothedRPath[index]
+    let bobSmoothY = timeWeightedAverage(strideSmoothedYPath, frames: analysis.frames, indices: bobIndices, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
+    let turnSmoothX = timeWeightedMonotonicSCurveValue(strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
+        ?? timeWeightedAverage(strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
 
     let strideResidual = percentileValue(analysis.residuals, indices: strideIndices, percentile: 0.70)
     let bobResidual = percentileValue(analysis.residuals, indices: bobIndices, percentile: 0.70)
@@ -285,9 +326,9 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let footX = analysis.footstepPathX[index] - footstepBaseX
     let footY = analysis.footstepPathY[index] - footstepBaseY
     let footR = analysis.footstepPathRoll[index] - footstepBaseR
-    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValue: footstepBaseX, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScalePixels)
-    let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValue: footstepBaseY, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScalePixels)
-    let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValue: footstepBaseR, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScaleDegrees)
+    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: footstepCleanXPath, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScalePixels)
+    let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: footstepCleanYPath, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScalePixels)
+    let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: footstepCleanRPath, frames: analysis.frames, index: index, trackingConfidence: tracking, fullImpulseScale: footstepFullScaleDegrees)
     let footAppliedX = abs(footX * xScale) * correctionFactor(options.strengths.microX, confidence: footQX)
     let footAppliedY = abs(footY * yScale) * correctionFactor(options.strengths.microY, confidence: footQY)
     let footAppliedR = abs(footR) * correctionFactor(options.strengths.microR, confidence: footQR)
@@ -401,11 +442,6 @@ private func activeIndices(_ frames: [AnalysisFrame], centerTime: Double, window
     return indices.isEmpty ? Array(frames.indices) : Array(indices)
 }
 
-private func localAverage(_ values: [Float], frames: [AnalysisFrame], centerIndex: Int, windowSeconds: Double) -> Float {
-    let indices = activeIndices(frames, centerTime: frames[centerIndex].time, windowSeconds: windowSeconds)
-    return timeWeightedAverage(values, frames: frames, indices: indices, centerTime: frames[centerIndex].time, windowSeconds: windowSeconds)
-}
-
 private func timeWeightedAverage(_ values: [Float], frames: [AnalysisFrame], indices: [Int], centerTime: Double, windowSeconds: Double) -> Float {
     guard !indices.isEmpty else {
         return 0.0
@@ -430,6 +466,46 @@ private func timeWeightedAverage(_ values: [Float], frames: [AnalysisFrame], ind
         return indices.reduce(Float(0.0)) { $0 + values[$1] } / Float(indices.count)
     }
     return weightedTotal / Float(totalWeight)
+}
+
+private func outerLinearPredictionPath(_ values: [Float], frames: [AnalysisFrame], targetIndices: [Int], innerWindowSeconds: Double, outerWindowSeconds: Double) -> [Float] {
+    guard !values.isEmpty else {
+        return values
+    }
+    var predicted = values
+    for index in Set(targetIndices) where values.indices.contains(index) && frames.indices.contains(index) {
+        predicted[index] = outerLinearPrediction(
+            values,
+            frames: frames,
+            centerIndex: index,
+            innerWindowSeconds: innerWindowSeconds,
+            outerWindowSeconds: outerWindowSeconds
+        ) ?? values[index]
+    }
+    return predicted
+}
+
+private func locallyTimeWeightedAveragePath(_ values: [Float], frames: [AnalysisFrame], targetIndices: [Int], windowSeconds: Double) -> [Float] {
+    guard !values.isEmpty else {
+        return values
+    }
+    var smoothed = values
+    let halfWindow = max(0.0, windowSeconds * 0.5)
+    for index in Set(targetIndices) where values.indices.contains(index) && frames.indices.contains(index) {
+        let centerTime = frames[index].time
+        let localIndices = frames.indices.filter { candidate in
+            abs(frames[candidate].time - centerTime) <= halfWindow + timeWindowSelectionEpsilon
+        }
+        let indices = localIndices.isEmpty ? [index] : Array(localIndices)
+        smoothed[index] = timeWeightedAverage(
+            values,
+            frames: frames,
+            indices: indices,
+            centerTime: centerTime,
+            windowSeconds: windowSeconds
+        )
+    }
+    return smoothed
 }
 
 private func timeWeightedMonotonicSCurveValue(_ values: [Float], frames: [AnalysisFrame], indices: [Int], centerTime: Double, windowSeconds: Double) -> Float? {
@@ -538,7 +614,11 @@ private func surroundingIndices(around centerIndex: Int, frames: [AnalysisFrame]
     return frames.indices.filter { abs(frames[$0].time - centerTime) <= outerWindow + timeWindowSelectionEpsilon }
 }
 
-private func footstepConfidence(values: [Float], baselineValue: Float, frames: [AnalysisFrame], index: Int, trackingConfidence: Float, fullImpulseScale: Float) -> Float {
+private func footstepConfidence(values: [Float], baselineValues: [Float], frames: [AnalysisFrame], index: Int, trackingConfidence: Float, fullImpulseScale: Float) -> Float {
+    guard values.indices.contains(index), baselineValues.indices.contains(index) else {
+        return 0.0
+    }
+    let baselineValue = baselineValues[index]
     let impulse = abs(values[index] - baselineValue)
     let surrounding = surroundingIndices(
         around: index,
@@ -549,7 +629,7 @@ private func footstepConfidence(values: [Float], baselineValue: Float, frames: [
     guard !surrounding.isEmpty else {
         return 0.0
     }
-    let surroundingNoise = median(surrounding.map { abs(values[$0] - (outerLinearPrediction(values, frames: frames, centerIndex: $0, innerWindowSeconds: footstepInnerWindowSeconds, outerWindowSeconds: footstepOuterWindowSeconds) ?? values[$0])) }) ?? 0.0
+    let surroundingNoise = median(surrounding.filter { baselineValues.indices.contains($0) }.map { abs(values[$0] - baselineValues[$0]) }) ?? 0.0
     let centerTime = frames[index].time
     let hasLeft = surrounding.contains { frames[$0].time < centerTime }
     let hasRight = surrounding.contains { frames[$0].time > centerTime }

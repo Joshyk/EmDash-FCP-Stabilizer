@@ -257,7 +257,9 @@ pixel estimates scaled to a target preview size.
 
 The report ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
 bands using the saved prepared paths, tracking confidence, residuals, blur,
-block coverage, and search-radius edge-hit counts. If a cache has mismatched
+block coverage, and search-radius edge-hit counts. The band split mirrors the
+render path: `FJIT` is measured first against the outer-frame baseline, then
+`SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
 Analysis run with the current FxPlug instead of trying to repair the data.
 
