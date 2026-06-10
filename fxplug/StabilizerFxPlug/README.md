@@ -231,8 +231,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
   runtime-version diagnostics so Final Cut Pro runtime analysis can be checked. The overlay scales
-  with the current render output so original/proxy playback switches do not make the bars balloon
-  over the viewer. These labels are raw English control/diagnostic
+  from the current render output to keep one readable viewer footprint across original/proxy
+  playback, while staying larger than the old compact panel. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,

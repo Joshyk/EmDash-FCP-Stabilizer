@@ -98,8 +98,9 @@ confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `SHRP`
 and lower means weaker evidence. `WLK` should show the walking-band tracking gate used by
 Footstep Jitter, Stride Wobble, and Walking Bob. Debug Overlay should also expose a compact
 active runtime version row so stale saved Inspector strings do not hide which binary is rendering.
-The overlay panel must keep a stable viewer footprint when Final Cut Pro switches between
-original and proxy playback; proxy output size must not make the bars balloon or overlap the
+The overlay panel should scale proportionally to the current render output so Final Cut Pro
+original/proxy playback presents one readable viewer footprint; high-resolution original
+frames must not make the bars tiny, and proxy output must not make them balloon over the
 preview.
 
 ## Playback And Render

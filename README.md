@@ -138,8 +138,9 @@ suppressed instead of producing a wavy image.
 bands and tracking state. It also includes a compact runtime-version row for the
 active render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
-The overlay scales with the current render output so switching between original
-and proxy playback does not make the bars balloon over the preview.
+The overlay scales from the current render output to keep one readable viewer
+footprint across original and proxy playback, while staying larger than the old
+compact panel.
 
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep

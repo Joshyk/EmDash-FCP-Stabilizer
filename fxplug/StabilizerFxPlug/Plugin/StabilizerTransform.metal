@@ -228,7 +228,7 @@ static uint debugLabelChar(uint row, uint index) {
 }
 
 static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlayScale) {
-    float textScale = max(1.0, 2.0 * overlayScale);
+    float textScale = 2.0 * overlayScale;
     constexpr float glyphWidth = 3.0;
     constexpr float glyphHeight = 5.0;
     float glyphAdvance = 4.0 * textScale;
@@ -291,9 +291,9 @@ fragment float4 fragmentShader(
         outputColor.a = 1.0;
         float2 pixel = uv * transform->outputSize;
         float overlayScale = clamp(
-            min(transform->outputSize.x / 3840.0, transform->outputSize.y / 2160.0),
-            0.35,
-            1.0
+            min(transform->outputSize.x / 3840.0, transform->outputSize.y / 2160.0) * 1.35,
+            0.75,
+            2.25
         );
         float panelX = pixel.x - (16.0 * overlayScale);
         float panelY = pixel.y - (16.0 * overlayScale);
