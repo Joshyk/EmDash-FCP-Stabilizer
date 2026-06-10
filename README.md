@@ -55,12 +55,16 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
 ```
 
 These actions use Final Cut Pro Accessibility UI scripting. Grant Accessibility
 permission to the app that runs the script. `start-analysis` and
 `toggle-debug-overlay` fail visibly if the selected clip does not have
 `Stabilizer Transform` applied or the Inspector control is not accessible.
+`open-selected-project` opens the selected Browser project with a CoreGraphics
+double-click, which is more reliable than repeated AppleScript clicks in Final
+Cut Pro.
 
 ## Inspector Controls
 

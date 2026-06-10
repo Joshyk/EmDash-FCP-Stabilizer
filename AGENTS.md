@@ -276,12 +276,17 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
 ```
 
 Use it from Keyboard Maestro, Automator Quick Actions, or Terminal when manual FCP
 validation needs faster access to `Stabilizer Transform`, `Start Host Analysis`, `Debug
-Overlay`, or the Inspector. Grant Accessibility permission to the app that runs the script.
+Overlay`, selected Browser projects, or the Inspector. Grant Accessibility permission to
+the app that runs the script.
+For project opening, prefer `open-selected-project` after selecting the project thumbnail
+or list row in the Browser. It uses a real CoreGraphics double-click because ordinary
+AppleScript click repeats can fail to register as a Final Cut Pro double-click.
 If FCP UI labels change, use `dump-front-window` to inspect the accessible roles/names and
 update the shared script in the parent workspace. Do not copy a separate version into this
 repo unless the user explicitly asks for repo-local divergence.

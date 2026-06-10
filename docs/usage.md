@@ -27,6 +27,7 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
 ```
 
 - `apply`: reveals the Effects Browser, searches `Stabilizer Transform`, and
@@ -34,6 +35,8 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
 - `start-analysis`: reveals the Inspector and presses `Start Host Analysis`.
 - `toggle-debug-overlay`: reveals the Inspector and toggles `Debug Overlay`.
 - `focus-inspector`: reveals or focuses the Inspector with Command-4.
+- `open-selected-project`: opens the selected Browser project thumbnail or list
+  row with a CoreGraphics double-click.
 
 The script uses Final Cut Pro Accessibility UI scripting. Grant Accessibility
 permission to the app that runs it. If FCP's UI labels are different on the
