@@ -260,6 +260,32 @@ Use this local Final Cut Pro library for manual end-to-end testing:
 It is a shared workspace test fixture, outside this plugin repo. Use it when checking the
 native effect against real timeline clips in Final Cut Pro.
 
+## Shared Final Cut Pro UI Shortcut Script
+
+The shared local AppleScript helper for Final Cut Pro UI shortcut work lives outside this
+repo at:
+
+```text
+/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript
+```
+
+From this repo, run it through the parent-relative path:
+
+```sh
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
+```
+
+Use it from Keyboard Maestro, Automator Quick Actions, or Terminal when manual FCP
+validation needs faster access to `Stabilizer Transform`, `Start Host Analysis`, `Debug
+Overlay`, or the Inspector. Grant Accessibility permission to the app that runs the script.
+If FCP UI labels change, use `dump-front-window` to inspect the accessible roles/names and
+update the shared script in the parent workspace. Do not copy a separate version into this
+repo unless the user explicitly asks for repo-local divergence.
+
 ## Version Visibility
 
 Keep `stabilizerFxPlugVersion` in
