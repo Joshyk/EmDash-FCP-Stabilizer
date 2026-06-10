@@ -162,7 +162,9 @@ same streaming builder.
 When `Start Host Analysis` is pressed while Final Cut Pro reports that another
 analysis is already requested or running, the effect enters `Queued Host
 Analysis` instead of failing. The process-wide queue starts queued clips one at a
-time as the host becomes available.
+time as the host becomes available. Queued start requests are retained until
+they either start or are explicitly cleared, and a completed analysis from an
+earlier clip does not satisfy a later queued clip.
 
 The analysis path:
 

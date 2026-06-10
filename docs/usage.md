@@ -13,7 +13,9 @@
 `Start Host Analysis` requests the active effect clip from Final Cut Pro. If Final Cut Pro
 reports that another analysis is already requested or running, the Inspector shows
 `Queued Host Analysis` and the effect waits in a process-wide serial queue. Queued clips
-start one at a time as earlier Host Analysis runs finish.
+start one at a time as earlier Host Analysis runs finish. A queued clip remains a real
+pending start request until it starts or you clear it; another clip's completed analysis is
+not treated as completion for the queued clip.
 Debug installs clean stale `Stabilizer Transform copy...` Motion Template folders in the
 `Emdash Studios` group so Final Cut Pro does not list duplicate Stabilizer effects.
 
@@ -167,7 +169,9 @@ fallbacks.
   whose selected `Sample Size` resolves to different actual pixel dimensions do not share a
   streaming builder. If another Stabilizer Host Analysis is already active, or Final Cut Pro
   is already running Host Analysis when another clip is requested, that effect instance is
-  queued and started after the host becomes available.
+  queued and started after the host becomes available. The queued request is retained until
+  start or explicit clear, and completed analysis from the previous clip does not make the
+  queued clip skip its own Host Analysis.
   Completed analysis is then published to the process-wide shared render/cache store and
   persisted to the shared user Application Support cache using the prepared analysis frame
   set, so analyzer and preview/render processes can hand off the prepared motion path
@@ -180,7 +184,8 @@ fallbacks.
 - `Host Analysis Status`: read-only status for analysis and cache reuse. It appends
   the current FxPlug runtime version when Final Cut Pro accepts status parameter
   updates. `Queued Host Analysis` means this clip is waiting for the plug-in's serial Host
-  Analysis queue to start it after the currently active host run finishes.
+  Analysis queue to start it after the currently active host run finishes; it should advance
+  automatically after the active host run finishes unless Final Cut Pro still reports busy.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
   `Walking Bob`, `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame

@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.19"
+private let stabilizerFxPlugVersion = "0.20"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -148,7 +148,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         return store
     }()
     private static let serialAnalysisQueueLock = NSLock()
-    private static var serialAnalysisQueue: [WeakStabilizerFxPlugPlugIn] = []
+    private static var serialAnalysisQueue: [StabilizerFxPlugPlugIn] = []
     private static var serialAnalysisQueueDrainScheduled = false
     private static var activeSerialAnalysisPlugin: WeakStabilizerFxPlugPlugIn?
     private static let stabilizerInfoViewLock = NSLock()
@@ -458,12 +458,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     @discardableResult
-    private func requestHostAnalysisIfNeeded(force: Bool = false, allowSerialQueue: Bool = true) -> HostAnalysisRequestResult {
-        if hostAnalysisStore.hasCompletedAnalysis {
+    private func requestHostAnalysisIfNeeded(
+        force: Bool = false,
+        allowSerialQueue: Bool = true,
+        queuedStartRequest: Bool = false
+    ) -> HostAnalysisRequestResult {
+        let isQueuedRequest = queuedStartRequest || Self.isQueuedSerialAnalysis(self)
+        if hostAnalysisStore.hasCompletedAnalysis && !(force && isQueuedRequest) {
             Self.removeQueuedSerialAnalysis(self)
             return .skippedCompleted
         }
-        guard force || !hostAnalysisStore.hasCompletedAnalysis else {
+        guard force || !hostAnalysisStore.hasCompletedAnalysis || isQueuedRequest else {
             Self.removeQueuedSerialAnalysis(self)
             return .skippedCompleted
         }
@@ -536,13 +541,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     @discardableResult
     private static func enqueueSerialAnalysis(_ plugin: StabilizerFxPlugPlugIn) -> Int {
         serialAnalysisQueueLock.lock()
-        serialAnalysisQueue.removeAll { queuedPlugin in
-            guard let queuedPlugin = queuedPlugin.plugin else {
-                return true
-            }
-            return queuedPlugin === plugin
-        }
-        serialAnalysisQueue.append(WeakStabilizerFxPlugPlugIn(plugin))
+        serialAnalysisQueue.removeAll { queuedPlugin in queuedPlugin === plugin }
+        serialAnalysisQueue.append(plugin)
         let position = serialAnalysisQueue.count
         serialAnalysisQueueLock.unlock()
         return position
@@ -550,13 +550,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     private static func removeQueuedSerialAnalysis(_ plugin: StabilizerFxPlugPlugIn) {
         serialAnalysisQueueLock.lock()
-        serialAnalysisQueue.removeAll { queuedPlugin in
-            guard let queuedPlugin = queuedPlugin.plugin else {
-                return true
-            }
-            return queuedPlugin === plugin
-        }
+        serialAnalysisQueue.removeAll { queuedPlugin in queuedPlugin === plugin }
         serialAnalysisQueueLock.unlock()
+    }
+
+    private static func isQueuedSerialAnalysis(_ plugin: StabilizerFxPlugPlugIn) -> Bool {
+        serialAnalysisQueueLock.lock()
+        defer { serialAnalysisQueueLock.unlock() }
+        return serialAnalysisQueue.contains { queuedPlugin in queuedPlugin === plugin }
     }
 
     private static func isAnotherSerialAnalysisActive(_ plugin: StabilizerFxPlugPlugIn) -> Bool {
@@ -590,13 +591,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static func dequeueNextSerialAnalysis() -> StabilizerFxPlugPlugIn? {
         serialAnalysisQueueLock.lock()
         defer { serialAnalysisQueueLock.unlock() }
-        while !serialAnalysisQueue.isEmpty {
-            let nextPlugin = serialAnalysisQueue.removeFirst().plugin
-            if let nextPlugin {
-                return nextPlugin
-            }
+        guard !serialAnalysisQueue.isEmpty else {
+            return nil
         }
-        return nil
+        return serialAnalysisQueue.removeFirst()
     }
 
     private static func scheduleSerialAnalysisQueueDrain(after delay: TimeInterval = 1.0) {
@@ -618,7 +616,11 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     private static func startNextQueuedHostAnalysis() {
         while let nextPlugin = dequeueNextSerialAnalysis() {
-            switch nextPlugin.requestHostAnalysisIfNeeded(force: true, allowSerialQueue: true) {
+            switch nextPlugin.requestHostAnalysisIfNeeded(
+                force: true,
+                allowSerialQueue: true,
+                queuedStartRequest: true
+            ) {
             case .started, .queued:
                 return
             case .skippedCompleted, .failed:

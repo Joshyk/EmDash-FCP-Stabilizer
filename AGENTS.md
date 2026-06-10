@@ -112,8 +112,10 @@ completed cache, render/preview instances with no prepared analysis should notic
 changes and reload persistent cache candidates on demand; this keeps the stabilized preview
 visible even when analyzer and render use different FxPlug processes. If Final Cut Pro keeps
 reporting a busy state when the serial queue tries to drain, keep the request queued visibly
-and retry later. Do not re-run full block matching across the analyzed frame set on every
-render frame. Keep `Host Analysis
+and retry later. A queued start request must remain a pending request for that effect
+instance; do not let a completed shared render/cache store from another clip satisfy or
+skip the queued clip's own Host Analysis start. Do not re-run full block matching across
+the analyzed frame set on every render frame. Keep `Host Analysis
 Status` visible in the Inspector, update it to `Ready (... frames)` after completed
 analysis, and include the active FxPlug version there when Final Cut Pro accepts status
 parameter updates. Debug Overlay should remain the live render-runtime indicator because
