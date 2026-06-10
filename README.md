@@ -165,6 +165,9 @@ Analysis` instead of failing. The process-wide queue starts queued clips one at 
 time as the host becomes available. Queued start requests are retained until
 they either start or are explicitly cleared, and a completed analysis from an
 earlier clip does not satisfy a later queued clip.
+Preview/render checks the persistent cache signature on each render pass, so a
+queued clip that completes in a different FxPlug process can replace an older
+prepared path without requiring another manual start.
 
 The analysis path:
 

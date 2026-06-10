@@ -175,10 +175,11 @@ fallbacks.
   Completed analysis is then published to the process-wide shared render/cache store and
   persisted to the shared user Application Support cache using the prepared analysis frame
   set, so analyzer and preview/render processes can hand off the prepared motion path
-  through validated cache files. Preview/render callbacks
-  detect cache file changes when they have no prepared analysis, then reload candidates
-  without starting Host Analysis. `Start Host Analysis` is the only path that requests Host
-  Analysis from Final Cut Pro.
+  through validated cache files. Preview/render callbacks detect cache file changes even
+  when they already hold an older prepared analysis, then reload candidates without starting
+  Host Analysis. A cache whose fingerprints do not match the current source frame is
+  rejected instead of being accepted by time proximity alone. `Start Host Analysis` is the
+  only path that requests Host Analysis from Final Cut Pro.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse. It appends

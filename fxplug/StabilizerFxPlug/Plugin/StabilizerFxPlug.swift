@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.20"
+private let stabilizerFxPlugVersion = "0.21"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1332,7 +1332,6 @@ private final class StabilizerHostAnalysisStore {
     private static let maxPersistentCacheEntriesPerSampleSize = 8
     private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0
-    private static let cacheValidationTimeToleranceSeconds = 0.1
     private static let cacheDirectoryName = "StabilizerFxPlug"
     private static let cacheFileName = "host-analysis-v2.json"
     private static let cacheIndexFileName = "host-analysis-index-v2.json"
@@ -1653,10 +1652,10 @@ private final class StabilizerHostAnalysisStore {
 
     func preparedAnalysisForRender(validating sourceImage: FxImageTile, at renderTime: CMTime) -> StabilizerPreparedAnalysis? {
         while true {
+            if shouldReloadPersistentCacheForRender(), loadPersistentCache() {
+                continue
+            }
             guard let analysis = preparedAnalysisSnapshot() else {
-                if shouldReloadPersistentCacheForRender(), loadPersistentCache() {
-                    continue
-                }
                 guard activateNextPersistentCache(afterRejecting: nil) else {
                     return nil
                 }
@@ -1779,7 +1778,7 @@ private final class StabilizerHostAnalysisStore {
             && status != .cacheUnsupported
             && status != .cacheIncomplete
         let shouldReload = (needsInitialLoad || cacheChanged)
-            && persistentCacheCandidates.isEmpty
+            && (cacheChanged || persistentCacheCandidates.isEmpty)
             && status != .analyzing
             && status != .cacheRejected
         lock.unlock()
@@ -2183,11 +2182,7 @@ private final class StabilizerHostAnalysisStore {
             return nil
         }
         if closestFrame.pixels.isEmpty {
-            let timeDifference = abs(closestFrame.time - currentFrame.time)
-            guard timeDifference <= Self.cacheValidationTimeToleranceSeconds else {
-                return nil
-            }
-            return closestFrame
+            return nil
         }
         guard Self.meanAbsoluteDifference(currentFrame.pixels, closestFrame.pixels) <= Self.cacheValidationMeanDifferenceThreshold else {
             return nil
