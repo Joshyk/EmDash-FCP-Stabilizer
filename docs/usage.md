@@ -18,15 +18,15 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 
 ## Optional UI Shortcuts
 
-Use `fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript` when
-binding helper actions in Keyboard Maestro, Automator Quick Actions, or another
-keyboard shortcut runner:
+Use the shared workspace script `../scripts/fcp_stabilizer_shortcuts.applescript`
+when binding helper actions in Keyboard Maestro, Automator Quick Actions, or
+another keyboard shortcut runner:
 
 ```sh
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript apply
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript start-analysis
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
 ```
 
 - `apply`: reveals the Effects Browser, searches `Stabilizer Transform`, and
@@ -40,7 +40,7 @@ permission to the app that runs it. If FCP's UI labels are different on the
 current machine, run:
 
 ```sh
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
 ```
 
 and use the printed roles/names to tune the script instead of adding hidden

@@ -46,15 +46,15 @@ persistent cache; they do not start analysis on their own.
 
 ## Optional Final Cut Pro Shortcuts
 
-`fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript` provides
-UI-scripted helper actions for Keyboard Maestro, Automator Quick Actions, or
-manual `osascript` runs:
+The shared workspace script `../scripts/fcp_stabilizer_shortcuts.applescript`
+provides UI-scripted helper actions for Keyboard Maestro, Automator Quick
+Actions, or manual `osascript` runs:
 
 ```sh
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript apply
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript start-analysis
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
-osascript fxplug/StabilizerFxPlug/scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
 ```
 
 These actions use Final Cut Pro Accessibility UI scripting. Grant Accessibility
