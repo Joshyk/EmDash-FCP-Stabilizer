@@ -251,6 +251,7 @@ private let footstepFullScalePixels: Float = 0.35
 private let footstepFullScaleDegrees: Float = 0.08
 private let footstepNoiseFloorScale: Float = 0.08
 private let footstepSurroundingNoiseMultiplier: Float = 1.10
+private let footstepSurroundingNoiseFloorCapScale: Float = 0.45
 private let footstepFullResponseScale: Float = 0.65
 private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
@@ -835,7 +836,11 @@ private func footstepConfidence(values: [Float], baselineValues: [Float], frames
     let hasLeft = surrounding.contains { frames[$0].time < centerTime }
     let hasRight = surrounding.contains { frames[$0].time > centerTime }
     let supportQuality: Float = (hasLeft && hasRight) ? 1.0 : 0.65
-    let noiseFloor = max(fullImpulseScale * footstepNoiseFloorScale, surroundingNoise * footstepSurroundingNoiseMultiplier)
+    let surroundingNoiseFloor = min(
+        surroundingNoise * footstepSurroundingNoiseMultiplier,
+        fullImpulseScale * footstepSurroundingNoiseFloorCapScale
+    )
+    let noiseFloor = max(fullImpulseScale * footstepNoiseFloorScale, surroundingNoiseFloor)
     let impulseQuality = confidenceRamp(impulse, start: noiseFloor, full: max(noiseFloor + Float.ulpOfOne, fullImpulseScale * footstepFullResponseScale))
     return clamp(trackingConfidence * supportQuality * impulseQuality, min: 0.0, max: 1.0)
 }

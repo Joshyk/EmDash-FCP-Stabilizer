@@ -133,7 +133,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   The default is `1.0`; values above `1.0` can compensate for weak frame confidence but are
   clamped during render to avoid inverse shake. The confidence response is more assertive for
   medium-confidence frame evidence, but zero confidence still produces zero correction.
-  Confidence also checks local baseline support and surrounding footstep noise.
+  Confidence also checks local baseline support and surrounding footstep noise, with the
+  surrounding-noise floor capped below full response so repeated walking motion does not bury
+  a real center-frame landing impulse.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
   `0.10` second shock region and predicts from outer samples up to `1.0` second away for

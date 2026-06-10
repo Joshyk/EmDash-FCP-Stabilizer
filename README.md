@@ -64,7 +64,8 @@ region and predicts from outer samples up to `1.0` second away. Confidence is
 based on current tracking evidence, local baseline support, and the center
 frame's impulse relative to surrounding footstep noise. Moderate landing impulses now reach
 useful confidence a little sooner, while zero evidence and noisy unsupported frames still
-produce zero correction.
+produce zero correction. The surrounding-noise floor is capped below the full-response point
+so repeated walking motion does not bury a real center-frame landing shock.
 FJIT, SWOB, and BOB use a walking-band tracking gate that slightly eases block coverage only
 when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
 avoid swimming or false turn smoothing.

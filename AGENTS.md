@@ -151,6 +151,8 @@ departs from its outer-frame baseline; do not force a hidden minimum confidence 
 Medium-confidence response may be curved upward for a more useful debug pass, and moderate
 landing impulses should not be buried by an overly high surrounding-noise threshold, but
 zero confidence must still produce zero correction.
+The surrounding-noise floor should be capped below the full impulse response point so repeated
+walking motion does not hide a real center-frame landing impulse.
 Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
 `4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
 weak, but applied correction must clamp at full detected-impulse removal during render so

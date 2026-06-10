@@ -34,8 +34,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   outer-frame baseline. The gate also requires local baseline support and compares the
   center-frame impulse against surrounding footstep noise, so one unsupported edge frame does
   not produce a strong correction by itself. Moderate landing impulses reach useful
-  confidence a little sooner than the surrounding-noise floor, while zero evidence remains
-  zero. Walking-band correction eases block coverage only when enough blocks were accepted;
+  confidence a little sooner than the surrounding-noise floor, and that surrounding-noise floor
+  is capped below the full-response point so repeated walking motion does not hide a real
+  center-frame landing shock. Zero evidence remains zero. Walking-band correction eases block coverage only when enough blocks were accepted;
   Far-field Warp and Turn Smoothing keep the stricter gate. Values above `1.0` can compensate when that
   frame-local score makes the detected impulse visibly under-corrected, but render output
   still clamps at full detected-impulse removal to avoid inverse shake.

@@ -283,6 +283,7 @@ enum AutoStabilizationEstimator {
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
     private static let footstepNoiseFloorScale: Float = 0.08
     private static let footstepSurroundingNoiseMultiplier: Float = 1.10
+    private static let footstepSurroundingNoiseFloorCapScale: Float = 0.45
     private static let footstepFullResponseScale: Float = 0.65
     private static let strideWobbleWindowSeconds = 2.0
     private static let strideWobbleFullScalePixels: Float = 0.75
@@ -2310,9 +2311,13 @@ enum AutoStabilizationEstimator {
         let hasLeftSupport = surroundingIndices.contains { frames.indices.contains($0) && frames[$0].time < centerTime }
         let hasRightSupport = surroundingIndices.contains { frames.indices.contains($0) && frames[$0].time > centerTime }
         let supportQuality: Float = (hasLeftSupport && hasRightSupport) ? 1.0 : 0.65
+        let surroundingNoiseFloor = min(
+            surroundingNoise * footstepSurroundingNoiseMultiplier,
+            fullImpulseScale * footstepSurroundingNoiseFloorCapScale
+        )
         let noiseFloor = max(
             fullImpulseScale * footstepNoiseFloorScale,
-            surroundingNoise * footstepSurroundingNoiseMultiplier
+            surroundingNoiseFloor
         )
         let impulseQuality = confidenceRamp(
             impulse,
