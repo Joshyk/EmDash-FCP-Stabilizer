@@ -202,7 +202,7 @@ changes and reload validated candidates on demand.
 
 `Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`,
 live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `SHRP`, `RES`, and
-search-radius `HIT` bars. Labels use raw English control/diagnostic abbreviations;
+search-radius `HIT`, `WLK`, and compact runtime-version bars. Labels use raw English control/diagnostic abbreviations;
 do not translate them in the preview.
 
 The overlay bars are normalized magnitudes or quality signals, not signed directions:
@@ -225,12 +225,14 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `SHRP`: frame sharpness/clarity quality; higher means less blur.
 - `RES`: residual quality; higher means lower block-matching residual/error.
 - `HIT`: search-radius headroom quality; higher means fewer searches hit the radius edge.
+- `WLK`: count-aware walking-band tracking quality used by FJIT, SWOB, and BOB.
 
 `TRK`, `SHRP`, `RES`, and `HIT` are all aligned as quality signals: high is good, low is bad.
 
 `Host Analysis Status` also reports:
 
 - The current FxPlug runtime version.
+- `track q` and `walk q`.
 - `footstep q` and effective Footstep Jitter X/Y/R strength.
 - `stride q` and effective Stride Wobble X/Y/R strength.
 - `bob q`.

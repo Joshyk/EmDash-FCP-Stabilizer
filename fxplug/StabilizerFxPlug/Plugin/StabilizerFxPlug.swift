@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.10"
+private let stabilizerFxPlugVersion = "0.11"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -644,7 +644,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
+            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
             frameCount,
             stabilizerFxPlugVersion,
             autoTransform.warpConfidence,
@@ -668,6 +668,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.temporalSmoothingPixelDelta.y,
             autoTransform.temporalSmoothingRotationDelta,
             autoTransform.trackingConfidence,
+            autoTransform.walkingTrackingConfidence,
             autoTransform.motionConfidence,
             autoTransform.blurAmount,
             autoTransform.residual,
@@ -842,7 +843,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let diagnostic5 = vector_float4(
             min(1.0, autoTransform.turnConfidence),
             farFieldWarpActivity,
-            0.0,
+            min(1.0, autoTransform.walkingTrackingConfidence),
             0.0
         )
 

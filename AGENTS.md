@@ -84,8 +84,9 @@ visible while tuning walking footage. Debug Overlay correction rows should keep 
 components in order before turn correction: `FJIT`, `SWOB`, `BOB`, `WARP`, then `TURN`;
 confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `SHRP`,
 `RES`, and `HIT` should all be quality bars where higher means better tracking evidence
-and lower means weaker evidence. Debug Overlay should also expose a compact active runtime
-version row so stale saved Inspector strings do not hide which binary is rendering.
+and lower means weaker evidence. `WLK` should show the walking-band tracking gate used by
+Footstep Jitter, Stride Wobble, and Walking Bob. Debug Overlay should also expose a compact
+active runtime version row so stale saved Inspector strings do not hide which binary is rendering.
 
 ## Playback And Render
 

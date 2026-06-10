@@ -150,13 +150,13 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   compact runtime-version row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime-version bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime-version bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When
   enabled, `Host Analysis Status` also shows the current FxPlug version, the raw center-frame transform, the
-  smoothed transform delta, tracking/motion confidence, blur, residual, the raw `foot q`,
+  smoothed transform delta, strict tracking, walking-band tracking, motion confidence, blur, residual, the raw `foot q`,
   the effective Footstep Jitter X/Y/R correction strength, `stride q`, the effective Stride
   Wobble X/Y/R correction strength, `turn q`, applied `warp q`, shear, yaw/pitch proxy, perspective,
   edge-hit counts, the X turn and stride components plus Y footstep, stride, and walking-bob

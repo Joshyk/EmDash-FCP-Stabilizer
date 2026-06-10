@@ -35,6 +35,7 @@ struct StabilizerAutoTransform {
     var perspective: vector_float2
     var blurAmount: Float
     var trackingConfidence: Float
+    var walkingTrackingConfidence: Float
     var motionConfidence: Float
     var residual: Float
     var footstepImpulse: vector_float3
@@ -70,6 +71,7 @@ struct StabilizerAutoTransform {
         perspective: vector_float2(0.0, 0.0),
         blurAmount: 0.0,
         trackingConfidence: 0.0,
+        walkingTrackingConfidence: 0.0,
         motionConfidence: 0.0,
         residual: 0.0,
         footstepImpulse: vector_float3(0.0, 0.0, 0.0),
@@ -830,6 +832,7 @@ enum AutoStabilizationEstimator {
             perspective: perspective,
             blurAmount: blurAmount,
             trackingConfidence: trackingConfidence,
+            walkingTrackingConfidence: walkingTrackingConfidence,
             motionConfidence: motionConfidence,
             residual: centerResidual,
             footstepImpulse: footstepImpulse,
@@ -898,6 +901,7 @@ enum AutoStabilizationEstimator {
         smoothedTransform.microConfidence = rawCenterTransform.microConfidence
         smoothedTransform.turnConfidence = rawCenterTransform.turnConfidence
         smoothedTransform.trackingConfidence = rawCenterTransform.trackingConfidence
+        smoothedTransform.walkingTrackingConfidence = rawCenterTransform.walkingTrackingConfidence
         smoothedTransform.motionConfidence = rawCenterTransform.motionConfidence
         smoothedTransform.residual = rawCenterTransform.residual
         smoothedTransform.footstepImpulse = rawCenterTransform.footstepImpulse
@@ -982,6 +986,7 @@ enum AutoStabilizationEstimator {
             perspective: vectorAverage(\.perspective),
             blurAmount: floatAverage(\.blurAmount),
             trackingConfidence: floatAverage(\.trackingConfidence),
+            walkingTrackingConfidence: floatAverage(\.walkingTrackingConfidence),
             motionConfidence: floatAverage(\.motionConfidence),
             residual: floatAverage(\.residual),
             footstepImpulse: vector3Average(\.footstepImpulse),

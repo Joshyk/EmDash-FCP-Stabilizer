@@ -214,10 +214,10 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   to confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
-  `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), and compact
+  `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
   runtime-version diagnostics so Final Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
-  correction values into `Host Analysis Status`, including tracking/motion quality, turn
+  correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,
   stride, and walking-bob components.
   The labels mean:
@@ -235,6 +235,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `B Q` Walking Bob confidence,
   `W Q` applied Far-field Warp confidence after tracking and search-radius safety gates,
   `T Q` Turn Smoothing confidence,
+  `WLK` walking-band tracking gate for FJIT/SWOB/BOB,
   `TRK` current frame tracking quality,
   `SHRP` frame sharpness/clarity quality where higher means less blur,
   `RES` residual quality where higher means lower block-matching error, and
