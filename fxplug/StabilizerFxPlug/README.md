@@ -145,17 +145,18 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   averaged back into the smooth path. Moderate landing impulses now reach useful confidence
   a little sooner, while zero evidence and noisy unsupported frames still produce zero
   correction.
-- `Footstep Jitter Rotation Strength`: direct amount for roll footstep correction. Values
-  above `1.0` can compensate when frame-local confidence makes the detected impulse visibly
-  under-corrected, but output remains clamped at full detected-impulse removal.
+- `Footstep Jitter Rotation Strength`: direct amount for roll footstep correction. It
+  defaults to `0.2` to protect the horizon in walking footage. Values above `1.0` can
+  compensate when frame-local confidence makes the detected impulse visibly under-corrected,
+  but output remains clamped at full detected-impulse removal.
 - `Stride Wobble X/Y/Rotation Strength`: direct amount for medium-period walking wobble. The
   render-time window is fixed at `2.0` seconds; there is no user-facing SWOB window. It is
   measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
   worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale,
-  and the Y default is `0.70` so step follow-through is not pushed entirely into the longer
-  Walking Bob pass. FJIT, SWOB, and BOB use a count-aware walking-band tracking gate; WARP
-  and TURN keep the stricter tracking gate.
+  the Y default is `0.70`, and the rotation default is `0.2` to protect the horizon while
+  step follow-through is kept out of the longer Walking Bob pass. FJIT, SWOB, and BOB use a
+  count-aware walking-band tracking gate; WARP and TURN keep the stricter tracking gate.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.

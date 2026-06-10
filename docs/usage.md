@@ -75,7 +75,8 @@ fallbacks.
   frame-local score makes the detected impulse visibly under-corrected, but render output
   still clamps at full detected-impulse removal to avoid inverse shake.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
-  default is `1.0` and the maximum is `4.0`. Values above `1.0` can compensate when
+  default is `0.2` and the maximum is `4.0`. The default is intentionally conservative so
+  walking footage does not lose a stable horizon. Values above `1.0` can compensate when
   frame-local confidence makes the detected impulse visibly under-corrected, but render
   output still clamps at full detected-impulse removal to avoid inverse shake.
 - `Stride Wobble X Strength`: direct amount for medium-period horizontal walking wobble that
@@ -89,7 +90,8 @@ fallbacks.
   of the single worst residual in the window, and its confidence reaches full response
   earlier for detected medium bands than for broad pan/turn bands.
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
-  is `0.75` and the maximum is `4.0`. The correction is measured from the
+  is `0.2` and the maximum is `4.0`. The conservative default protects the horizon in
+  walking footage. The correction is measured from the
   footstep-cleaned baseline and clamped at full detected-band removal during render, so high
   values do not add inverse shake. It is not measured from the raw or jerk-limited broad path,
   so Footstep Jitter shock is not removed a second time.

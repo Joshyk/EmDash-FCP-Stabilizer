@@ -173,7 +173,9 @@ walking motion does not hide a real center-frame landing impulse.
 Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
 `4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
 weak, but applied correction must clamp at full detected-impulse removal during render so
-high slider values do not add inverse shake.
+high slider values do not add inverse shake. Footstep Jitter Rotation Strength should
+default to `0.2` so walking footage keeps a stable horizon unless the user explicitly asks
+for stronger roll correction.
 Medium-period walking shake that is longer than Footstep Jitter but shorter than Walking
 Bob should be handled by the render-time `Stride Wobble` stage. Keep its time window fixed
 inside the implementation at `2.0` seconds, expose only X/Y/Rotation strength controls with
@@ -183,7 +185,8 @@ stride-smoothed path so the same band is not removed twice. Stride Wobble residu
 should use robust window evidence instead of the single worst frame in the window, so one
 bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
 full confidence sooner than the broad UI scale, and the default Y strength should remain high
-enough to remove step follow-through before the longer Walking Bob pass.
+enough to remove step follow-through before the longer Walking Bob pass. Stride Wobble
+Rotation Strength should default to `0.2` for the same horizon-preserving reason.
 Footstep Jitter, Stride Wobble, and Walking Bob may use a count-aware walking-band tracking
 gate that eases block coverage only when enough motion blocks were accepted. Far-field Warp
 and Turn Smoothing should keep the stricter tracking gate so weak evidence does not create

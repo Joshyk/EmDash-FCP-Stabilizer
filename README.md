@@ -81,6 +81,7 @@ output, producing an identity transform.
 roll impulses. They run up to `4.0`; values above `1.0` can compensate when
 tracking confidence makes the correction too weak. The applied correction still
 clamps at full detected-impulse removal so it does not add inverse shake. The
+rotation default is `0.2` to keep walking footage from losing a stable horizon. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
 region and predicts from outer samples up to `1.0` second away. Confidence is
 based on current tracking evidence, local baseline support, and the center
@@ -102,6 +103,7 @@ instead of letting a single bad frame suppress the whole band. Medium stride
 bands reach full confidence earlier than the broad UI scale so real walking
 follow-through is not left entirely to the longer Walking Bob pass; the Y default
 is `0.70`, high enough to remove medium vertical step wobble before the broader BOB pass.
+The rotation default is `0.2` to protect the horizon.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
