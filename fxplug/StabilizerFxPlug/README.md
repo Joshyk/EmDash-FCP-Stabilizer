@@ -215,7 +215,11 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
-  runtime version when Final Cut Pro accepts status parameter updates.
+  runtime version when Final Cut Pro accepts status parameter updates. During a real analysis
+  run, the status advances as `Analyzing Host Frames (N)`. If Final Cut Pro restores an
+  in-progress analysis state while a compatible saved cache is already present, the plug-in
+  prefers the saved cache and keeps the shared Ready/cache status visible instead of letting
+  transient analyzer callback status mask it.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
   version, active correction bands (`Footstep jitter <= 1s`, `Stride wobble <= 2s`,
   `Walking Bob <= 2.5s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
@@ -226,7 +230,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime-version diagnostics so Final Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
+  runtime-version diagnostics so Final Cut Pro runtime analysis can be checked. The overlay scales
+  with the current render output so original/proxy playback switches do not make the bars balloon
+  over the viewer. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,

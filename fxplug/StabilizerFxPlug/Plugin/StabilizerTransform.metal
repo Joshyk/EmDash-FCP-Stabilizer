@@ -227,11 +227,11 @@ static uint debugLabelChar(uint row, uint index) {
     }
 }
 
-static bool debugLabelCoverage(float panelX, float rowY, uint row) {
-    constexpr float textScale = 2.0;
+static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlayScale) {
+    float textScale = max(1.0, 2.0 * overlayScale);
     constexpr float glyphWidth = 3.0;
     constexpr float glyphHeight = 5.0;
-    constexpr float glyphAdvance = 4.0 * textScale;
+    float glyphAdvance = 4.0 * textScale;
 
     float textX = panelX - 6.0;
     float textY = rowY - 2.0;
@@ -290,14 +290,19 @@ fragment float4 fragmentShader(
     if (transform->debugOverlay > 0.5) {
         outputColor.a = 1.0;
         float2 pixel = uv * transform->outputSize;
-        float panelX = pixel.x - 16.0;
-        float panelY = pixel.y - 16.0;
-        constexpr float labelWidth = 44.0;
-        constexpr float labelGap = 6.0;
-        constexpr float barWidth = 180.0;
-        constexpr float rowHeight = 13.0;
-        constexpr float panelWidth = labelWidth + labelGap + barWidth;
-        constexpr float panelHeight = 20.0 * rowHeight;
+        float overlayScale = clamp(
+            min(transform->outputSize.x / 3840.0, transform->outputSize.y / 2160.0),
+            0.35,
+            1.0
+        );
+        float panelX = pixel.x - (16.0 * overlayScale);
+        float panelY = pixel.y - (16.0 * overlayScale);
+        float labelWidth = 44.0 * overlayScale;
+        float labelGap = 6.0 * overlayScale;
+        float barWidth = 180.0 * overlayScale;
+        float rowHeight = 13.0 * overlayScale;
+        float panelWidth = labelWidth + labelGap + barWidth;
+        float panelHeight = 20.0 * rowHeight;
         if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
@@ -365,7 +370,10 @@ fragment float4 fragmentShader(
                 color = float3(0.94, 0.96, 0.98);
             }
             float barX = panelX - labelWidth - labelGap;
-            bool inBar = barX >= 0.0 && barX <= barWidth && rowY >= 2.0 && rowY <= 11.0;
+            bool inBar = barX >= 0.0
+                && barX <= barWidth
+                && rowY >= (2.0 * overlayScale)
+                && rowY <= (11.0 * overlayScale);
             float activeWidth = barWidth * fill;
             float3 background = float3(0.02, 0.02, 0.02);
             float3 overlay = background;
@@ -374,7 +382,7 @@ fragment float4 fragmentShader(
                 overlay = barX <= activeWidth ? color : background;
                 alpha = 0.78;
             }
-            if (debugLabelCoverage(panelX, rowY, row)) {
+            if (debugLabelCoverage(panelX, rowY, row, overlayScale)) {
                 overlay = float3(0.94, 0.96, 0.98);
                 alpha = 0.92;
             }

@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.3.3"
+private let stabilizerFxPlugVersion = "0.3.6"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -163,6 +163,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private var lastPublishedStatus = ""
     private var lastPublishedInfo = ""
     private var lastPublishedRenderRevision: Double?
+    private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalysisStore: StabilizerHostAnalysisStore?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
@@ -807,6 +808,33 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
     }
 
+    private func publishAnalysisCallbackStatus(_ analysisStore: StabilizerHostAnalysisStore) {
+        if hostAnalysisStore.hasCompletedAnalysis {
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+        } else {
+            publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(analysisStore.renderInvalidationToken, force: true)
+        }
+    }
+
+    private func publishActiveAnalysisProgressIfNeeded(_ analysisStore: StabilizerHostAnalysisStore) {
+        let frameCount = analysisStore.frameCount
+        statusLock.lock()
+        let shouldPublish = frameCount == 1
+            || frameCount - lastPublishedActiveAnalysisFrameCount >= 30
+        if shouldPublish {
+            lastPublishedActiveAnalysisFrameCount = frameCount
+        }
+        statusLock.unlock()
+        guard shouldPublish else {
+            return
+        }
+        publishAnalysisCallbackStatus(analysisStore)
+    }
+
     private func setActiveAnalysisStore(_ store: StabilizerHostAnalysisStore?) {
         analysisSessionLock.lock()
         activeAnalysisStore = store
@@ -1115,6 +1143,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             frameDuration: frameDuration,
             requestedSampleScalePercent: requestedSampleScalePercent(at: analysisRange.start)
         )
+        lastPublishedActiveAnalysisFrameCount = 0
         setActiveAnalysisStore(analysisStore)
         NSLog(
             "StabilizerFxPlug: setup Host Analysis range %.3f+%.3f seconds, frameDuration %.6f seconds.",
@@ -1122,7 +1151,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             CMTimeGetSeconds(analysisRange.duration),
             CMTimeGetSeconds(frameDuration)
         )
-        publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
+        _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded()
+        publishAnalysisCallbackStatus(analysisStore)
     }
 
     func analyzeFrame(_ frame: FxImageTile!, at frameTime: CMTime) throws {
@@ -1145,8 +1175,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: frame) {
             analysisStore.rejectProxyAnalysis(reason: rejectionReason)
-            publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
-            publishStabilizerInfo(force: true)
+            publishAnalysisCallbackStatus(analysisStore)
             abandonActiveAnalysisAfterFailure()
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
@@ -1157,8 +1186,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         guard let frameInfo = StabilizerOriginalMediaPolicy.frameInfo(for: frame) else {
             let reason = "Host Analysis could not read the original clip size for Sample Size."
             analysisStore.rejectProxyAnalysis(reason: reason)
-            publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
-            publishStabilizerInfo(force: true)
+            publishAnalysisCallbackStatus(analysisStore)
             abandonActiveAnalysisAfterFailure()
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
@@ -1183,6 +1211,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     analysisFrame.sampleHeight
                 )
             }
+            publishActiveAnalysisProgressIfNeeded(analysisStore)
         } catch {
             abandonActiveAnalysisAfterFailure()
             throw error
@@ -1203,8 +1232,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         do {
             try analysisStore.finish()
         } catch {
-            publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
-            publishStabilizerInfo(force: true)
+            publishAnalysisCallbackStatus(analysisStore)
             abandonActiveAnalysisAfterFailure()
             throw error
         }
@@ -1834,7 +1862,6 @@ private final class StabilizerHostAnalysisStore {
             && status != .cacheIncomplete
         let shouldReload = (needsInitialLoad || cacheChanged)
             && (cacheChanged || persistentCacheCandidates.isEmpty)
-            && status != .analyzing
             && status != .cacheRejected
         lock.unlock()
         return shouldReload

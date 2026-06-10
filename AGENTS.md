@@ -36,6 +36,10 @@ when one exists; only start a new host analysis when no saved cache can be loade
 not delete saved cache files. If the loaded cache is rejected for the current clip, the next
 start should skip that rejected cache and request a new analysis. `Clear Host Analysis
 Cache` is the explicit cache-clear path and should show `Cache Cleared`.
+If Final Cut Pro restores or reports an in-progress Host Analysis while a compatible saved
+cache is already present, the render/cache consumer should still reload and prefer the saved
+cache; transient analyzer callback status must not mask the shared ready cache in the
+Inspector.
 Persistent cache compatibility is based on cache schema and current source-frame
 validation, not the visible FxPlug runtime version. Render-only version bumps should reuse
 saved Host Analysis cache candidates. The loader should also consider current and legacy
@@ -94,6 +98,9 @@ confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `SHRP`
 and lower means weaker evidence. `WLK` should show the walking-band tracking gate used by
 Footstep Jitter, Stride Wobble, and Walking Bob. Debug Overlay should also expose a compact
 active runtime version row so stale saved Inspector strings do not hide which binary is rendering.
+The overlay panel must keep a stable viewer footprint when Final Cut Pro switches between
+original and proxy playback; proxy output size must not make the bars balloon or overlap the
+preview.
 
 ## Playback And Render
 
@@ -132,8 +139,9 @@ Queue drain should not depend on the FxPlug XPC main queue pumping while Final C
 busy. Do not re-run full block matching across
 the analyzed frame set on every render frame. Keep `Host Analysis
 Status` visible in the Inspector, update it to `Ready (... frames)` after completed
-analysis, and include the active FxPlug version there when Final Cut Pro accepts status
-parameter updates. Debug Overlay should remain the live render-runtime indicator because
+analysis, update `Analyzing Host Frames (N)` during real frame analysis, and include the
+active FxPlug version there when Final Cut Pro accepts status parameter updates. Debug
+Overlay should remain the live render-runtime indicator because
 older saved Inspector strings can remain stale on existing timeline instances.
 Render playback must tolerate trimmed clips whose render time differs from Host
 Analysis frame time by matching the current render frame fingerprint back to the analyzed

@@ -198,6 +198,10 @@ fallbacks.
   updates. `Queued Host Analysis` means this clip is waiting for the plug-in's serial Host
   Analysis queue to start it after the currently active host run finishes; it should advance
   automatically after the active host run finishes unless Final Cut Pro still reports busy.
+  During a real analysis run, the status advances as `Analyzing Host Frames (N)`.
+  If Final Cut Pro restores an in-progress analysis state while a compatible saved cache is
+  already present, the plug-in prefers the saved cache and keeps the shared Ready/cache
+  status visible instead of letting transient analyzer callback status mask it.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
   `Walking Bob`, `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame
@@ -208,7 +212,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime-version bars while
-  checking runtime behavior.
+  checking runtime behavior. The overlay scales with the current render output so original/proxy
+  playback switches do not make the bars balloon over the viewer.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When
