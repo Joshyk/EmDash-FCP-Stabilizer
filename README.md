@@ -100,7 +100,7 @@ likely to disappear while low-confidence warp evidence is still suppressed
 instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V05` row for the active
+bands and tracking state. It also includes a compact `V06` row for the active
 render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 
@@ -179,7 +179,9 @@ Analysis Cache` is the explicit delete path and shows `Cache Cleared`.
 
 Unsupported schema candidates show `Cache Unsupported - Run Host Analysis`
 instead of being silently ignored or deleted. This keeps stale caches available
-for older builds while the current effect asks for a new analysis.
+for older builds while the current effect asks for a new analysis. Supported-schema
+caches with incomplete prepared path arrays show `Cache Incomplete - Run Host Analysis`
+so older incomplete analysis is not silently ignored.
 
 The active runtime uses a process-wide shared Host Analysis store because Final
 Cut Pro may call setup, frame analysis, cleanup, preview, and render through

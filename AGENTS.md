@@ -42,7 +42,9 @@ saved Host Analysis cache candidates. The loader should also consider current an
 Stabilizer container cache locations so bundle-id migrations do not force a new analysis
 when the cache schema is still supported. Unsupported schema candidates should surface
 `Cache Unsupported - Run Host Analysis` in the Inspector, remain on disk, and require an
-explicit new Host Analysis run instead of being silently ignored or deleted.
+explicit new Host Analysis run instead of being silently ignored or deleted. Supported-schema
+caches with incomplete prepared path arrays should surface `Cache Incomplete - Run Host
+Analysis`, remain on disk, and require a new Host Analysis run.
 
 Host Analysis should read user-controlled `Sample Size` once when analysis starts. The
 Inspector default should be `10%` so quick Debug Overlay tuning can start without a full

@@ -134,20 +134,20 @@ private struct Analysis {
 
         func requireFloatArray(_ value: [Float]?, _ name: String) throws -> [Float] {
             guard let value else {
-                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.5 or newer")
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.6 or newer")
             }
             guard value.count == frames.count else {
-                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.5 or newer")
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.6 or newer")
             }
             return value
         }
 
         func requireIntArray(_ value: [Int32]?, _ name: String) throws -> [Int32] {
             guard let value else {
-                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.5 or newer")
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.6 or newer")
             }
             guard value.count == frames.count else {
-                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.5 or newer")
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.6 or newer")
             }
             return value
         }

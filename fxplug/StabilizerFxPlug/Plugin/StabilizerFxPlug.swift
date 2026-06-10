@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.5"
+private let stabilizerFxPlugVersion = "0.6"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1055,6 +1055,7 @@ private enum HostAnalysisStatus {
     case ready
     case cacheRejected
     case cacheUnsupported
+    case cacheIncomplete
     case cacheCleared
     case proxyRejected
 }
@@ -1213,6 +1214,8 @@ private final class StabilizerHostAnalysisStore {
             return "Cache Rejected - Run Host Analysis"
         case .cacheUnsupported:
             return "Cache Unsupported - Run Host Analysis"
+        case .cacheIncomplete:
+            return "Cache Incomplete - Run Host Analysis"
         case .cacheCleared:
             return "Cache Cleared"
         case .proxyRejected:
@@ -1519,11 +1522,15 @@ private final class StabilizerHostAnalysisStore {
             markCurrentPersistentCacheGenerationObserved()
         }
         var candidateURLs = filteredPersistentCacheCandidateURLs()
-        var unsupportedCacheSummaries: [String] = []
+        var unusableCacheSummaries: [(status: HostAnalysisStatus, summary: String)] = []
         while !candidateURLs.isEmpty {
             let activeURL = candidateURLs.removeFirst()
             if let unsupportedSummary = Self.unsupportedPersistentCacheSummary(at: activeURL) {
-                unsupportedCacheSummaries.append(unsupportedSummary)
+                unusableCacheSummaries.append((.cacheUnsupported, unsupportedSummary))
+                continue
+            }
+            if let incompleteSummary = Self.incompletePersistentCacheSummary(at: activeURL) {
+                unusableCacheSummaries.append((.cacheIncomplete, incompleteSummary))
                 continue
             }
             guard let activeCandidate = Self.loadPersistentCache(at: activeURL) else {
@@ -1544,11 +1551,11 @@ private final class StabilizerHostAnalysisStore {
             NSLog("StabilizerFxPlug: loaded persisted Host Analysis cache \(activeCandidate.fileName) with \(activeCandidate.frames.count) frames; \(candidateURLs.count) lazy alternate cache(s) available.")
             return true
         }
-        if let unsupportedCacheSummary = unsupportedCacheSummaries.first {
+        if let unusableCacheSummary = unusableCacheSummaries.first {
             lock.lock()
             if preparedAnalysis == nil && status != .analyzing {
-                status = .cacheUnsupported
-                analysisInfoText = unsupportedCacheSummary
+                status = unusableCacheSummary.status
+                analysisInfoText = unusableCacheSummary.summary
                 bumpRevisionLocked()
             }
             lock.unlock()
@@ -1562,7 +1569,9 @@ private final class StabilizerHostAnalysisStore {
         lock.lock()
         let cacheChanged = observedPersistentCacheSignature != signature
             || observedPersistentCacheGeneration < generation
-        let needsInitialLoad = preparedAnalysis == nil && status != .cacheUnsupported
+        let needsInitialLoad = preparedAnalysis == nil
+            && status != .cacheUnsupported
+            && status != .cacheIncomplete
         let shouldReload = (needsInitialLoad || cacheChanged)
             && persistentCacheCandidates.isEmpty
             && status != .analyzing
@@ -2249,6 +2258,13 @@ private final class StabilizerHostAnalysisStore {
     }
 
     private static func preparedAnalysis(from cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) throws -> StabilizerPreparedAnalysis {
+        if let mismatchReason = preparedPathArrayMismatchReason(for: cache, frameCount: frames.count) {
+            throw NSError(
+                domain: "com.justadev.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "persisted Host Analysis cache prepared paths are incomplete: \(mismatchReason)"]
+            )
+        }
         let floatArrays = [
             cache.residuals,
             cache.rollMotion,
@@ -2329,6 +2345,51 @@ private final class StabilizerHostAnalysisStore {
         )
     }
 
+    private static func preparedPathArrayMismatchReason(for cache: PersistedHostAnalysisCache, frameCount: Int) -> String? {
+        let floatArrays: [(String, [Float]?)] = [
+            ("residuals", cache.residuals),
+            ("rollMotion", cache.rollMotion),
+            ("pathX", cache.pathX),
+            ("pathY", cache.pathY),
+            ("pathRoll", cache.pathRoll),
+            ("footstepPathX", cache.footstepPathX),
+            ("footstepPathY", cache.footstepPathY),
+            ("footstepPathRoll", cache.footstepPathRoll),
+            ("pathYaw", cache.pathYaw),
+            ("pathPitch", cache.pathPitch),
+            ("pathShearX", cache.pathShearX),
+            ("pathShearY", cache.pathShearY),
+            ("pathPerspectiveX", cache.pathPerspectiveX),
+            ("pathPerspectiveY", cache.pathPerspectiveY),
+            ("analysisConfidence", cache.analysisConfidence),
+            ("warpConfidence", cache.warpConfidence),
+            ("blurAmounts", cache.blurAmounts)
+        ]
+        let countArrays: [(String, [Int32]?)] = [
+            ("acceptedBlockCounts", cache.acceptedBlockCounts),
+            ("totalBlockCounts", cache.totalBlockCounts),
+            ("searchRadiusHitCounts", cache.searchRadiusHitCounts),
+            ("searchRadiusTotalCounts", cache.searchRadiusTotalCounts)
+        ]
+        for (name, values) in floatArrays {
+            guard let values else {
+                return "\(name) is missing"
+            }
+            if values.count != frameCount {
+                return "\(name) has \(values.count) values but frames has \(frameCount)"
+            }
+        }
+        for (name, values) in countArrays {
+            guard let values else {
+                return "\(name) is missing"
+            }
+            if values.count != frameCount {
+                return "\(name) has \(values.count) values but frames has \(frameCount)"
+            }
+        }
+        return nil
+    }
+
     private static func persistentCacheCandidateURLs() -> [URL] {
         var candidateURLs: [URL] = []
         var seenPaths = Set<String>()
@@ -2397,6 +2458,30 @@ private final class StabilizerHostAnalysisStore {
             }
             let expectedSchema = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ",")
             return "Cache Unsupported (schema \(header.schemaVersion), need \(expectedSchema)) | \(url.lastPathComponent)"
+        } catch {
+            return nil
+        }
+    }
+
+    private static func incompletePersistentCacheSummary(at url: URL) -> String? {
+        do {
+            if let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+               fileSize > maxPersistentCacheReadBytes {
+                return nil
+            }
+            let data = try Data(contentsOf: url)
+            let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
+            guard supportedCacheSchemaVersions.contains(cache.schemaVersion) else {
+                return nil
+            }
+            let frameCount = cache.frames.count
+            guard frameCount >= 3 else {
+                return "Cache Incomplete (only \(frameCount) frames) | \(url.lastPathComponent)"
+            }
+            if let mismatchReason = preparedPathArrayMismatchReason(for: cache, frameCount: frameCount) {
+                return "Cache Incomplete (\(mismatchReason)) | \(url.lastPathComponent)"
+            }
+            return nil
         } catch {
             return nil
         }

@@ -6,7 +6,8 @@
 2. Restart Final Cut Pro if it was already open.
 3. Apply `Stabilizer Transform` from the `Emdash Studios` effects group.
 4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis`,
-   `Cache Rejected - Run Host Analysis`, or `Cache Unsupported - Run Host Analysis`.
+   `Cache Rejected - Run Host Analysis`, `Cache Unsupported - Run Host Analysis`, or
+   `Cache Incomplete - Run Host Analysis`.
 5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
 `Start Host Analysis` requests the active effect clip from Final Cut Pro. If Final Cut Pro
@@ -112,8 +113,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   rejected cache and requests a new analysis. Rejected cache file names are remembered in
   the active FxPlug runtime so the same invalid candidate is not immediately reloaded again.
   If a saved cache uses an unsupported schema, the Inspector shows
-  `Cache Unsupported - Run Host Analysis`; the file remains on disk and the button starts a
-  new Host Analysis run for the current build.
+  `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has incomplete prepared
+  paths, the Inspector shows `Cache Incomplete - Run Host Analysis`. In both cases the file
+  remains on disk and the button starts a new Host Analysis run for the current build.
 - Persistent analysis reuse is based on cache schema and current source-frame validation,
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
@@ -139,10 +141,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
-  compact `V05` row in `Debug Overlay` when confirming the active render runtime.
+  compact `V06` row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V05` bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V06` bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
@@ -287,7 +289,8 @@ validation pixels, the effect only accepts the nearest cached frame when it is w
 tight render-time tolerance and logs that path explicitly. Rejected cache candidates are
 visible in logs/status and left on disk for other clips. Unsupported schema candidates are
 also left on disk, but the Inspector shows `Cache Unsupported - Run Host Analysis` so a
-current-build analysis is explicitly required.
+current-build analysis is explicitly required. Supported-schema caches with incomplete
+prepared path arrays show `Cache Incomplete - Run Host Analysis` for the same reason.
 
 New cache files store prepared motion paths, per-frame timestamps, blur values,
 search-radius edge-hit counts, and fingerprints instead of every frame's full luma sample.

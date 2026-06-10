@@ -192,8 +192,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   analysis when no saved cache can be loaded. Saved cache files remain available for later
   reuse. If the previous cache was rejected for the current clip, the next start skips that
   rejected cache and requests a new analysis. If a saved cache uses an unsupported schema,
-  the Inspector shows `Cache Unsupported - Run Host Analysis`; the file remains on disk and
-  the next start requests new analysis for the current build.
+  the Inspector shows `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has
+  incomplete prepared paths, it shows `Cache Incomplete - Run Host Analysis`. The file remains
+  on disk and the next start requests new analysis for the current build.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
@@ -203,12 +204,12 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Walking Bob <= 2.5s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available. Older saved timeline instances may keep
-  stale saved Inspector strings, so use the compact `V05` row in `Debug Overlay` to
+  stale saved Inspector strings, so use the compact `V06` row in `Debug Overlay` to
   confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), and compact runtime
-  `V05` diagnostics so Final
+  `V06` diagnostics so Final
   Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn
