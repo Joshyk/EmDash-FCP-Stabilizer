@@ -62,7 +62,9 @@ completed prepared path from being saved.
 The feedback CLI under `fxplug/StabilizerFxPlug/scripts/` reads saved Host Analysis cache
 files for diagnostics only. It must not become a second stabilization runtime or silently
 repair malformed cache data; mismatched frame/path arrays should fail visibly and require a
-new Host Analysis run. Feedback band estimates should mirror the render path's order:
+new Host Analysis run. Its cache inventory mode should list saved cache readiness without
+repairing, deleting, or promoting cache files. Feedback band estimates should mirror the
+render path's order:
 measure Footstep Jitter against the outer-frame baseline first, then compute Stride Wobble,
 Walking Bob, and Turn diagnostics from the footstep-cleaned path.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,

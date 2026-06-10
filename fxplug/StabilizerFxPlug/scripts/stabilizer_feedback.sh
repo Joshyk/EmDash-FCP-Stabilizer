@@ -9,7 +9,13 @@ BINARY="${CACHE_ROOT}/stabilizer-feedback-${SOURCE_HASH}"
 
 mkdir -p "$CACHE_ROOT"
 if [ ! -x "$BINARY" ]; then
-	xcrun swiftc "$SOURCE" -o "$BINARY"
+	TMP_BINARY="${BINARY}.$$"
+	rm -f "$TMP_BINARY"
+	trap 'rm -f "$TMP_BINARY"' EXIT HUP INT TERM
+	xcrun swiftc "$SOURCE" -o "$TMP_BINARY"
+	chmod +x "$TMP_BINARY"
+	mv "$TMP_BINARY" "$BINARY"
+	trap - EXIT HUP INT TERM
 fi
 
 exec "$BINARY" "$@"

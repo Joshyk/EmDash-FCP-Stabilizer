@@ -255,6 +255,12 @@ default, or another cache with `--cache /path/to/host-analysis-v2.json`. Use
 `--json` for machine-readable output and `--output-size 1920x1080` when you want
 pixel estimates scaled to a target preview size.
 
+Use `--list-caches` to list the latest shared cache and range-specific cache
+files under `~/Library/Application Support/StabilizerFxPlug`. It reports each
+file as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing
+or deleting anything; add `--cache-root /path/to/root` to inspect another cache
+root explicitly.
+
 The report ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
 bands using the saved prepared paths, tracking confidence, residuals, blur,
 block coverage, and search-radius edge-hit counts. The band split mirrors the

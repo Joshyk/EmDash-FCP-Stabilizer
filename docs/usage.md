@@ -175,6 +175,18 @@ for structured output, `--window 0.5` to inspect the strongest frame near the
 note, and `--output-size 1920x1080` to scale translation estimates to a preview
 size.
 
+Use `--list-caches` to inspect saved cache readiness before diagnosing a note:
+
+```sh
+fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh --list-caches
+```
+
+The listing checks the latest shared cache and range-specific cache files under
+`~/Library/Application Support/StabilizerFxPlug`, reporting `READY`,
+`INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE`. It does not repair, delete, or
+promote cache files. Use `--cache-root /path/to/root` only when you explicitly
+want to inspect a different cache root.
+
 The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
 paths and ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
 bands. It follows the same band order as render: `FJIT` is measured against the

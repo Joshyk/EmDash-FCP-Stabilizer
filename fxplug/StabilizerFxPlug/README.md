@@ -245,6 +245,12 @@ Host Analysis cache without launching Final Cut Pro:
 scripts/stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
 ```
 
+Run `scripts/stabilizer_feedback.sh --list-caches` to inspect saved cache
+readiness before assessing a note. It lists the latest shared cache and
+range-specific files as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE`
+without repairing or deleting them; `--cache-root /path/to/root` inspects an
+explicit alternate root.
+
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP` bands from the prepared
 motion paths and tracking diagnostics. It uses the same footstep-first band

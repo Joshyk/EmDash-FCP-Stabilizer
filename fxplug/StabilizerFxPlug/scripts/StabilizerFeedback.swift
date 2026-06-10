@@ -7,12 +7,14 @@ private struct FeedbackError: Error, CustomStringConvertible {
 
 private struct Options {
     var cachePath = "~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json"
+    var cacheRoot = "~/Library/Application Support/StabilizerFxPlug"
     var relativeTime: Double?
     var note: String?
     var windowSeconds = 0.25
     var outputSize: (width: Float, height: Float)?
     var json = false
     var limit = 5
+    var listCaches = false
     var strengths = Strengths.defaults
 }
 
@@ -78,6 +80,19 @@ private struct PersistedHostAnalysisFrame: Decodable {
     let fingerprint: String?
 }
 
+private struct CacheInventoryEntry {
+    let path: String
+    let status: String
+    let reason: String
+    let schemaVersion: Int?
+    let frameCount: Int?
+    let rangeStartSeconds: Double?
+    let rangeDurationSeconds: Double?
+    let sampleWidth: Int?
+    let sampleHeight: Int?
+    let modifiedAt: Date?
+}
+
 private struct AnalysisFrame {
     let time: Double
     let blurAmount: Float
@@ -116,7 +131,7 @@ private struct Analysis {
     let searchRadiusTotalCounts: [Int32]
 
     init(cache: PersistedHostAnalysisCache, cachePath: String) throws {
-        guard cache.schemaVersion == 14 else {
+        guard cache.schemaVersion == supportedCacheSchemaVersion else {
             throw FeedbackError(description: "unsupported Host Analysis cache schema \(cache.schemaVersion); run Host Analysis with the current FxPlug before using feedback diagnostics")
         }
         let frames = try cache.frames.map { persisted -> AnalysisFrame in
@@ -236,13 +251,156 @@ private let farFieldWarpTrackingGateStart: Float = 0.34
 private let farFieldWarpTrackingGateFull: Float = 0.52
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
+private let supportedCacheSchemaVersion = 14
 
 private func loadAnalysis(path: String) throws -> Analysis {
-    let expandedPath = NSString(string: path).expandingTildeInPath
+    let expandedPath = expandPath(path)
     let url = URL(fileURLWithPath: expandedPath)
     let data = try Data(contentsOf: url)
     let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
     return try Analysis(cache: cache, cachePath: expandedPath)
+}
+
+private func expandPath(_ path: String) -> String {
+    NSString(string: path).expandingTildeInPath
+}
+
+private func cacheInventory(rootPath: String) -> [CacheInventoryEntry] {
+    let rootURL = URL(fileURLWithPath: expandPath(rootPath), isDirectory: true)
+    let cacheStorageURL = rootURL.appendingPathComponent("caches", isDirectory: true)
+    var urls: [URL] = []
+    var seen = Set<String>()
+
+    func appendURL(_ url: URL) {
+        let path = url.standardizedFileURL.path
+        guard FileManager.default.fileExists(atPath: path), seen.insert(path).inserted else {
+            return
+        }
+        urls.append(URL(fileURLWithPath: path))
+    }
+
+    appendURL(rootURL.appendingPathComponent("host-analysis-v2.json", isDirectory: false))
+    if let cacheURLs = try? FileManager.default.contentsOfDirectory(
+        at: cacheStorageURL,
+        includingPropertiesForKeys: [.contentModificationDateKey],
+        options: [.skipsHiddenFiles]
+    ) {
+        for url in cacheURLs where url.pathExtension == "json" {
+            appendURL(url)
+        }
+    }
+
+    return urls
+        .map(cacheInventoryEntry(at:))
+        .sorted { left, right in
+            (left.modifiedAt ?? .distantPast) > (right.modifiedAt ?? .distantPast)
+        }
+}
+
+private func cacheInventoryEntry(at url: URL) -> CacheInventoryEntry {
+    let path = url.path
+    let modifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+    do {
+        let data = try Data(contentsOf: url)
+        let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
+        let status: String
+        let reason: String
+        if cache.schemaVersion != supportedCacheSchemaVersion {
+            status = "unsupported"
+            reason = "schema \(cache.schemaVersion), need \(supportedCacheSchemaVersion)"
+        } else if cache.frames.count < 3 {
+            status = "incomplete"
+            reason = "only \(cache.frames.count) frames"
+        } else if let issue = preparedCacheIssue(cache) {
+            status = "incomplete"
+            reason = issue
+        } else {
+            status = "ready"
+            reason = "feedback-ready"
+        }
+        return CacheInventoryEntry(
+            path: path,
+            status: status,
+            reason: reason,
+            schemaVersion: cache.schemaVersion,
+            frameCount: cache.frames.count,
+            rangeStartSeconds: cache.rangeStartSeconds,
+            rangeDurationSeconds: cache.rangeDurationSeconds,
+            sampleWidth: cache.sampleWidth,
+            sampleHeight: cache.sampleHeight,
+            modifiedAt: modifiedAt
+        )
+    } catch {
+        return CacheInventoryEntry(
+            path: path,
+            status: "unreadable",
+            reason: error.localizedDescription,
+            schemaVersion: nil,
+            frameCount: nil,
+            rangeStartSeconds: nil,
+            rangeDurationSeconds: nil,
+            sampleWidth: nil,
+            sampleHeight: nil,
+            modifiedAt: modifiedAt
+        )
+    }
+}
+
+private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? {
+    let frames = cache.frames
+    for index in 1..<frames.count where frames[index].time <= frames[index - 1].time {
+        return "frame times are not strictly increasing near frame \(index)"
+    }
+    for (index, frame) in frames.enumerated() {
+        if frame.fingerprint?.isEmpty ?? true {
+            return "frame \(index) is missing fingerprint"
+        }
+    }
+
+    let frameCount = frames.count
+    let floatArrays: [(String, [Float]?)] = [
+        ("residuals", cache.residuals),
+        ("rollMotion", cache.rollMotion),
+        ("pathX", cache.pathX),
+        ("pathY", cache.pathY),
+        ("pathRoll", cache.pathRoll),
+        ("footstepPathX", cache.footstepPathX),
+        ("footstepPathY", cache.footstepPathY),
+        ("footstepPathRoll", cache.footstepPathRoll),
+        ("pathYaw", cache.pathYaw),
+        ("pathPitch", cache.pathPitch),
+        ("pathShearX", cache.pathShearX),
+        ("pathShearY", cache.pathShearY),
+        ("pathPerspectiveX", cache.pathPerspectiveX),
+        ("pathPerspectiveY", cache.pathPerspectiveY),
+        ("analysisConfidence", cache.analysisConfidence),
+        ("warpConfidence", cache.warpConfidence),
+        ("blurAmounts", cache.blurAmounts)
+    ]
+    let intArrays: [(String, [Int32]?)] = [
+        ("acceptedBlockCounts", cache.acceptedBlockCounts),
+        ("totalBlockCounts", cache.totalBlockCounts),
+        ("searchRadiusHitCounts", cache.searchRadiusHitCounts),
+        ("searchRadiusTotalCounts", cache.searchRadiusTotalCounts)
+    ]
+
+    for (name, values) in floatArrays {
+        guard let values else {
+            return "\(name) is missing"
+        }
+        if values.count != frameCount {
+            return "\(name) has \(values.count) values but frames has \(frameCount)"
+        }
+    }
+    for (name, values) in intArrays {
+        guard let values else {
+            return "\(name) is missing"
+        }
+        if values.count != frameCount {
+            return "\(name) has \(values.count) values but frames has \(frameCount)"
+        }
+    }
+    return nil
 }
 
 private func assessment(for analysis: Analysis, index: Int, options: Options) -> FrameAssessment {
@@ -828,9 +986,9 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
         "frameCount": analysis.frames.count,
         "sampleWidth": analysis.sampleWidth,
         "sampleHeight": analysis.sampleHeight,
-        "requestedClipTime": options.relativeTime as Any,
+        "requestedClipTime": jsonValue(options.relativeTime),
         "windowSeconds": options.windowSeconds,
-        "note": options.note as Any,
+        "note": jsonValue(options.note),
         "assessments": assessments.map { assessment in
             [
                 "frameIndex": assessment.index,
@@ -863,6 +1021,62 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
     print("")
 }
 
+private func renderCacheInventoryHuman(_ entries: [CacheInventoryEntry], rootPath: String) {
+    print("Stabilizer Host Analysis caches")
+    print("Root: \(expandPath(rootPath))")
+    if entries.isEmpty {
+        print("No cache files found.")
+        return
+    }
+    for entry in entries {
+        let schema = entry.schemaVersion.map(String.init) ?? "-"
+        let frames = entry.frameCount.map(String.init) ?? "-"
+        let sample: String
+        if let width = entry.sampleWidth, let height = entry.sampleHeight {
+            sample = "\(width)x\(height)"
+        } else {
+            sample = "-"
+        }
+        let range: String
+        if let start = entry.rangeStartSeconds, let duration = entry.rangeDurationSeconds {
+            range = "\(formatSeconds(start))+\(formatSeconds(duration))"
+        } else {
+            range = "-"
+        }
+        let modified = entry.modifiedAt.map { iso8601Formatter.string(from: $0) } ?? "-"
+        print("\(entry.status.uppercased()) schema \(schema) frames \(frames) sample \(sample) range \(range) modified \(modified)")
+        print("  \(entry.reason)")
+        print("  \(entry.path)")
+    }
+}
+
+private func renderCacheInventoryJSON(_ entries: [CacheInventoryEntry], rootPath: String) throws {
+    let root: [String: Any] = [
+        "root": expandPath(rootPath),
+        "caches": entries.map { entry in
+            [
+                "path": entry.path,
+                "status": entry.status,
+                "reason": entry.reason,
+                "schemaVersion": jsonValue(entry.schemaVersion),
+                "frameCount": jsonValue(entry.frameCount),
+                "rangeStartSeconds": jsonValue(entry.rangeStartSeconds),
+                "rangeDurationSeconds": jsonValue(entry.rangeDurationSeconds),
+                "sampleWidth": jsonValue(entry.sampleWidth),
+                "sampleHeight": jsonValue(entry.sampleHeight),
+                "modifiedAt": jsonValue(entry.modifiedAt.map { iso8601Formatter.string(from: $0) })
+            ] as [String: Any]
+        }
+    ]
+    let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+    FileHandle.standardOutput.write(data)
+    print("")
+}
+
+private func jsonValue<T>(_ value: T?) -> Any {
+    value ?? NSNull()
+}
+
 private func parseOptions() throws -> Options {
     var options = Options()
     var args = Array(CommandLine.arguments.dropFirst())
@@ -884,6 +1098,10 @@ private func parseOptions() throws -> Options {
         switch arg {
         case "--cache":
             options.cachePath = try nextValue(for: arg)
+        case "--cache-root":
+            options.cacheRoot = try nextValue(for: arg)
+        case "--list-caches":
+            options.listCaches = true
         case "--time":
             options.relativeTime = try nextDouble(for: arg)
         case "--note":
@@ -935,8 +1153,10 @@ private func printUsage() {
       stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
       stabilizer_feedback.sh --time 5.0 --json
       stabilizer_feedback.sh --cache /path/to/host-analysis-v2.json --limit 5
+      stabilizer_feedback.sh --list-caches
 
     time is clip-relative: 0.0 is the Host Analysis range start.
+    --list-caches reports saved cache readiness without repairing cache files.
     """)
 }
 
@@ -944,14 +1164,29 @@ private func formatSeconds(_ value: Double) -> String {
     String(format: "%.3fs", value)
 }
 
+private let iso8601Formatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
 do {
     let options = try parseOptions()
-    let analysis = try loadAnalysis(path: options.cachePath)
-    let assessments = try chooseAssessments(analysis: analysis, options: options)
-    if options.json {
-        try renderJSON(assessments, analysis: analysis, options: options)
+    if options.listCaches {
+        let entries = cacheInventory(rootPath: options.cacheRoot)
+        if options.json {
+            try renderCacheInventoryJSON(entries, rootPath: options.cacheRoot)
+        } else {
+            renderCacheInventoryHuman(entries, rootPath: options.cacheRoot)
+        }
     } else {
-        renderHuman(assessments, analysis: analysis, options: options)
+        let analysis = try loadAnalysis(path: options.cachePath)
+        let assessments = try chooseAssessments(analysis: analysis, options: options)
+        if options.json {
+            try renderJSON(assessments, analysis: analysis, options: options)
+        } else {
+            renderHuman(assessments, analysis: analysis, options: options)
+        }
     }
 } catch {
     fputs("error: \(error)\n", stderr)
