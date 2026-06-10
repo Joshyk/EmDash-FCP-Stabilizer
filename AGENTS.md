@@ -56,6 +56,9 @@ per-frame `.luma` scratch files or store analysis files inside a Final Cut Pro l
 bundle.
 Persistent cache files should store prepared paths, frame timing, blur values, and
 fingerprints instead of every frame's full luma sample.
+Cache candidates should be sample-size-scoped. Do not collapse different `Sample Size`
+outputs into one in-progress builder or one retained cache bucket; the cache index should
+retain candidates independently per actual `sampleWidth`/`sampleHeight`.
 Cache persistence should treat the prepared analysis frame set as authoritative. The
 retained source-frame map may be reduced after Metal preparation and must not prevent a
 completed prepared path from being saved.
@@ -95,9 +98,11 @@ active runtime version row so stale saved Inspector strings do not hide which bi
 
 Host Analysis playback must render from prepared motion paths for the active FxPlug runtime.
 `Start Host Analysis` is the only path that should call `startForwardAnalysis`; render and
-preview callbacks must not auto-start Host Analysis. The active runtime uses a process-wide
-shared Host Analysis store because Final Cut Pro may call setup, frame analysis, cleanup,
-and preview/render through different FxPlug instances. Persistent cache files are the
+preview callbacks must not auto-start Host Analysis. In-progress Host Analysis state must be
+per clip/session so simultaneous clips, including clips with different actual sample sizes,
+do not share a streaming builder. The active runtime uses a process-wide shared Host
+Analysis render/cache store after completion because Final Cut Pro may call analyzer and
+preview/render through different FxPlug instances. Persistent cache files are the
 cross-process reuse path after source-frame validation. Completed analysis should be written
 to the shared user Application Support cache path, not only to the current extension
 container. When an analyzer instance saves a completed cache, render/preview instances with

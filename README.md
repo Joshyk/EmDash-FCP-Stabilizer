@@ -152,6 +152,11 @@ luma and run frame-to-frame block matching. If Metal analysis resources are not
 available, the Host Analysis path fails visibly in status/log output instead of
 falling back to CPU analysis.
 
+Each active Host Analysis run owns its own in-progress session store. Different
+clips can analyze at the same time, and clips whose selected `Sample Size`
+resolves to different actual pixel dimensions do not share the same streaming
+builder.
+
 The analysis path:
 
 - Streams frame-to-frame motion through Metal.
@@ -195,6 +200,11 @@ Completed Host Analysis is written to the shared user cache:
 /Users/justadev/Library/Application Support/StabilizerFxPlug/caches/
 ```
 
+Range-specific files under `caches/` include the actual `sampleWidth` and
+`sampleHeight` in the filename, and the cache index retains candidates
+independently per sample size. `host-analysis-v2.json` is kept as the latest
+compatibility alias, not as the only retained cache.
+
 Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, and fingerprints instead of
 every frame's full luma sample. Cache writing uses the prepared analysis frame
@@ -220,11 +230,11 @@ for older builds while the current effect asks for a new analysis. Supported-sch
 caches with incomplete prepared path arrays show `Cache Incomplete - Run Host Analysis`
 so older incomplete analysis is not silently ignored.
 
-The active runtime uses a process-wide shared Host Analysis store because Final
-Cut Pro may call setup, frame analysis, cleanup, preview, and render through
-different FxPlug instances. Persistent cache files are the cross-process reuse
-path. Preview/render instances with no prepared analysis watch for cache file
-changes and reload validated candidates on demand.
+The active runtime uses per-clip stores for in-progress Host Analysis and a
+process-wide shared render/cache store after analysis completes. Persistent
+cache files are the cross-process reuse path. Preview/render instances with no
+prepared analysis watch for cache file changes and reload validated candidates
+on demand.
 
 ## Diagnostics
 

@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.16"
+private let stabilizerFxPlugVersion = "0.17"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -153,9 +153,11 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
+    private let analysisSessionLock = NSLock()
     private var lastPublishedStatus = ""
     private var lastPublishedInfo = ""
     private var lastPublishedRenderRevision: UInt64?
+    private var activeAnalysisStore: StabilizerHostAnalysisStore?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
     }
@@ -624,7 +626,21 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
     }
 
+    private func setActiveAnalysisStore(_ store: StabilizerHostAnalysisStore?) {
+        analysisSessionLock.lock()
+        activeAnalysisStore = store
+        analysisSessionLock.unlock()
+    }
+
+    private func currentActiveAnalysisStore() -> StabilizerHostAnalysisStore? {
+        analysisSessionLock.lock()
+        let store = activeAnalysisStore
+        analysisSessionLock.unlock()
+        return store
+    }
+
     private func abandonActiveAnalysisAfterFailure() {
+        setActiveAnalysisStore(nil)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
     }
 
@@ -905,12 +921,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     func setupAnalysis(for analysisRange: CMTimeRange, frameDuration: CMTime) throws {
-        let analysisStore = hostAnalysisStore
+        let analysisStore = StabilizerHostAnalysisStore()
         analysisStore.begin(
             range: analysisRange,
             frameDuration: frameDuration,
             requestedSampleScalePercent: requestedSampleScalePercent(at: analysisRange.start)
         )
+        setActiveAnalysisStore(analysisStore)
         NSLog(
             "StabilizerFxPlug: setup Host Analysis range %.3f+%.3f seconds, frameDuration %.6f seconds.",
             CMTimeGetSeconds(analysisRange.start),
@@ -921,7 +938,15 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     func analyzeFrame(_ frame: FxImageTile!, at frameTime: CMTime) throws {
-        let analysisStore = hostAnalysisStore
+        guard let analysisStore = currentActiveAnalysisStore() else {
+            let reason = "Stabilizer Host Analysis session store was unavailable; setupAnalysis did not create an active per-clip cache."
+            NSLog("StabilizerFxPlug: \(reason)")
+            throw NSError(
+                domain: "com.justadev.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: reason]
+            )
+        }
         guard let frame else {
             abandonActiveAnalysisAfterFailure()
             throw NSError(
@@ -977,8 +1002,25 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     func cleanupAnalysis() throws {
-        let analysisStore = hostAnalysisStore
-        try analysisStore.finish()
+        guard let analysisStore = currentActiveAnalysisStore() else {
+            let reason = "Stabilizer Host Analysis cleanup had no active per-clip cache."
+            NSLog("StabilizerFxPlug: \(reason)")
+            throw NSError(
+                domain: "com.justadev.StabilizerFxPlug",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: reason]
+            )
+        }
+        do {
+            try analysisStore.finish()
+        } catch {
+            publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
+            publishStabilizerInfo(force: true)
+            abandonActiveAnalysisAfterFailure()
+            throw error
+        }
+        hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
+        setActiveAnalysisStore(nil)
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
@@ -1136,7 +1178,7 @@ private final class StabilizerHostAnalysisStore {
     private static let supportedCacheSchemaVersions: Set<Int> = [14]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
-    private static let maxPersistentCacheEntries = 8
+    private static let maxPersistentCacheEntriesPerSampleSize = 8
     private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0
     private static let cacheValidationTimeToleranceSeconds = 0.1
@@ -1716,7 +1758,7 @@ private final class StabilizerHostAnalysisStore {
                 try Self.updatePersistentCacheIndex(with: indexEntry)
             }
             Self.bumpPersistentCacheGeneration()
-            NSLog("StabilizerFxPlug: saved Host Analysis cache with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
+            NSLog("StabilizerFxPlug: saved sample-size Host Analysis cache \(sampleWidth)x\(sampleHeight) with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
         } catch {
             NSLog("StabilizerFxPlug: failed to save Host Analysis cache: \(error.localizedDescription)")
         }
@@ -2607,8 +2649,17 @@ private final class StabilizerHostAnalysisStore {
         entries.insert(entry, at: 0)
         entries.sort { $0.createdAt > $1.createdAt }
 
-        let retainedEntries = Array(entries.prefix(maxPersistentCacheEntries))
-        let prunedEntries = entries.dropFirst(maxPersistentCacheEntries)
+        var retainedEntries: [PersistedHostAnalysisIndexEntry] = []
+        var prunedEntries: [PersistedHostAnalysisIndexEntry] = []
+        let entriesBySampleSize = Dictionary(grouping: entries) { entry in
+            "\(entry.sampleWidth)x\(entry.sampleHeight)"
+        }
+        for sampleEntries in entriesBySampleSize.values {
+            let sortedSampleEntries = sampleEntries.sorted { $0.createdAt > $1.createdAt }
+            retainedEntries.append(contentsOf: sortedSampleEntries.prefix(maxPersistentCacheEntriesPerSampleSize))
+            prunedEntries.append(contentsOf: sortedSampleEntries.dropFirst(maxPersistentCacheEntriesPerSampleSize))
+        }
+        retainedEntries.sort { $0.createdAt > $1.createdAt }
         let index = PersistedHostAnalysisIndex(schemaVersion: cacheSchemaVersion, entries: retainedEntries)
         let data = try JSONEncoder().encode(index)
         try data.write(to: cacheIndexURL, options: .atomic)

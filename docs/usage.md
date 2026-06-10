@@ -160,12 +160,12 @@ fallbacks.
 - Persistent analysis reuse is based on cache schema and current source-frame validation,
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
-- Host Analysis uses a process-wide shared render store inside the active FxPlug runtime.
-  Setup, frame analysis, cleanup, and render read/write that shared store when Final Cut Pro
-  uses different FxPlug instances in the same process. Completed analysis is also persisted
-  to the shared user Application Support cache using the prepared analysis frame set, so
-  analyzer and preview/render processes can hand off the prepared motion path through
-  validated cache files. Preview/render callbacks
+- In-progress Host Analysis uses a per-clip session store, so simultaneous clips and clips
+  whose selected `Sample Size` resolves to different actual pixel dimensions do not share a
+  streaming builder. Completed analysis is then published to the process-wide shared
+  render/cache store and persisted to the shared user Application Support cache using the
+  prepared analysis frame set, so analyzer and preview/render processes can hand off the
+  prepared motion path through validated cache files. Preview/render callbacks
   detect cache file changes when they have no prepared analysis, then reload candidates
   without starting Host Analysis. `Start Host Analysis` is the only path that requests Host
   Analysis from Final Cut Pro. If Final Cut Pro reports that Host Analysis is already
@@ -328,7 +328,7 @@ FxPlug.
 
 ## Host Analysis Cache
 
-The latest Host Analysis cache is written to:
+The latest Host Analysis compatibility alias is written to:
 
 ```text
 /Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json
@@ -346,11 +346,15 @@ The cache index is written to:
 /Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-index-v2.json
 ```
 
-Range-specific cache files are stored under:
+Range-specific, sample-size-scoped cache files are stored under:
 
 ```text
 /Users/justadev/Library/Application Support/StabilizerFxPlug/caches/
 ```
+
+Those filenames include the actual `sampleWidth` and `sampleHeight`, and the cache index
+retains entries independently per sample size instead of pruning all sizes through one
+global bucket.
 
 On load, the effect validates the current source frame against saved frame fingerprints
 before using a persisted cache. If a lightweight cache frame no longer has retained
