@@ -36,6 +36,12 @@ source_plugin="${source_app}/${PLUGIN_RELATIVE_PATH}"
 legacy_user_app="${HOME}/Applications/${APP_NAME}"
 legacy_user_plugin="${legacy_user_app}/${PLUGIN_RELATIVE_PATH}"
 
+if pgrep -x "Final Cut Pro" >/dev/null 2>&1; then
+	echo "error: Final Cut Pro is running. Quit Final Cut Pro before installing StabilizerFxPlug." >&2
+	echo "       Replacing a loaded FxPlug can leave Final Cut Pro holding a stale PlugInKit object and trigger P1000307 helper communication errors." >&2
+	exit 1
+fi
+
 unregister_stale_plugins() {
 	pluginkit -m -A -D -v -p FxPlug -i "$PLUGIN_IDENTIFIER" 2>/dev/null | while IFS= read -r line; do
 		plugin_path=$(printf '%s\n' "$line" | sed -n 's/.*	//p')

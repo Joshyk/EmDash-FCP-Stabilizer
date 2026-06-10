@@ -3,7 +3,7 @@
 ## Final Cut Pro
 
 1. Build the FxPlug wrapper app.
-2. Restart Final Cut Pro if it was already open.
+2. Open Final Cut Pro after the install step completes.
 3. Apply `Stabilizer Transform` from the `Emdash Studios` effects group.
 4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis`,
    `Cache Rejected - Run Host Analysis`, `Cache Unsupported - Run Host Analysis`, or
@@ -18,6 +18,9 @@ pending start request until it starts or you clear it; another clip's completed 
 not treated as completion for the queued clip.
 Debug installs clean stale `Stabilizer Transform copy...` Motion Template folders in the
 `Emdash Studios` group so Final Cut Pro does not list duplicate Stabilizer effects.
+The Debug install step fails if Final Cut Pro is running, because replacing a loaded FxPlug
+can leave Final Cut Pro holding a stale PlugInKit object and trigger `P1000307` helper
+communication errors.
 
 ## Optional UI Shortcuts
 
@@ -409,6 +412,9 @@ xcodebuild \
   -derivedDataPath /tmp/StabilizerFxPlugDerived \
   build
 ```
+
+Quit Final Cut Pro before building or rerunning `install_debug_app.sh`. The installer fails
+visibly when Final Cut Pro is running instead of replacing a loaded FxPlug bundle.
 
 Verify with:
 
