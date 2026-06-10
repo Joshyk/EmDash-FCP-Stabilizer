@@ -131,9 +131,10 @@ Host Analysis. Do not add or expose a user-facing Footstep Jitter window; fine j
 be corrected from the current render frame's impulse against the fixed seconds-based
 outer-frame baseline using the multi-block Host Analysis path. Footstep Jitter confidence
 should be evaluated per render frame from current tracking quality, accepted block coverage,
-blur, and whether the center frame departs from its outer-frame baseline; do not force a
-hidden minimum confidence floor. Medium-confidence response may be curved upward for a more
-useful debug pass, but zero confidence must still produce zero correction.
+blur, local baseline support, surrounding footstep noise, and whether the center frame
+departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
+Medium-confidence response may be curved upward for a more useful debug pass, but zero
+confidence must still produce zero correction.
 Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
 `4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
 weak, but applied correction must clamp at full detected-impulse removal during render so
@@ -143,7 +144,9 @@ Bob should be handled by the render-time `Stride Wobble` stage. Keep its time wi
 inside the implementation at `2.0` seconds, expose only X/Y/Rotation strength controls with
 maximum `4.0`, do not add a user-facing Stride Wobble window, compute it from the
 footstep-cleaned baseline, and feed longer Turn Smoothing / Walking Bob bands from the
-stride-smoothed path so the same band is not removed twice.
+stride-smoothed path so the same band is not removed twice. Stride Wobble residual gating
+should use robust window evidence instead of the single worst frame in the window, so one
+bad block-match frame does not suppress the whole medium band.
 The render path must not compute Stride Wobble from the raw or jerk-limited broad path,
 because that reintroduces Footstep Jitter shock into the medium-period band.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
@@ -164,7 +167,9 @@ jumps in the preview. `Turn Detection Window` must use the Inspector UI value, a
 minimum must be the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than
 SWOB. The turn band should be measured from the stride-smoothed path instead of the raw frame
 path, and Y correction must stay Footstep Jitter first, Stride Wobble second, and Walking Bob
-last so short landing shock is not reintroduced by turn smoothing.
+last so short landing shock is not reintroduced by turn smoothing. TURN confidence should
+require both tracking evidence and a real X turn band; do not keep a hidden minimum turn
+confidence on low-evidence frames.
 Y-axis walking bob that is longer than Stride Wobble but separate from X-only panning should
 be handled by the render-time fixed `2.5` second `Walking Bob` and `Walking Bob Removal`
 path, which corrects the Y-only band between the fixed `2.0` second stride-smoothed baseline
@@ -173,9 +178,9 @@ rerunning Host Analysis. Do not expose a user-facing Walking Bob window control.
 Walking Bob should remain in the same effect as the final Y-only correction stage. It must
 use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, and setting
 `Walking Bob Removal` to zero must still allow Footstep Jitter Y to work.
-Walking Bob confidence should be based on current tracking evidence and symmetric window
-support so weak block coverage or one-sided clip-edge windows do not create large vertical
-image waves.
+Walking Bob confidence should be based on current tracking evidence, symmetric window
+support, robust residual evidence, and actual Y-band magnitude so weak block coverage,
+one-sided clip-edge windows, or tiny vertical bands do not create large vertical image waves.
 Walking Bob removal values should clamp at full
 detected-band removal during render so high slider values do not add inverse vertical
 shake, while still allowing values above `1.0` to compensate for low-confidence gating.
@@ -191,7 +196,9 @@ its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long
 does not become a fixed deskew. Low tracking confidence or poor search-radius headroom should
 gate Far-field Warp off instead of creating wave-like image distortion. Render should use a
 walking-footage tracking gate tuned for 25% Host Analysis samples plus a tiny render-time
-deadband so weak warp deltas do not create swimming or wave-like distortion.
+deadband so weak warp deltas do not create swimming or wave-like distortion. Medium-confidence
+warp gates may be curved upward, but zero tracking or poor search-radius evidence must still
+produce zero warp correction.
 `W Q` should represent the applied warp confidence after those safety gates. Bump Host
 Analysis cache schema when prepared warp path semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original

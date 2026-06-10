@@ -60,40 +60,47 @@ roll impulses. They run up to `4.0`; values above `1.0` can compensate when
 tracking confidence makes the correction too weak. The applied correction still
 clamps at full detected-impulse removal so it does not add inverse shake. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
-region and predicts from outer samples up to `1.0` second away.
+region and predicts from outer samples up to `1.0` second away. Confidence is
+based on current tracking evidence, local baseline support, and the center
+frame's impulse relative to surrounding footstep noise.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
 strengths. It is measured from the footstep-cleaned path, then longer Turn
 Smoothing and Walking Bob bands are measured from the stride-smoothed path so
 the same motion is not removed twice. It does not use the raw or jerk-limited
-broad path as its band input.
+broad path as its band input. Its residual gate uses robust window percentiles
+instead of letting a single bad frame suppress the whole band.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
 Y or roll, and is soft-limited to a small output-edge budget during render.
 `Turn Detection Window` comes from the Inspector UI value. Its UI minimum is the
 fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
+TURN confidence now requires both tracking evidence and a real X turn band, so
+low-evidence frames do not get a hidden minimum turn correction.
 
 `Walking Bob` uses a fixed internal `2.5` second Y-only baseline for the remaining
 vertical walking bounce after Footstep Jitter and Stride Wobble. The shorter window keeps
 BOB from turning weak vertical evidence into a slow image wave. The Inspector
 exposes only `Walking Bob Removal`; it does not gate or weaken Footstep Jitter Y.
-Its confidence uses current tracking quality and symmetric window support so weak
-tracking or one-sided clip-edge windows do not create large vertical waves. The
-default removal is `0.75`.
+Its confidence uses current tracking quality, symmetric window support, robust
+residuals, and actual Y-band magnitude so weak tracking, one-sided clip-edge
+windows, or tiny vertical bands do not create large vertical waves. The default
+removal is `0.75`.
 
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
 frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
 maximum is `4.0`. The render path gates warp with walking-footage tracking quality and
-search-radius headroom, then drops tiny warp deltas through a deadband so weak
-frames do not create visible swimming or wave-like distortion. Low-confidence
-warp evidence is suppressed instead of producing a wavy image.
+search-radius headroom, then curves medium-confidence gates upward and drops
+tiny warp deltas through a deadband so useful ridge-line correction is less
+likely to disappear while low-confidence warp evidence is still suppressed
+instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V03` row for the active
+bands and tracking state. It also includes a compact `V04` row for the active
 render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 

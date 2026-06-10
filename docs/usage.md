@@ -30,9 +30,11 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Host Analysis builds that path from multiple Metal block-matched regions with outlier
   blocks rejected before render. Footstep Jitter is gated per frame from current tracking
   quality, block coverage, blur, and whether the center frame actually departs from its
-  outer-frame baseline. Values above `1.0` can compensate when that frame-local score makes
-  the detected impulse visibly under-corrected, but render output still clamps at full
-  detected-impulse removal to avoid inverse shake.
+  outer-frame baseline. The gate also requires local baseline support and compares the
+  center-frame impulse against surrounding footstep noise, so one unsupported edge frame does
+  not produce a strong correction by itself. Values above `1.0` can compensate when that
+  frame-local score makes the detected impulse visibly under-corrected, but render output
+  still clamps at full detected-impulse removal to avoid inverse shake.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
   default is `1.0` and the maximum is `4.0`. Values above `1.0` can compensate when
   frame-local confidence makes the detected impulse visibly under-corrected, but render
@@ -43,7 +45,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
   default is `0.35` because Walking Bob remains the main longer vertical-cycle correction.
   Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
-  user-facing Stride Wobble window.
+  user-facing Stride Wobble window. Its residual gate uses robust window percentiles instead
+  of the single worst residual in the window.
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
   is `0.75` and the maximum is `4.0`. The correction is measured from the
   footstep-cleaned baseline and clamped at full detected-band removal during render, so high
@@ -63,8 +66,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   the Y band between the stride-smoothed baseline and this slightly longer walking-bob
   smooth path without changing X or roll. There is no user-facing window control; `Turn
   Detection Window` has its own Inspector slider. Its confidence uses tracking quality and
-  symmetric window support, so weak block coverage or one-sided clip-edge windows do not
-  create large vertical waves.
+  symmetric window support, robust residuals, and actual Y-band magnitude, so weak block
+  coverage, one-sided clip-edge windows, or tiny vertical bands do not create large vertical
+  waves.
 - `Walking Bob Removal`: direct amount for the Y-only correction. Footstep bounce
   can be reduced without changing X or roll. This is the final correction stage inside the
   same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
@@ -88,7 +92,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   is measured from the stride-smoothed path instead of the raw frame path, so short landing
   shock and medium stride wobble are not reintroduced by turn smoothing. The macro X output
   correction is soft-limited to a small edge budget during render so large detected pans do
-  not create stretched-edge jumps in the preview.
+  not create stretched-edge jumps in the preview. TURN confidence requires both tracking
+  evidence and a real X turn band, so low-evidence frames no longer receive a hidden minimum
+  turn correction.
 - `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
   mode this is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
@@ -132,10 +138,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
-  compact `V03` row in `Debug Overlay` when confirming the active render runtime.
+  compact `V04` row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V03` bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V04` bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
@@ -192,7 +198,8 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   center-frame transform and the smoothing delta so visible stepping can be diagnosed from
   the Inspector. Footstep Jitter X/Y and roll keep the current render frame's impulse
   correction after the wider Stride/Turn/Bob smoothing pass, so fine distant ridge-line shake
-  is not averaged out by temporal smoothing.
+  is not averaged out by temporal smoothing. Stride, Bob, and Turn confidence use robust
+  residual percentiles rather than the single worst frame in the smoothing window.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.
@@ -210,8 +217,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   shear at `0.016`, yaw/pitch proxy at `0.010`, and perspective at `0.006`. The applied
   value is the local warp band against its `0.10`/`1.0` second outer-frame linear baseline,
   not the absolute accumulated warp path. Render also requires walking-footage tracking
-  quality and search-radius headroom before applying warp, and drops tiny warp deltas
-  through a deadband to avoid wave-like image distortion while tuning micro jitter.
+  quality and search-radius headroom before applying warp, curves medium-confidence gates
+  upward, and drops tiny warp deltas through a deadband to avoid wave-like image distortion
+  while tuning micro jitter.
 - Host Analysis cache schema `14` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,

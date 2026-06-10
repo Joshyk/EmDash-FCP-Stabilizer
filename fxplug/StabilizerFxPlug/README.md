@@ -133,6 +133,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   The default is `1.0`; values above `1.0` can compensate for weak frame confidence but are
   clamped during render to avoid inverse shake. The confidence response is more assertive for
   medium-confidence frame evidence, but zero confidence still produces zero correction.
+  Confidence also checks local baseline support and surrounding footstep noise.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
   `0.10` second shock region and predicts from outer samples up to `1.0` second away for
@@ -144,24 +145,26 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Stride Wobble X/Y/Rotation Strength`: direct amount for medium-period walking wobble. The
   render-time window is fixed at `2.0` seconds; there is no user-facing SWOB window. It is
   measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
-  not erase FJIT twice.
+  not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
+  worst frame.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
 - `Walking Bob`: fixed internal `2.5` second Y-only walking bob band after FJIT and SWOB.
   There is no user-facing BOB window control; Turn Detection has its own Inspector slider.
   The shorter window keeps BOB from turning weak vertical evidence into a slow image wave.
-  Its confidence uses tracking quality and symmetric window support so weak tracking or
-  one-sided clip-edge windows do not create large vertical waves.
+  Its confidence uses tracking quality, symmetric window support, robust residuals, and
+  actual Y-band magnitude so weak tracking, one-sided clip-edge windows, or tiny vertical
+  bands do not create large vertical waves.
 - `Walking Bob Removal`: direct amount for the Y-only BOB correction. Setting it to `0` does
   not disable Footstep Jitter Y, and higher values are clamped during render to avoid inverse
   vertical shake.
 - `Far-field Warp Strength`: bundled small-clamp WARP correction for distant ridge-line
   shake. It uses a `0.10`/`1.0` second outer-frame linear warp baseline and applies shear,
   yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
-  gates warp with walking-footage tracking quality and search-radius headroom, then applies a
-  tiny deadband and small render-only clamps so weak frames do not create wave-like image
-  distortion.
+  gates warp with walking-footage tracking quality and search-radius headroom, curves
+  medium-confidence gates upward, then applies a tiny deadband and small render-only clamps
+  so weak frames do not create wave-like image distortion.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.
@@ -198,12 +201,12 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Walking Bob <= 2.5s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available. Older saved timeline instances may keep
-  stale saved Inspector strings, so use the compact `V03` row in `Debug Overlay` to
+  stale saved Inspector strings, so use the compact `V04` row in `Debug Overlay` to
   confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), and compact runtime
-  `V03` diagnostics so Final
+  `V04` diagnostics so Final
   Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn
