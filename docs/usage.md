@@ -179,7 +179,8 @@ The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
 paths and ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
 bands. It follows the same band order as render: `FJIT` is measured against the
 outer-frame baseline, then `SWOB`, `BOB`, and `TURN` are measured from that
-footstep-cleaned path. If the cache was written by an older build with mismatched frame/path
+footstep-cleaned path. `WARP` `q` matches the applied `W Q` confidence shown by
+Debug Overlay. If the cache was written by an older build with mismatched frame/path
 arrays, it fails visibly and asks for a new Host Analysis run with the current
 FxPlug.
 

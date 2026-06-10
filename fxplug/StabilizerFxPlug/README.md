@@ -249,6 +249,7 @@ scripts/stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
 remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP` bands from the prepared
 motion paths and tracking diagnostics. It uses the same footstep-first band
 split as render, so `SWOB`, `BOB`, and `TURN` diagnostics are computed from the
-footstep-cleaned path rather than the raw footstep path. It fails visibly on unsupported or
+footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
+applied `W Q` confidence shown by Debug Overlay. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.

@@ -358,12 +358,14 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let turnDetected = abs(turnBandX * xScale)
     let turnApplied = turnDetected * correctionFactor(options.strengths.turn, confidence: turnQ)
 
+    let rawWarpConfidence = analysis.warpConfidence[index]
     let warpGate = farFieldWarpGate(
-        warpConfidence: analysis.warpConfidence[index],
+        warpConfidence: rawWarpConfidence,
         trackingConfidence: tracking,
         searchRadiusHitCount: analysis.searchRadiusHitCounts[index],
         searchRadiusTotalCount: analysis.searchRadiusTotalCounts[index]
     )
+    let appliedWarpConfidence = clamp(rawWarpConfidence * warpGate, min: 0.0, max: 1.0)
     let warpDetected = warpMagnitude(analysis: analysis, index: index) * min(4.0, max(0.0, Float(options.strengths.warp)))
     let warpApplied = warpDetected * warpGate
 
@@ -405,8 +407,8 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
             detected: warpDetected,
             applied: warpApplied,
             remaining: max(0.0, warpDetected - warpApplied),
-            confidence: warpGate,
-            note: "dimensionless warp band"
+            confidence: appliedWarpConfidence,
+            note: String(format: "dimensionless warp band raw q %.2f gate %.2f", rawWarpConfidence, warpGate)
         )
     ].sorted { $0.remaining > $1.remaining }
 
