@@ -94,7 +94,7 @@ struct StabilizerCorrectionStrengths {
         microJitterY: 1.0,
         microJitterRotation: 1.0,
         strideWobbleX: 0.65,
-        strideWobbleY: 0.35,
+        strideWobbleY: 0.50,
         strideWobbleRotation: 0.75,
         panStabilizationStrength: 0.8,
         walkingBob: 0.75,
@@ -285,6 +285,7 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleWindowSeconds = 2.0
     private static let strideWobbleFullScalePixels: Float = 0.75
     private static let strideWobbleFullScaleDegrees: Float = 0.16
+    private static let strideWobbleFullResponseScale: Float = 0.65
     private static let walkingBobFullScalePixels: Float = 0.65
     private static let turnSmoothingFullScalePixels: Float = 2.0
     private static let maxFarFieldShear: Float = 0.008
@@ -2075,7 +2076,7 @@ enum AutoStabilizationEstimator {
         let bandQuality = confidenceRamp(
             magnitude,
             start: noiseFloor,
-            full: max(noiseFloor + Float.ulpOfOne, fullScale)
+            full: max(noiseFloor + Float.ulpOfOne, fullScale * strideWobbleFullResponseScale)
         )
         return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
     }

@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.8"
+private let stabilizerFxPlugVersion = "0.9"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -229,7 +229,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         paramAPI.addFloatSlider(
             withName: "Stride Wobble Y Strength",
             parameterID: ParameterID.strideWobbleYStrength.rawValue,
-            defaultValue: 0.35,
+            defaultValue: 0.50,
             parameterMin: 0.0,
             parameterMax: 4.0,
             sliderMin: 0.0,
@@ -380,7 +380,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             microJitterYStrength: 1.0,
             microJitterRotationStrength: 1.0,
             strideWobbleXStrength: 0.65,
-            strideWobbleYStrength: 0.35,
+            strideWobbleYStrength: 0.50,
             strideWobbleRotationStrength: 0.75,
             panStabilizationStrength: 1.0,
             walkingBobStrength: 0.75,

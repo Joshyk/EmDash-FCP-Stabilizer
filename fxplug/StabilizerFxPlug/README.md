@@ -148,7 +148,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   render-time window is fixed at `2.0` seconds; there is no user-facing SWOB window. It is
   measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
-  worst frame.
+  worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale,
+  and the Y default is `0.50` so step follow-through is not pushed entirely into the longer
+  Walking Bob pass.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
@@ -259,7 +261,7 @@ motion paths and tracking diagnostics. It uses the same footstep-first band
 split as render, so `SWOB`, `BOB`, and `TURN` diagnostics are computed from the
 footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes FJIT per-axis
-confidence, residual quality, blur quality, block coverage, edge quality, and WARP
+and SWOB per-axis confidence, residual quality, blur quality, block coverage, edge quality, and WARP
 tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.

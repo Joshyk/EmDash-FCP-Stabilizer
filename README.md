@@ -72,7 +72,10 @@ strengths. It is measured from the footstep-cleaned path, then longer Turn
 Smoothing and Walking Bob bands are measured from the stride-smoothed path so
 the same motion is not removed twice. It does not use the raw or jerk-limited
 broad path as its band input. Its residual gate uses robust window percentiles
-instead of letting a single bad frame suppress the whole band.
+instead of letting a single bad frame suppress the whole band. Medium stride
+bands reach full confidence earlier than the broad UI scale so real walking
+follow-through is not left entirely to the longer Walking Bob pass; the Y default
+is `0.50`, still lower than X/roll but no longer near-minimal.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
@@ -270,8 +273,8 @@ block coverage, and search-radius edge-hit counts. The band split mirrors the
 render path: `FJIT` is measured first against the outer-frame baseline, then
 `SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. `WARP`
 `q` matches the applied `W Q` confidence shown by Debug Overlay, and the report
-includes FJIT per-axis confidence, residual, blur, block coverage, edge quality,
-and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
+includes FJIT and SWOB per-axis confidence, residual, blur, block coverage,
+edge quality, and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
 Analysis run with the current FxPlug instead of trying to repair the data.
 

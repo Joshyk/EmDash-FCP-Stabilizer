@@ -34,7 +34,7 @@ private struct Strengths {
         microY: 1.0,
         microR: 1.0,
         strideX: 0.65,
-        strideY: 0.35,
+        strideY: 0.50,
         strideR: 0.75,
         turn: 1.0,
         bob: 0.75,
@@ -149,20 +149,20 @@ private struct Analysis {
 
         func requireFloatArray(_ value: [Float]?, _ name: String) throws -> [Float] {
             guard let value else {
-                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.8 or newer")
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with the current FxPlug")
             }
             guard value.count == frames.count else {
-                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.8 or newer")
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with the current FxPlug")
             }
             return value
         }
 
         func requireIntArray(_ value: [Int32]?, _ name: String) throws -> [Int32] {
             guard let value else {
-                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.8 or newer")
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with the current FxPlug")
             }
             guard value.count == frames.count else {
-                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.8 or newer")
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with the current FxPlug")
             }
             return value
         }
@@ -252,6 +252,7 @@ private let footstepSurroundingNoiseMultiplier: Float = 1.10
 private let footstepFullResponseScale: Float = 0.65
 private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
+private let strideFullResponseScale: Float = 0.65
 private let walkingBobFullScalePixels: Float = 0.65
 private let turnFullScalePixels: Float = 2.0
 private let farFieldWarpTrackingGateStart: Float = 0.30
@@ -551,7 +552,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
             applied: strideApplied,
             remaining: max(0.0, strideDetected - strideApplied),
             confidence: (strideQX + strideQY + strideQR) / 3.0,
-            note: String(format: "stride band X %.3f Y %.3f R %.3f", strideX, strideY, strideR)
+            note: String(format: "stride band X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f", strideX, strideY, strideR, strideQX, strideQY, strideQR)
         ),
         BandAssessment(
             name: "BOB",
@@ -818,7 +819,7 @@ private func footstepConfidence(values: [Float], baselineValues: [Float], frames
 private func strideConfidence(bandValue: Float, trackingConfidence: Float, fullScale: Float) -> Float {
     let magnitude = abs(bandValue)
     let noiseFloor = fullScale * 0.10
-    let bandQuality = confidenceRamp(magnitude, start: noiseFloor, full: max(noiseFloor + Float.ulpOfOne, fullScale))
+    let bandQuality = confidenceRamp(magnitude, start: noiseFloor, full: max(noiseFloor + Float.ulpOfOne, fullScale * strideFullResponseScale))
     return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
 }
 

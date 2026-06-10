@@ -46,10 +46,12 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   is longer than Footstep Jitter but shorter than broad Turn Smoothing. The default is
   `0.65` and the maximum is `4.0`.
 - `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
-  default is `0.35` because Walking Bob remains the main longer vertical-cycle correction.
+  default is `0.50`, so medium vertical follow-through is corrected before the longer
+  Walking Bob pass while still leaving BOB as the broader vertical-cycle correction.
   Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
   user-facing Stride Wobble window. Its residual gate uses robust window percentiles instead
-  of the single worst residual in the window.
+  of the single worst residual in the window, and its confidence reaches full response
+  earlier for detected medium bands than for broad pan/turn bands.
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
   is `0.75` and the maximum is `4.0`. The correction is measured from the
   footstep-cleaned baseline and clamped at full detected-band removal during render, so high
@@ -194,8 +196,8 @@ The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
 paths and ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
 bands. It follows the same band order as render: `FJIT` is measured against the
 outer-frame baseline, then `SWOB`, `BOB`, and `TURN` are measured from that
-footstep-cleaned path. It prints FJIT per-axis confidence (`qX`, `qY`, `qR`) alongside
-the raw impulse. `WARP` `q` matches the applied `W Q` confidence shown by
+footstep-cleaned path. It prints FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
+the raw impulse or band values. `WARP` `q` matches the applied `W Q` confidence shown by
 Debug Overlay. The report also prints residual quality, blur quality, block coverage,
 edge quality, and WARP tracking/edge gate values so conservative gating can be separated
 from weak detected motion. If the cache was written by an older build with mismatched frame/path

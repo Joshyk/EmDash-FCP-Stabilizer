@@ -160,7 +160,9 @@ maximum `4.0`, do not add a user-facing Stride Wobble window, compute it from th
 footstep-cleaned baseline, and feed longer Turn Smoothing / Walking Bob bands from the
 stride-smoothed path so the same band is not removed twice. Stride Wobble residual gating
 should use robust window evidence instead of the single worst frame in the window, so one
-bad block-match frame does not suppress the whole medium band.
+bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
+full confidence sooner than the broad UI scale, and the default Y strength should remain high
+enough to remove step follow-through before the longer Walking Bob pass.
 The render path must not compute Stride Wobble from the raw or jerk-limited broad path,
 because that reintroduces Footstep Jitter shock into the medium-period band.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
