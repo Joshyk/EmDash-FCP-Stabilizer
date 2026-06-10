@@ -149,20 +149,20 @@ private struct Analysis {
 
         func requireFloatArray(_ value: [Float]?, _ name: String) throws -> [Float] {
             guard let value else {
-                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.7 or newer")
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.8 or newer")
             }
             guard value.count == frames.count else {
-                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.7 or newer")
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.8 or newer")
             }
             return value
         }
 
         func requireIntArray(_ value: [Int32]?, _ name: String) throws -> [Int32] {
             guard let value else {
-                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.7 or newer")
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.8 or newer")
             }
             guard value.count == frames.count else {
-                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.7 or newer")
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.8 or newer")
             }
             return value
         }
@@ -248,8 +248,8 @@ private let timeWindowSelectionEpsilon = 0.001
 private let footstepFullScalePixels: Float = 0.35
 private let footstepFullScaleDegrees: Float = 0.08
 private let footstepNoiseFloorScale: Float = 0.08
-private let footstepSurroundingNoiseMultiplier: Float = 1.25
-private let footstepFullResponseScale: Float = 0.82
+private let footstepSurroundingNoiseMultiplier: Float = 1.10
+private let footstepFullResponseScale: Float = 0.65
 private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
 private let walkingBobFullScalePixels: Float = 0.65
@@ -543,7 +543,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
             applied: footApplied,
             remaining: max(0.0, footDetected - footApplied),
             confidence: (footQX + footQY + footQR) / 3.0,
-            note: String(format: "foot raw X %.3f Y %.3f R %.3f", footX, footY, footR)
+            note: String(format: "foot raw X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f", footX, footY, footR, footQX, footQY, footQR)
         ),
         BandAssessment(
             name: "SWOB",

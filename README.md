@@ -62,7 +62,9 @@ clamps at full detected-impulse removal so it does not add inverse shake. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
 region and predicts from outer samples up to `1.0` second away. Confidence is
 based on current tracking evidence, local baseline support, and the center
-frame's impulse relative to surrounding footstep noise.
+frame's impulse relative to surrounding footstep noise. Moderate landing impulses now reach
+useful confidence a little sooner, while zero evidence and noisy unsupported frames still
+produce zero correction.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
@@ -268,8 +270,8 @@ block coverage, and search-radius edge-hit counts. The band split mirrors the
 render path: `FJIT` is measured first against the outer-frame baseline, then
 `SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. `WARP`
 `q` matches the applied `W Q` confidence shown by Debug Overlay, and the report
-includes residual, blur, block coverage, edge quality, and WARP tracking/edge gate
-values so over- or under-gating is visible. If a cache has mismatched
+includes FJIT per-axis confidence, residual, blur, block coverage, edge quality,
+and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
 Analysis run with the current FxPlug instead of trying to repair the data.
 

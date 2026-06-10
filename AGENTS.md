@@ -146,8 +146,9 @@ outer-frame baseline using the multi-block Host Analysis path. Footstep Jitter c
 should be evaluated per render frame from current tracking quality, accepted block coverage,
 blur, local baseline support, surrounding footstep noise, and whether the center frame
 departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
-Medium-confidence response may be curved upward for a more useful debug pass, but zero
-confidence must still produce zero correction.
+Medium-confidence response may be curved upward for a more useful debug pass, and moderate
+landing impulses should not be buried by an overly high surrounding-noise threshold, but
+zero confidence must still produce zero correction.
 Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
 `4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
 weak, but applied correction must clamp at full detected-impulse removal during render so

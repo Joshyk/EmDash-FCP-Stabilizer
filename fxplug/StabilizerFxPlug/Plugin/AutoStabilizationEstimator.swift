@@ -280,8 +280,8 @@ enum AutoStabilizationEstimator {
     private static let footstepImpulseFullScalePixels: Float = 0.35
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
     private static let footstepNoiseFloorScale: Float = 0.08
-    private static let footstepSurroundingNoiseMultiplier: Float = 1.25
-    private static let footstepFullResponseScale: Float = 0.82
+    private static let footstepSurroundingNoiseMultiplier: Float = 1.10
+    private static let footstepFullResponseScale: Float = 0.65
     private static let strideWobbleWindowSeconds = 2.0
     private static let strideWobbleFullScalePixels: Float = 0.75
     private static let strideWobbleFullScaleDegrees: Float = 0.16

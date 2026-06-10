@@ -138,7 +138,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
   `0.10` second shock region and predicts from outer samples up to `1.0` second away for
   X/Y/rotation, so landing shock is treated as a frame-level impulse instead of being
-  averaged back into the smooth path.
+  averaged back into the smooth path. Moderate landing impulses now reach useful confidence
+  a little sooner, while zero evidence and noisy unsupported frames still produce zero
+  correction.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep correction. Values
   above `1.0` can compensate when frame-local confidence makes the detected impulse visibly
   under-corrected, but output remains clamped at full detected-impulse removal.
@@ -256,8 +258,8 @@ remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP` bands from the prepared
 motion paths and tracking diagnostics. It uses the same footstep-first band
 split as render, so `SWOB`, `BOB`, and `TURN` diagnostics are computed from the
 footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
-applied `W Q` confidence shown by Debug Overlay. The report includes residual quality,
-blur quality, block coverage, edge quality, and WARP tracking/edge gate values so gating
-causes are visible. It fails visibly on unsupported or
+applied `W Q` confidence shown by Debug Overlay. The report includes FJIT per-axis
+confidence, residual quality, blur quality, block coverage, edge quality, and WARP
+tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.
