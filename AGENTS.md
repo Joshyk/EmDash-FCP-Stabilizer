@@ -108,10 +108,15 @@ because Final Cut Pro may call analyzer and preview/render through different FxP
 instances. Persistent cache files are the cross-process reuse path after source-frame
 validation. Completed analysis should be written to the shared user Application Support
 cache path, not only to the current extension container. When an analyzer instance saves a
-completed cache, render/preview instances should notice cache file changes and reload
-persistent cache candidates on demand even when they already hold an older prepared
-analysis; this keeps the stabilized preview visible after serial queued analysis and when
-analyzer and render use different FxPlug processes. Fingerprint mismatches must reject a
+completed cache, render/preview instances and plug-in state callbacks should notice cache
+file changes, reload persistent cache candidates on demand, and update the hidden render
+revision with a process-independent small numeric token even when they already hold an older
+prepared analysis; this keeps the stabilized preview visible after serial queued analysis and
+when analyzer and render use different FxPlug processes. Do not use per-process revision
+counters as the hidden render invalidation value because analyzer and render processes can
+generate the same counter value for different completed clips. Do not repeatedly set the
+hidden render revision when Final Cut Pro already holds the same value, because that can keep
+the effect in a loading/invalidation loop. Fingerprint mismatches must reject a
 candidate instead of accepting a different clip by time proximity alone. If Final Cut Pro keeps
 reporting a busy state when the serial queue tries to drain, keep the request queued visibly
 and retry later. A queued start request must remain a pending request for that effect

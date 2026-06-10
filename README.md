@@ -172,9 +172,15 @@ path does not use plug-in-local active markers as the blocking authority; it ask
 Final Cut Pro's current analysis state and queues only when the host reports a
 busy/requested state. Final Cut Pro's own analysis state remains the authority
 before any queued request can start.
-Preview/render checks the persistent cache signature on each render pass, so a
-queued clip that completes in a different FxPlug process can replace an older
-prepared path without requiring another manual start.
+Preview/render and plug-in state callbacks check the persistent cache signature,
+so a queued clip that completes in a different FxPlug process can replace an
+older prepared path and update the hidden render revision without requiring
+another manual start. The hidden render revision uses a process-independent
+small numeric token rather than the local analysis counter, so separate
+analyzer/render processes do not publish the same invalidation value for
+different clips. The plug-in skips setting that hidden parameter when Final Cut
+Pro already has the same value, avoiding repeated preview invalidation during
+effect load.
 
 The analysis path:
 

@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.28"
+private let stabilizerFxPlugVersion = "0.30"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -162,7 +162,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private let analysisSessionLock = NSLock()
     private var lastPublishedStatus = ""
     private var lastPublishedInfo = ""
-    private var lastPublishedRenderRevision: UInt64?
+    private var lastPublishedRenderRevision: Double?
     private var activeAnalysisStore: StabilizerHostAnalysisStore?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
@@ -424,14 +424,23 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
         state.debugOverlay = debugOverlay.boolValue
         paramAPI.getIntValue(&state.sampleScale, fromParameter: ParameterID.sampleScale.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.renderRevision, fromParameter: ParameterID.renderRevision.rawValue, at: renderTime)
+        if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded() {
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(
+                hostAnalysisStore.renderInvalidationToken,
+                currentParameterValue: state.renderRevision,
+                force: true
+            )
+        }
         let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
-        paramAPI.getFloatValue(&state.renderRevision, fromParameter: ParameterID.renderRevision.rawValue, at: renderTime)
         drainQueuedHostAnalysisFromFCPCallbackIfNeeded()
         publishHostAnalysisStatus()
         publishStabilizerInfo(state: state)
-        publishRenderRevision(state.hostAnalysisRevision)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, currentParameterValue: state.renderRevision)
 
         pluginState?.pointee = NSData(bytes: &state, length: MemoryLayout<StabilizerPluginState>.size)
     }
@@ -445,7 +454,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let loadedPersistentCache = shouldSkipPersistentCacheReload ? false : hostAnalysisStore.loadPersistentCache()
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
-        publishRenderRevision(hostAnalysisStore.revision, force: true)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
         if !loadedPersistentCache {
             requestHostAnalysisIfNeeded(force: true)
         }
@@ -457,7 +466,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         hostAnalysisStore.clearPersistentCache()
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
-        publishRenderRevision(hostAnalysisStore.revision, force: true)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
     }
 
     @discardableResult
@@ -481,7 +490,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             hostAnalysisStore.markStartFailed(reason: "FxAnalysisAPI unavailable")
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.revision, force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
             return .failed
         }
         let analysisState = analysisAPI.analysisStateForEffect()
@@ -495,7 +504,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 hostAnalysisStore.markQueued(position: position, reason: reason)
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
-                publishRenderRevision(hostAnalysisStore.revision, force: true)
+                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
                 NSLog("StabilizerFxPlug: queued Host Analysis request at position \(position) because host state is \(reason).")
                 Self.scheduleSerialAnalysisQueueDrain()
                 return .queued
@@ -504,7 +513,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             }
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.revision, force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
             if force {
                 NSLog("StabilizerFxPlug: Host Analysis is already requested or running.")
             }
@@ -517,7 +526,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             hostAnalysisStore.markRequested()
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.revision, force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
             return .started
         } catch {
             NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
@@ -525,7 +534,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             hostAnalysisStore.markStartFailed(reason: error.localizedDescription)
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.revision, force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
             return .failed
         }
     }
@@ -771,7 +780,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         return lines.joined(separator: "\n")
     }
 
-    private func publishRenderRevision(_ revision: UInt64, force: Bool = false) {
+    private func publishRenderRevision(_ revision: Double, currentParameterValue: Double? = nil, force: Bool = false) {
+        guard revision > 0.0 else {
+            return
+        }
+        if let currentParameterValue,
+           abs(currentParameterValue - revision) < 0.5 {
+            statusLock.lock()
+            lastPublishedRenderRevision = revision
+            statusLock.unlock()
+            return
+        }
         statusLock.lock()
         let shouldPublish = force || lastPublishedRenderRevision != revision
         if shouldPublish {
@@ -783,7 +802,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         else {
             return
         }
-        if !settingAPI.setFloatValue(Double(revision), toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
+        if !settingAPI.setFloatValue(revision, toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
             NSLog("StabilizerFxPlug: failed to update Render Revision parameter.")
         }
     }
@@ -804,7 +823,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private func abandonActiveAnalysisAfterFailure() {
         setActiveAnalysisStore(nil)
         Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
-        publishRenderRevision(hostAnalysisStore.revision, force: true)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
     }
 
     private func requestedSampleScalePercent(at time: CMTime) -> Double {
@@ -1187,7 +1206,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         setActiveAnalysisStore(nil)
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
-        publishRenderRevision(hostAnalysisStore.revision, force: true)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
         Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
     }
 }
@@ -1373,6 +1392,7 @@ private final class StabilizerHostAnalysisStore {
     private var validationState: HostAnalysisValidationState = .notRequired
     private var status: HostAnalysisStatus = .needsAnalysis
     private var analysisRevision: UInt64 = 0
+    private var renderRevisionToken: Double = 0.0
     private var observedPersistentCacheGeneration: UInt64 = 0
     private var observedPersistentCacheSignature = ""
     private var latestSourceFrameInfo: StabilizerSourceFrameInfo?
@@ -1389,6 +1409,12 @@ private final class StabilizerHostAnalysisStore {
         lock.lock()
         defer { lock.unlock() }
         return analysisRevision
+    }
+
+    var renderInvalidationToken: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return renderRevisionToken
     }
 
     var infoText: String {
@@ -1667,7 +1693,7 @@ private final class StabilizerHostAnalysisStore {
 
     func preparedAnalysisForRender(validating sourceImage: FxImageTile, at renderTime: CMTime) -> StabilizerPreparedAnalysis? {
         while true {
-            if shouldReloadPersistentCacheForRender(), loadPersistentCache() {
+            if shouldReloadPersistentCacheForConsumer(), loadPersistentCache() {
                 continue
             }
             guard let analysis = preparedAnalysisSnapshot() else {
@@ -1783,7 +1809,14 @@ private final class StabilizerHostAnalysisStore {
         return false
     }
 
-    private func shouldReloadPersistentCacheForRender() -> Bool {
+    func reloadPersistentCacheForConsumerIfNeeded() -> Bool {
+        guard shouldReloadPersistentCacheForConsumer() else {
+            return false
+        }
+        return loadPersistentCache()
+    }
+
+    private func shouldReloadPersistentCacheForConsumer() -> Bool {
         let generation = Self.currentPersistentCacheGeneration()
         let signature = Self.currentPersistentCacheSignature()
         lock.lock()
@@ -2372,6 +2405,17 @@ private final class StabilizerHostAnalysisStore {
 
     private func bumpRevisionLocked() {
         analysisRevision &+= 1
+        renderRevisionToken = Self.nextRenderInvalidationToken(after: renderRevisionToken)
+    }
+
+    private static func nextRenderInvalidationToken(after currentToken: Double) -> Double {
+        let milliseconds = UInt64((Date().timeIntervalSinceReferenceDate * 1000.0).rounded())
+        let nextToken = Double((milliseconds % 900_000) + 1_000)
+        if abs(nextToken - currentToken) >= 0.5 {
+            return nextToken
+        }
+        let incrementedToken = currentToken + 1.0
+        return incrementedToken < 901_000.0 ? incrementedToken : 1_000.0
     }
 
     private func removePersistentCache(logFailures: Bool) {
