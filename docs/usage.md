@@ -157,6 +157,28 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   Walking Bob detections. The render-time confidence response is more assertive for
   medium-confidence frame evidence, but zero confidence still produces zero correction.
 
+## Feedback CLI
+
+To turn a review note into diagnostics, run the cache-backed feedback tool:
+
+```sh
+fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
+```
+
+`--time` is clip-relative, so `5.0` means five seconds after the saved Host
+Analysis range starts. The default cache path is
+`~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json`; pass
+`--cache` for a range-specific file under the `caches/` directory. Add `--json`
+for structured output, `--window 0.5` to inspect the strongest frame near the
+note, and `--output-size 1920x1080` to scale translation estimates to a preview
+size.
+
+The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
+paths and ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
+bands. If the cache was written by an older build with mismatched frame/path
+arrays, it fails visibly and asks for a new Host Analysis run with the current
+FxPlug.
+
 ## Behavior
 
 - The effect does not write Final Cut Pro Transform keyframes.

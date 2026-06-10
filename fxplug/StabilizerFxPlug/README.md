@@ -234,3 +234,18 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `RES` residual quality where higher means lower block-matching error, and
   `HIT` search-radius headroom quality where higher means fewer searches hit the radius edge.
   `TRK`, `SHRP`, `RES`, and `HIT` all use the same high-is-good direction.
+
+## Feedback CLI
+
+Use `scripts/stabilizer_feedback.sh` to compare a review note against the saved
+Host Analysis cache without launching Final Cut Pro:
+
+```sh
+scripts/stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
+```
+
+`--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
+remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP` bands from the prepared
+motion paths and tracking diagnostics. It fails visibly on unsupported or
+mismatched cache data instead of repairing it; rerun Host Analysis with the
+current FxPlug when that happens.
