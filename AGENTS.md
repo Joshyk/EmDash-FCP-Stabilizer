@@ -156,9 +156,11 @@ outer-frame baseline using the multi-block Host Analysis path. Footstep Jitter c
 should be evaluated per render frame from current tracking quality, accepted block coverage,
 blur, local baseline support, surrounding footstep noise, and whether the center frame
 departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
-Medium-confidence response may be curved upward for a more useful debug pass, and moderate
-landing impulses should not be buried by an overly high surrounding-noise threshold, but
-zero confidence must still produce zero correction.
+Medium-confidence response may be curved upward for a more useful debug pass. Footstep
+Jitter, Stride Wobble, and Walking Bob may use a more assertive medium-confidence response
+than Turn Smoothing and Far-field Warp, but zero confidence must still produce zero
+correction. Moderate landing impulses should not be buried by an overly high
+surrounding-noise threshold.
 The surrounding-noise floor should be capped below the full impulse response point so repeated
 walking motion does not hide a real center-frame landing impulse.
 Footstep Jitter strength values should be direct removal amounts with an exposed maximum of

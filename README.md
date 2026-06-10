@@ -272,9 +272,9 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - Current warp shape values.
 
 Values above `1.0` on Footstep, Stride, and Bob controls boost low-confidence
-corrections with a curved confidence response. The response is more assertive for
-medium-confidence frame evidence, but still has no hidden minimum confidence
-floor: zero confidence produces zero correction.
+corrections with a curved confidence response. Those walking-band controls use a
+more assertive medium-confidence response than TURN and WARP, but still have no
+hidden minimum confidence floor: zero confidence produces zero correction.
 
 ## Feedback CLI
 

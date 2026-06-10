@@ -220,7 +220,7 @@ static uint debugLabelChar(uint row, uint index) {
         case 19:
             if (index == 0) { return 86; } // V
             if (index == 1) { return 49; } // 1
-            if (index == 2) { return 53; } // 5
+            if (index == 2) { return 54; } // 6
             return 0;
         default:
             return 0;

@@ -197,8 +197,9 @@ fallbacks.
   edge-hit counts, the X turn and stride components plus Y footstep, stride, and walking-bob
   components, plus separate `bob q` confidence.
 - Strength values above `1.0` still compensate low-confidence Footstep, Stride Wobble, and
-  Walking Bob detections. The render-time confidence response is more assertive for
-  medium-confidence frame evidence, but zero confidence still produces zero correction.
+  Walking Bob detections. Those walking-band controls use a more assertive
+  medium-confidence response than TURN and WARP, but zero confidence still produces zero
+  correction.
 
 ## Feedback CLI
 
