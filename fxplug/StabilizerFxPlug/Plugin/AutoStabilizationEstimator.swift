@@ -293,8 +293,8 @@ enum AutoStabilizationEstimator {
     private static let maxRenderedFarFieldShear: Float = 0.004
     private static let maxRenderedFarFieldYawPitchProxy: Float = 0.0025
     private static let maxRenderedFarFieldPerspective: Float = 0.0015
-    private static let farFieldWarpTrackingGateStart: Float = 0.34
-    private static let farFieldWarpTrackingGateFull: Float = 0.52
+    private static let farFieldWarpTrackingGateStart: Float = 0.30
+    private static let farFieldWarpTrackingGateFull: Float = 0.50
     private static let farFieldWarpEdgeQualityGateStart: Float = 0.55
     private static let farFieldWarpEdgeQualityGateFull: Float = 0.86
     private static let footstepImpulseInnerWindowSeconds = 0.10

@@ -94,14 +94,15 @@ perspective trim for distant background motion. It is applied from the current
 frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
 maximum is `4.0`. The render path gates warp with walking-footage tracking quality and
-search-radius headroom, then curves medium-confidence gates upward and drops
-tiny warp deltas through a deadband so useful ridge-line correction is less
-likely to disappear while low-confidence warp evidence is still suppressed
+search-radius headroom. The tracking gate now starts earlier for moderate
+25% Host Analysis evidence, then curves medium-confidence gates upward and
+drops tiny warp deltas through a deadband so useful ridge-line correction is
+less likely to disappear while low-confidence warp evidence is still suppressed
 instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V06` row for the active
-render runtime. It does not control black outside-source pixels;
+bands and tracking state. It also includes a compact runtime-version row for the
+active render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
@@ -266,7 +267,9 @@ bands using the saved prepared paths, tracking confidence, residuals, blur,
 block coverage, and search-radius edge-hit counts. The band split mirrors the
 render path: `FJIT` is measured first against the outer-frame baseline, then
 `SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. `WARP`
-`q` matches the applied `W Q` confidence shown by Debug Overlay. If a cache has mismatched
+`q` matches the applied `W Q` confidence shown by Debug Overlay, and the report
+includes residual, blur, block coverage, edge quality, and WARP tracking/edge gate
+values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
 Analysis run with the current FxPlug instead of trying to repair the data.
 

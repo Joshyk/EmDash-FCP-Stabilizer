@@ -149,20 +149,20 @@ private struct Analysis {
 
         func requireFloatArray(_ value: [Float]?, _ name: String) throws -> [Float] {
             guard let value else {
-                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.6 or newer")
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.7 or newer")
             }
             guard value.count == frames.count else {
-                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.6 or newer")
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.7 or newer")
             }
             return value
         }
 
         func requireIntArray(_ value: [Int32]?, _ name: String) throws -> [Int32] {
             guard let value else {
-                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.6 or newer")
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with FxPlug 0.7 or newer")
             }
             guard value.count == frames.count else {
-                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.6 or newer")
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with FxPlug 0.7 or newer")
             }
             return value
         }
@@ -216,10 +216,17 @@ private struct FrameAssessment {
     let motionConfidence: Float
     let residual: Float
     let blur: Float
+    let residualQuality: Float
+    let blurQuality: Float
+    let blockCoverage: Float
     let acceptedBlocks: Int32
     let totalBlocks: Int32
     let edgeHits: Int32
     let edgeTotal: Int32
+    let edgeQuality: Float
+    let warpTrackingGate: Float
+    let warpEdgeGate: Float
+    let warpGate: Float
     let bands: [BandAssessment]
 
     var topBand: BandAssessment {
@@ -247,8 +254,8 @@ private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
 private let walkingBobFullScalePixels: Float = 0.65
 private let turnFullScalePixels: Float = 2.0
-private let farFieldWarpTrackingGateStart: Float = 0.34
-private let farFieldWarpTrackingGateFull: Float = 0.52
+private let farFieldWarpTrackingGateStart: Float = 0.30
+private let farFieldWarpTrackingGateFull: Float = 0.50
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
 private let supportedCacheSchemaVersion = 14
@@ -416,13 +423,14 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let turnIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: turnWindowSeconds)
     let sampledIndices = Array(Set(strideIndices + bobIndices + turnIndices + [index]))
     let centerResidual = analysis.residuals[index]
-    let tracking = frameTrackingConfidence(
+    let quality = frameTrackingQuality(
         motionConfidence: analysis.analysisConfidence[index],
         residual: centerResidual,
         blurAmount: analysis.blurAmounts[index],
         acceptedBlockCount: analysis.acceptedBlockCounts[index],
         totalBlockCount: analysis.totalBlockCounts[index]
     )
+    let tracking = frameTrackingConfidence(quality)
 
     let footstepCleanXPath = outerLinearPredictionPath(
         analysis.footstepPathX,
@@ -517,12 +525,13 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let turnApplied = turnDetected * correctionFactor(options.strengths.turn, confidence: turnQ)
 
     let rawWarpConfidence = analysis.warpConfidence[index]
-    let warpGate = farFieldWarpGate(
+    let warpGateComponents = farFieldWarpGateComponents(
         warpConfidence: rawWarpConfidence,
         trackingConfidence: tracking,
         searchRadiusHitCount: analysis.searchRadiusHitCounts[index],
         searchRadiusTotalCount: analysis.searchRadiusTotalCounts[index]
     )
+    let warpGate = warpGateComponents.gate
     let appliedWarpConfidence = clamp(rawWarpConfidence * warpGate, min: 0.0, max: 1.0)
     let warpDetected = warpMagnitude(analysis: analysis, index: index) * min(4.0, max(0.0, Float(options.strengths.warp)))
     let warpApplied = warpDetected * warpGate
@@ -566,7 +575,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
             applied: warpApplied,
             remaining: max(0.0, warpDetected - warpApplied),
             confidence: appliedWarpConfidence,
-            note: String(format: "dimensionless warp band raw q %.2f gate %.2f", rawWarpConfidence, warpGate)
+            note: String(format: "dimensionless warp band raw q %.2f gate %.2f trkGate %.2f edgeGate %.2f", rawWarpConfidence, warpGate, warpGateComponents.trackingGate, warpGateComponents.edgeGate)
         )
     ].sorted { $0.remaining > $1.remaining }
 
@@ -578,10 +587,17 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
         motionConfidence: analysis.analysisConfidence[index],
         residual: centerResidual,
         blur: analysis.blurAmounts[index],
+        residualQuality: quality.residualQuality,
+        blurQuality: quality.blurQuality,
+        blockCoverage: quality.blockCoverage,
         acceptedBlocks: analysis.acceptedBlockCounts[index],
         totalBlocks: analysis.totalBlockCounts[index],
         edgeHits: analysis.searchRadiusHitCounts[index],
         edgeTotal: analysis.searchRadiusTotalCounts[index],
+        edgeQuality: warpGateComponents.edgeQuality,
+        warpTrackingGate: warpGateComponents.trackingGate,
+        warpEdgeGate: warpGateComponents.edgeGate,
+        warpGate: warpGate,
         bands: bands
     )
 }
@@ -820,22 +836,38 @@ private func turnConfidence(bandValue: Float, trackingConfidence: Float) -> Floa
     return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
 }
 
-private func farFieldWarpGate(warpConfidence: Float, trackingConfidence: Float, searchRadiusHitCount: Int32, searchRadiusTotalCount: Int32) -> Float {
+private func farFieldWarpGateComponents(
+    warpConfidence: Float,
+    trackingConfidence: Float,
+    searchRadiusHitCount: Int32,
+    searchRadiusTotalCount: Int32
+) -> (edgeQuality: Float, trackingGate: Float, edgeGate: Float, gate: Float) {
     guard warpConfidence > 0.0, searchRadiusTotalCount > 0 else {
-        return 0.0
+        return (0.0, 0.0, 0.0, 0.0)
     }
     let edgeQuality = 1.0 - clamp(Float(searchRadiusHitCount) / Float(searchRadiusTotalCount), min: 0.0, max: 1.0)
     let trackingGate = confidenceRamp(trackingConfidence, start: farFieldWarpTrackingGateStart, full: farFieldWarpTrackingGateFull)
     let edgeGate = confidenceRamp(edgeQuality, start: farFieldWarpEdgeQualityGateStart, full: farFieldWarpEdgeQualityGateFull)
-    return correctionConfidenceResponse(clamp(trackingGate * edgeGate, min: 0.0, max: 1.0))
+    let gate = correctionConfidenceResponse(clamp(trackingGate * edgeGate, min: 0.0, max: 1.0))
+    return (edgeQuality, trackingGate, edgeGate, gate)
 }
 
-private func frameTrackingConfidence(motionConfidence: Float, residual: Float, blurAmount: Float, acceptedBlockCount: Int32, totalBlockCount: Int32) -> Float {
+private func frameTrackingQuality(
+    motionConfidence: Float,
+    residual: Float,
+    blurAmount: Float,
+    acceptedBlockCount: Int32,
+    totalBlockCount: Int32
+) -> (residualQuality: Float, blurQuality: Float, blockCoverage: Float, combinedEvidence: Float) {
     let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
     let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
-    let blockQuality = totalBlockCount > 0 ? clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0) : 0.0
-    let evidence = motionConfidence * residualQuality * blurQuality * blockQuality
-    return clamp(sqrtf(max(0.0, evidence)), min: 0.0, max: 1.0)
+    let blockCoverage = totalBlockCount > 0 ? clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0) : 0.0
+    let evidence = motionConfidence * residualQuality * blurQuality * blockCoverage
+    return (residualQuality, blurQuality, blockCoverage, evidence)
+}
+
+private func frameTrackingConfidence(_ quality: (residualQuality: Float, blurQuality: Float, blockCoverage: Float, combinedEvidence: Float)) -> Float {
+    clamp(sqrtf(max(0.0, quality.combinedEvidence)), min: 0.0, max: 1.0)
 }
 
 private func residualAdjustedTrackingConfidence(_ trackingConfidence: Float, residual: Float, multiplier: Float) -> Float {
@@ -966,6 +998,14 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
                      assessment.totalBlocks,
                      assessment.edgeHits,
                      assessment.edgeTotal))
+        print(String(format: "  quality residualQ %.2f blurQ %.2f blockQ %.2f edgeQ %.2f warpGate %.2f (trk %.2f edge %.2f)",
+                     assessment.residualQuality,
+                     assessment.blurQuality,
+                     assessment.blockCoverage,
+                     assessment.edgeQuality,
+                     assessment.warpGate,
+                     assessment.warpTrackingGate,
+                     assessment.warpEdgeGate))
         for band in assessment.bands {
             print(String(format: "  %-4@ detected %.3f applied %.3f remaining %.3f q %.2f | %@",
                          band.name as NSString,
@@ -998,10 +1038,17 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
                 "motionConfidence": assessment.motionConfidence,
                 "residual": assessment.residual,
                 "blur": assessment.blur,
+                "residualQuality": assessment.residualQuality,
+                "blurQuality": assessment.blurQuality,
+                "blockCoverage": assessment.blockCoverage,
                 "acceptedBlocks": assessment.acceptedBlocks,
                 "totalBlocks": assessment.totalBlocks,
                 "edgeHits": assessment.edgeHits,
                 "edgeTotal": assessment.edgeTotal,
+                "edgeQuality": assessment.edgeQuality,
+                "warpTrackingGate": assessment.warpTrackingGate,
+                "warpEdgeGate": assessment.warpEdgeGate,
+                "warpGate": assessment.warpGate,
                 "topBand": assessment.topBand.name,
                 "bands": assessment.bands.map { band in
                     [

@@ -81,9 +81,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   deviation from its own `0.10`/`1.0` second outer-frame linear warp baseline, so
   accumulated drift does not turn into a fixed deskew. The default is `1.0`, the maximum is
   `4.0`, and `0` fully disables warp. Render gates warp with walking-footage tracking
-  quality and search-radius headroom, then applies a tiny deadband so weak frames do not
-  create wave-like image distortion. Pull this down if close grass, roads, water, or frame
-  edges start to swim.
+  quality and search-radius headroom. The tracking gate starts earlier for moderate
+  25% Host Analysis evidence, then applies a tiny deadband so weak frames do not create
+  wave-like image distortion. Pull this down if close grass, roads, water, or frame edges
+  start to swim.
 - `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
   walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
   correction is bypassed; the default is `1.0` and the maximum is `4.0`. Values above `1.0`
@@ -141,10 +142,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
-  compact `V06` row in `Debug Overlay` when confirming the active render runtime.
+  compact runtime-version row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V06` bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime-version bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
@@ -192,7 +193,9 @@ paths and ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
 bands. It follows the same band order as render: `FJIT` is measured against the
 outer-frame baseline, then `SWOB`, `BOB`, and `TURN` are measured from that
 footstep-cleaned path. `WARP` `q` matches the applied `W Q` confidence shown by
-Debug Overlay. If the cache was written by an older build with mismatched frame/path
+Debug Overlay. The report also prints residual quality, blur quality, block coverage,
+edge quality, and WARP tracking/edge gate values so conservative gating can be separated
+from weak detected motion. If the cache was written by an older build with mismatched frame/path
 arrays, it fails visibly and asks for a new Host Analysis run with the current
 FxPlug.
 
@@ -257,9 +260,10 @@ FxPlug.
   shear at `0.016`, yaw/pitch proxy at `0.010`, and perspective at `0.006`. The applied
   value is the local warp band against its `0.10`/`1.0` second outer-frame linear baseline,
   not the absolute accumulated warp path. Render also requires walking-footage tracking
-  quality and search-radius headroom before applying warp, curves medium-confidence gates
-  upward, and drops tiny warp deltas through a deadband to avoid wave-like image distortion
-  while tuning micro jitter.
+  quality and search-radius headroom before applying warp, starts its tracking gate earlier
+  for moderate 25% Host Analysis evidence, curves medium-confidence gates upward, and drops
+  tiny warp deltas through a deadband to avoid wave-like image distortion while tuning
+  micro jitter.
 - Host Analysis cache schema `14` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,

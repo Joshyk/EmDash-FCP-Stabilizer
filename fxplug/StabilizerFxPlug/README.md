@@ -162,9 +162,10 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Far-field Warp Strength`: bundled small-clamp WARP correction for distant ridge-line
   shake. It uses a `0.10`/`1.0` second outer-frame linear warp baseline and applies shear,
   yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
-  gates warp with walking-footage tracking quality and search-radius headroom, curves
-  medium-confidence gates upward, then applies a tiny deadband and small render-only clamps
-  so weak frames do not create wave-like image distortion.
+  gates warp with walking-footage tracking quality and search-radius headroom, starts the
+  tracking gate earlier for moderate 25% Host Analysis evidence, curves medium-confidence
+  gates upward, then applies a tiny deadband and small render-only clamps so weak frames do
+  not create wave-like image distortion.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.
@@ -204,13 +205,12 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Walking Bob <= 2.5s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available. Older saved timeline instances may keep
-  stale saved Inspector strings, so use the compact `V06` row in `Debug Overlay` to
-  confirm the active render runtime.
+  stale saved Inspector strings, so use the compact runtime-version row in `Debug Overlay`
+  to confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
-  `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), and compact runtime
-  `V06` diagnostics so Final
-  Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
+  `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), and compact
+  runtime-version diagnostics so Final Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,
@@ -256,6 +256,8 @@ remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP` bands from the prepared
 motion paths and tracking diagnostics. It uses the same footstep-first band
 split as render, so `SWOB`, `BOB`, and `TURN` diagnostics are computed from the
 footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
-applied `W Q` confidence shown by Debug Overlay. It fails visibly on unsupported or
+applied `W Q` confidence shown by Debug Overlay. The report includes residual quality,
+blur quality, block coverage, edge quality, and WARP tracking/edge gate values so gating
+causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.
