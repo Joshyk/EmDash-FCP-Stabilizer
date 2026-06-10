@@ -122,6 +122,8 @@ loaded cache immediately rather than requiring re-analysis; original-media valid
 happen later when original frames are available. When the
 effective overall transform strength is zero, rendering must
 bypass prepared motion-path sampling and output an identity transform with no debug overlay.
+Render-time frame/window lookup should use the sorted prepared frame times directly instead
+of repeatedly scanning the full analysis frame set on every preview sample.
 When Host Analysis/cache state changes, update a hidden render-affecting revision parameter
 so Final Cut Pro invalidates the preview/render cache and the viewer reflects the prepared
 stabilization immediately.

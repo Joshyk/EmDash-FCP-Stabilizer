@@ -175,7 +175,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   more gradually, uses short local tracking support and a `0.36` second render smoothing
   window to reduce single-frame gate flicker, then
   applies a tiny deadband and small render-only clamps so weak frames do not create wave-like
-  image distortion.
+  image distortion. Render-time window lookup uses the sorted Host Analysis times directly,
+  so long prepared caches do not require repeated full-cache scans during playback.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.

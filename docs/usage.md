@@ -288,8 +288,10 @@ FxPlug.
   correction after the wider Stride/Turn/Bob smoothing pass, so fine distant ridge-line shake
   is not averaged out by temporal smoothing. Far-field Warp uses a shorter `0.36` second
   in-range smoothing window so ridge-line correction remains responsive without turning
-  single-frame gate changes into swimming. Stride, Bob, and Turn confidence use robust
-  residual percentiles rather than the single worst frame in the smoothing window.
+  single-frame gate changes into swimming. Render-time window selection uses the sorted Host
+  Analysis frame times directly, so long prepared caches do not require repeated full-cache
+  scans during playback. Stride, Bob, and Turn confidence use robust residual percentiles
+  rather than the single worst frame in the smoothing window.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available.

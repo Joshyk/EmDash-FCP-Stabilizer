@@ -466,13 +466,29 @@ enum AutoStabilizationEstimator {
         let smoothWindowSeconds = max(effectiveStrideWobbleWindowSeconds, panSmoothSeconds)
         let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
         let frameInterpolation = frameInterpolation(at: renderSeconds, in: frames)
-        let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
+        let windowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: smoothWindowSeconds * 0.5
+        )
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
-        let strideWobbleWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveStrideWobbleWindowSeconds * 0.5 }
+        let strideWobbleWindowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: effectiveStrideWobbleWindowSeconds * 0.5
+        )
         let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : Array(strideWobbleWindowIndices)
-        let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }
+        let walkingBobWindowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: effectiveWalkingBobWindowSeconds * 0.5
+        )
         let walkingBobActiveIndices = walkingBobWindowIndices.isEmpty ? [centerIndex] : Array(walkingBobWindowIndices)
-        let farFieldWarpGateWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= farFieldWarpOuterWindowSeconds * 0.5 }
+        let farFieldWarpGateWindowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: farFieldWarpOuterWindowSeconds * 0.5
+        )
         let farFieldWarpGateActiveIndices = farFieldWarpGateWindowIndices.isEmpty ? [centerIndex] : Array(farFieldWarpGateWindowIndices)
         let sampledIndices = activeIndices + strideWobbleActiveIndices + walkingBobActiveIndices + [centerIndex] + frameInterpolation.indices
         let footstepBaselineXPath = outerLinearPredictionPath(
@@ -1619,16 +1635,20 @@ enum AutoStabilizationEstimator {
     }
 
     private static func closestFrameIndex(to time: Double, in frames: [StabilizerAnalysisFrame]) -> Int {
-        var bestIndex = 0
-        var bestDistance = Double.greatestFiniteMagnitude
-        for (index, frame) in frames.enumerated() {
-            let distance = abs(frame.time - time)
-            if distance < bestDistance {
-                bestIndex = index
-                bestDistance = distance
-            }
+        guard !frames.isEmpty else {
+            return 0
         }
-        return bestIndex
+        let nextIndex = lowerBoundFrameIndex(frames, time: time)
+        guard nextIndex > frames.startIndex else {
+            return frames.startIndex
+        }
+        guard nextIndex < frames.endIndex else {
+            return frames.index(before: frames.endIndex)
+        }
+        let previousIndex = nextIndex - 1
+        let previousDistance = abs(frames[previousIndex].time - time)
+        let nextDistance = abs(frames[nextIndex].time - time)
+        return previousDistance <= nextDistance ? previousIndex : nextIndex
     }
 
     private struct FrameInterpolation {
@@ -1655,21 +1675,19 @@ enum AutoStabilizationEstimator {
         if time >= frames[lastIndex].time {
             return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
         }
-        for upperIndex in 1..<frames.count {
-            let upperTime = frames[upperIndex].time
-            guard time <= upperTime else {
-                continue
-            }
-            let lowerIndex = upperIndex - 1
-            let lowerTime = frames[lowerIndex].time
-            let duration = upperTime - lowerTime
-            guard duration > 1e-9 else {
-                return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: 0.0)
-            }
-            let fraction = clamp(Float((time - lowerTime) / duration), min: 0.0, max: 1.0)
-            return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction)
+        let upperIndex = upperBoundFrameIndex(frames, time: time)
+        guard upperIndex > frames.startIndex, upperIndex < frames.endIndex else {
+            return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
         }
-        return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
+        let lowerIndex = upperIndex - 1
+        let lowerTime = frames[lowerIndex].time
+        let upperTime = frames[upperIndex].time
+        let duration = upperTime - lowerTime
+        guard duration > 1e-9 else {
+            return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: 0.0)
+        }
+        let fraction = clamp(Float((time - lowerTime) / duration), min: 0.0, max: 1.0)
+        return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction)
     }
 
     private static func interpolatedValue(_ values: [Float], using interpolation: FrameInterpolation) -> Float {
@@ -1746,10 +1764,54 @@ enum AutoStabilizationEstimator {
             return []
         }
         let centerTime = frames[centerIndex].time
-        let maxDistance = windowSeconds + timeWindowSelectionEpsilon
-        return frames.indices.filter { index in
-            abs(frames[index].time - centerTime) <= maxDistance
+        return indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: windowSeconds)
+    }
+
+    private static func indicesWithinTimeRadius(
+        _ frames: [StabilizerAnalysisFrame],
+        centerTime: Double,
+        radiusSeconds: Double
+    ) -> [Int] {
+        guard !frames.isEmpty, centerTime.isFinite, radiusSeconds.isFinite else {
+            return []
         }
+        let boundedRadius = max(0.0, radiusSeconds)
+        let startTime = centerTime - boundedRadius - timeWindowSelectionEpsilon
+        let endTime = centerTime + boundedRadius + timeWindowSelectionEpsilon
+        let lowerIndex = lowerBoundFrameIndex(frames, time: startTime)
+        let upperIndex = upperBoundFrameIndex(frames, time: endTime)
+        guard lowerIndex < upperIndex else {
+            return []
+        }
+        return Array(lowerIndex..<upperIndex)
+    }
+
+    private static func lowerBoundFrameIndex(_ frames: [StabilizerAnalysisFrame], time: Double) -> Int {
+        var low = frames.startIndex
+        var high = frames.endIndex
+        while low < high {
+            let mid = low + ((high - low) / 2)
+            if frames[mid].time < time {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
+    }
+
+    private static func upperBoundFrameIndex(_ frames: [StabilizerAnalysisFrame], time: Double) -> Int {
+        var low = frames.startIndex
+        var high = frames.endIndex
+        while low < high {
+            let mid = low + ((high - low) / 2)
+            if frames[mid].time <= time {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
     }
 
     private static func surroundingIndicesExcludingCenter(
@@ -1764,7 +1826,8 @@ enum AutoStabilizationEstimator {
         let innerWindow = max(0.0, min(innerWindowSeconds, outerWindowSeconds))
         let outerWindow = max(innerWindow, outerWindowSeconds)
         let centerTime = frames[centerIndex].time
-        let indices = frames.indices.filter { index in
+        let outerIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: outerWindow)
+        let indices = outerIndices.filter { index in
             let distance = abs(frames[index].time - centerTime)
             return distance <= outerWindow + timeWindowSelectionEpsilon
                 && distance > innerWindow + timeWindowSelectionEpsilon
@@ -1789,7 +1852,7 @@ enum AutoStabilizationEstimator {
         let outerWindow = max(innerWindow, outerWindowSeconds)
         let centerTime = frames[centerIndex].time
         var points: [(x: Float, y: Float)] = []
-        for index in frames.indices where values.indices.contains(index) {
+        for index in indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: outerWindow) where values.indices.contains(index) {
             let offsetSeconds = frames[index].time - centerTime
             let distance = abs(offsetSeconds)
             if distance <= outerWindow + timeWindowSelectionEpsilon
@@ -1951,9 +2014,7 @@ enum AutoStabilizationEstimator {
         let halfWindowSeconds = max(0.0, windowSeconds * 0.5)
         for index in Set(targetIndices) where values.indices.contains(index) && frames.indices.contains(index) {
             let centerTime = frames[index].time
-            let localIndices = frames.indices.filter { candidate in
-                abs(frames[candidate].time - centerTime) <= halfWindowSeconds + timeWindowSelectionEpsilon
-            }
+            let localIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindowSeconds)
             let activeIndices = localIndices.isEmpty ? [index] : Array(localIndices)
             smoothedValues[index] = timeWeightedAverage(
                 values,

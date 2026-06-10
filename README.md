@@ -175,7 +175,9 @@ first or last analysis frame. It smooths Stride Wobble, Walking Bob, and Turn
 Smoothing bands without averaging away the current frame's Footstep Jitter
 impulse. Far-field Warp uses a separate short `0.36` second in-range smoothing
 window so distant ridge-line correction stays responsive without amplifying
-single-frame gate flicker.
+single-frame gate flicker. Render-time frame lookup uses the sorted Host Analysis
+times directly, so long analysis caches do not require repeated full-cache scans
+for every preview frame.
 
 Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
