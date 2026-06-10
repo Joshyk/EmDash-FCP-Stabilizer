@@ -37,8 +37,12 @@ Current implementation to review:
     - `microPixelOffset` for Footstep Jitter
     - `walkingBobPixelOffset` for Walking Bob
   - `temporallySmoothedEstimate` samples neighboring render times symmetrically and blends the final automatic transform with zero phase.
-  - Turn Smoothing applies only to X translation and Walking Bob handles Y-only medium-period motion; Footstep Jitter X/Y and roll use the current center-frame impulse correction so fine ridge-line shake is not averaged away.
-  - Footstep Jitter uses per-frame confidence without a hidden minimum floor before applying X/Y/roll correction, still clamped at full detected-impulse removal.
+  - Turn Smoothing applies only to X translation and requires both tracking evidence and a real X turn band, without a hidden minimum turn-confidence floor.
+  - Walking Bob handles Y-only medium-period motion and gates on tracking quality, symmetric window support, robust residuals, and actual Y-band magnitude.
+  - Footstep Jitter X/Y and roll use the current center-frame impulse correction so fine ridge-line shake is not averaged away.
+  - Footstep Jitter uses per-frame confidence without a hidden minimum floor before applying X/Y/roll correction, checks local baseline support plus surrounding footstep noise, and stays clamped at full detected-impulse removal.
+  - Stride/Walking Bob/Turn residual gates use robust window percentiles rather than the single worst residual in the window.
+  - Far-field Warp render gating curves medium-confidence tracking/search-headroom evidence upward while preserving zero correction for zero evidence.
   - Far-field Warp estimates conservative deskew/shear, yaw/pitch proxy, and perspective trim from upper-frame residual blocks after translation and roll are removed.
   - `StabilizerAutoTransform` now carries:
     - final smoothed `pixelOffset` and `rotationDegrees`

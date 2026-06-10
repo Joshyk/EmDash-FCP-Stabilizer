@@ -44,6 +44,28 @@ outside-source pixels.
 clip. Preview and render callbacks only read completed analysis or a validated
 persistent cache; they do not start analysis on their own.
 
+## Optional Final Cut Pro Shortcuts
+
+The shared workspace script `../scripts/fcp_stabilizer_shortcuts.applescript`
+provides UI-scripted helper actions for Keyboard Maestro, Automator Quick
+Actions, or manual `osascript` runs:
+
+```sh
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
+```
+
+These actions use Final Cut Pro Accessibility UI scripting. Grant Accessibility
+permission to the app that runs the script. `start-analysis` and
+`toggle-debug-overlay` fail visibly if the selected clip does not have
+`Stabilizer Transform` applied or the Inspector control is not accessible.
+`open-selected-project` opens the selected Browser project with a CoreGraphics
+double-click, which is more reliable than repeated AppleScript clicks in Final
+Cut Pro.
+
 ## Inspector Controls
 
 `Sample Size` is read once when analysis starts. It is always derived from the
@@ -59,42 +81,62 @@ output, producing an identity transform.
 roll impulses. They run up to `4.0`; values above `1.0` can compensate when
 tracking confidence makes the correction too weak. The applied correction still
 clamps at full detected-impulse removal so it does not add inverse shake. The
+rotation default is `0.2` to keep walking footage from losing a stable horizon. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
-region and predicts from outer samples up to `1.0` second away.
+region and predicts from outer samples up to `1.0` second away. Confidence is
+based on current tracking evidence, local baseline support, and the center
+frame's impulse relative to surrounding footstep noise. Moderate landing impulses now reach
+useful confidence a little sooner, while zero evidence and noisy unsupported frames still
+produce zero correction. The surrounding-noise floor is capped below the full-response point
+so repeated walking motion does not bury a real center-frame landing shock.
+FJIT, SWOB, and BOB use a walking-band tracking gate that slightly eases block coverage only
+when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
+avoid swimming or false turn smoothing.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
 strengths. It is measured from the footstep-cleaned path, then longer Turn
 Smoothing and Walking Bob bands are measured from the stride-smoothed path so
 the same motion is not removed twice. It does not use the raw or jerk-limited
-broad path as its band input.
+broad path as its band input. Its residual gate uses robust window percentiles
+instead of letting a single bad frame suppress the whole band. Medium stride
+bands reach full confidence earlier than the broad UI scale so real walking
+follow-through is not left entirely to the longer Walking Bob pass; the Y default
+is `0.70`, high enough to remove medium vertical step wobble before the broader BOB pass.
+The rotation default is `0.2` to protect the horizon.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
 Y or roll, and is soft-limited to a small output-edge budget during render.
 `Turn Detection Window` comes from the Inspector UI value. Its UI minimum is the
 fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
+TURN confidence now requires both tracking evidence and a real X turn band, so
+low-evidence frames do not get a hidden minimum turn correction.
 
 `Walking Bob` uses a fixed internal `2.5` second Y-only baseline for the remaining
 vertical walking bounce after Footstep Jitter and Stride Wobble. The shorter window keeps
 BOB from turning weak vertical evidence into a slow image wave. The Inspector
 exposes only `Walking Bob Removal`; it does not gate or weaken Footstep Jitter Y.
-Its confidence uses current tracking quality and symmetric window support so weak
-tracking or one-sided clip-edge windows do not create large vertical waves. The
-default removal is `0.75`.
+Its confidence uses current tracking quality, symmetric window support, robust
+residuals, and actual Y-band magnitude so weak tracking, one-sided clip-edge
+windows, or tiny vertical bands do not create large vertical waves. The default
+removal is `0.75`.
 
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
 frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
 maximum is `4.0`. The render path gates warp with walking-footage tracking quality and
-search-radius headroom, then drops tiny warp deltas through a deadband so weak
-frames do not create visible swimming or wave-like distortion. Low-confidence
-warp evidence is suppressed instead of producing a wavy image.
+search-radius headroom. The tracking gate starts early enough for moderate
+25% Host Analysis evidence but reaches full response more gradually, uses short
+local tracking support to reduce single-frame gate flicker, then drops tiny warp
+deltas through a deadband so useful ridge-line correction is less likely to
+disappear while high-side gate jumps and low-confidence warp evidence are
+suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V03` row for the active
-render runtime. It does not control black outside-source pixels;
+bands and tracking state. It also includes a compact runtime-version row for the
+active render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
@@ -111,6 +153,34 @@ analysis frames from the host. The plug-in then uses Metal compute to downsample
 luma and run frame-to-frame block matching. If Metal analysis resources are not
 available, the Host Analysis path fails visibly in status/log output instead of
 falling back to CPU analysis.
+
+Each active Host Analysis run owns its own in-progress session store. Different
+clips can be requested while another clip is running, and clips whose selected
+`Sample Size` resolves to different actual pixel dimensions do not share the
+same streaming builder.
+
+When `Start Host Analysis` is pressed while Final Cut Pro reports that another
+analysis is already requested or running, the effect enters `Queued Host
+Analysis` instead of failing. The process-wide queue starts queued clips one at a
+time as the host becomes available. Queued start requests are retained until
+they either start or are explicitly cleared, and a completed analysis from an
+earlier clip does not satisfy a later queued clip.
+Analysis callback instances clear process-wide analysis bookkeeping, because
+Final Cut Pro may deliver setup/analyze/cleanup to a different FxPlug instance
+than the Inspector button instance that requested the run. The Inspector start
+path does not use plug-in-local active markers as the blocking authority; it asks
+Final Cut Pro's current analysis state and queues only when the host reports a
+busy/requested state. Final Cut Pro's own analysis state remains the authority
+before any queued request can start.
+Preview/render and plug-in state callbacks check the persistent cache signature,
+so a queued clip that completes in a different FxPlug process can replace an
+older prepared path and update the hidden render revision without requiring
+another manual start. The hidden render revision uses a process-independent
+small numeric token rather than the local analysis counter, so separate
+analyzer/render processes do not publish the same invalidation value for
+different clips. The plug-in skips setting that hidden parameter when Final Cut
+Pro already has the same value, avoiding repeated preview invalidation during
+effect load.
 
 The analysis path:
 
@@ -131,9 +201,13 @@ render time.
 Render-time smoothing samples neighboring render times symmetrically across a
 `1.20` second zero-phase window and blends the automatic transform. At clip
 edges it averages only in-range neighboring samples instead of duplicating the
-first or last analysis frame. It smooths Stride Wobble, Walking Bob, Far-field
-Warp, and Turn Smoothing bands without averaging away the current frame's
-Footstep Jitter impulse.
+first or last analysis frame. It smooths Stride Wobble, Walking Bob, and Turn
+Smoothing bands without averaging away the current frame's Footstep Jitter
+impulse. Far-field Warp uses a separate short `0.36` second in-range smoothing
+window so distant ridge-line correction stays responsive without amplifying
+single-frame gate flicker. Render-time frame lookup uses the sorted Host Analysis
+times directly, so long analysis caches do not require repeated full-cache scans
+for every preview frame.
 
 Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
@@ -151,9 +225,16 @@ Completed Host Analysis is written to the shared user cache:
 /Users/justadev/Library/Application Support/StabilizerFxPlug/caches/
 ```
 
+Range-specific files under `caches/` include the actual `sampleWidth` and
+`sampleHeight` in the filename, and the cache index retains candidates
+independently per sample size. `host-analysis-v2.json` is kept as the latest
+compatibility alias, not as the only retained cache.
+
 Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, and fingerprints instead of
-every frame's full luma sample.
+every frame's full luma sample. Cache writing uses the prepared analysis frame
+set as the authoritative timeline, so a reduced retained source-frame map does
+not prevent a completed prepared path from being saved.
 
 `Start Host Analysis` first tries to reload a saved cache. It starts a new host
 analysis only when no compatible saved cache can be loaded. It must not delete
@@ -170,19 +251,21 @@ Analysis Cache` is the explicit delete path and shows `Cache Cleared`.
 
 Unsupported schema candidates show `Cache Unsupported - Run Host Analysis`
 instead of being silently ignored or deleted. This keeps stale caches available
-for older builds while the current effect asks for a new analysis.
+for older builds while the current effect asks for a new analysis. Supported-schema
+caches with incomplete prepared path arrays show `Cache Incomplete - Run Host Analysis`
+so older incomplete analysis is not silently ignored.
 
-The active runtime uses a process-wide shared Host Analysis store because Final
-Cut Pro may call setup, frame analysis, cleanup, preview, and render through
-different FxPlug instances. Persistent cache files are the cross-process reuse
-path. Preview/render instances with no prepared analysis watch for cache file
-changes and reload validated candidates on demand.
+The active runtime uses per-clip stores for in-progress Host Analysis and a
+process-wide shared render/cache store after analysis completes. Persistent
+cache files are the cross-process reuse path. Preview/render instances with no
+prepared analysis watch for cache file changes and reload validated candidates
+on demand.
 
 ## Diagnostics
 
 `Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`,
 live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `SHRP`, `RES`, and
-search-radius `HIT` bars. Labels use raw English control/diagnostic abbreviations;
+search-radius `HIT`, `WLK`, and compact runtime-version bars. Labels use raw English control/diagnostic abbreviations;
 do not translate them in the preview.
 
 The overlay bars are normalized magnitudes or quality signals, not signed directions:
@@ -205,12 +288,14 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `SHRP`: frame sharpness/clarity quality; higher means less blur.
 - `RES`: residual quality; higher means lower block-matching residual/error.
 - `HIT`: search-radius headroom quality; higher means fewer searches hit the radius edge.
+- `WLK`: count-aware walking-band tracking quality used by FJIT, SWOB, and BOB.
 
 `TRK`, `SHRP`, `RES`, and `HIT` are all aligned as quality signals: high is good, low is bad.
 
 `Host Analysis Status` also reports:
 
 - The current FxPlug runtime version.
+- `track q` and `walk q`.
 - `footstep q` and effective Footstep Jitter X/Y/R strength.
 - `stride q` and effective Stride Wobble X/Y/R strength.
 - `bob q`.
@@ -222,9 +307,50 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - Current warp shape values.
 
 Values above `1.0` on Footstep, Stride, and Bob controls boost low-confidence
-corrections with a curved confidence response. The response is more assertive for
-medium-confidence frame evidence, but still has no hidden minimum confidence
-floor: zero confidence produces zero correction.
+corrections with a curved confidence response. Those walking-band controls use a
+more assertive medium-confidence response than TURN and WARP, but still have no
+hidden minimum confidence floor: zero confidence produces zero correction.
+
+## Feedback CLI
+
+Use the local feedback CLI when reviewing notes like `at 5 sec there is a
+notable unremoved shake` against a saved Host Analysis cache:
+
+```sh
+fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
+  --time 5.0 \
+  --note "notable unremoved shake"
+```
+
+`--time` is clip-relative: `0.0` is the start of the Host Analysis range saved
+in the cache. With `--time`, the CLI reports the highest-score frame inside the
+requested `--window` and prints the selected clip time separately from the
+requested note time. The CLI reads
+`~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` by
+default, or another cache with `--cache /path/to/host-analysis-v2.json`. Use
+`--json` for machine-readable output, `--turn-window` to match a non-default
+Inspector `Turn Detection Window`, and `--output-size 1920x1080` when you want
+pixel estimates scaled to a target preview size.
+
+Use `--list-caches` to list the latest shared cache and range-specific cache
+files under `~/Library/Application Support/StabilizerFxPlug`. It reports each
+file as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing
+or deleting anything; add `--cache-root /path/to/root` to inspect another cache
+root explicitly.
+
+The report prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order
+bands using the saved prepared paths, tracking confidence, residuals, blur,
+block coverage, and search-radius edge-hit counts, while the summary line names
+the highest remaining band. The band split mirrors the render path: `FJIT` is
+measured first against the outer-frame baseline, then `SWOB`, `BOB`, and `TURN`
+are measured from the footstep-cleaned path. `WARP`
+uses the same local baseline/gate inputs that are then short-smoothed in render,
+and the report includes strict tracking, walking-band tracking, FJIT and SWOB
+per-axis confidence, BOB tracking/window support, residual, blur, block
+coverage, edge quality, stable WARP tracking support, and WARP tracking/edge
+gate values so over- or under-gating is visible. If a cache has mismatched
+frame/path array counts, the CLI fails explicitly and asks for a new Host
+Analysis run with the current FxPlug instead of trying to repair the data.
 
 ## Build
 

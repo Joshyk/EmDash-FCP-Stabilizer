@@ -42,7 +42,9 @@ saved Host Analysis cache candidates. The loader should also consider current an
 Stabilizer container cache locations so bundle-id migrations do not force a new analysis
 when the cache schema is still supported. Unsupported schema candidates should surface
 `Cache Unsupported - Run Host Analysis` in the Inspector, remain on disk, and require an
-explicit new Host Analysis run instead of being silently ignored or deleted.
+explicit new Host Analysis run instead of being silently ignored or deleted. Supported-schema
+caches with incomplete prepared path arrays should surface `Cache Incomplete - Run Host
+Analysis`, remain on disk, and require a new Host Analysis run.
 
 Host Analysis should read user-controlled `Sample Size` once when analysis starts. The
 Inspector default should be `10%` so quick Debug Overlay tuning can start without a full
@@ -54,6 +56,24 @@ per-frame `.luma` scratch files or store analysis files inside a Final Cut Pro l
 bundle.
 Persistent cache files should store prepared paths, frame timing, blur values, and
 fingerprints instead of every frame's full luma sample.
+Cache candidates should be sample-size-scoped. Do not collapse different `Sample Size`
+outputs into one in-progress builder or one retained cache bucket; the cache index should
+retain candidates independently per actual `sampleWidth`/`sampleHeight`.
+Cache persistence should treat the prepared analysis frame set as authoritative. The
+retained source-frame map may be reduced after Metal preparation and must not prevent a
+completed prepared path from being saved.
+The feedback CLI under `fxplug/StabilizerFxPlug/scripts/` reads saved Host Analysis cache
+files for diagnostics only. It must not become a second stabilization runtime or silently
+repair malformed cache data; mismatched frame/path arrays should fail visibly and require a
+new Host Analysis run. Its cache inventory mode should list saved cache readiness without
+repairing, deleting, or promoting cache files. Feedback band estimates should mirror the
+render path's order:
+measure Footstep Jitter against the outer-frame baseline first, then compute Stride Wobble,
+Walking Bob, and Turn diagnostics from the footstep-cleaned path. Walking Bob diagnostics
+should expose tracking evidence and symmetric window support so edge-window gating is visible.
+The feedback report should print bands in Debug Overlay/render order (`FJIT`, `SWOB`, `BOB`,
+`WARP`, `TURN`) and choose the top remaining band separately. Its `--turn-window` option should
+match the Inspector `Turn Detection Window` when that UI value is not the default `6.0`.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,
 reject outlier blocks, and expose low block-confidence states in status/debug output instead
 of silently falling back to a coarse global shift. Walking landscape analysis should
@@ -70,25 +90,46 @@ visible while tuning walking footage. Debug Overlay correction rows should keep 
 components in order before turn correction: `FJIT`, `SWOB`, `BOB`, `WARP`, then `TURN`;
 confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `SHRP`,
 `RES`, and `HIT` should all be quality bars where higher means better tracking evidence
-and lower means weaker evidence. Debug Overlay should also expose a compact active runtime
-version row so stale saved Inspector strings do not hide which binary is rendering.
+and lower means weaker evidence. `WLK` should show the walking-band tracking gate used by
+Footstep Jitter, Stride Wobble, and Walking Bob. Debug Overlay should also expose a compact
+active runtime version row so stale saved Inspector strings do not hide which binary is rendering.
 
 ## Playback And Render
 
 Host Analysis playback must render from prepared motion paths for the active FxPlug runtime.
 `Start Host Analysis` is the only path that should call `startForwardAnalysis`; render and
-preview callbacks must not auto-start Host Analysis. The active runtime uses a process-wide
-shared Host Analysis store because Final Cut Pro may call setup, frame analysis, cleanup,
-and preview/render through different FxPlug instances. Persistent cache files are the
-cross-process reuse path after source-frame validation. Completed analysis should be written
-to the shared user Application Support cache path, not only to the current extension
-container. When an analyzer instance saves a completed cache, render/preview instances with
-no prepared analysis should notice cache file changes and reload persistent cache candidates
-on demand; this keeps the stabilized preview visible even when analyzer and render use
-different FxPlug processes. If Final Cut
-Pro reports that Host Analysis is already requested or running, surface that state in
-Inspector status instead of queueing another start inside the plug-in. Do not re-run
-full block matching across the analyzed frame set on every render frame. Keep `Host Analysis
+preview callbacks must not auto-start Host Analysis. If Final Cut Pro reports that another
+Host Analysis is already requested or running, queue the requested effect instance for
+serial analysis and surface `Queued Host Analysis` in the Inspector instead of failing
+silently. In-progress Host Analysis state must be per clip/session so requested clips,
+including clips with different actual sample sizes, never share a streaming builder. The
+active runtime uses a process-wide shared Host Analysis render/cache store after completion
+because Final Cut Pro may call analyzer and preview/render through different FxPlug
+instances. Persistent cache files are the cross-process reuse path after source-frame
+validation. Completed analysis should be written to the shared user Application Support
+cache path, not only to the current extension container. When an analyzer instance saves a
+completed cache, render/preview instances and plug-in state callbacks should notice cache
+file changes, reload persistent cache candidates on demand, and update the hidden render
+revision with a process-independent small numeric token even when they already hold an older
+prepared analysis; this keeps the stabilized preview visible after serial queued analysis and
+when analyzer and render use different FxPlug processes. Do not use per-process revision
+counters as the hidden render invalidation value because analyzer and render processes can
+generate the same counter value for different completed clips. Do not repeatedly set the
+hidden render revision when Final Cut Pro already holds the same value, because that can keep
+the effect in a loading/invalidation loop. Fingerprint mismatches must reject a
+candidate instead of accepting a different clip by time proximity alone. If Final Cut Pro keeps
+reporting a busy state when the serial queue tries to drain, keep the request queued visibly
+and retry later. A queued start request must remain a pending request for that effect
+instance; do not let a completed shared render/cache store from another clip satisfy or
+skip the queued clip's own Host Analysis start. Because Final Cut Pro can call analysis
+setup/analyze/cleanup on a different FxPlug instance than the Inspector button instance,
+analysis completion/failure should clear process-wide analysis bookkeeping before queue
+drain. Do not use plug-in-local active markers as the authority for blocking another
+Inspector `Start Host Analysis` action; the start path should ask Final Cut Pro's
+`analysisStateForEffect()` and queue only when the host reports a busy/requested state.
+Queue drain should not depend on the FxPlug XPC main queue pumping while Final Cut Pro is
+busy. Do not re-run full block matching across
+the analyzed frame set on every render frame. Keep `Host Analysis
 Status` visible in the Inspector, update it to `Ready (... frames)` after completed
 analysis, and include the active FxPlug version there when Final Cut Pro accepts status
 parameter updates. Debug Overlay should remain the live render-runtime indicator because
@@ -104,6 +145,8 @@ loaded cache immediately rather than requiring re-analysis; original-media valid
 happen later when original frames are available. When the
 effective overall transform strength is zero, rendering must
 bypass prepared motion-path sampling and output an identity transform with no debug overlay.
+Render-time frame/window lookup should use the sorted prepared frame times directly instead
+of repeatedly scanning the full analysis frame set on every preview sample.
 When Host Analysis/cache state changes, update a hidden render-affecting revision parameter
 so Final Cut Pro invalidates the preview/render cache and the viewer reflects the prepared
 stabilization immediately.
@@ -118,7 +161,10 @@ Render-time smoothing must not average away Footstep Jitter impulses or roll jit
 to stabilize fine distant ridge-line shake. Smooth Turn Smoothing, Stride Wobble, and Walking
 Bob components independently, then recombine them with the current render frame's Footstep
 Jitter X/Y/roll correction. Footstep Jitter debug/status output should show the raw confidence
-and effective correction strength so low-confidence gating is visible.
+and effective correction strength so low-confidence gating is visible. Far-field Warp should
+not use the full broad transform-smoothing window; keep it on a short in-range render-time
+smoothing window so ridge-line correction stays responsive while single-frame gate flicker is
+still damped.
 
 ## Walking Correction Stages
 
@@ -131,19 +177,36 @@ Host Analysis. Do not add or expose a user-facing Footstep Jitter window; fine j
 be corrected from the current render frame's impulse against the fixed seconds-based
 outer-frame baseline using the multi-block Host Analysis path. Footstep Jitter confidence
 should be evaluated per render frame from current tracking quality, accepted block coverage,
-blur, and whether the center frame departs from its outer-frame baseline; do not force a
-hidden minimum confidence floor. Medium-confidence response may be curved upward for a more
-useful debug pass, but zero confidence must still produce zero correction.
+blur, local baseline support, surrounding footstep noise, and whether the center frame
+departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
+Medium-confidence response may be curved upward for a more useful debug pass. Footstep
+Jitter, Stride Wobble, and Walking Bob may use a more assertive medium-confidence response
+than Turn Smoothing and Far-field Warp, but zero confidence must still produce zero
+correction. Moderate landing impulses should not be buried by an overly high
+surrounding-noise threshold.
+The surrounding-noise floor should be capped below the full impulse response point so repeated
+walking motion does not hide a real center-frame landing impulse.
 Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
 `4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
 weak, but applied correction must clamp at full detected-impulse removal during render so
-high slider values do not add inverse shake.
+high slider values do not add inverse shake. Footstep Jitter Rotation Strength should
+default to `0.2` so walking footage keeps a stable horizon unless the user explicitly asks
+for stronger roll correction.
 Medium-period walking shake that is longer than Footstep Jitter but shorter than Walking
 Bob should be handled by the render-time `Stride Wobble` stage. Keep its time window fixed
 inside the implementation at `2.0` seconds, expose only X/Y/Rotation strength controls with
 maximum `4.0`, do not add a user-facing Stride Wobble window, compute it from the
 footstep-cleaned baseline, and feed longer Turn Smoothing / Walking Bob bands from the
-stride-smoothed path so the same band is not removed twice.
+stride-smoothed path so the same band is not removed twice. Stride Wobble residual gating
+should use robust window evidence instead of the single worst frame in the window, so one
+bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
+full confidence sooner than the broad UI scale, and the default Y strength should remain high
+enough to remove step follow-through before the longer Walking Bob pass. Stride Wobble
+Rotation Strength should default to `0.2` for the same horizon-preserving reason.
+Footstep Jitter, Stride Wobble, and Walking Bob may use a count-aware walking-band tracking
+gate that eases block coverage only when enough motion blocks were accepted. Far-field Warp
+and Turn Smoothing should keep the stricter tracking gate so weak evidence does not create
+swimming warp or false turn smoothing.
 The render path must not compute Stride Wobble from the raw or jerk-limited broad path,
 because that reintroduces Footstep Jitter shock into the medium-period band.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
@@ -164,7 +227,9 @@ jumps in the preview. `Turn Detection Window` must use the Inspector UI value, a
 minimum must be the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than
 SWOB. The turn band should be measured from the stride-smoothed path instead of the raw frame
 path, and Y correction must stay Footstep Jitter first, Stride Wobble second, and Walking Bob
-last so short landing shock is not reintroduced by turn smoothing.
+last so short landing shock is not reintroduced by turn smoothing. TURN confidence should
+require both tracking evidence and a real X turn band; do not keep a hidden minimum turn
+confidence on low-evidence frames.
 Y-axis walking bob that is longer than Stride Wobble but separate from X-only panning should
 be handled by the render-time fixed `2.5` second `Walking Bob` and `Walking Bob Removal`
 path, which corrects the Y-only band between the fixed `2.0` second stride-smoothed baseline
@@ -173,9 +238,9 @@ rerunning Host Analysis. Do not expose a user-facing Walking Bob window control.
 Walking Bob should remain in the same effect as the final Y-only correction stage. It must
 use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, and setting
 `Walking Bob Removal` to zero must still allow Footstep Jitter Y to work.
-Walking Bob confidence should be based on current tracking evidence and symmetric window
-support so weak block coverage or one-sided clip-edge windows do not create large vertical
-image waves.
+Walking Bob confidence should be based on current tracking evidence, symmetric window
+support, robust residual evidence, and actual Y-band magnitude so weak block coverage,
+one-sided clip-edge windows, or tiny vertical bands do not create large vertical image waves.
 Walking Bob removal values should clamp at full
 detected-band removal during render so high slider values do not add inverse vertical
 shake, while still allowing values above `1.0` to compensate for low-confidence gating.
@@ -191,7 +256,12 @@ its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long
 does not become a fixed deskew. Low tracking confidence or poor search-radius headroom should
 gate Far-field Warp off instead of creating wave-like image distortion. Render should use a
 walking-footage tracking gate tuned for 25% Host Analysis samples plus a tiny render-time
-deadband so weak warp deltas do not create swimming or wave-like distortion.
+deadband so weak warp deltas do not create swimming or wave-like distortion. Medium-confidence
+warp gates may be curved upward, and the tracking gate should start early enough that moderate
+25% Host Analysis evidence can still correct distant ridge-line shake while reaching full
+response gradually enough to avoid high-side gate jumps. The warp gate may use short local
+tracking support and short render-time smoothing to avoid single-frame gate flicker, but zero
+local tracking or poor current search-radius evidence must still produce zero warp correction.
 `W Q` should represent the applied warp confidence after those safety gates. Bump Host
 Analysis cache schema when prepared warp path semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
@@ -225,6 +295,39 @@ Use this local Final Cut Pro library for manual end-to-end testing:
 
 It is a shared workspace test fixture, outside this plugin repo. Use it when checking the
 native effect against real timeline clips in Final Cut Pro.
+
+## Shared Final Cut Pro UI Shortcut Script
+
+The shared local AppleScript helper for Final Cut Pro UI shortcut work lives outside this
+repo at:
+
+```text
+/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript
+```
+
+From this repo, run it through the parent-relative path:
+
+```sh
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript set-debug-overlay on
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript set-debug-overlay off
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
+```
+
+Use it from Keyboard Maestro, Automator Quick Actions, or Terminal when manual FCP
+validation needs faster access to `Stabilizer Transform`, `Start Host Analysis`, `Debug
+Overlay`, selected Browser projects, or the Inspector. Grant Accessibility permission to
+the app that runs the script.
+For project opening, prefer `open-selected-project` after selecting the project thumbnail
+or list row in the Browser. It uses a real CoreGraphics double-click because ordinary
+AppleScript click repeats can fail to register as a Final Cut Pro double-click.
+If FCP UI labels change, use `dump-front-window` to inspect the accessible roles/names and
+update the shared script in the parent workspace. Do not copy a separate version into this
+repo unless the user explicitly asks for repo-local divergence.
 
 ## Version Visibility
 

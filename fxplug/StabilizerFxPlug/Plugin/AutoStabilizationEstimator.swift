@@ -35,6 +35,7 @@ struct StabilizerAutoTransform {
     var perspective: vector_float2
     var blurAmount: Float
     var trackingConfidence: Float
+    var walkingTrackingConfidence: Float
     var motionConfidence: Float
     var residual: Float
     var footstepImpulse: vector_float3
@@ -70,6 +71,7 @@ struct StabilizerAutoTransform {
         perspective: vector_float2(0.0, 0.0),
         blurAmount: 0.0,
         trackingConfidence: 0.0,
+        walkingTrackingConfidence: 0.0,
         motionConfidence: 0.0,
         residual: 0.0,
         footstepImpulse: vector_float3(0.0, 0.0, 0.0),
@@ -94,7 +96,7 @@ struct StabilizerCorrectionStrengths {
         microJitterY: 1.0,
         microJitterRotation: 1.0,
         strideWobbleX: 0.65,
-        strideWobbleY: 0.35,
+        strideWobbleY: 0.70,
         strideWobbleRotation: 0.75,
         panStabilizationStrength: 0.8,
         walkingBob: 0.75,
@@ -277,21 +279,31 @@ enum AutoStabilizationEstimator {
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 21
     private static let renderTemporalSmoothingWindowSeconds = 1.20
+    private static let renderFarFieldWarpSmoothingWindowSeconds = 0.36
     private static let footstepImpulseFullScalePixels: Float = 0.35
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
+    private static let footstepNoiseFloorScale: Float = 0.08
+    private static let footstepSurroundingNoiseMultiplier: Float = 1.10
+    private static let footstepSurroundingNoiseFloorCapScale: Float = 0.45
+    private static let footstepFullResponseScale: Float = 0.65
     private static let strideWobbleWindowSeconds = 2.0
     private static let strideWobbleFullScalePixels: Float = 0.75
     private static let strideWobbleFullScaleDegrees: Float = 0.16
+    private static let strideWobbleFullResponseScale: Float = 0.65
+    private static let walkingBobFullScalePixels: Float = 0.65
+    private static let turnSmoothingFullScalePixels: Float = 2.0
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
     private static let maxRenderedFarFieldShear: Float = 0.004
     private static let maxRenderedFarFieldYawPitchProxy: Float = 0.0025
     private static let maxRenderedFarFieldPerspective: Float = 0.0015
-    private static let farFieldWarpTrackingGateStart: Float = 0.38
-    private static let farFieldWarpTrackingGateFull: Float = 0.55
-    private static let farFieldWarpEdgeQualityGateStart: Float = 0.60
-    private static let farFieldWarpEdgeQualityGateFull: Float = 0.92
+    private static let farFieldWarpTrackingGateStart: Float = 0.26
+    private static let farFieldWarpTrackingGateFull: Float = 0.56
+    private static let farFieldWarpTrackingGateMedianBlend: Float = 0.45
+    private static let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
+    private static let farFieldWarpEdgeQualityGateStart: Float = 0.55
+    private static let farFieldWarpEdgeQualityGateFull: Float = 0.86
     private static let footstepImpulseInnerWindowSeconds = 0.10
     private static let footstepImpulseOuterWindowSeconds = 1.0
     private static let farFieldWarpInnerWindowSeconds = 0.10
@@ -454,12 +466,30 @@ enum AutoStabilizationEstimator {
         let smoothWindowSeconds = max(effectiveStrideWobbleWindowSeconds, panSmoothSeconds)
         let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
         let frameInterpolation = frameInterpolation(at: renderSeconds, in: frames)
-        let windowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= smoothWindowSeconds * 0.5 }
+        let windowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: smoothWindowSeconds * 0.5
+        )
         let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
-        let strideWobbleWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveStrideWobbleWindowSeconds * 0.5 }
+        let strideWobbleWindowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: effectiveStrideWobbleWindowSeconds * 0.5
+        )
         let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : Array(strideWobbleWindowIndices)
-        let walkingBobWindowIndices = frames.indices.filter { abs(frames[$0].time - renderSeconds) <= effectiveWalkingBobWindowSeconds * 0.5 }
+        let walkingBobWindowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: effectiveWalkingBobWindowSeconds * 0.5
+        )
         let walkingBobActiveIndices = walkingBobWindowIndices.isEmpty ? [centerIndex] : Array(walkingBobWindowIndices)
+        let farFieldWarpGateWindowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: farFieldWarpOuterWindowSeconds * 0.5
+        )
+        let farFieldWarpGateActiveIndices = farFieldWarpGateWindowIndices.isEmpty ? [centerIndex] : Array(farFieldWarpGateWindowIndices)
         let sampledIndices = activeIndices + strideWobbleActiveIndices + walkingBobActiveIndices + [centerIndex] + frameInterpolation.indices
         let footstepBaselineXPath = outerLinearPredictionPath(
             analysis.footstepPathX,
@@ -579,9 +609,9 @@ enum AutoStabilizationEstimator {
         let sampleHeight = frames[centerIndex].sampleHeight
         let xScale = outputSize.x / Float(max(1, sampleWidth))
         let yScale = outputSize.y / Float(max(1, sampleHeight))
-        let turnResidual = maxValue(analysis.residuals, indices: activeIndices)
-        let strideResidual = maxValue(analysis.residuals, indices: strideWobbleActiveIndices)
-        let bobResidual = maxValue(analysis.residuals, indices: walkingBobActiveIndices)
+        let turnResidual = percentileValue(analysis.residuals, indices: activeIndices, percentile: 0.75)
+        let strideResidual = percentileValue(analysis.residuals, indices: strideWobbleActiveIndices, percentile: 0.70)
+        let bobResidual = percentileValue(analysis.residuals, indices: walkingBobActiveIndices, percentile: 0.70)
         let centerResidual = interpolatedValue(analysis.residuals, using: frameInterpolation)
         let blurAmount = timeWeightedAverage(analysis.blurAmounts, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let centerBlurAmount = interpolatedValue(analysis.blurAmounts, using: frameInterpolation)
@@ -598,12 +628,19 @@ enum AutoStabilizationEstimator {
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount
         )
+        let walkingTrackingConfidence = walkingBandTrackingConfidence(
+            motionConfidence: motionConfidence,
+            residual: centerResidual,
+            blurAmount: centerBlurAmount,
+            acceptedBlockCount: acceptedBlockCount,
+            totalBlockCount: totalBlockCount
+        )
         let footstepXConfidence = footstepFrameConfidence(
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
             frames: frames,
             interpolation: frameInterpolation,
-            trackingConfidence: trackingConfidence,
+            trackingConfidence: walkingTrackingConfidence,
             fullImpulseScale: footstepImpulseFullScalePixels
         )
         let footstepYConfidence = footstepFrameConfidence(
@@ -611,7 +648,7 @@ enum AutoStabilizationEstimator {
             baselineValues: footstepBaselineYPath,
             frames: frames,
             interpolation: frameInterpolation,
-            trackingConfidence: trackingConfidence,
+            trackingConfidence: walkingTrackingConfidence,
             fullImpulseScale: footstepImpulseFullScalePixels
         )
         let footstepRollConfidence = footstepFrameConfidence(
@@ -619,14 +656,16 @@ enum AutoStabilizationEstimator {
             baselineValues: footstepBaselineRollPath,
             frames: frames,
             interpolation: frameInterpolation,
-            trackingConfidence: trackingConfidence,
+            trackingConfidence: walkingTrackingConfidence,
             fullImpulseScale: footstepImpulseFullScaleDegrees
         )
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideBandX = footstepCleanXAtRender - strideSmoothX
         let strideBandY = footstepCleanYAtRender - strideSmoothY
         let strideBandRoll = footstepCleanRollAtRender - strideSmoothRoll
-        let strideTrackingConfidence = clamp((1.0 - (strideResidual * 0.6)) * trackingConfidence, min: 0.0, max: 1.0)
+        let panBandX = strideSmoothX - turnSmoothX
+        let walkingBobBandY = strideSmoothY - bobSmoothY
+        let strideTrackingConfidence = residualAdjustedTrackingConfidence(walkingTrackingConfidence, residual: strideResidual, multiplier: 0.6)
         let strideXConfidence = strideWobbleConfidence(
             bandValue: strideBandX,
             trackingConfidence: strideTrackingConfidence,
@@ -643,22 +682,30 @@ enum AutoStabilizationEstimator {
             fullScale: strideWobbleFullScaleDegrees
         )
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-        let confidence = clamp(1.0 - (turnResidual * 1.2), min: 0.35, max: 1.0)
+        let turnTrackingConfidence = residualAdjustedTrackingConfidence(trackingConfidence, residual: turnResidual, multiplier: 0.9)
+        let confidence = turnSmoothingConfidence(
+            bandValue: panBandX,
+            trackingConfidence: turnTrackingConfidence
+        )
         let bobWindowSupport = symmetricWindowSupport(
             frames: frames,
             centerTime: renderSeconds,
             windowSeconds: effectiveWalkingBobWindowSeconds
         )
-        let bobConfidence = clamp((1.0 - (bobResidual * 0.4)) * trackingConfidence * bobWindowSupport, min: 0.0, max: 1.0)
+        let bobTrackingConfidence = residualAdjustedTrackingConfidence(walkingTrackingConfidence, residual: bobResidual, multiplier: 0.4)
+        let bobConfidence = walkingBobConfidence(
+            bandValue: walkingBobBandY,
+            trackingConfidence: bobTrackingConfidence,
+            windowSupport: bobWindowSupport
+        )
         let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
-        let microXCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence)
-        let microYCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence)
-        let microRotationCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
-        let strideXCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.strideWobbleX, confidence: strideXConfidence)
-        let strideYCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence)
-        let strideRotationCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.strideWobbleRotation, confidence: strideRollConfidence)
-        let walkingBobCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.walkingBob, confidence: bobConfidence)
-        let panBandX = strideSmoothX - turnSmoothX
+        let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence)
+        let microYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence)
+        let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
+        let strideXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleX, confidence: strideXConfidence)
+        let strideYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence)
+        let strideRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleRotation, confidence: strideRollConfidence)
+        let walkingBobCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.walkingBob, confidence: bobConfidence)
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
@@ -682,7 +729,6 @@ enum AutoStabilizationEstimator {
         let strideCompensationX = -strideBandX * xScale * strideXCorrectionStrength
         let strideCompensationY = -strideBandY * yScale * strideYCorrectionStrength
         let strideCompensationRotation = -strideBandRoll * strideRotationCorrectionStrength
-        let walkingBobBandY = strideSmoothY - bobSmoothY
         let walkingBobCompensationY = -walkingBobBandY * yScale * walkingBobCorrectionStrength
         let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
         let microPixelOffset = vector_float2(microCompensationX, microCompensationY)
@@ -692,11 +738,21 @@ enum AutoStabilizationEstimator {
         let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + walkingBobPixelOffset.y
         let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
+        let farFieldWarpTrackingConfidence = stableFarFieldWarpTrackingConfidence(
+            analysis: analysis,
+            indices: farFieldWarpGateActiveIndices,
+            currentTrackingConfidence: trackingConfidence
+        )
+        let farFieldWarpEdgeQuality = stableFarFieldWarpEdgeQuality(
+            analysis: analysis,
+            indices: farFieldWarpGateActiveIndices,
+            currentSearchRadiusHitCount: searchRadiusHitCount,
+            currentSearchRadiusTotalCount: searchRadiusTotalCount
+        )
         let farFieldWarpGate = farFieldWarpRenderGate(
             warpConfidence: warpConfidence,
-            trackingConfidence: trackingConfidence,
-            searchRadiusHitCount: searchRadiusHitCount,
-            searchRadiusTotalCount: searchRadiusTotalCount
+            trackingConfidence: farFieldWarpTrackingConfidence,
+            edgeQuality: farFieldWarpEdgeQuality
         )
         let appliedWarpConfidence = clamp(warpConfidence * farFieldWarpGate, min: 0.0, max: 1.0)
         let yawPitchProxy = vector_float2(
@@ -706,7 +762,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselineYawPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength,
                 max: maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength
@@ -717,7 +773,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselinePitchPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength,
                 max: maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength
@@ -730,7 +786,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselineShearXPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldShear * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldShear * farFieldWarpStrength,
                 max: maxRenderedFarFieldShear * farFieldWarpStrength
@@ -741,7 +797,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselineShearYPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldShear * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldShear * farFieldWarpStrength,
                 max: maxRenderedFarFieldShear * farFieldWarpStrength
@@ -754,7 +810,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselinePerspectiveXPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldPerspective * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldPerspective * farFieldWarpStrength,
                 max: maxRenderedFarFieldPerspective * farFieldWarpStrength
@@ -765,7 +821,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselinePerspectiveYPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldPerspective * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldPerspective * farFieldWarpStrength,
                 max: maxRenderedFarFieldPerspective * farFieldWarpStrength
@@ -808,6 +864,7 @@ enum AutoStabilizationEstimator {
             perspective: perspective,
             blurAmount: blurAmount,
             trackingConfidence: trackingConfidence,
+            walkingTrackingConfidence: walkingTrackingConfidence,
             motionConfidence: motionConfidence,
             residual: centerResidual,
             footstepImpulse: footstepImpulse,
@@ -843,7 +900,7 @@ enum AutoStabilizationEstimator {
         let denominator = Double(max(1, sampleCount - 1))
         let sampleStep = renderTemporalSmoothingWindowSeconds / denominator
         let sigma = max(1e-6, halfWindow * 0.5)
-        var weightedSamples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+        var weightedSamples: [(transform: StabilizerAutoTransform, weight: Float, offsetSeconds: Double)] = []
 
         for sampleIndex in 0..<sampleCount {
             let offset = (Double(sampleIndex - centerSample) * sampleStep)
@@ -863,19 +920,35 @@ enum AutoStabilizationEstimator {
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths
             )
-            weightedSamples.append((transform: transform, weight: weight))
+            weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
         }
 
         guard !weightedSamples.isEmpty else {
             return rawCenterTransform
         }
-        var smoothedTransform = weightedAverageTransform(weightedSamples)
+        let broadTransformSamples = weightedSamples.map { sample in
+            (transform: sample.transform, weight: sample.weight)
+        }
+        var smoothedTransform = weightedAverageTransform(broadTransformSamples)
+        let shortWarpSamples = farFieldWarpSmoothingSamples(weightedSamples)
+        let smoothedWarpTransform = shortWarpSamples.isEmpty
+            ? rawCenterTransform
+            : weightedAverageTransform(shortWarpSamples)
+        let smoothedWarpConfidence = clamp(smoothedWarpTransform.warpConfidence, min: 0.0, max: 1.0)
+        let centerWarpConfidence = clamp(rawCenterTransform.warpConfidence, min: 0.0, max: 1.0)
+        let cappedWarpConfidence = min(smoothedWarpConfidence, centerWarpConfidence)
+        let centerWarpScale = smoothedWarpConfidence > 1e-6 ? cappedWarpConfidence / smoothedWarpConfidence : 0.0
         smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
         smoothedTransform.footstepJitterRotationDegrees = rawCenterTransform.footstepJitterRotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
         smoothedTransform.microConfidence = rawCenterTransform.microConfidence
+        smoothedTransform.warpConfidence = cappedWarpConfidence
+        smoothedTransform.yawPitchProxy = smoothedWarpTransform.yawPitchProxy * centerWarpScale
+        smoothedTransform.shear = smoothedWarpTransform.shear * centerWarpScale
+        smoothedTransform.perspective = smoothedWarpTransform.perspective * centerWarpScale
         smoothedTransform.turnConfidence = rawCenterTransform.turnConfidence
         smoothedTransform.trackingConfidence = rawCenterTransform.trackingConfidence
+        smoothedTransform.walkingTrackingConfidence = rawCenterTransform.walkingTrackingConfidence
         smoothedTransform.motionConfidence = rawCenterTransform.motionConfidence
         smoothedTransform.residual = rawCenterTransform.residual
         smoothedTransform.footstepImpulse = rawCenterTransform.footstepImpulse
@@ -894,6 +967,24 @@ enum AutoStabilizationEstimator {
         smoothedTransform.temporalSmoothingSampleCount = Int32(weightedSamples.count)
         smoothedTransform.temporalSmoothingWindowSeconds = Float(renderTemporalSmoothingWindowSeconds)
         return smoothedTransform
+    }
+
+    private static func farFieldWarpSmoothingSamples(
+        _ samples: [(transform: StabilizerAutoTransform, weight: Float, offsetSeconds: Double)]
+    ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+        let halfWindow = renderFarFieldWarpSmoothingWindowSeconds * 0.5
+        let sigma = max(1e-6, halfWindow * 0.5)
+        return samples.compactMap { sample in
+            guard abs(sample.offsetSeconds) <= halfWindow + 1e-9 else {
+                return nil
+            }
+            let normalizedDistance = sample.offsetSeconds / sigma
+            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard weight > 0.0001 else {
+                return nil
+            }
+            return (transform: sample.transform, weight: weight)
+        }
     }
 
     private static func weightedAverageTransform(
@@ -960,6 +1051,7 @@ enum AutoStabilizationEstimator {
             perspective: vectorAverage(\.perspective),
             blurAmount: floatAverage(\.blurAmount),
             trackingConfidence: floatAverage(\.trackingConfidence),
+            walkingTrackingConfidence: floatAverage(\.walkingTrackingConfidence),
             motionConfidence: floatAverage(\.motionConfidence),
             residual: floatAverage(\.residual),
             footstepImpulse: vector3Average(\.footstepImpulse),
@@ -1543,16 +1635,20 @@ enum AutoStabilizationEstimator {
     }
 
     private static func closestFrameIndex(to time: Double, in frames: [StabilizerAnalysisFrame]) -> Int {
-        var bestIndex = 0
-        var bestDistance = Double.greatestFiniteMagnitude
-        for (index, frame) in frames.enumerated() {
-            let distance = abs(frame.time - time)
-            if distance < bestDistance {
-                bestIndex = index
-                bestDistance = distance
-            }
+        guard !frames.isEmpty else {
+            return 0
         }
-        return bestIndex
+        let nextIndex = lowerBoundFrameIndex(frames, time: time)
+        guard nextIndex > frames.startIndex else {
+            return frames.startIndex
+        }
+        guard nextIndex < frames.endIndex else {
+            return frames.index(before: frames.endIndex)
+        }
+        let previousIndex = nextIndex - 1
+        let previousDistance = abs(frames[previousIndex].time - time)
+        let nextDistance = abs(frames[nextIndex].time - time)
+        return previousDistance <= nextDistance ? previousIndex : nextIndex
     }
 
     private struct FrameInterpolation {
@@ -1579,21 +1675,19 @@ enum AutoStabilizationEstimator {
         if time >= frames[lastIndex].time {
             return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
         }
-        for upperIndex in 1..<frames.count {
-            let upperTime = frames[upperIndex].time
-            guard time <= upperTime else {
-                continue
-            }
-            let lowerIndex = upperIndex - 1
-            let lowerTime = frames[lowerIndex].time
-            let duration = upperTime - lowerTime
-            guard duration > 1e-9 else {
-                return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: 0.0)
-            }
-            let fraction = clamp(Float((time - lowerTime) / duration), min: 0.0, max: 1.0)
-            return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction)
+        let upperIndex = upperBoundFrameIndex(frames, time: time)
+        guard upperIndex > frames.startIndex, upperIndex < frames.endIndex else {
+            return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
         }
-        return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
+        let lowerIndex = upperIndex - 1
+        let lowerTime = frames[lowerIndex].time
+        let upperTime = frames[upperIndex].time
+        let duration = upperTime - lowerTime
+        guard duration > 1e-9 else {
+            return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: 0.0)
+        }
+        let fraction = clamp(Float((time - lowerTime) / duration), min: 0.0, max: 1.0)
+        return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction)
     }
 
     private static func interpolatedValue(_ values: [Float], using interpolation: FrameInterpolation) -> Float {
@@ -1670,10 +1764,54 @@ enum AutoStabilizationEstimator {
             return []
         }
         let centerTime = frames[centerIndex].time
-        let maxDistance = windowSeconds + timeWindowSelectionEpsilon
-        return frames.indices.filter { index in
-            abs(frames[index].time - centerTime) <= maxDistance
+        return indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: windowSeconds)
+    }
+
+    private static func indicesWithinTimeRadius(
+        _ frames: [StabilizerAnalysisFrame],
+        centerTime: Double,
+        radiusSeconds: Double
+    ) -> [Int] {
+        guard !frames.isEmpty, centerTime.isFinite, radiusSeconds.isFinite else {
+            return []
         }
+        let boundedRadius = max(0.0, radiusSeconds)
+        let startTime = centerTime - boundedRadius - timeWindowSelectionEpsilon
+        let endTime = centerTime + boundedRadius + timeWindowSelectionEpsilon
+        let lowerIndex = lowerBoundFrameIndex(frames, time: startTime)
+        let upperIndex = upperBoundFrameIndex(frames, time: endTime)
+        guard lowerIndex < upperIndex else {
+            return []
+        }
+        return Array(lowerIndex..<upperIndex)
+    }
+
+    private static func lowerBoundFrameIndex(_ frames: [StabilizerAnalysisFrame], time: Double) -> Int {
+        var low = frames.startIndex
+        var high = frames.endIndex
+        while low < high {
+            let mid = low + ((high - low) / 2)
+            if frames[mid].time < time {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
+    }
+
+    private static func upperBoundFrameIndex(_ frames: [StabilizerAnalysisFrame], time: Double) -> Int {
+        var low = frames.startIndex
+        var high = frames.endIndex
+        while low < high {
+            let mid = low + ((high - low) / 2)
+            if frames[mid].time <= time {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
     }
 
     private static func surroundingIndicesExcludingCenter(
@@ -1688,7 +1826,8 @@ enum AutoStabilizationEstimator {
         let innerWindow = max(0.0, min(innerWindowSeconds, outerWindowSeconds))
         let outerWindow = max(innerWindow, outerWindowSeconds)
         let centerTime = frames[centerIndex].time
-        let indices = frames.indices.filter { index in
+        let outerIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: outerWindow)
+        let indices = outerIndices.filter { index in
             let distance = abs(frames[index].time - centerTime)
             return distance <= outerWindow + timeWindowSelectionEpsilon
                 && distance > innerWindow + timeWindowSelectionEpsilon
@@ -1713,7 +1852,7 @@ enum AutoStabilizationEstimator {
         let outerWindow = max(innerWindow, outerWindowSeconds)
         let centerTime = frames[centerIndex].time
         var points: [(x: Float, y: Float)] = []
-        for index in frames.indices where values.indices.contains(index) {
+        for index in indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: outerWindow) where values.indices.contains(index) {
             let offsetSeconds = frames[index].time - centerTime
             let distance = abs(offsetSeconds)
             if distance <= outerWindow + timeWindowSelectionEpsilon
@@ -1875,9 +2014,7 @@ enum AutoStabilizationEstimator {
         let halfWindowSeconds = max(0.0, windowSeconds * 0.5)
         for index in Set(targetIndices) where values.indices.contains(index) && frames.indices.contains(index) {
             let centerTime = frames[index].time
-            let localIndices = frames.indices.filter { candidate in
-                abs(frames[candidate].time - centerTime) <= halfWindowSeconds + timeWindowSelectionEpsilon
-            }
+            let localIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindowSeconds)
             let activeIndices = localIndices.isEmpty ? [index] : Array(localIndices)
             smoothedValues[index] = timeWeightedAverage(
                 values,
@@ -1969,13 +2106,24 @@ enum AutoStabilizationEstimator {
         return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
-    private static func maxValue(_ values: [Float], indices: [Int]) -> Float {
-        guard !indices.isEmpty else {
+    private static func percentileValue(_ values: [Float], indices: [Int], percentile: Float) -> Float {
+        let sortedValues = indices
+            .filter { values.indices.contains($0) }
+            .map { values[$0] }
+            .filter(\.isFinite)
+            .sorted()
+        guard !sortedValues.isEmpty else {
             return 0.0
         }
-        return indices.reduce(Float(0.0)) { partial, index in
-            max(partial, values[index])
+        guard sortedValues.count > 1 else {
+            return sortedValues[0]
         }
+        let boundedPercentile = clamp(percentile, min: 0.0, max: 1.0)
+        let scaledIndex = boundedPercentile * Float(sortedValues.count - 1)
+        let lowerIndex = Int(Darwin.floorf(scaledIndex))
+        let upperIndex = min(sortedValues.count - 1, lowerIndex + 1)
+        let fraction = scaledIndex - Float(lowerIndex)
+        return sortedValues[lowerIndex] + ((sortedValues[upperIndex] - sortedValues[lowerIndex]) * fraction)
     }
 
     private static func radiansToDegrees(_ radians: Float) -> Float {
@@ -1997,26 +2145,35 @@ enum AutoStabilizationEstimator {
         return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
     }
 
+    private static func walkingConfidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
+        let requestedRemoval = clamp(Float(strength), min: 0.0, max: 4.0)
+        let confidenceResponse = walkingCorrectionConfidenceResponse(confidence)
+        let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
+        let confidenceBoost = max(0.0, requestedRemoval - 1.0)
+            * 0.20
+            * confidenceResponse
+            * (1.0 - (confidenceResponse * 0.35))
+        return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
+    }
+
     private static func correctionConfidenceResponse(_ confidence: Float) -> Float {
         let boundedConfidence = clamp(confidence, min: 0.0, max: 1.0)
         return boundedConfidence * (1.0 + ((1.0 - boundedConfidence) * 0.45))
     }
 
+    private static func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {
+        let boundedConfidence = clamp(confidence, min: 0.0, max: 1.0)
+        return boundedConfidence * (1.0 + ((1.0 - boundedConfidence) * 0.65))
+    }
+
     private static func farFieldWarpRenderGate(
         warpConfidence: Float,
         trackingConfidence: Float,
-        searchRadiusHitCount: Int32,
-        searchRadiusTotalCount: Int32
+        edgeQuality: Float
     ) -> Float {
-        guard warpConfidence > 0.0, searchRadiusTotalCount > 0 else {
+        guard warpConfidence > 0.0 else {
             return 0.0
         }
-        let searchRadiusHitRatio = clamp(
-            Float(searchRadiusHitCount) / Float(searchRadiusTotalCount),
-            min: 0.0,
-            max: 1.0
-        )
-        let edgeQuality = 1.0 - searchRadiusHitRatio
         let trackingGate = confidenceRamp(
             trackingConfidence,
             start: farFieldWarpTrackingGateStart,
@@ -2027,7 +2184,81 @@ enum AutoStabilizationEstimator {
             start: farFieldWarpEdgeQualityGateStart,
             full: farFieldWarpEdgeQualityGateFull
         )
-        return clamp(trackingGate * edgeGate, min: 0.0, max: 1.0)
+        let gate = clamp(trackingGate * edgeGate, min: 0.0, max: 1.0)
+        return correctionConfidenceResponse(gate)
+    }
+
+    private static func stableFarFieldWarpTrackingConfidence(
+        analysis: StabilizerPreparedAnalysis,
+        indices: [Int],
+        currentTrackingConfidence: Float
+    ) -> Float {
+        let localTrackingValues = indices.compactMap { index -> Float? in
+            guard analysis.frames.indices.contains(index),
+                  analysis.residuals.indices.contains(index),
+                  analysis.blurAmounts.indices.contains(index),
+                  analysis.analysisConfidence.indices.contains(index),
+                  analysis.acceptedBlockCounts.indices.contains(index),
+                  analysis.totalBlockCounts.indices.contains(index)
+            else {
+                return nil
+            }
+            return frameTrackingConfidence(
+                motionConfidence: analysis.analysisConfidence[index],
+                residual: analysis.residuals[index],
+                blurAmount: analysis.blurAmounts[index],
+                acceptedBlockCount: analysis.acceptedBlockCounts[index],
+                totalBlockCount: analysis.totalBlockCounts[index]
+            )
+        }
+        guard let localMedianTrackingConfidence = median(localTrackingValues) else {
+            return currentTrackingConfidence
+        }
+        if localMedianTrackingConfidence < farFieldWarpTrackingGateStart {
+            return min(currentTrackingConfidence, localMedianTrackingConfidence)
+        }
+        let blendedTrackingConfidence = (currentTrackingConfidence * (1.0 - farFieldWarpTrackingGateMedianBlend))
+            + (localMedianTrackingConfidence * farFieldWarpTrackingGateMedianBlend)
+        return clamp(
+            blendedTrackingConfidence,
+            min: max(0.0, currentTrackingConfidence - farFieldWarpTrackingGateStabilityLimit),
+            max: min(1.0, currentTrackingConfidence + farFieldWarpTrackingGateStabilityLimit)
+        )
+    }
+
+    private static func stableFarFieldWarpEdgeQuality(
+        analysis: StabilizerPreparedAnalysis,
+        indices: [Int],
+        currentSearchRadiusHitCount: Int32,
+        currentSearchRadiusTotalCount: Int32
+    ) -> Float {
+        let currentEdgeQuality = searchRadiusEdgeQuality(
+            hitCount: currentSearchRadiusHitCount,
+            totalCount: currentSearchRadiusTotalCount
+        )
+        let localEdgeQualityValues = indices.compactMap { index -> Float? in
+            guard analysis.searchRadiusHitCounts.indices.contains(index),
+                  analysis.searchRadiusTotalCounts.indices.contains(index)
+            else {
+                return nil
+            }
+            return searchRadiusEdgeQuality(
+                hitCount: analysis.searchRadiusHitCounts[index],
+                totalCount: analysis.searchRadiusTotalCounts[index]
+            )
+        }
+        guard let localMedianEdgeQuality = median(localEdgeQualityValues) else {
+            return currentEdgeQuality
+        }
+        return min(currentEdgeQuality, localMedianEdgeQuality)
+    }
+
+    private static func searchRadiusEdgeQuality(hitCount: Int32, totalCount: Int32) -> Float {
+        guard totalCount > 0 else {
+            return 0.0
+        }
+        let hitRatio = clamp(Float(hitCount) / Float(totalCount), min: 0.0, max: 1.0)
+        return 1.0 - hitRatio
     }
 
     private static func softDeadband(_ value: Float, threshold: Float) -> Float {
@@ -2049,9 +2280,47 @@ enum AutoStabilizationEstimator {
         let bandQuality = confidenceRamp(
             magnitude,
             start: noiseFloor,
-            full: max(noiseFloor + Float.ulpOfOne, fullScale)
+            full: max(noiseFloor + Float.ulpOfOne, fullScale * strideWobbleFullResponseScale)
         )
         return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
+    }
+
+    private static func walkingBobConfidence(
+        bandValue: Float,
+        trackingConfidence: Float,
+        windowSupport: Float
+    ) -> Float {
+        let magnitude = abs(bandValue)
+        let noiseFloor = walkingBobFullScalePixels * 0.08
+        let bandQuality = confidenceRamp(
+            magnitude,
+            start: noiseFloor,
+            full: max(noiseFloor + Float.ulpOfOne, walkingBobFullScalePixels)
+        )
+        return clamp(trackingConfidence * windowSupport * bandQuality, min: 0.0, max: 1.0)
+    }
+
+    private static func turnSmoothingConfidence(
+        bandValue: Float,
+        trackingConfidence: Float
+    ) -> Float {
+        let magnitude = abs(bandValue)
+        let noiseFloor = turnSmoothingFullScalePixels * 0.08
+        let bandQuality = confidenceRamp(
+            magnitude,
+            start: noiseFloor,
+            full: max(noiseFloor + Float.ulpOfOne, turnSmoothingFullScalePixels)
+        )
+        return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
+    }
+
+    private static func residualAdjustedTrackingConfidence(
+        _ trackingConfidence: Float,
+        residual: Float,
+        multiplier: Float
+    ) -> Float {
+        let residualQuality = clamp(1.0 - (residual * multiplier), min: 0.0, max: 1.0)
+        return clamp(trackingConfidence * residualQuality, min: 0.0, max: 1.0)
     }
 
     private static func frameTrackingConfidence(
@@ -2071,6 +2340,30 @@ enum AutoStabilizationEstimator {
         }
         let combinedEvidence = motionConfidence * residualQuality * blurQuality * blockQuality
         return clamp(Darwin.sqrtf(max(0.0, combinedEvidence)), min: 0.0, max: 1.0)
+    }
+
+    private static func walkingBandTrackingConfidence(
+        motionConfidence: Float,
+        residual: Float,
+        blurAmount: Float,
+        acceptedBlockCount: Int32,
+        totalBlockCount: Int32
+    ) -> Float {
+        let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
+        let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+        let blockQuality = walkingBandBlockQuality(acceptedBlockCount: acceptedBlockCount, totalBlockCount: totalBlockCount)
+        let combinedEvidence = motionConfidence * residualQuality * blurQuality * blockQuality
+        return clamp(Darwin.sqrtf(max(0.0, combinedEvidence)), min: 0.0, max: 1.0)
+    }
+
+    private static func walkingBandBlockQuality(acceptedBlockCount: Int32, totalBlockCount: Int32) -> Float {
+        guard acceptedBlockCount > 0, totalBlockCount > 0 else {
+            return 0.0
+        }
+        let coverage = clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0)
+        let countSupport = confidenceRamp(Float(acceptedBlockCount), start: 4.0, full: 10.0)
+        let coverageLift = 0.35 * countSupport * (1.0 - coverage)
+        return clamp(coverage + coverageLift, min: 0.0, max: 1.0)
     }
 
     private static func footstepFrameConfidence(
@@ -2121,14 +2414,28 @@ enum AutoStabilizationEstimator {
             innerWindowSeconds: footstepImpulseInnerWindowSeconds,
             outerWindowSeconds: footstepImpulseOuterWindowSeconds
         ).filter { values.indices.contains($0) && baselineValues.indices.contains($0) }
+        guard !surroundingIndices.isEmpty else {
+            return 0.0
+        }
         let surroundingNoise = median(surroundingIndices.map { abs(values[$0] - baselineValues[$0]) }) ?? 0.0
-        let noiseFloor = max(fullImpulseScale * 0.12, surroundingNoise * 1.4)
+        let centerTime = frames.indices.contains(index) ? frames[index].time : 0.0
+        let hasLeftSupport = surroundingIndices.contains { frames.indices.contains($0) && frames[$0].time < centerTime }
+        let hasRightSupport = surroundingIndices.contains { frames.indices.contains($0) && frames[$0].time > centerTime }
+        let supportQuality: Float = (hasLeftSupport && hasRightSupport) ? 1.0 : 0.65
+        let surroundingNoiseFloor = min(
+            surroundingNoise * footstepSurroundingNoiseMultiplier,
+            fullImpulseScale * footstepSurroundingNoiseFloorCapScale
+        )
+        let noiseFloor = max(
+            fullImpulseScale * footstepNoiseFloorScale,
+            surroundingNoiseFloor
+        )
         let impulseQuality = confidenceRamp(
             impulse,
             start: noiseFloor,
-            full: max(noiseFloor + Float.ulpOfOne, fullImpulseScale)
+            full: max(noiseFloor + Float.ulpOfOne, fullImpulseScale * footstepFullResponseScale)
         )
-        return clamp(trackingConfidence * impulseQuality, min: 0.0, max: 1.0)
+        return clamp(trackingConfidence * supportQuality * impulseQuality, min: 0.0, max: 1.0)
     }
 
     private static func confidenceRamp(_ value: Float, start: Float, full: Float) -> Float {

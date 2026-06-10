@@ -213,9 +213,14 @@ static uint debugLabelChar(uint row, uint index) {
             if (index == 2) { return 84; } // T
             return 0;
         case 18:
+            if (index == 0) { return 87; } // W
+            if (index == 1) { return 76; } // L
+            if (index == 2) { return 75; } // K
+            return 0;
+        case 19:
             if (index == 0) { return 86; } // V
-            if (index == 1) { return 48; } // 0
-            if (index == 2) { return 50; } // 2
+            if (index == 1) { return 49; } // 1
+            if (index == 2) { return 54; } // 6
             return 0;
         default:
             return 0;
@@ -283,6 +288,7 @@ fragment float4 fragmentShader(
         : float4(colorSample);
 
     if (transform->debugOverlay > 0.5) {
+        outputColor.a = 1.0;
         float2 pixel = uv * transform->outputSize;
         float panelX = pixel.x - 16.0;
         float panelY = pixel.y - 16.0;
@@ -291,7 +297,7 @@ fragment float4 fragmentShader(
         constexpr float barWidth = 180.0;
         constexpr float rowHeight = 13.0;
         constexpr float panelWidth = labelWidth + labelGap + barWidth;
-        constexpr float panelHeight = 19.0 * rowHeight;
+        constexpr float panelHeight = 20.0 * rowHeight;
         if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
@@ -352,6 +358,9 @@ fragment float4 fragmentShader(
                 fill = saturate(transform->diagnostic.w);
                 color = float3(1.0, 0.1, 0.1);
             } else if (row == 18) {
+                fill = saturate(transform->diagnostic5.z);
+                color = float3(0.2, 1.0, 0.75);
+            } else if (row == 19) {
                 fill = 1.0;
                 color = float3(0.94, 0.96, 0.98);
             }
