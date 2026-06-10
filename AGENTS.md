@@ -98,20 +98,22 @@ active runtime version row so stale saved Inspector strings do not hide which bi
 
 Host Analysis playback must render from prepared motion paths for the active FxPlug runtime.
 `Start Host Analysis` is the only path that should call `startForwardAnalysis`; render and
-preview callbacks must not auto-start Host Analysis. In-progress Host Analysis state must be
-per clip/session so simultaneous clips, including clips with different actual sample sizes,
-do not share a streaming builder. The active runtime uses a process-wide shared Host
-Analysis render/cache store after completion because Final Cut Pro may call analyzer and
-preview/render through different FxPlug instances. Persistent cache files are the
-cross-process reuse path after source-frame validation. Completed analysis should be written
-to the shared user Application Support cache path, not only to the current extension
-container. When an analyzer instance saves a completed cache, render/preview instances with
-no prepared analysis should notice cache file changes and reload persistent cache candidates
-on demand; this keeps the stabilized preview visible even when analyzer and render use
-different FxPlug processes. If Final Cut
-Pro reports that Host Analysis is already requested or running, surface that state in
-Inspector status instead of queueing another start inside the plug-in. Do not re-run
-full block matching across the analyzed frame set on every render frame. Keep `Host Analysis
+preview callbacks must not auto-start Host Analysis. If Final Cut Pro reports that another
+Host Analysis is already requested or running, queue the requested effect instance for
+serial analysis and surface `Queued Host Analysis` in the Inspector instead of failing
+silently. In-progress Host Analysis state must be per clip/session so requested clips,
+including clips with different actual sample sizes, never share a streaming builder. The
+active runtime uses a process-wide shared Host Analysis render/cache store after completion
+because Final Cut Pro may call analyzer and preview/render through different FxPlug
+instances. Persistent cache files are the cross-process reuse path after source-frame
+validation. Completed analysis should be written to the shared user Application Support
+cache path, not only to the current extension container. When an analyzer instance saves a
+completed cache, render/preview instances with no prepared analysis should notice cache file
+changes and reload persistent cache candidates on demand; this keeps the stabilized preview
+visible even when analyzer and render use different FxPlug processes. If Final Cut Pro keeps
+reporting a busy state when the serial queue tries to drain, keep the request queued visibly
+and retry later. Do not re-run full block matching across the analyzed frame set on every
+render frame. Keep `Host Analysis
 Status` visible in the Inspector, update it to `Ready (... frames)` after completed
 analysis, and include the active FxPlug version there when Final Cut Pro accepts status
 parameter updates. Debug Overlay should remain the live render-runtime indicator because

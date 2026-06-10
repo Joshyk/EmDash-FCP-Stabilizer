@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.17"
+private let stabilizerFxPlugVersion = "0.18"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -147,6 +147,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         store.loadPersistentCache()
         return store
     }()
+    private static let serialAnalysisQueueLock = NSLock()
+    private static var serialAnalysisQueue: [WeakStabilizerFxPlugPlugIn] = []
+    private static var serialAnalysisQueueDrainScheduled = false
+    private static var activeSerialAnalysisPlugin: WeakStabilizerFxPlugPlugIn?
     private static let stabilizerInfoViewLock = NSLock()
     private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private static var latestStabilizerInfo = "FxPlug \(stabilizerFxPlugVersion)\nNo Analysis"
@@ -160,6 +164,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private var activeAnalysisStore: StabilizerHostAnalysisStore?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
+    }
+
+    private enum HostAnalysisRequestResult {
+        case started
+        case skippedCompleted
+        case queued
+        case failed
     }
 
     required init?(apiManager: PROAPIAccessing) {
@@ -439,26 +450,41 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     @objc(clearHostAnalysisCache)
     func clearHostAnalysisCache() {
+        Self.removeQueuedSerialAnalysis(self)
         hostAnalysisStore.clearPersistentCache()
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
     }
 
-    private func requestHostAnalysisIfNeeded(force: Bool = false) {
+    @discardableResult
+    private func requestHostAnalysisIfNeeded(force: Bool = false, allowSerialQueue: Bool = true) -> HostAnalysisRequestResult {
         if hostAnalysisStore.hasCompletedAnalysis {
-            return
+            Self.removeQueuedSerialAnalysis(self)
+            return .skippedCompleted
         }
         guard force || !hostAnalysisStore.hasCompletedAnalysis else {
-            return
+            Self.removeQueuedSerialAnalysis(self)
+            return .skippedCompleted
+        }
+        if allowSerialQueue && force && Self.isAnotherSerialAnalysisActive(self) {
+            let position = Self.enqueueSerialAnalysis(self)
+            hostAnalysisStore.markQueued(position: position, reason: "SerialAnalysisActive")
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.revision, force: true)
+            NSLog("StabilizerFxPlug: queued Host Analysis request at position \(position) because another Stabilizer analysis is active.")
+            Self.scheduleSerialAnalysisQueueDrain()
+            return .queued
         }
         guard let analysisAPI = apiManager.api(for: FxAnalysisAPI.self) as? FxAnalysisAPI else {
             NSLog("StabilizerFxPlug: FxAnalysisAPI is unavailable; Host Analysis cannot start.")
+            Self.removeQueuedSerialAnalysis(self)
             hostAnalysisStore.markStartFailed(reason: "FxAnalysisAPI unavailable")
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.revision, force: true)
-            return
+            return .failed
         }
         let analysisState = analysisAPI.analysisStateForEffect()
         let canStart = analysisState == kFxAnalysisState_NotAnalyzing
@@ -466,7 +492,16 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             || (force && analysisState == kFxAnalysisState_AnalysisCompleted)
         guard canStart else {
             let reason = Self.analysisStateDescription(analysisState)
-            if force {
+            if allowSerialQueue && force {
+                let position = Self.enqueueSerialAnalysis(self)
+                hostAnalysisStore.markQueued(position: position, reason: reason)
+                publishHostAnalysisStatus(force: true)
+                publishStabilizerInfo(force: true)
+                publishRenderRevision(hostAnalysisStore.revision, force: true)
+                NSLog("StabilizerFxPlug: queued Host Analysis request at position \(position) because host state is \(reason).")
+                Self.scheduleSerialAnalysisQueueDrain()
+                return .queued
+            } else if force {
                 hostAnalysisStore.markStartFailed(reason: "Host state \(reason)")
             }
             publishHostAnalysisStatus(force: true)
@@ -475,21 +510,120 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             if force {
                 NSLog("StabilizerFxPlug: Host Analysis is already requested or running.")
             }
-            return
+            return .failed
         }
         do {
+            Self.removeQueuedSerialAnalysis(self)
             try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
+            Self.markSerialAnalysisActive(self)
             NSLog("StabilizerFxPlug: requested GPU Host Analysis for the effect clip.")
             hostAnalysisStore.markRequested()
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.revision, force: true)
+            return .started
         } catch {
             NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
+            Self.removeQueuedSerialAnalysis(self)
             hostAnalysisStore.markStartFailed(reason: error.localizedDescription)
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.revision, force: true)
+            return .failed
+        }
+    }
+
+    @discardableResult
+    private static func enqueueSerialAnalysis(_ plugin: StabilizerFxPlugPlugIn) -> Int {
+        serialAnalysisQueueLock.lock()
+        serialAnalysisQueue.removeAll { queuedPlugin in
+            guard let queuedPlugin = queuedPlugin.plugin else {
+                return true
+            }
+            return queuedPlugin === plugin
+        }
+        serialAnalysisQueue.append(WeakStabilizerFxPlugPlugIn(plugin))
+        let position = serialAnalysisQueue.count
+        serialAnalysisQueueLock.unlock()
+        return position
+    }
+
+    private static func removeQueuedSerialAnalysis(_ plugin: StabilizerFxPlugPlugIn) {
+        serialAnalysisQueueLock.lock()
+        serialAnalysisQueue.removeAll { queuedPlugin in
+            guard let queuedPlugin = queuedPlugin.plugin else {
+                return true
+            }
+            return queuedPlugin === plugin
+        }
+        serialAnalysisQueueLock.unlock()
+    }
+
+    private static func isAnotherSerialAnalysisActive(_ plugin: StabilizerFxPlugPlugIn) -> Bool {
+        serialAnalysisQueueLock.lock()
+        defer { serialAnalysisQueueLock.unlock() }
+        guard let activePlugin = activeSerialAnalysisPlugin?.plugin else {
+            activeSerialAnalysisPlugin = nil
+            return false
+        }
+        return activePlugin !== plugin
+    }
+
+    private static func markSerialAnalysisActive(_ plugin: StabilizerFxPlugPlugIn) {
+        serialAnalysisQueueLock.lock()
+        activeSerialAnalysisPlugin = WeakStabilizerFxPlugPlugIn(plugin)
+        serialAnalysisQueueLock.unlock()
+    }
+
+    private static func clearSerialAnalysisActive(_ plugin: StabilizerFxPlugPlugIn) {
+        serialAnalysisQueueLock.lock()
+        if let activePlugin = activeSerialAnalysisPlugin?.plugin {
+            if activePlugin === plugin {
+                activeSerialAnalysisPlugin = nil
+            }
+        } else {
+            activeSerialAnalysisPlugin = nil
+        }
+        serialAnalysisQueueLock.unlock()
+    }
+
+    private static func dequeueNextSerialAnalysis() -> StabilizerFxPlugPlugIn? {
+        serialAnalysisQueueLock.lock()
+        defer { serialAnalysisQueueLock.unlock() }
+        while !serialAnalysisQueue.isEmpty {
+            let nextPlugin = serialAnalysisQueue.removeFirst().plugin
+            if let nextPlugin {
+                return nextPlugin
+            }
+        }
+        return nil
+    }
+
+    private static func scheduleSerialAnalysisQueueDrain(after delay: TimeInterval = 1.0) {
+        serialAnalysisQueueLock.lock()
+        guard !serialAnalysisQueueDrainScheduled else {
+            serialAnalysisQueueLock.unlock()
+            return
+        }
+        serialAnalysisQueueDrainScheduled = true
+        serialAnalysisQueueLock.unlock()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            Self.serialAnalysisQueueLock.lock()
+            Self.serialAnalysisQueueDrainScheduled = false
+            Self.serialAnalysisQueueLock.unlock()
+            Self.startNextQueuedHostAnalysis()
+        }
+    }
+
+    private static func startNextQueuedHostAnalysis() {
+        while let nextPlugin = dequeueNextSerialAnalysis() {
+            switch nextPlugin.requestHostAnalysisIfNeeded(force: true, allowSerialQueue: true) {
+            case .started, .queued:
+                return
+            case .skippedCompleted, .failed:
+                continue
+            }
         }
     }
 
@@ -641,6 +775,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     private func abandonActiveAnalysisAfterFailure() {
         setActiveAnalysisStore(nil)
+        Self.clearSerialAnalysisActive(self)
+        Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
     }
 
@@ -1005,6 +1141,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         guard let analysisStore = currentActiveAnalysisStore() else {
             let reason = "Stabilizer Host Analysis cleanup had no active per-clip cache."
             NSLog("StabilizerFxPlug: \(reason)")
+            Self.clearSerialAnalysisActive(self)
+            Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
@@ -1021,9 +1159,19 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
         setActiveAnalysisStore(nil)
+        Self.clearSerialAnalysisActive(self)
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
+        Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
+    }
+}
+
+private final class WeakStabilizerFxPlugPlugIn {
+    weak var plugin: StabilizerFxPlugPlugIn?
+
+    init(_ plugin: StabilizerFxPlugPlugIn) {
+        self.plugin = plugin
     }
 }
 
@@ -1093,6 +1241,7 @@ private enum HostAnalysisValidationState {
 private enum HostAnalysisStatus {
     case needsAnalysis
     case requested
+    case queued
     case analyzing
     case cacheLoaded
     case ready
@@ -1244,6 +1393,8 @@ private final class StabilizerHostAnalysisStore {
             return "Needs Analysis"
         case .requested:
             return "Host Analysis Requested"
+        case .queued:
+            return "Queued Host Analysis"
         case .analyzing:
             return "Analyzing Host Frames (\(frameCount))"
         case .cacheLoaded:
@@ -1317,6 +1468,16 @@ private final class StabilizerHostAnalysisStore {
         lock.lock()
         if preparedAnalysis == nil && status != .analyzing {
             status = .requested
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+    }
+
+    func markQueued(position: Int, reason: String) {
+        lock.lock()
+        if preparedAnalysis == nil {
+            status = .queued
+            analysisInfoText = "Queued Host Analysis #\(position) | waiting for \(reason)"
             bumpRevisionLocked()
         }
         lock.unlock()

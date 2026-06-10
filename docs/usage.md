@@ -11,8 +11,9 @@
 5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
 `Start Host Analysis` requests the active effect clip from Final Cut Pro. If Final Cut Pro
-reports that another analysis is already requested or running, the Inspector shows that
-host state instead of starting an internal plug-in queue.
+reports that another analysis is already requested or running, the Inspector shows
+`Queued Host Analysis` and the effect waits in a process-wide serial queue. Queued clips
+start one at a time as earlier Host Analysis runs finish.
 Debug installs clean stale `Stabilizer Transform copy...` Motion Template folders in the
 `Emdash Studios` group so Final Cut Pro does not list duplicate Stabilizer effects.
 
@@ -160,22 +161,24 @@ fallbacks.
 - Persistent analysis reuse is based on cache schema and current source-frame validation,
   not the loaded FxPlug runtime version. Render-only runtime updates should reuse the saved
   Host Analysis cache.
-- In-progress Host Analysis uses a per-clip session store, so simultaneous clips and clips
+- In-progress Host Analysis uses a per-clip session store, so requested clips and clips
   whose selected `Sample Size` resolves to different actual pixel dimensions do not share a
-  streaming builder. Completed analysis is then published to the process-wide shared
-  render/cache store and persisted to the shared user Application Support cache using the
-  prepared analysis frame set, so analyzer and preview/render processes can hand off the
-  prepared motion path through validated cache files. Preview/render callbacks
+  streaming builder. If another Stabilizer Host Analysis is already active, or Final Cut Pro
+  is already running Host Analysis when another clip is requested, that effect instance is
+  queued and started after the host becomes available.
+  Completed analysis is then published to the process-wide shared render/cache store and
+  persisted to the shared user Application Support cache using the prepared analysis frame
+  set, so analyzer and preview/render processes can hand off the prepared motion path
+  through validated cache files. Preview/render callbacks
   detect cache file changes when they have no prepared analysis, then reload candidates
   without starting Host Analysis. `Start Host Analysis` is the only path that requests Host
-  Analysis from Final Cut Pro. If Final Cut Pro reports that Host Analysis is already
-  requested or running, the Inspector shows that state instead of queueing another start
-  inside the plug-in.
+  Analysis from Final Cut Pro.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse. It appends
   the current FxPlug runtime version when Final Cut Pro accepts status parameter
-  updates.
+  updates. `Queued Host Analysis` means this clip is waiting for the plug-in's serial Host
+  Analysis queue to start it after the currently active host run finishes.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
   `Walking Bob`, `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame

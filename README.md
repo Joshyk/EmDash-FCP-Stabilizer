@@ -153,9 +153,14 @@ available, the Host Analysis path fails visibly in status/log output instead of
 falling back to CPU analysis.
 
 Each active Host Analysis run owns its own in-progress session store. Different
-clips can analyze at the same time, and clips whose selected `Sample Size`
-resolves to different actual pixel dimensions do not share the same streaming
-builder.
+clips can be requested while another clip is running, and clips whose selected
+`Sample Size` resolves to different actual pixel dimensions do not share the
+same streaming builder.
+
+When `Start Host Analysis` is pressed while Final Cut Pro reports that another
+analysis is already requested or running, the effect enters `Queued Host
+Analysis` instead of failing. The process-wide queue starts queued clips one at a
+time as the host becomes available.
 
 The analysis path:
 
