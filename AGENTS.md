@@ -68,6 +68,9 @@ render path's order:
 measure Footstep Jitter against the outer-frame baseline first, then compute Stride Wobble,
 Walking Bob, and Turn diagnostics from the footstep-cleaned path. Walking Bob diagnostics
 should expose tracking evidence and symmetric window support so edge-window gating is visible.
+The feedback report should print bands in Debug Overlay/render order (`FJIT`, `SWOB`, `BOB`,
+`WARP`, `TURN`) and choose the top remaining band separately. Its `--turn-window` option should
+match the Inspector `Turn Detection Window` when that UI value is not the default `6.0`.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,
 reject outlier blocks, and expose low block-confidence states in status/debug output instead
 of silently falling back to a coarse global shift. Walking landscape analysis should

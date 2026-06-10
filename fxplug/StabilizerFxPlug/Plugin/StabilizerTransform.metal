@@ -220,7 +220,7 @@ static uint debugLabelChar(uint row, uint index) {
         case 19:
             if (index == 0) { return 86; } // V
             if (index == 1) { return 49; } // 1
-            if (index == 2) { return 52; } // 4
+            if (index == 2) { return 53; } // 5
             return 0;
         default:
             return 0;
@@ -288,6 +288,7 @@ fragment float4 fragmentShader(
         : float4(colorSample);
 
     if (transform->debugOverlay > 0.5) {
+        outputColor.a = 1.0;
         float2 pixel = uv * transform->outputSize;
         float panelX = pixel.x - 16.0;
         float panelY = pixel.y - 16.0;

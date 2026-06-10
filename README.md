@@ -291,7 +291,8 @@ requested `--window` and prints the selected clip time separately from the
 requested note time. The CLI reads
 `~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` by
 default, or another cache with `--cache /path/to/host-analysis-v2.json`. Use
-`--json` for machine-readable output and `--output-size 1920x1080` when you want
+`--json` for machine-readable output, `--turn-window` to match a non-default
+Inspector `Turn Detection Window`, and `--output-size 1920x1080` when you want
 pixel estimates scaled to a target preview size.
 
 Use `--list-caches` to list the latest shared cache and range-specific cache
@@ -300,11 +301,12 @@ file as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing
 or deleting anything; add `--cache-root /path/to/root` to inspect another cache
 root explicitly.
 
-The report ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
+The report prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order
 bands using the saved prepared paths, tracking confidence, residuals, blur,
-block coverage, and search-radius edge-hit counts. The band split mirrors the
-render path: `FJIT` is measured first against the outer-frame baseline, then
-`SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. `WARP`
+block coverage, and search-radius edge-hit counts, while the summary line names
+the highest remaining band. The band split mirrors the render path: `FJIT` is
+measured first against the outer-frame baseline, then `SWOB`, `BOB`, and `TURN`
+are measured from the footstep-cleaned path. `WARP`
 uses the same local baseline/gate inputs that are then short-smoothed in render,
 and the report includes strict tracking, walking-band tracking, FJIT and SWOB
 per-axis confidence, BOB tracking/window support, residual, blur, block

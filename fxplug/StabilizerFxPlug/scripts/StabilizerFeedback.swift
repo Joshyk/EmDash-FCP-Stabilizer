@@ -15,6 +15,7 @@ private struct Options {
     var json = false
     var limit = 5
     var listCaches = false
+    var turnWindowSeconds = 6.0
     var strengths = Strengths.defaults
 }
 
@@ -240,6 +241,118 @@ private struct FrameAssessment {
     }
 }
 
+private struct AssessmentContext {
+    let analysis: Analysis
+    let footstepCleanXPath: [Float]
+    let footstepCleanYPath: [Float]
+    let footstepCleanRPath: [Float]
+    let strideSmoothedXPath: [Float]
+    let strideSmoothedYPath: [Float]
+    let strideSmoothedRPath: [Float]
+    let warpMagnitudes: [Float]
+
+    init(analysis: Analysis) {
+        self.analysis = analysis
+        let allIndices = Array(analysis.frames.indices)
+        let cleanX = outerLinearPredictionPath(
+            analysis.footstepPathX,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: footstepInnerWindowSeconds,
+            outerWindowSeconds: footstepOuterWindowSeconds
+        )
+        let cleanY = outerLinearPredictionPath(
+            analysis.footstepPathY,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: footstepInnerWindowSeconds,
+            outerWindowSeconds: footstepOuterWindowSeconds
+        )
+        let cleanR = outerLinearPredictionPath(
+            analysis.footstepPathRoll,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: footstepInnerWindowSeconds,
+            outerWindowSeconds: footstepOuterWindowSeconds
+        )
+        footstepCleanXPath = cleanX
+        footstepCleanYPath = cleanY
+        footstepCleanRPath = cleanR
+        strideSmoothedXPath = locallyTimeWeightedAveragePath(
+            cleanX,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            windowSeconds: strideWindowSeconds
+        )
+        strideSmoothedYPath = locallyTimeWeightedAveragePath(
+            cleanY,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            windowSeconds: strideWindowSeconds
+        )
+        strideSmoothedRPath = locallyTimeWeightedAveragePath(
+            cleanR,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            windowSeconds: strideWindowSeconds
+        )
+
+        let baselineYaw = outerLinearPredictionPath(
+            analysis.pathYaw,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: farFieldInnerWindowSeconds,
+            outerWindowSeconds: farFieldOuterWindowSeconds
+        )
+        let baselinePitch = outerLinearPredictionPath(
+            analysis.pathPitch,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: farFieldInnerWindowSeconds,
+            outerWindowSeconds: farFieldOuterWindowSeconds
+        )
+        let baselineShearX = outerLinearPredictionPath(
+            analysis.pathShearX,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: farFieldInnerWindowSeconds,
+            outerWindowSeconds: farFieldOuterWindowSeconds
+        )
+        let baselineShearY = outerLinearPredictionPath(
+            analysis.pathShearY,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: farFieldInnerWindowSeconds,
+            outerWindowSeconds: farFieldOuterWindowSeconds
+        )
+        let baselinePerspectiveX = outerLinearPredictionPath(
+            analysis.pathPerspectiveX,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: farFieldInnerWindowSeconds,
+            outerWindowSeconds: farFieldOuterWindowSeconds
+        )
+        let baselinePerspectiveY = outerLinearPredictionPath(
+            analysis.pathPerspectiveY,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            innerWindowSeconds: farFieldInnerWindowSeconds,
+            outerWindowSeconds: farFieldOuterWindowSeconds
+        )
+        warpMagnitudes = allIndices.map { index in
+            let yaw = analysis.pathYaw[index] - baselineYaw[index]
+            let pitch = analysis.pathPitch[index] - baselinePitch[index]
+            let shearX = analysis.pathShearX[index] - baselineShearX[index]
+            let shearY = analysis.pathShearY[index] - baselineShearY[index]
+            let perspectiveX = analysis.pathPerspectiveX[index] - baselinePerspectiveX[index]
+            let perspectiveY = analysis.pathPerspectiveY[index] - baselinePerspectiveY[index]
+            return (hypotf(yaw, pitch) * 1000.0)
+                + (hypotf(shearX, shearY) * 900.0)
+                + (hypotf(perspectiveX, perspectiveY) * 900.0)
+        }
+    }
+}
+
 private let strideWindowSeconds = 2.0
 private let walkingBobWindowSeconds = 2.5
 private let footstepInnerWindowSeconds = 0.10
@@ -416,7 +529,8 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
     return nil
 }
 
-private func assessment(for analysis: Analysis, index: Int, options: Options) -> FrameAssessment {
+private func assessment(for context: AssessmentContext, index: Int, options: Options) -> FrameAssessment {
+    let analysis = context.analysis
     let frame = analysis.frames[index]
     let outputWidth = options.outputSize?.width ?? Float(analysis.sampleWidth)
     let outputHeight = options.outputSize?.height ?? Float(analysis.sampleHeight)
@@ -425,10 +539,9 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
 
     let strideIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: strideWindowSeconds)
     let bobIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
-    let turnWindowSeconds = max(strideWindowSeconds, 6.0)
+    let turnWindowSeconds = max(strideWindowSeconds, options.turnWindowSeconds)
     let turnIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: turnWindowSeconds)
     let warpGateIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: farFieldOuterWindowSeconds)
-    let sampledIndices = Array(Set(strideIndices + bobIndices + turnIndices + [index]))
     let centerResidual = analysis.residuals[index]
     let quality = frameTrackingQuality(
         motionConfidence: analysis.analysisConfidence[index],
@@ -446,55 +559,15 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
         totalBlockCount: analysis.totalBlockCounts[index]
     )
 
-    let footstepCleanXPath = outerLinearPredictionPath(
-        analysis.footstepPathX,
-        frames: analysis.frames,
-        targetIndices: sampledIndices,
-        innerWindowSeconds: footstepInnerWindowSeconds,
-        outerWindowSeconds: footstepOuterWindowSeconds
-    )
-    let footstepCleanYPath = outerLinearPredictionPath(
-        analysis.footstepPathY,
-        frames: analysis.frames,
-        targetIndices: sampledIndices,
-        innerWindowSeconds: footstepInnerWindowSeconds,
-        outerWindowSeconds: footstepOuterWindowSeconds
-    )
-    let footstepCleanRPath = outerLinearPredictionPath(
-        analysis.footstepPathRoll,
-        frames: analysis.frames,
-        targetIndices: sampledIndices,
-        innerWindowSeconds: footstepInnerWindowSeconds,
-        outerWindowSeconds: footstepOuterWindowSeconds
-    )
-    let strideSmoothedXPath = locallyTimeWeightedAveragePath(
-        footstepCleanXPath,
-        frames: analysis.frames,
-        targetIndices: sampledIndices,
-        windowSeconds: strideWindowSeconds
-    )
-    let strideSmoothedYPath = locallyTimeWeightedAveragePath(
-        footstepCleanYPath,
-        frames: analysis.frames,
-        targetIndices: sampledIndices,
-        windowSeconds: strideWindowSeconds
-    )
-    let strideSmoothedRPath = locallyTimeWeightedAveragePath(
-        footstepCleanRPath,
-        frames: analysis.frames,
-        targetIndices: sampledIndices,
-        windowSeconds: strideWindowSeconds
-    )
-
-    let footstepBaseX = footstepCleanXPath[index]
-    let footstepBaseY = footstepCleanYPath[index]
-    let footstepBaseR = footstepCleanRPath[index]
-    let strideSmoothX = strideSmoothedXPath[index]
-    let strideSmoothY = strideSmoothedYPath[index]
-    let strideSmoothR = strideSmoothedRPath[index]
-    let bobSmoothY = timeWeightedAverage(strideSmoothedYPath, frames: analysis.frames, indices: bobIndices, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
-    let turnSmoothX = timeWeightedMonotonicSCurveValue(strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
-        ?? timeWeightedAverage(strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
+    let footstepBaseX = context.footstepCleanXPath[index]
+    let footstepBaseY = context.footstepCleanYPath[index]
+    let footstepBaseR = context.footstepCleanRPath[index]
+    let strideSmoothX = context.strideSmoothedXPath[index]
+    let strideSmoothY = context.strideSmoothedYPath[index]
+    let strideSmoothR = context.strideSmoothedRPath[index]
+    let bobSmoothY = timeWeightedAverage(context.strideSmoothedYPath, frames: analysis.frames, indices: bobIndices, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
+    let turnSmoothX = timeWeightedMonotonicSCurveValue(context.strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
+        ?? timeWeightedAverage(context.strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
 
     let strideResidual = percentileValue(analysis.residuals, indices: strideIndices, percentile: 0.70)
     let bobResidual = percentileValue(analysis.residuals, indices: bobIndices, percentile: 0.70)
@@ -506,9 +579,9 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let footX = analysis.footstepPathX[index] - footstepBaseX
     let footY = analysis.footstepPathY[index] - footstepBaseY
     let footR = analysis.footstepPathRoll[index] - footstepBaseR
-    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: footstepCleanXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
-    let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: footstepCleanYPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
-    let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: footstepCleanRPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScaleDegrees)
+    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: context.footstepCleanXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
+    let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: context.footstepCleanYPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
+    let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: context.footstepCleanRPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScaleDegrees)
     let footAppliedX = abs(footX * xScale) * correctionFactor(options.strengths.microX, confidence: footQX)
     let footAppliedY = abs(footY * yScale) * correctionFactor(options.strengths.microY, confidence: footQY)
     let footAppliedR = abs(footR) * correctionFactor(options.strengths.microR, confidence: footQR)
@@ -557,7 +630,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     )
     let warpGate = warpGateComponents.gate
     let appliedWarpConfidence = clamp(rawWarpConfidence * warpGate, min: 0.0, max: 1.0)
-    let warpDetected = warpMagnitude(analysis: analysis, index: index) * min(4.0, max(0.0, Float(options.strengths.warp)))
+    let warpDetected = context.warpMagnitudes[index] * min(4.0, max(0.0, Float(options.strengths.warp)))
     let warpApplied = warpDetected * appliedWarpConfidence
 
     let bands = [
@@ -586,22 +659,22 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
             note: String(format: "Y band %.3f trk %.2f support %.2f", bobBandY, bobTracking, bobSupport)
         ),
         BandAssessment(
-            name: "TURN",
-            detected: turnDetected,
-            applied: turnApplied,
-            remaining: max(0.0, turnDetected - turnApplied),
-            confidence: turnQ,
-            note: String(format: "X band %.3f", turnBandX)
-        ),
-        BandAssessment(
             name: "WARP",
             detected: warpDetected,
             applied: warpApplied,
             remaining: max(0.0, warpDetected - warpApplied),
             confidence: appliedWarpConfidence,
             note: String(format: "dimensionless warp band raw q %.2f gate %.2f trkGate %.2f edgeGate %.2f stableTrk %.2f", rawWarpConfidence, warpGate, warpGateComponents.trackingGate, warpGateComponents.edgeGate, warpTracking)
+        ),
+        BandAssessment(
+            name: "TURN",
+            detected: turnDetected,
+            applied: turnApplied,
+            remaining: max(0.0, turnDetected - turnApplied),
+            confidence: turnQ,
+            note: String(format: "X band %.3f", turnBandX)
         )
-    ].sorted { $0.remaining > $1.remaining }
+    ]
 
     return FrameAssessment(
         index: index,
@@ -628,20 +701,53 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     )
 }
 
-private func warpMagnitude(analysis: Analysis, index: Int) -> Float {
-    let yaw = analysis.pathYaw[index] - (outerLinearPrediction(analysis.pathYaw, frames: analysis.frames, centerIndex: index, innerWindowSeconds: farFieldInnerWindowSeconds, outerWindowSeconds: farFieldOuterWindowSeconds) ?? analysis.pathYaw[index])
-    let pitch = analysis.pathPitch[index] - (outerLinearPrediction(analysis.pathPitch, frames: analysis.frames, centerIndex: index, innerWindowSeconds: farFieldInnerWindowSeconds, outerWindowSeconds: farFieldOuterWindowSeconds) ?? analysis.pathPitch[index])
-    let shearX = analysis.pathShearX[index] - (outerLinearPrediction(analysis.pathShearX, frames: analysis.frames, centerIndex: index, innerWindowSeconds: farFieldInnerWindowSeconds, outerWindowSeconds: farFieldOuterWindowSeconds) ?? analysis.pathShearX[index])
-    let shearY = analysis.pathShearY[index] - (outerLinearPrediction(analysis.pathShearY, frames: analysis.frames, centerIndex: index, innerWindowSeconds: farFieldInnerWindowSeconds, outerWindowSeconds: farFieldOuterWindowSeconds) ?? analysis.pathShearY[index])
-    let perspX = analysis.pathPerspectiveX[index] - (outerLinearPrediction(analysis.pathPerspectiveX, frames: analysis.frames, centerIndex: index, innerWindowSeconds: farFieldInnerWindowSeconds, outerWindowSeconds: farFieldOuterWindowSeconds) ?? analysis.pathPerspectiveX[index])
-    let perspY = analysis.pathPerspectiveY[index] - (outerLinearPrediction(analysis.pathPerspectiveY, frames: analysis.frames, centerIndex: index, innerWindowSeconds: farFieldInnerWindowSeconds, outerWindowSeconds: farFieldOuterWindowSeconds) ?? analysis.pathPerspectiveY[index])
-    return (hypotf(yaw, pitch) * 1000.0) + (hypotf(shearX, shearY) * 900.0) + (hypotf(perspX, perspY) * 900.0)
-}
-
 private func activeIndices(_ frames: [AnalysisFrame], centerTime: Double, windowSeconds: Double) -> [Int] {
     let halfWindow = windowSeconds * 0.5
-    let indices = frames.indices.filter { abs(frames[$0].time - centerTime) <= halfWindow + timeWindowSelectionEpsilon }
+    let indices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindow)
     return indices.isEmpty ? Array(frames.indices) : Array(indices)
+}
+
+private func indicesWithinTimeRadius(_ frames: [AnalysisFrame], centerTime: Double, radiusSeconds: Double) -> [Int] {
+    guard !frames.isEmpty else {
+        return []
+    }
+    let boundedRadius = max(0.0, radiusSeconds)
+    let startTime = centerTime - boundedRadius - timeWindowSelectionEpsilon
+    let endTime = centerTime + boundedRadius + timeWindowSelectionEpsilon
+    let lower = lowerBoundFrameIndex(frames, time: startTime)
+    let upper = upperBoundFrameIndex(frames, time: endTime)
+    guard lower < upper else {
+        return []
+    }
+    return Array(lower..<upper)
+}
+
+private func lowerBoundFrameIndex(_ frames: [AnalysisFrame], time: Double) -> Int {
+    var low = frames.startIndex
+    var high = frames.endIndex
+    while low < high {
+        let mid = low + ((high - low) / 2)
+        if frames[mid].time < time {
+            low = mid + 1
+        } else {
+            high = mid
+        }
+    }
+    return low
+}
+
+private func upperBoundFrameIndex(_ frames: [AnalysisFrame], time: Double) -> Int {
+    var low = frames.startIndex
+    var high = frames.endIndex
+    while low < high {
+        let mid = low + ((high - low) / 2)
+        if frames[mid].time <= time {
+            low = mid + 1
+        } else {
+            high = mid
+        }
+    }
+    return low
 }
 
 private func timeWeightedAverage(_ values: [Float], frames: [AnalysisFrame], indices: [Int], centerTime: Double, windowSeconds: Double) -> Float {
@@ -695,9 +801,7 @@ private func locallyTimeWeightedAveragePath(_ values: [Float], frames: [Analysis
     let halfWindow = max(0.0, windowSeconds * 0.5)
     for index in Set(targetIndices) where values.indices.contains(index) && frames.indices.contains(index) {
         let centerTime = frames[index].time
-        let localIndices = frames.indices.filter { candidate in
-            abs(frames[candidate].time - centerTime) <= halfWindow + timeWindowSelectionEpsilon
-        }
+        let localIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindow)
         let indices = localIndices.isEmpty ? [index] : Array(localIndices)
         smoothed[index] = timeWeightedAverage(
             values,
@@ -776,7 +880,7 @@ private func outerLinearPrediction(_ values: [Float], frames: [AnalysisFrame], c
     let outerWindow = max(innerWindow, outerWindowSeconds)
     let centerTime = frames[centerIndex].time
     var points: [(x: Float, y: Float)] = []
-    for index in frames.indices where values.indices.contains(index) {
+    for index in indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: outerWindow) where values.indices.contains(index) {
         let offsetSeconds = frames[index].time - centerTime
         let distance = abs(offsetSeconds)
         if distance <= outerWindow + timeWindowSelectionEpsilon && distance > innerWindow + timeWindowSelectionEpsilon {
@@ -806,14 +910,15 @@ private func surroundingIndices(around centerIndex: Int, frames: [AnalysisFrame]
     let innerWindow = max(0.0, min(innerWindowSeconds, outerWindowSeconds))
     let outerWindow = max(innerWindow, outerWindowSeconds)
     let centerTime = frames[centerIndex].time
-    let indices = frames.indices.filter { index in
+    let outerIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: outerWindow)
+    let indices = outerIndices.filter { index in
         let distance = abs(frames[index].time - centerTime)
         return distance <= outerWindow + timeWindowSelectionEpsilon && distance > innerWindow + timeWindowSelectionEpsilon
     }
     if indices.count >= 3 {
         return Array(indices)
     }
-    return frames.indices.filter { abs(frames[$0].time - centerTime) <= outerWindow + timeWindowSelectionEpsilon }
+    return outerIndices
 }
 
 private func footstepConfidence(values: [Float], baselineValues: [Float], frames: [AnalysisFrame], index: Int, trackingConfidence: Float, fullImpulseScale: Float) -> Float {
@@ -1077,6 +1182,7 @@ private func nearestIndex(in analysis: Analysis, absoluteTime: Double) -> Int {
 }
 
 private func chooseAssessments(analysis: Analysis, options: Options) throws -> [FrameAssessment] {
+    let context = AssessmentContext(analysis: analysis)
     if let relativeTime = options.relativeTime {
         let absoluteTime = analysis.rangeStartSeconds + relativeTime
         let firstTime = analysis.frames[0].time
@@ -1088,11 +1194,11 @@ private func chooseAssessments(analysis: Analysis, options: Options) throws -> [
         let halfWindow = max(0.0, options.windowSeconds * 0.5)
         let indices = analysis.frames.indices.filter { abs(analysis.frames[$0].time - absoluteTime) <= halfWindow + timeWindowSelectionEpsilon }
         let candidates = (indices.isEmpty ? [nearestIndex(in: analysis, absoluteTime: absoluteTime)] : Array(indices))
-            .map { assessment(for: analysis, index: $0, options: options) }
-        return [candidates.max { $0.score < $1.score } ?? assessment(for: analysis, index: nearestIndex(in: analysis, absoluteTime: absoluteTime), options: options)]
+            .map { assessment(for: context, index: $0, options: options) }
+        return [candidates.max { $0.score < $1.score } ?? assessment(for: context, index: nearestIndex(in: analysis, absoluteTime: absoluteTime), options: options)]
     }
     return analysis.frames.indices
-        .map { assessment(for: analysis, index: $0, options: options) }
+        .map { assessment(for: context, index: $0, options: options) }
         .sorted { $0.score > $1.score }
         .prefix(max(1, options.limit))
         .map { $0 }
@@ -1102,6 +1208,7 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
     print("Stabilizer feedback")
     print("Cache: \(analysis.cachePath)")
     print("Schema: \(analysis.schemaVersion), frames: \(analysis.frames.count), sample: \(analysis.sampleWidth)x\(analysis.sampleHeight)")
+    print("Turn window: \(formatSeconds(options.turnWindowSeconds))")
     if let time = options.relativeTime {
         print("Requested clip time: \(formatSeconds(time)), window: \(formatSeconds(options.windowSeconds))")
         if let selected = assessments.first {
@@ -1165,6 +1272,7 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
             (assessments.first?.clipTime ?? requested) - requested
         }),
         "windowSeconds": options.windowSeconds,
+        "turnWindowSeconds": options.turnWindowSeconds,
         "note": jsonValue(options.note),
         "assessments": assessments.map { assessment in
             [
@@ -1294,6 +1402,8 @@ private func parseOptions() throws -> Options {
             options.note = try nextValue(for: arg)
         case "--window":
             options.windowSeconds = max(0.0, try nextDouble(for: arg))
+        case "--turn-window":
+            options.turnWindowSeconds = max(strideWindowSeconds, try nextDouble(for: arg))
         case "--output-size":
             let value = try nextValue(for: arg)
             let parts = value.lowercased().split(separator: "x")
@@ -1342,6 +1452,7 @@ private func printUsage() {
       stabilizer_feedback.sh --list-caches
 
     time is clip-relative: 0.0 is the Host Analysis range start.
+    --turn-window should match the Inspector Turn Detection Window when it is not 6.0.
     --list-caches reports saved cache readiness without repairing cache files.
     """)
 }

@@ -213,8 +213,8 @@ Analysis range starts. The default cache path is
 `~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json`; pass
 `--cache` for a range-specific file under the `caches/` directory. Add `--json`
 for structured output, `--window 0.5` to inspect the strongest frame near the
-note, and `--output-size 1920x1080` to scale translation estimates to a preview
-size.
+note, `--turn-window` to match a non-default Inspector `Turn Detection Window`,
+and `--output-size 1920x1080` to scale translation estimates to a preview size.
 
 Use `--list-caches` to inspect saved cache readiness before diagnosing a note:
 
@@ -229,9 +229,9 @@ promote cache files. Use `--cache-root /path/to/root` only when you explicitly
 want to inspect a different cache root.
 
 The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
-paths and ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
-bands. It follows the same band order as render: `FJIT` is measured against the
-outer-frame baseline, then `SWOB`, `BOB`, and `TURN` are measured from that
+paths and prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order,
+while the summary line names the highest remaining band. `FJIT` is measured against
+the outer-frame baseline, then `SWOB`, `BOB`, and `TURN` are measured from that
 footstep-cleaned path. It prints strict tracking and walking-band tracking separately,
 FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
 the raw impulse or band values, and BOB tracking/window support so short

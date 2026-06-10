@@ -263,10 +263,11 @@ without repairing or deleting them; `--cache-root /path/to/root` inspects an
 explicit alternate root.
 
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
-remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP` bands from the prepared
-motion paths and tracking diagnostics. It uses the same footstep-first band
-split as render, so `SWOB`, `BOB`, and `TURN` diagnostics are computed from the
-footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
+remaining shake from the prepared motion paths and tracking diagnostics, then
+prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order. Pass
+`--turn-window` when the Inspector `Turn Detection Window` is not the default `6.0`.
+It uses the same footstep-first band split as render, so `SWOB`, `BOB`, and `TURN`
+diagnostics are computed from the footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band
 tracking confidence, FJIT per-axis and SWOB per-axis confidence, BOB tracking/window support, residual quality, blur quality, block coverage, edge quality, stable WARP tracking support, and WARP
 tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
