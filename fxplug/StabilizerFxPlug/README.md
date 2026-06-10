@@ -149,7 +149,7 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
   worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale,
-  and the Y default is `0.50` so step follow-through is not pushed entirely into the longer
+  and the Y default is `0.70` so step follow-through is not pushed entirely into the longer
   Walking Bob pass. FJIT, SWOB, and BOB use a count-aware walking-band tracking gate; WARP
   and TURN keep the stricter tracking gate.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
@@ -168,8 +168,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   shake. It uses a `0.10`/`1.0` second outer-frame linear warp baseline and applies shear,
   yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
   gates warp with walking-footage tracking quality and search-radius headroom, starts the
-  tracking gate earlier for moderate 25% Host Analysis evidence, curves medium-confidence
-  gates upward, then applies a tiny deadband and small render-only clamps so weak frames do
+  tracking gate early enough for moderate 25% Host Analysis evidence, reaches full response
+  more gradually, then applies a tiny deadband and small render-only clamps so weak frames do
   not create wave-like image distortion.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, and the macro correction is soft-limited to a small

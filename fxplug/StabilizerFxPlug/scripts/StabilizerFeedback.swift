@@ -34,7 +34,7 @@ private struct Strengths {
         microY: 1.0,
         microR: 1.0,
         strideX: 0.65,
-        strideY: 0.50,
+        strideY: 0.70,
         strideR: 0.75,
         turn: 1.0,
         bob: 0.75,
@@ -256,8 +256,8 @@ private let strideFullScaleDegrees: Float = 0.16
 private let strideFullResponseScale: Float = 0.65
 private let walkingBobFullScalePixels: Float = 0.65
 private let turnFullScalePixels: Float = 2.0
-private let farFieldWarpTrackingGateStart: Float = 0.30
-private let farFieldWarpTrackingGateFull: Float = 0.50
+private let farFieldWarpTrackingGateStart: Float = 0.26
+private let farFieldWarpTrackingGateFull: Float = 0.56
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
 private let supportedCacheSchemaVersion = 14

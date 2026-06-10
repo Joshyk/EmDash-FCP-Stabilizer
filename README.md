@@ -78,7 +78,7 @@ broad path as its band input. Its residual gate uses robust window percentiles
 instead of letting a single bad frame suppress the whole band. Medium stride
 bands reach full confidence earlier than the broad UI scale so real walking
 follow-through is not left entirely to the longer Walking Bob pass; the Y default
-is `0.50`, still lower than X/roll but no longer near-minimal.
+is `0.70`, high enough to remove medium vertical step wobble before the broader BOB pass.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
@@ -102,10 +102,10 @@ perspective trim for distant background motion. It is applied from the current
 frame's local deviation from its own `1.0` second outer-frame linear baseline,
 so long-term drift does not become a fixed deskew. The default is `1.0`, and the
 maximum is `4.0`. The render path gates warp with walking-footage tracking quality and
-search-radius headroom. The tracking gate now starts earlier for moderate
-25% Host Analysis evidence, then curves medium-confidence gates upward and
+search-radius headroom. The tracking gate starts early enough for moderate
+25% Host Analysis evidence but reaches full response more gradually, then
 drops tiny warp deltas through a deadband so useful ridge-line correction is
-less likely to disappear while low-confidence warp evidence is still suppressed
+less likely to disappear while high-side gate jumps and low-confidence warp evidence are suppressed
 instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction

@@ -220,8 +220,9 @@ gate Far-field Warp off instead of creating wave-like image distortion. Render s
 walking-footage tracking gate tuned for 25% Host Analysis samples plus a tiny render-time
 deadband so weak warp deltas do not create swimming or wave-like distortion. Medium-confidence
 warp gates may be curved upward, and the tracking gate should start early enough that moderate
-25% Host Analysis evidence can still correct distant ridge-line shake, but zero tracking or
-poor search-radius evidence must still produce zero warp correction.
+25% Host Analysis evidence can still correct distant ridge-line shake while reaching full
+response gradually enough to avoid high-side gate jumps, but zero tracking or poor search-radius
+evidence must still produce zero warp correction.
 `W Q` should represent the applied warp confidence after those safety gates. Bump Host
 Analysis cache schema when prepared warp path semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original

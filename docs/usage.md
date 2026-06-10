@@ -47,7 +47,7 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   is longer than Footstep Jitter but shorter than broad Turn Smoothing. The default is
   `0.65` and the maximum is `4.0`.
 - `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
-  default is `0.50`, so medium vertical follow-through is corrected before the longer
+  default is `0.70`, so medium vertical follow-through is corrected before the longer
   Walking Bob pass while still leaving BOB as the broader vertical-cycle correction.
   Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
   user-facing Stride Wobble window. Its residual gate uses robust window percentiles instead
@@ -86,10 +86,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   deviation from its own `0.10`/`1.0` second outer-frame linear warp baseline, so
   accumulated drift does not turn into a fixed deskew. The default is `1.0`, the maximum is
   `4.0`, and `0` fully disables warp. Render gates warp with walking-footage tracking
-  quality and search-radius headroom. The tracking gate starts earlier for moderate
-  25% Host Analysis evidence, then applies a tiny deadband so weak frames do not create
-  wave-like image distortion. Pull this down if close grass, roads, water, or frame edges
-  start to swim.
+  quality and search-radius headroom. The tracking gate starts early enough for moderate
+  25% Host Analysis evidence but reaches full response more gradually, then applies a tiny
+  deadband so weak frames and high-side gate jumps do not create wave-like image distortion.
+  Pull this down if close grass, roads, water, or frame edges start to swim.
 - `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
   walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
   correction is bypassed; the default is `1.0` and the maximum is `4.0`. Values above `1.0`

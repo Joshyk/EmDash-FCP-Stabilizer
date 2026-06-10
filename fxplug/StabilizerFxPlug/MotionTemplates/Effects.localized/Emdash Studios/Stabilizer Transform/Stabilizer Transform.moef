@@ -276,7 +276,7 @@
 				<parameter name="Footstep Jitter Y Strength" id="18" flags="12884901904" default="1" value="1"/>
 				<parameter name="Footstep Jitter Rotation Strength" id="8" flags="12884901904" default="1" value="1"/>
 				<parameter name="Stride Wobble X Strength" id="29" flags="12884901904" default="0.65" value="0.65"/>
-					<parameter name="Stride Wobble Y Strength" id="30" flags="12884901904" default="0.50" value="0.50"/>
+					<parameter name="Stride Wobble Y Strength" id="30" flags="12884901904" default="0.70" value="0.70"/>
 				<parameter name="Stride Wobble Rotation Strength" id="31" flags="12884901904" default="0.75" value="0.75"/>
 				<parameter name="Overall Strength" id="1" flags="12884901904" default="1" value="1"/>
 				<parameter name="Walking Bob Removal" id="26" flags="12884901904" default="0.75" value="0.75"/>
@@ -288,7 +288,7 @@
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
-					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.11" value="Needs Analysis | FxPlug 0.11"/>
+					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.12" value="Needs Analysis | FxPlug 0.12"/>
 				<parameter name="Stabilizer Info" id="32" flags="12884904021" default="No Analysis" value="No Analysis"/>
 				<parameter name="Render Revision" id="20" flags="12884901906" default="0" value="0"/>
 				<parameter name="Mix" id="10001" flags="12884901888" default="1" value="1"/>
