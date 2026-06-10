@@ -348,9 +348,10 @@ codesign --verify --deep --strict /Applications/StabilizerFxPlug.app
 git diff --check -- AGENTS.md README.md docs/usage.md fxplug/StabilizerFxPlug
 ```
 
-The `StabilizerFxPlug` shared scheme has a post-build action that runs
+The `StabilizerFxPlug` shared scheme has a pre-build action that fails when Final Cut Pro is
+running and a post-build action that runs
 `fxplug/StabilizerFxPlug/scripts/install_debug_app.sh`. Final Cut Pro must be quit before
-that install step runs; replacing a loaded FxPlug bundle can leave Final Cut Pro holding a
+building or installing; touching a loaded FxPlug bundle can leave Final Cut Pro holding a
 stale PlugInKit object and produce `P1000307` helper communication errors. A successful
 build should install `/Applications/StabilizerFxPlug.app`, copy the Motion Template into
 the user's Movies Motion Templates folder, and register its embedded pluginkit for Final

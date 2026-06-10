@@ -18,9 +18,9 @@ pending start request until it starts or you clear it; another clip's completed 
 not treated as completion for the queued clip.
 Debug installs clean stale `Stabilizer Transform copy...` Motion Template folders in the
 `Emdash Studios` group so Final Cut Pro does not list duplicate Stabilizer effects.
-The Debug install step fails if Final Cut Pro is running, because replacing a loaded FxPlug
-can leave Final Cut Pro holding a stale PlugInKit object and trigger `P1000307` helper
-communication errors.
+The Debug scheme and install step fail if Final Cut Pro is running, because building or
+replacing a loaded FxPlug can leave Final Cut Pro holding a stale PlugInKit object and
+trigger `P1000307` helper communication errors.
 
 ## Optional UI Shortcuts
 
@@ -413,8 +413,9 @@ xcodebuild \
   build
 ```
 
-Quit Final Cut Pro before building or rerunning `install_debug_app.sh`. The installer fails
-visibly when Final Cut Pro is running instead of replacing a loaded FxPlug bundle.
+Quit Final Cut Pro before building or rerunning `install_debug_app.sh`. The shared scheme
+and installer fail visibly when Final Cut Pro is running instead of touching a loaded FxPlug
+bundle.
 
 Verify with:
 

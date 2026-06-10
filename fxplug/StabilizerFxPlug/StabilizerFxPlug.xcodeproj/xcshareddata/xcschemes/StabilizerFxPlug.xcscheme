@@ -6,6 +6,24 @@
       parallelizeBuildables = "YES"
       buildImplicitDependencies = "YES"
       buildArchitectures = "Automatic">
+      <PreActions>
+         <ExecutionAction
+            ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
+            <ActionContent
+               title = "Require Final Cut Pro Quit"
+               scriptText = "if /usr/bin/pgrep -x &quot;Final Cut Pro&quot; &gt;/dev/null 2&gt;&amp;1; then&#10;  echo &quot;error: Final Cut Pro is running. Quit Final Cut Pro before building StabilizerFxPlug.&quot; &gt;&amp;2&#10;  echo &quot;       Building while Final Cut Pro holds the FxPlug can leave a stale PlugInKit object and trigger P1000307 helper communication errors.&quot; &gt;&amp;2&#10;  exit 1&#10;fi">
+               <EnvironmentBuildable>
+                  <BuildableReference
+                     BuildableIdentifier = "primary"
+                     BlueprintIdentifier = "000000000000000000000011"
+                     BuildableName = "StabilizerFxPlug.app"
+                     BlueprintName = "StabilizerFxPlug"
+                     ReferencedContainer = "container:StabilizerFxPlug.xcodeproj">
+                  </BuildableReference>
+               </EnvironmentBuildable>
+            </ActionContent>
+         </ExecutionAction>
+      </PreActions>
       <PostActions>
          <ExecutionAction
             ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">

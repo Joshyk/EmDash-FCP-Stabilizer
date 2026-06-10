@@ -377,10 +377,10 @@ stale `Stabilizer Transform copy...` Motion Template folders from the
 `Emdash Studios` group so Finder-created duplicates do not appear as extra
 effects in Final Cut Pro.
 
-The install step fails if Final Cut Pro is running. Quit Final Cut Pro before
-rebuilding or rerunning the install script; replacing a loaded FxPlug can leave
-Final Cut Pro holding a stale PlugInKit object and cause `P1000307` helper
-communication errors.
+The shared scheme and install script fail if Final Cut Pro is running. Quit
+Final Cut Pro before rebuilding or rerunning the install script; building or
+replacing a loaded FxPlug can leave Final Cut Pro holding a stale PlugInKit
+object and cause `P1000307` helper communication errors.
 
 Verify registration:
 
