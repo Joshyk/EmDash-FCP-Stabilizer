@@ -142,7 +142,8 @@ analysis is validated, render playback should keep using the prepared motion pat
 Final Cut Pro is playing proxy media; proxy media is rejected only for Host Analysis input
 and for validating an unvalidated persisted cache. If a saved Host Analysis cache is loaded
 while Final Cut Pro is currently playing proxy media, render playback should still use the
-loaded cache immediately rather than requiring re-analysis; original-media validation can
+loaded cache immediately rather than requiring re-analysis, keep the preview invalidation
+revision moving so the stabilized proxy preview appears, and let original-media validation
 happen later when original frames are available. When the
 effective overall transform strength is zero, rendering must
 bypass prepared motion-path sampling and output an identity transform with no debug overlay.

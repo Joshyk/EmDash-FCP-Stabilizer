@@ -191,7 +191,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   actual pixel size is shown in `Stabilizer Info`.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
-  original-media validation can happen later when original frames are available.
+  original-media validation can happen later when original frames are available. The render
+  path keeps the hidden preview revision current in this state so Final Cut Pro shows the
+  stabilized proxy preview without switching back to original media first.
 - `Edge Display Mode`: chooses whether transformed pixels outside the source image stretch
   edge pixels or draw black.
 - Host Analysis is always used. It requests GPU analysis frames from the host. Incomplete

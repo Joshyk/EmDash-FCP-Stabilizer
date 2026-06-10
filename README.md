@@ -213,7 +213,9 @@ Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
 prepared motion paths. A validated analysis continues to drive preview/render
 when Final Cut Pro plays proxy media; proxy media is rejected only for Host
-Analysis input and for validating an unvalidated cache.
+Analysis input and for validating an unvalidated cache. When proxy playback uses
+a loaded cache before original-media validation, the render path keeps the hidden
+preview revision current so Final Cut Pro shows the stabilized proxy preview.
 
 ## Cache Behavior
 

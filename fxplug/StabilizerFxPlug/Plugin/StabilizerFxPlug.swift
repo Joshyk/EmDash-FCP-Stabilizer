@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.3.2"
+private let stabilizerFxPlugVersion = "0.3.3"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -963,6 +963,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let autoTransform: StabilizerAutoTransform
         if transformEnabled,
            let preparedAnalysis = hostAnalysisStore.preparedAnalysisForRender(validating: sourceImages[0], at: renderTime) {
+            let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
+            if abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
+                publishHostAnalysisStatus()
+                publishStabilizerInfo(state: state)
+                publishRenderRevision(renderInvalidationToken, currentParameterValue: state.renderRevision)
+            }
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             autoTransform = AutoStabilizationEstimator.estimate(
                 preparedAnalysis: preparedAnalysis,
@@ -1715,7 +1721,7 @@ private final class StabilizerHostAnalysisStore {
             }
 
             if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) {
-                markReadyAfterOriginalMediaReturnedIfNeeded()
+                markReadyForProxyRenderIfNeeded()
                 updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
                 NSLog("StabilizerFxPlug: using loaded Host Analysis cache for render before original-media validation because current playback frame is proxy media: \(rejectionReason)")
                 return analysis
@@ -2111,6 +2117,20 @@ private final class StabilizerHostAnalysisStore {
             bumpRevisionLocked()
         }
         lock.unlock()
+    }
+
+    private func markReadyForProxyRenderIfNeeded() {
+        lock.lock()
+        let shouldMarkReady = preparedAnalysis != nil
+            && (status == .cacheLoaded || status == .proxyRejected)
+        if shouldMarkReady {
+            status = .ready
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+        if shouldMarkReady {
+            NSLog("StabilizerFxPlug: keeping prepared Host Analysis active for proxy preview before original-media validation.")
+        }
     }
 
     private func rejectPersistentCache(reason: String) {

@@ -317,7 +317,9 @@ FxPlug.
   rather than the single worst frame in the smoothing window.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
-  original-media validation can happen later when original frames are available.
+  original-media validation can happen later when original frames are available. The render
+  path keeps the hidden preview revision current in this state so the stabilized proxy
+  preview appears without switching back to original media first.
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
   Footstep Jitter impulse path, a fixed `2.0` second Stride Wobble band, and a Y-only
