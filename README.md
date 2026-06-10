@@ -171,9 +171,11 @@ render time.
 Render-time smoothing samples neighboring render times symmetrically across a
 `1.20` second zero-phase window and blends the automatic transform. At clip
 edges it averages only in-range neighboring samples instead of duplicating the
-first or last analysis frame. It smooths Stride Wobble, Walking Bob, Far-field
-Warp, and Turn Smoothing bands without averaging away the current frame's
-Footstep Jitter impulse.
+first or last analysis frame. It smooths Stride Wobble, Walking Bob, and Turn
+Smoothing bands without averaging away the current frame's Footstep Jitter
+impulse. Far-field Warp uses a separate short `0.36` second in-range smoothing
+window so distant ridge-line correction stays responsive without amplifying
+single-frame gate flicker.
 
 Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
@@ -284,7 +286,9 @@ fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
 ```
 
 `--time` is clip-relative: `0.0` is the start of the Host Analysis range saved
-in the cache. The CLI reads
+in the cache. With `--time`, the CLI reports the highest-score frame inside the
+requested `--window` and prints the selected clip time separately from the
+requested note time. The CLI reads
 `~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` by
 default, or another cache with `--cache /path/to/host-analysis-v2.json`. Use
 `--json` for machine-readable output and `--output-size 1920x1080` when you want
@@ -301,9 +305,11 @@ bands using the saved prepared paths, tracking confidence, residuals, blur,
 block coverage, and search-radius edge-hit counts. The band split mirrors the
 render path: `FJIT` is measured first against the outer-frame baseline, then
 `SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. `WARP`
-`q` matches the applied `W Q` confidence shown by Debug Overlay, and the report
-includes strict tracking, walking-band tracking, FJIT and SWOB per-axis confidence, BOB tracking/window support,
-residual, blur, block coverage, edge quality, stable WARP tracking support, and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
+uses the same local baseline/gate inputs that are then short-smoothed in render,
+and the report includes strict tracking, walking-band tracking, FJIT and SWOB
+per-axis confidence, BOB tracking/window support, residual, blur, block
+coverage, edge quality, stable WARP tracking support, and WARP tracking/edge
+gate values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
 Analysis run with the current FxPlug instead of trying to repair the data.
 

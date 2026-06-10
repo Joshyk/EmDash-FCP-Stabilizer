@@ -236,7 +236,9 @@ footstep-cleaned path. It prints strict tracking and walking-band tracking separ
 FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
 the raw impulse or band values, and BOB tracking/window support so short
 or one-sided analysis ranges are distinguishable from weak vertical motion. `WARP` `q` matches the applied `W Q` confidence shown by
-Debug Overlay. The report also prints residual quality, blur quality, block coverage,
+Debug Overlay. With `--time`, the report picks the highest-score frame inside
+the requested `--window` and prints both the requested note time and selected
+clip time. The report also prints residual quality, blur quality, block coverage,
 edge quality, stable WARP tracking support, and WARP tracking/edge gate values so conservative gating can be separated
 from weak detected motion. If the cache was written by an older build with mismatched frame/path
 arrays, it fails visibly and asks for a new Host Analysis run with the current
@@ -284,7 +286,9 @@ FxPlug.
   center-frame transform and the smoothing delta so visible stepping can be diagnosed from
   the Inspector. Footstep Jitter X/Y and roll keep the current render frame's impulse
   correction after the wider Stride/Turn/Bob smoothing pass, so fine distant ridge-line shake
-  is not averaged out by temporal smoothing. Stride, Bob, and Turn confidence use robust
+  is not averaged out by temporal smoothing. Far-field Warp uses a shorter `0.36` second
+  in-range smoothing window so ridge-line correction remains responsive without turning
+  single-frame gate changes into swimming. Stride, Bob, and Turn confidence use robust
   residual percentiles rather than the single worst frame in the smoothing window.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
@@ -305,8 +309,8 @@ FxPlug.
   not the absolute accumulated warp path. Render also requires walking-footage tracking
   quality and search-radius headroom before applying warp, starts its tracking gate earlier
   for moderate 25% Host Analysis evidence, stabilizes that gate with short local tracking
-  support, and drops tiny warp deltas through a deadband to avoid wave-like image distortion
-  while tuning micro jitter.
+  support, applies only short render-time smoothing, and drops tiny warp deltas through a
+  deadband to avoid wave-like image distortion while tuning micro jitter.
 - Host Analysis cache schema `14` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,

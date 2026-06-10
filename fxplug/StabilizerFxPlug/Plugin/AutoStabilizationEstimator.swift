@@ -279,6 +279,7 @@ enum AutoStabilizationEstimator {
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 21
     private static let renderTemporalSmoothingWindowSeconds = 1.20
+    private static let renderFarFieldWarpSmoothingWindowSeconds = 0.36
     private static let footstepImpulseFullScalePixels: Float = 0.35
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
     private static let footstepNoiseFloorScale: Float = 0.08
@@ -745,7 +746,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselineYawPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength,
                 max: maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength
@@ -756,7 +757,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselinePitchPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength,
                 max: maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength
@@ -769,7 +770,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselineShearXPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldShear * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldShear * farFieldWarpStrength,
                 max: maxRenderedFarFieldShear * farFieldWarpStrength
@@ -780,7 +781,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselineShearYPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldShear * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldShear * farFieldWarpStrength,
                 max: maxRenderedFarFieldShear * farFieldWarpStrength
@@ -793,7 +794,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselinePerspectiveXPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldPerspective * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldPerspective * farFieldWarpStrength,
                 max: maxRenderedFarFieldPerspective * farFieldWarpStrength
@@ -804,7 +805,7 @@ enum AutoStabilizationEstimator {
                     baselineValues: farFieldBaselinePerspectiveYPath,
                     interpolation: frameInterpolation,
                     deadband: maxRenderedFarFieldPerspective * 0.08,
-                    confidence: farFieldWarpGate
+                    confidence: appliedWarpConfidence
                 ),
                 min: -maxRenderedFarFieldPerspective * farFieldWarpStrength,
                 max: maxRenderedFarFieldPerspective * farFieldWarpStrength
@@ -883,7 +884,7 @@ enum AutoStabilizationEstimator {
         let denominator = Double(max(1, sampleCount - 1))
         let sampleStep = renderTemporalSmoothingWindowSeconds / denominator
         let sigma = max(1e-6, halfWindow * 0.5)
-        var weightedSamples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+        var weightedSamples: [(transform: StabilizerAutoTransform, weight: Float, offsetSeconds: Double)] = []
 
         for sampleIndex in 0..<sampleCount {
             let offset = (Double(sampleIndex - centerSample) * sampleStep)
@@ -903,17 +904,32 @@ enum AutoStabilizationEstimator {
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths
             )
-            weightedSamples.append((transform: transform, weight: weight))
+            weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
         }
 
         guard !weightedSamples.isEmpty else {
             return rawCenterTransform
         }
-        var smoothedTransform = weightedAverageTransform(weightedSamples)
+        let broadTransformSamples = weightedSamples.map { sample in
+            (transform: sample.transform, weight: sample.weight)
+        }
+        var smoothedTransform = weightedAverageTransform(broadTransformSamples)
+        let shortWarpSamples = farFieldWarpSmoothingSamples(weightedSamples)
+        let smoothedWarpTransform = shortWarpSamples.isEmpty
+            ? rawCenterTransform
+            : weightedAverageTransform(shortWarpSamples)
+        let smoothedWarpConfidence = clamp(smoothedWarpTransform.warpConfidence, min: 0.0, max: 1.0)
+        let centerWarpConfidence = clamp(rawCenterTransform.warpConfidence, min: 0.0, max: 1.0)
+        let cappedWarpConfidence = min(smoothedWarpConfidence, centerWarpConfidence)
+        let centerWarpScale = smoothedWarpConfidence > 1e-6 ? cappedWarpConfidence / smoothedWarpConfidence : 0.0
         smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
         smoothedTransform.footstepJitterRotationDegrees = rawCenterTransform.footstepJitterRotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
         smoothedTransform.microConfidence = rawCenterTransform.microConfidence
+        smoothedTransform.warpConfidence = cappedWarpConfidence
+        smoothedTransform.yawPitchProxy = smoothedWarpTransform.yawPitchProxy * centerWarpScale
+        smoothedTransform.shear = smoothedWarpTransform.shear * centerWarpScale
+        smoothedTransform.perspective = smoothedWarpTransform.perspective * centerWarpScale
         smoothedTransform.turnConfidence = rawCenterTransform.turnConfidence
         smoothedTransform.trackingConfidence = rawCenterTransform.trackingConfidence
         smoothedTransform.walkingTrackingConfidence = rawCenterTransform.walkingTrackingConfidence
@@ -935,6 +951,24 @@ enum AutoStabilizationEstimator {
         smoothedTransform.temporalSmoothingSampleCount = Int32(weightedSamples.count)
         smoothedTransform.temporalSmoothingWindowSeconds = Float(renderTemporalSmoothingWindowSeconds)
         return smoothedTransform
+    }
+
+    private static func farFieldWarpSmoothingSamples(
+        _ samples: [(transform: StabilizerAutoTransform, weight: Float, offsetSeconds: Double)]
+    ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+        let halfWindow = renderFarFieldWarpSmoothingWindowSeconds * 0.5
+        let sigma = max(1e-6, halfWindow * 0.5)
+        return samples.compactMap { sample in
+            guard abs(sample.offsetSeconds) <= halfWindow + 1e-9 else {
+                return nil
+            }
+            let normalizedDistance = sample.offsetSeconds / sigma
+            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard weight > 0.0001 else {
+                return nil
+            }
+            return (transform: sample.transform, weight: weight)
+        }
     }
 
     private static func weightedAverageTransform(

@@ -1104,6 +1104,10 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
     print("Schema: \(analysis.schemaVersion), frames: \(analysis.frames.count), sample: \(analysis.sampleWidth)x\(analysis.sampleHeight)")
     if let time = options.relativeTime {
         print("Requested clip time: \(formatSeconds(time)), window: \(formatSeconds(options.windowSeconds))")
+        if let selected = assessments.first {
+            let delta = selected.clipTime - time
+            print("Selected clip time: \(formatSeconds(selected.clipTime)) (\(formatSignedSeconds(delta)) from request; highest-score frame in window)")
+        }
     } else {
         print("Top \(assessments.count) residual candidates across cache")
     }
@@ -1154,7 +1158,12 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
         "frameCount": analysis.frames.count,
         "sampleWidth": analysis.sampleWidth,
         "sampleHeight": analysis.sampleHeight,
+        "selectionMode": options.relativeTime == nil ? "top-cache-candidates" : "highest-score-frame-in-time-window",
         "requestedClipTime": jsonValue(options.relativeTime),
+        "selectedClipTime": jsonValue(assessments.first?.clipTime),
+        "selectedClipTimeDelta": jsonValue(options.relativeTime.map { requested in
+            (assessments.first?.clipTime ?? requested) - requested
+        }),
         "windowSeconds": options.windowSeconds,
         "note": jsonValue(options.note),
         "assessments": assessments.map { assessment in
@@ -1339,6 +1348,10 @@ private func printUsage() {
 
 private func formatSeconds(_ value: Double) -> String {
     String(format: "%.3fs", value)
+}
+
+private func formatSignedSeconds(_ value: Double) -> String {
+    String(format: "%+.3fs", value)
 }
 
 private let iso8601Formatter: ISO8601DateFormatter = {

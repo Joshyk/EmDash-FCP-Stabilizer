@@ -40,10 +40,11 @@ estimators, or Transform-keyframe writers back into this target.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
 - Combines per-frame Footstep Jitter, fixed-window Stride Wobble, fixed-window Walking Bob,
   Far-field Warp, and broader Turn Smoothing bands so walking-gimbal shake is separated by
-  time scale without rerunning Host Analysis. Only Footstep Jitter keeps the current
-  render frame's raw impulse after `1.20` second zero-phase smoothing; Stride Wobble stays
-  in the wider smoothed transform. Clip-edge smoothing skips out-of-range neighboring
-  samples instead of duplicating the first or last analysis frame.
+  time scale without rerunning Host Analysis. Footstep Jitter keeps the current render
+  frame's raw impulse after `1.20` second zero-phase smoothing; Far-field Warp uses a
+  shorter `0.36` second in-range smoothing window so ridge-line correction stays responsive.
+  Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
+  or last analysis frame.
 - `Edge Display Mode` switches preview edges between stretched source edges and black
   outside-source pixels, making stabilization movement visible when needed.
 - Updates a hidden render revision parameter when Host Analysis/cache state changes so Final
@@ -171,7 +172,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
   gates warp with walking-footage tracking quality and search-radius headroom, starts the
   tracking gate early enough for moderate 25% Host Analysis evidence, reaches full response
-  more gradually, uses short local tracking support to reduce single-frame gate flicker, then
+  more gradually, uses short local tracking support and a `0.36` second render smoothing
+  window to reduce single-frame gate flicker, then
   applies a tiny deadband and small render-only clamps so weak frames do not create wave-like
   image distortion.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
