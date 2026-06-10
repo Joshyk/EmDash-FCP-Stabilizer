@@ -283,6 +283,8 @@ From this repo, run it through the parent-relative path:
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript set-debug-overlay on
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript set-debug-overlay off
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
