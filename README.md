@@ -100,7 +100,7 @@ likely to disappear while low-confidence warp evidence is still suppressed
 instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact `V04` row for the active
+bands and tracking state. It also includes a compact `V05` row for the active
 render runtime. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 
@@ -160,7 +160,9 @@ Completed Host Analysis is written to the shared user cache:
 
 Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, and fingerprints instead of
-every frame's full luma sample.
+every frame's full luma sample. Cache writing uses the prepared analysis frame
+set as the authoritative timeline, so a reduced retained source-frame map does
+not prevent a completed prepared path from being saved.
 
 `Start Host Analysis` first tries to reload a saved cache. It starts a new host
 analysis only when no compatible saved cache can be loaded. It must not delete
@@ -232,6 +234,30 @@ Values above `1.0` on Footstep, Stride, and Bob controls boost low-confidence
 corrections with a curved confidence response. The response is more assertive for
 medium-confidence frame evidence, but still has no hidden minimum confidence
 floor: zero confidence produces zero correction.
+
+## Feedback CLI
+
+Use the local feedback CLI when reviewing notes like `at 5 sec there is a
+notable unremoved shake` against a saved Host Analysis cache:
+
+```sh
+fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
+  --time 5.0 \
+  --note "notable unremoved shake"
+```
+
+`--time` is clip-relative: `0.0` is the start of the Host Analysis range saved
+in the cache. The CLI reads
+`~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` by
+default, or another cache with `--cache /path/to/host-analysis-v2.json`. Use
+`--json` for machine-readable output and `--output-size 1920x1080` when you want
+pixel estimates scaled to a target preview size.
+
+The report ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
+bands using the saved prepared paths, tracking confidence, residuals, blur,
+block coverage, and search-radius edge-hit counts. If a cache has mismatched
+frame/path array counts, the CLI fails explicitly and asks for a new Host
+Analysis run with the current FxPlug instead of trying to repair the data.
 
 ## Build
 

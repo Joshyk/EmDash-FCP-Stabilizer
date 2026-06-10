@@ -120,8 +120,9 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
 - Host Analysis uses a process-wide shared render store inside the active FxPlug runtime.
   Setup, frame analysis, cleanup, and render read/write that shared store when Final Cut Pro
   uses different FxPlug instances in the same process. Completed analysis is also persisted
-  to the shared user Application Support cache so analyzer and preview/render processes can
-  hand off the prepared motion path through validated cache files. Preview/render callbacks
+  to the shared user Application Support cache using the prepared analysis frame set, so
+  analyzer and preview/render processes can hand off the prepared motion path through
+  validated cache files. Preview/render callbacks
   detect cache file changes when they have no prepared analysis, then reload candidates
   without starting Host Analysis. `Start Host Analysis` is the only path that requests Host
   Analysis from Final Cut Pro. If Final Cut Pro reports that Host Analysis is already
@@ -138,10 +139,10 @@ Debug installs clean stale `Stabilizer Transform copy...` Motion Template folder
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
-  compact `V04` row in `Debug Overlay` when confirming the active render runtime.
+  compact `V05` row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V04` bars while
+  `TRK`, `SHRP`, `RES`, search-radius `HIT`, and compact runtime `V05` bars while
   checking runtime behavior.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.

@@ -184,6 +184,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   host analysis renders identity for that source instead of silently switching modes.
   Proxy media is rejected for Host Analysis input and for unvalidated persisted-cache
   validation, but a validated analysis continues to render during proxy playback.
+  Completed cache writes use the prepared analysis frame set as the authoritative timeline,
+  so a reduced retained source-frame map does not block persistence.
 - `Debug Overlay` shows labeled top-left diagnostics while checking runtime behavior.
 - `Start Host Analysis`: clears the current in-memory host-analysis frames, reloads a saved
   persistent cache if one exists, and only asks Final Cut Pro to start a forward GPU
@@ -201,12 +203,12 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Walking Bob <= 2.5s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available. Older saved timeline instances may keep
-  stale saved Inspector strings, so use the compact `V04` row in `Debug Overlay` to
+  stale saved Inspector strings, so use the compact `V05` row in `Debug Overlay` to
   confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), and compact runtime
-  `V04` diagnostics so Final
+  `V05` diagnostics so Final
   Cut Pro runtime analysis can be checked. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including tracking/motion quality, turn

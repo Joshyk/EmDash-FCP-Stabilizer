@@ -54,6 +54,13 @@ per-frame `.luma` scratch files or store analysis files inside a Final Cut Pro l
 bundle.
 Persistent cache files should store prepared paths, frame timing, blur values, and
 fingerprints instead of every frame's full luma sample.
+Cache persistence should treat the prepared analysis frame set as authoritative. The
+retained source-frame map may be reduced after Metal preparation and must not prevent a
+completed prepared path from being saved.
+The feedback CLI under `fxplug/StabilizerFxPlug/scripts/` reads saved Host Analysis cache
+files for diagnostics only. It must not become a second stabilization runtime or silently
+repair malformed cache data; mismatched frame/path arrays should fail visibly and require a
+new Host Analysis run.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,
 reject outlier blocks, and expose low block-confidence states in status/debug output instead
 of silently falling back to a coarse global shift. Walking landscape analysis should

@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.4"
+private let stabilizerFxPlugVersion = "0.5"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1636,14 +1636,18 @@ private final class StabilizerHostAnalysisStore {
             return (frames, prepared, range, frameDuration)
         }()
 
-        guard snapshot.frames.count >= 3, let prepared = snapshot.prepared else {
+        guard let prepared = snapshot.prepared, prepared.frames.count >= 3 else {
             return
         }
-        let firstFrameTime = snapshot.frames.first?.time ?? 0.0
-        let lastFrameTime = snapshot.frames.last?.time ?? firstFrameTime
-        let sampleWidth = snapshot.frames.first?.sampleWidth ?? AutoStabilizationEstimator.defaultSampleWidth
-        let sampleHeight = snapshot.frames.first?.sampleHeight ?? AutoStabilizationEstimator.defaultSampleHeight
-        let frameDurationSeconds = Self.validFrameDurationSeconds(snapshot.frameDuration, frames: snapshot.frames)
+        let framesToPersist = prepared.frames
+        if snapshot.frames.count != framesToPersist.count {
+            NSLog("StabilizerFxPlug: persisting prepared Host Analysis frame set with \(framesToPersist.count) frames; retained frame map had \(snapshot.frames.count) frames.")
+        }
+        let firstFrameTime = framesToPersist.first?.time ?? 0.0
+        let lastFrameTime = framesToPersist.last?.time ?? firstFrameTime
+        let sampleWidth = framesToPersist.first?.sampleWidth ?? AutoStabilizationEstimator.defaultSampleWidth
+        let sampleHeight = framesToPersist.first?.sampleHeight ?? AutoStabilizationEstimator.defaultSampleHeight
+        let frameDurationSeconds = Self.validFrameDurationSeconds(snapshot.frameDuration, frames: framesToPersist)
         let suppliedRangeStartSeconds = CMTimeGetSeconds(snapshot.range.start)
         let suppliedRangeDurationSeconds = CMTimeGetSeconds(snapshot.range.duration)
         let rangeStartSeconds = suppliedRangeStartSeconds.isFinite ? suppliedRangeStartSeconds : firstFrameTime
@@ -1659,7 +1663,7 @@ private final class StabilizerHostAnalysisStore {
             frameDurationSeconds: frameDurationSeconds,
             sampleWidth: sampleWidth,
             sampleHeight: sampleHeight,
-            frames: snapshot.frames.map {
+            frames: framesToPersist.map {
                 PersistedHostAnalysisFrame(
                     time: $0.time,
                     pixels: nil,
@@ -1694,15 +1698,15 @@ private final class StabilizerHostAnalysisStore {
             try FileManager.default.createDirectory(at: Self.cacheDirectoryURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: Self.cacheStorageDirectoryURL, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(cache)
-            let cacheFileName = Self.persistentCacheFileName(for: cache, frames: snapshot.frames)
+            let cacheFileName = Self.persistentCacheFileName(for: cache, frames: framesToPersist)
             let cacheURL = Self.cacheStorageDirectoryURL.appendingPathComponent(cacheFileName, isDirectory: false)
             try data.write(to: cacheURL, options: .atomic)
             try data.write(to: Self.cacheURL, options: .atomic)
-            if let indexEntry = Self.indexEntry(for: cache, fileName: cacheFileName, frames: snapshot.frames) {
+            if let indexEntry = Self.indexEntry(for: cache, fileName: cacheFileName, frames: framesToPersist) {
                 try Self.updatePersistentCacheIndex(with: indexEntry)
             }
             Self.bumpPersistentCacheGeneration()
-            NSLog("StabilizerFxPlug: saved Host Analysis cache with \(snapshot.frames.count) frames to \(cacheURL.path).")
+            NSLog("StabilizerFxPlug: saved Host Analysis cache with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
         } catch {
             NSLog("StabilizerFxPlug: failed to save Host Analysis cache: \(error.localizedDescription)")
         }
