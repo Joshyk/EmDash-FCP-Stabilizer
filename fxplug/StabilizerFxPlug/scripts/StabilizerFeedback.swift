@@ -558,7 +558,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
     let warpGate = warpGateComponents.gate
     let appliedWarpConfidence = clamp(rawWarpConfidence * warpGate, min: 0.0, max: 1.0)
     let warpDetected = warpMagnitude(analysis: analysis, index: index) * min(4.0, max(0.0, Float(options.strengths.warp)))
-    let warpApplied = warpDetected * warpGate
+    let warpApplied = warpDetected * appliedWarpConfidence
 
     let bands = [
         BandAssessment(
