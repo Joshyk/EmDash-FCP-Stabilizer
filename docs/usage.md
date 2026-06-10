@@ -197,7 +197,8 @@ paths and ranks likely remaining `FJIT`, `SWOB`, `BOB`, `TURN`, and `WARP`
 bands. It follows the same band order as render: `FJIT` is measured against the
 outer-frame baseline, then `SWOB`, `BOB`, and `TURN` are measured from that
 footstep-cleaned path. It prints FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
-the raw impulse or band values. `WARP` `q` matches the applied `W Q` confidence shown by
+the raw impulse or band values. It also prints BOB tracking/window support so short
+or one-sided analysis ranges are distinguishable from weak vertical motion. `WARP` `q` matches the applied `W Q` confidence shown by
 Debug Overlay. The report also prints residual quality, blur quality, block coverage,
 edge quality, and WARP tracking/edge gate values so conservative gating can be separated
 from weak detected motion. If the cache was written by an older build with mismatched frame/path

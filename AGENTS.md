@@ -66,7 +66,8 @@ new Host Analysis run. Its cache inventory mode should list saved cache readines
 repairing, deleting, or promoting cache files. Feedback band estimates should mirror the
 render path's order:
 measure Footstep Jitter against the outer-frame baseline first, then compute Stride Wobble,
-Walking Bob, and Turn diagnostics from the footstep-cleaned path.
+Walking Bob, and Turn diagnostics from the footstep-cleaned path. Walking Bob diagnostics
+should expose tracking evidence and symmetric window support so edge-window gating is visible.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,
 reject outlier blocks, and expose low block-confidence states in status/debug output instead
 of silently falling back to a coarse global shift. Walking landscape analysis should

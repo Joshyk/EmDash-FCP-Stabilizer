@@ -261,7 +261,7 @@ motion paths and tracking diagnostics. It uses the same footstep-first band
 split as render, so `SWOB`, `BOB`, and `TURN` diagnostics are computed from the
 footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes FJIT per-axis
-and SWOB per-axis confidence, residual quality, blur quality, block coverage, edge quality, and WARP
+and SWOB per-axis confidence, BOB tracking/window support, residual quality, blur quality, block coverage, edge quality, and WARP
 tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.

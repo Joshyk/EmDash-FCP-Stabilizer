@@ -560,7 +560,7 @@ private func assessment(for analysis: Analysis, index: Int, options: Options) ->
             applied: bobApplied,
             remaining: max(0.0, bobDetected - bobApplied),
             confidence: bobQ,
-            note: String(format: "Y band %.3f", bobBandY)
+            note: String(format: "Y band %.3f trk %.2f support %.2f", bobBandY, bobTracking, bobSupport)
         ),
         BandAssessment(
             name: "TURN",

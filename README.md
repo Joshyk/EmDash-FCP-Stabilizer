@@ -273,8 +273,8 @@ block coverage, and search-radius edge-hit counts. The band split mirrors the
 render path: `FJIT` is measured first against the outer-frame baseline, then
 `SWOB`, `BOB`, and `TURN` are measured from the footstep-cleaned path. `WARP`
 `q` matches the applied `W Q` confidence shown by Debug Overlay, and the report
-includes FJIT and SWOB per-axis confidence, residual, blur, block coverage,
-edge quality, and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
+includes FJIT and SWOB per-axis confidence, BOB tracking/window support,
+residual, blur, block coverage, edge quality, and WARP tracking/edge gate values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
 Analysis run with the current FxPlug instead of trying to repair the data.
 
