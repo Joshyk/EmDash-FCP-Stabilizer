@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.21"
+private let stabilizerFxPlugVersion = "0.28"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -150,7 +150,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static let serialAnalysisQueueLock = NSLock()
     private static var serialAnalysisQueue: [StabilizerFxPlugPlugIn] = []
     private static var serialAnalysisQueueDrainScheduled = false
-    private static var activeSerialAnalysisPlugin: WeakStabilizerFxPlugPlugIn?
+    private static var serialAnalysisQueueDrainThreadRunning = false
+    private static var serialAnalysisCallbackDrainInProgress = false
+    private static var serialAnalysisNextCallbackDrainAt = Date.distantPast
     private static let stabilizerInfoViewLock = NSLock()
     private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private static var latestStabilizerInfo = "FxPlug \(stabilizerFxPlugVersion)\nNo Analysis"
@@ -426,6 +428,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
         paramAPI.getFloatValue(&state.renderRevision, fromParameter: ParameterID.renderRevision.rawValue, at: renderTime)
+        drainQueuedHostAnalysisFromFCPCallbackIfNeeded()
         publishHostAnalysisStatus()
         publishStabilizerInfo(state: state)
         publishRenderRevision(state.hostAnalysisRevision)
@@ -472,16 +475,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             Self.removeQueuedSerialAnalysis(self)
             return .skippedCompleted
         }
-        if allowSerialQueue && force && Self.isAnotherSerialAnalysisActive(self) {
-            let position = Self.enqueueSerialAnalysis(self)
-            hostAnalysisStore.markQueued(position: position, reason: "SerialAnalysisActive")
-            publishHostAnalysisStatus(force: true)
-            publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.revision, force: true)
-            NSLog("StabilizerFxPlug: queued Host Analysis request at position \(position) because another Stabilizer analysis is active.")
-            Self.scheduleSerialAnalysisQueueDrain()
-            return .queued
-        }
         guard let analysisAPI = apiManager.api(for: FxAnalysisAPI.self) as? FxAnalysisAPI else {
             NSLog("StabilizerFxPlug: FxAnalysisAPI is unavailable; Host Analysis cannot start.")
             Self.removeQueuedSerialAnalysis(self)
@@ -520,7 +513,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         do {
             Self.removeQueuedSerialAnalysis(self)
             try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
-            Self.markSerialAnalysisActive(self)
             NSLog("StabilizerFxPlug: requested GPU Host Analysis for the effect clip.")
             hostAnalysisStore.markRequested()
             publishHostAnalysisStatus(force: true)
@@ -560,34 +552,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         return serialAnalysisQueue.contains { queuedPlugin in queuedPlugin === plugin }
     }
 
-    private static func isAnotherSerialAnalysisActive(_ plugin: StabilizerFxPlugPlugIn) -> Bool {
-        serialAnalysisQueueLock.lock()
-        defer { serialAnalysisQueueLock.unlock() }
-        guard let activePlugin = activeSerialAnalysisPlugin?.plugin else {
-            activeSerialAnalysisPlugin = nil
-            return false
-        }
-        return activePlugin !== plugin
-    }
-
-    private static func markSerialAnalysisActive(_ plugin: StabilizerFxPlugPlugIn) {
-        serialAnalysisQueueLock.lock()
-        activeSerialAnalysisPlugin = WeakStabilizerFxPlugPlugIn(plugin)
-        serialAnalysisQueueLock.unlock()
-    }
-
-    private static func clearSerialAnalysisActive(_ plugin: StabilizerFxPlugPlugIn) {
-        serialAnalysisQueueLock.lock()
-        if let activePlugin = activeSerialAnalysisPlugin?.plugin {
-            if activePlugin === plugin {
-                activeSerialAnalysisPlugin = nil
-            }
-        } else {
-            activeSerialAnalysisPlugin = nil
-        }
-        serialAnalysisQueueLock.unlock()
-    }
-
     private static func dequeueNextSerialAnalysis() -> StabilizerFxPlugPlugIn? {
         serialAnalysisQueueLock.lock()
         defer { serialAnalysisQueueLock.unlock() }
@@ -599,19 +563,81 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     private static func scheduleSerialAnalysisQueueDrain(after delay: TimeInterval = 1.0) {
         serialAnalysisQueueLock.lock()
-        guard !serialAnalysisQueueDrainScheduled else {
+        serialAnalysisQueueDrainScheduled = true
+        guard !serialAnalysisQueueDrainThreadRunning else {
             serialAnalysisQueueLock.unlock()
             return
         }
-        serialAnalysisQueueDrainScheduled = true
+        serialAnalysisQueueDrainThreadRunning = true
         serialAnalysisQueueLock.unlock()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            Self.serialAnalysisQueueLock.lock()
-            Self.serialAnalysisQueueDrainScheduled = false
-            Self.serialAnalysisQueueLock.unlock()
-            Self.startNextQueuedHostAnalysis()
+        Thread.detachNewThread {
+            Self.runSerialAnalysisQueueDrainLoop(initialDelay: delay)
         }
+    }
+
+    private static func runSerialAnalysisQueueDrainLoop(initialDelay: TimeInterval) {
+        var nextDelay = max(0.0, initialDelay)
+        while true {
+            if nextDelay > 0.0 {
+                Thread.sleep(forTimeInterval: nextDelay)
+            }
+            serialAnalysisQueueLock.lock()
+            serialAnalysisQueueDrainScheduled = false
+            let hasQueuedRequest = !serialAnalysisQueue.isEmpty
+            if !hasQueuedRequest {
+                serialAnalysisQueueDrainThreadRunning = false
+                serialAnalysisQueueLock.unlock()
+                return
+            }
+            serialAnalysisQueueLock.unlock()
+
+            startNextQueuedHostAnalysis()
+
+            serialAnalysisQueueLock.lock()
+            let shouldKeepRunning = !serialAnalysisQueue.isEmpty
+            if !shouldKeepRunning {
+                serialAnalysisQueueDrainThreadRunning = false
+                serialAnalysisQueueLock.unlock()
+                return
+            }
+            serialAnalysisQueueDrainScheduled = true
+            serialAnalysisQueueLock.unlock()
+            nextDelay = 1.0
+        }
+    }
+
+    private static func beginSerialAnalysisCallbackDrainIfNeeded() -> Bool {
+        serialAnalysisQueueLock.lock()
+        defer { serialAnalysisQueueLock.unlock() }
+        guard !serialAnalysisQueue.isEmpty,
+              !serialAnalysisCallbackDrainInProgress
+        else {
+            return false
+        }
+        let now = Date()
+        guard now >= serialAnalysisNextCallbackDrainAt else {
+            return false
+        }
+        serialAnalysisCallbackDrainInProgress = true
+        serialAnalysisNextCallbackDrainAt = now.addingTimeInterval(1.0)
+        return true
+    }
+
+    private static func endSerialAnalysisCallbackDrain() {
+        serialAnalysisQueueLock.lock()
+        serialAnalysisCallbackDrainInProgress = false
+        serialAnalysisQueueLock.unlock()
+    }
+
+    private func drainQueuedHostAnalysisFromFCPCallbackIfNeeded() {
+        guard Self.beginSerialAnalysisCallbackDrainIfNeeded() else {
+            return
+        }
+        defer {
+            Self.endSerialAnalysisCallbackDrain()
+        }
+        Self.startNextQueuedHostAnalysis()
     }
 
     private static func startNextQueuedHostAnalysis() {
@@ -777,7 +803,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     private func abandonActiveAnalysisAfterFailure() {
         setActiveAnalysisStore(nil)
-        Self.clearSerialAnalysisActive(self)
         Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
     }
@@ -1143,7 +1168,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         guard let analysisStore = currentActiveAnalysisStore() else {
             let reason = "Stabilizer Host Analysis cleanup had no active per-clip cache."
             NSLog("StabilizerFxPlug: \(reason)")
-            Self.clearSerialAnalysisActive(self)
             Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
@@ -1161,19 +1185,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
         setActiveAnalysisStore(nil)
-        Self.clearSerialAnalysisActive(self)
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.revision, force: true)
         Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
-    }
-}
-
-private final class WeakStabilizerFxPlugPlugIn {
-    weak var plugin: StabilizerFxPlugPlugIn?
-
-    init(_ plugin: StabilizerFxPlugPlugIn) {
-        self.plugin = plugin
     }
 }
 

@@ -165,6 +165,13 @@ Analysis` instead of failing. The process-wide queue starts queued clips one at 
 time as the host becomes available. Queued start requests are retained until
 they either start or are explicitly cleared, and a completed analysis from an
 earlier clip does not satisfy a later queued clip.
+Analysis callback instances clear process-wide analysis bookkeeping, because
+Final Cut Pro may deliver setup/analyze/cleanup to a different FxPlug instance
+than the Inspector button instance that requested the run. The Inspector start
+path does not use plug-in-local active markers as the blocking authority; it asks
+Final Cut Pro's current analysis state and queues only when the host reports a
+busy/requested state. Final Cut Pro's own analysis state remains the authority
+before any queued request can start.
 Preview/render checks the persistent cache signature on each render pass, so a
 queued clip that completes in a different FxPlug process can replace an older
 prepared path without requiring another manual start.

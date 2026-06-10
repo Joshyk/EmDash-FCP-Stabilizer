@@ -116,7 +116,14 @@ candidate instead of accepting a different clip by time proximity alone. If Fina
 reporting a busy state when the serial queue tries to drain, keep the request queued visibly
 and retry later. A queued start request must remain a pending request for that effect
 instance; do not let a completed shared render/cache store from another clip satisfy or
-skip the queued clip's own Host Analysis start. Do not re-run full block matching across
+skip the queued clip's own Host Analysis start. Because Final Cut Pro can call analysis
+setup/analyze/cleanup on a different FxPlug instance than the Inspector button instance,
+analysis completion/failure should clear process-wide analysis bookkeeping before queue
+drain. Do not use plug-in-local active markers as the authority for blocking another
+Inspector `Start Host Analysis` action; the start path should ask Final Cut Pro's
+`analysisStateForEffect()` and queue only when the host reports a busy/requested state.
+Queue drain should not depend on the FxPlug XPC main queue pumping while Final Cut Pro is
+busy. Do not re-run full block matching across
 the analyzed frame set on every render frame. Keep `Host Analysis
 Status` visible in the Inspector, update it to `Ready (... frames)` after completed
 analysis, and include the active FxPlug version there when Final Cut Pro accepts status

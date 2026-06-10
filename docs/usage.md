@@ -171,7 +171,13 @@ fallbacks.
   is already running Host Analysis when another clip is requested, that effect instance is
   queued and started after the host becomes available. The queued request is retained until
   start or explicit clear, and completed analysis from the previous clip does not make the
-  queued clip skip its own Host Analysis.
+  queued clip skip its own Host Analysis. Final Cut Pro may run the analysis callbacks on a
+  different FxPlug instance than the Inspector button instance, so completion clears
+  process-wide analysis bookkeeping before draining the next queued request. The Inspector
+  start path does not use plug-in-local active markers as the blocking authority; it asks
+  Final Cut Pro's current analysis state and queues only when the host reports a
+  busy/requested state. Queued starts still check Final Cut Pro's actual analysis state
+  before starting.
   Completed analysis is then published to the process-wide shared render/cache store and
   persisted to the shared user Application Support cache using the prepared analysis frame
   set, so analyzer and preview/render processes can hand off the prepared motion path
