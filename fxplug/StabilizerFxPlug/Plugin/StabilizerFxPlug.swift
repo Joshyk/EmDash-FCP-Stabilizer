@@ -2,6 +2,7 @@ import AppKit
 import CoreMedia
 import Foundation
 import Metal
+import os.log
 import simd
 
 private enum ParameterID: UInt32 {
@@ -27,7 +28,8 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.24"
+private let stabilizerFxPlugVersion = "0.3.28"
+private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -181,13 +183,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static var serialAnalysisQueueDrainThreadRunning = false
     private static var serialAnalysisCallbackDrainInProgress = false
     private static var serialAnalysisNextCallbackDrainAt = Date.distantPast
+    private static let activeAnalysisStoreLock = NSLock()
+    private static var activeAnalysisStore: StabilizerHostAnalysisStore?
     private static let stabilizerInfoViewLock = NSLock()
     private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private static var latestStabilizerInfo = "FxPlug \(stabilizerFxPlugVersion)\nNo Analysis"
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
-    private let analysisSessionLock = NSLock()
     private let cacheIdentityLock = NSLock()
     private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.StabilizerFxPlug.PersistentCacheMonitor")
     private var lastPublishedStatus = ""
@@ -197,7 +200,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
-    private var activeAnalysisStore: StabilizerHostAnalysisStore?
     private var persistentCacheMonitor: DispatchSourceTimer?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
@@ -516,14 +518,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     @objc(startHostAnalysis)
     func startHostAnalysis() {
+        os_log("Start Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, stabilizerFxPlugVersion)
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
-        guard configureProjectBundleCacheDirectory() else {
-            publishHostAnalysisStatus(force: true)
-            publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-            return
-        }
         let expectedRange = currentInputRange()
         if let expectedRange,
            let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
@@ -532,11 +529,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         hostAnalysisStore.reset()
         let loadedPersistentCache: Bool
-        if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
-            loadedPersistentCache = true
+        if configureProjectBundleCacheDirectory(markUnavailable: false) {
+            if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
+               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
+                loadedPersistentCache = true
+            } else {
+                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(expectedRange: expectedRange)
+            }
         } else {
-            loadedPersistentCache = hostAnalysisStore.loadPersistentCache(expectedRange: expectedRange)
+            loadedPersistentCache = false
+            os_log("Start preflight could not resolve Event cache root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
+            NSLog("StabilizerFxPlug: Start Host Analysis could not preflight the Event cache root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
         }
         if loadedPersistentCache {
             publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: true)
@@ -580,6 +583,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             return .skippedCompleted
         }
         guard let analysisAPI = apiManager.api(for: FxAnalysisAPI.self) as? FxAnalysisAPI else {
+            os_log("FxAnalysisAPI unavailable; Host Analysis cannot start.", log: stabilizerHostAnalysisLog, type: .error)
             NSLog("StabilizerFxPlug: FxAnalysisAPI is unavailable; Host Analysis cannot start.")
             Self.removeQueuedSerialAnalysis(self)
             hostAnalysisStore.markStartFailed(reason: "FxAnalysisAPI unavailable")
@@ -601,6 +605,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 publishStabilizerInfo(force: true)
                 publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
                 NSLog("StabilizerFxPlug: queued Host Analysis request at position \(position) because host state is \(reason).")
+                os_log("Queued Host Analysis because host state is %{public}@ at position %{public}d.", log: stabilizerHostAnalysisLog, type: .default, reason, position)
                 Self.scheduleSerialAnalysisQueueDrain()
                 return .queued
             } else if force {
@@ -611,6 +616,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
             if force {
                 NSLog("StabilizerFxPlug: Host Analysis is already requested or running.")
+                os_log("Host Analysis start blocked because host state is %{public}@.", log: stabilizerHostAnalysisLog, type: .error, reason)
             }
             return .failed
         }
@@ -618,6 +624,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             Self.removeQueuedSerialAnalysis(self)
             try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
             NSLog("StabilizerFxPlug: requested GPU Host Analysis for the effect clip.")
+            os_log("Requested GPU Host Analysis for the effect clip.", log: stabilizerHostAnalysisLog, type: .default)
             hostAnalysisStore.markRequested()
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
@@ -625,6 +632,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             return .started
         } catch {
             NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
+            os_log("Host Analysis request failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
             Self.removeQueuedSerialAnalysis(self)
             hostAnalysisStore.markStartFailed(reason: error.localizedDescription)
             publishHostAnalysisStatus(force: true)
@@ -1015,15 +1023,15 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     private func setActiveAnalysisStore(_ store: StabilizerHostAnalysisStore?) {
-        analysisSessionLock.lock()
-        activeAnalysisStore = store
-        analysisSessionLock.unlock()
+        Self.activeAnalysisStoreLock.lock()
+        Self.activeAnalysisStore = store
+        Self.activeAnalysisStoreLock.unlock()
     }
 
     private func currentActiveAnalysisStore() -> StabilizerHostAnalysisStore? {
-        analysisSessionLock.lock()
-        let store = activeAnalysisStore
-        analysisSessionLock.unlock()
+        Self.activeAnalysisStoreLock.lock()
+        let store = Self.activeAnalysisStore
+        Self.activeAnalysisStoreLock.unlock()
         return store
     }
 
@@ -1129,7 +1137,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     @discardableResult
-    private func configureProjectBundleCacheDirectory() -> Bool {
+    private func configureProjectBundleCacheDirectory(markUnavailable: Bool = true) -> Bool {
         if StabilizerHostAnalysisStore.hasConfiguredProjectBundleCacheDirectory {
             return true
         }
@@ -1149,13 +1157,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     guard let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL) else {
                         let reason = "FxProjectAPI media folder is not inside a .fcpbundle: \(projectMediaURL.path)"
                         NSLog("StabilizerFxPlug: \(reason)")
-                        hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        if markUnavailable {
+                            hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        }
                         return false
                     }
                     guard let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot) else {
                         let reason = "FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
                         NSLog("StabilizerFxPlug: \(reason)")
-                        hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        if markUnavailable {
+                            hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        }
                         return false
                     }
                     let cacheRoot = Self.eventHostAnalysisCacheRoot(in: eventResolution.eventRoot)
@@ -1164,7 +1176,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     } catch {
                         let reason = "Event Analysis Files cache root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
                         NSLog("StabilizerFxPlug: \(reason)")
-                        hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        if markUnavailable {
+                            hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        }
                         return false
                     }
                     Self.migrateLegacyHostAnalysisCacheIfNeeded(
@@ -1189,18 +1203,24 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 }
                 let reason = "FxProjectAPI did not provide a project media folder URL."
                 NSLog("StabilizerFxPlug: \(reason)")
-                hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                if markUnavailable {
+                    hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                }
                 return false
             } catch {
                 let reason = "FxProjectAPI media folder unavailable: \(error.localizedDescription)"
                 NSLog("StabilizerFxPlug: \(reason)")
-                hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                if markUnavailable {
+                    hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                }
                 return false
             }
         } else {
             let reason = "FxProjectAPI unavailable; Event Analysis Files cache cannot be resolved."
             NSLog("StabilizerFxPlug: \(reason)")
-            hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+            if markUnavailable {
+                hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+            }
             return false
         }
     }
@@ -1690,12 +1710,23 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     func setupAnalysis(for analysisRange: CMTimeRange, frameDuration: CMTime) throws {
-        guard configureProjectBundleCacheDirectory() else {
-            throw NSError(
-                domain: "com.justadev.StabilizerFxPlug",
-                code: Int(kFxError_AnalysisError),
-                userInfo: [NSLocalizedDescriptionKey: stabilizerProjectCacheUnavailableMessage]
-            )
+        os_log(
+            "setupAnalysis requested for range %{public}.3f+%{public}.3f seconds, frameDuration %{public}.6f seconds.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            CMTimeGetSeconds(analysisRange.start),
+            CMTimeGetSeconds(analysisRange.duration),
+            CMTimeGetSeconds(frameDuration)
+        )
+        NSLog(
+            "StabilizerFxPlug: setup Host Analysis requested for range %.3f+%.3f seconds, frameDuration %.6f seconds.",
+            CMTimeGetSeconds(analysisRange.start),
+            CMTimeGetSeconds(analysisRange.duration),
+            CMTimeGetSeconds(frameDuration)
+        )
+        if !configureProjectBundleCacheDirectory() {
+            NSLog("StabilizerFxPlug: setup Host Analysis will continue in memory because the Event cache root is unavailable.")
+            os_log("setupAnalysis continuing in memory because the Event cache root is unavailable; completed analysis will not be persisted.", log: stabilizerHostAnalysisLog, type: .error)
         }
         let analysisStore = StabilizerHostAnalysisStore()
         analysisStore.begin(
@@ -1705,6 +1736,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         )
         lastPublishedActiveAnalysisFrameCount = 0
         setActiveAnalysisStore(analysisStore)
+        os_log("setupAnalysis created an active in-progress store.", log: stabilizerHostAnalysisLog, type: .default)
         NSLog(
             "StabilizerFxPlug: setup Host Analysis range %.3f+%.3f seconds, frameDuration %.6f seconds.",
             CMTimeGetSeconds(analysisRange.start),
@@ -1724,6 +1756,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         guard let analysisStore = currentActiveAnalysisStore() else {
             let reason = "Stabilizer Host Analysis session store was unavailable; setupAnalysis did not create an active per-clip cache."
             NSLog("StabilizerFxPlug: \(reason)")
+            os_log("analyzeFrame failed at %{public}.6f seconds because the active in-progress store was unavailable.", log: stabilizerHostAnalysisLog, type: .error, CMTimeGetSeconds(frameTime))
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
@@ -1769,6 +1802,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             )
             try analysisStore.append(analysisFrame, sourceInfo: frameInfo)
             if analysisStore.frameCount == 1 {
+                os_log(
+                    "Received first Host Analysis frame at %{public}.3f seconds, sample %{public}dx%{public}d.",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    CMTimeGetSeconds(frameTime),
+                    analysisFrame.sampleWidth,
+                    analysisFrame.sampleHeight
+                )
                 NSLog(
                     "StabilizerFxPlug: received first Host Analysis frame at %.3f seconds, sample %dx%d.",
                     CMTimeGetSeconds(frameTime),
@@ -1787,6 +1828,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         guard let analysisStore = currentActiveAnalysisStore() else {
             let reason = "Stabilizer Host Analysis cleanup had no active per-clip cache."
             NSLog("StabilizerFxPlug: \(reason)")
+            os_log("cleanupAnalysis failed because the active in-progress store was unavailable.", log: stabilizerHostAnalysisLog, type: .error)
             Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
@@ -1802,6 +1844,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             throw error
         }
         hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
+        os_log("cleanupAnalysis completed %{public}d analyzed frame(s).", log: stabilizerHostAnalysisLog, type: .default, analysisStore.frameCount)
         let completedCacheIdentity = hostAnalysisStore.activeCacheIdentity
         let completedRenderRevision = hostAnalysisStore.renderInvalidationToken
         setActiveAnalysisStore(nil)
@@ -2107,6 +2150,9 @@ private final class StabilizerHostAnalysisStore {
         case .cacheCleared:
             return "Cache Cleared"
         case .projectCacheUnavailable:
+            if hasPreparedAnalysis {
+                return "Ready Memory Only - \(stabilizerProjectCacheUnavailableMessage)"
+            }
             return stabilizerProjectCacheUnavailableMessage
         case .proxyRejected:
             return "Proxy Media Rejected - Use Original Media"

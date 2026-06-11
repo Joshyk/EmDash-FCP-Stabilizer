@@ -24,11 +24,15 @@ Commands:
   apply-selected            Apply Stabilizer Transform to the selected clip.
   enable-debug              Turn Debug Overlay on for the selected effect.
   disable-debug             Turn Debug Overlay off for the selected effect.
+  start-analysis            Press Start Host Analysis for the selected effect.
   analyze-selected          Enable Debug Overlay, then press Start Host Analysis.
   apply-and-analyze-selected
                             Apply the effect, enable Debug Overlay, then start analysis.
                             Use only on a fresh selected clip to avoid duplicate effects.
+  clear-browser-search      Clear the visible FCP Browser search field.
   open-selected-project     Open the selected FCP Browser project row/thumbnail.
+  open-project NAME         Open the named FCP Browser project in the selected Event.
+  select-playhead-clip      Select the timeline clip under the playhead.
   list-caches               List saved Host Analysis cache readiness for the test library.
   feedback-at TIME [NOTE]   Run cache-backed feedback diagnostics at clip-relative TIME.
 
@@ -80,6 +84,16 @@ open_test_library() {
 	/usr/bin/open "$TEST_LIBRARY"
 }
 
+open_project() {
+	local project_name="${1:-}"
+	[[ -n "$project_name" ]] || fail "open-project requires a project name, for example: scripts/fcp_ui_test.sh open-project 'stab test - gh6'"
+	run_helper open-project "$project_name"
+}
+
+clear_browser_search() {
+	run_helper clear-browser-search
+}
+
 apply_selected() {
 	run_helper apply
 }
@@ -92,7 +106,13 @@ disable_debug() {
 	run_helper set-debug-overlay off
 }
 
+start_analysis() {
+	run_helper start-analysis
+}
+
 analyze_selected() {
+	run_helper select-playhead-clip
+	sleep 0.2
 	enable_debug
 	sleep 0.2
 	run_helper start-analysis
@@ -150,14 +170,26 @@ case "$command_name" in
 	disable-debug)
 		disable_debug
 		;;
+	start-analysis)
+		start_analysis
+		;;
 	analyze-selected)
 		analyze_selected
 		;;
 	apply-and-analyze-selected)
 		apply_and_analyze_selected
 		;;
+	clear-browser-search)
+		clear_browser_search
+		;;
 	open-selected-project)
 		run_helper open-selected-project
+		;;
+	open-project)
+		open_project "$@"
+		;;
+	select-playhead-clip)
+		run_helper select-playhead-clip
 		;;
 	list-caches)
 		list_caches

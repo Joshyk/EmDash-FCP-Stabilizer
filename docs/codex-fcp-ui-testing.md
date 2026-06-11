@@ -21,9 +21,16 @@ Pro is currently running.
 
    ```sh
    scripts/fcp_ui_test.sh open-test-library
+   scripts/fcp_ui_test.sh open-project "stab test - gh6"
    ```
 
-2. In Final Cut Pro, select the target timeline clip.
+2. Select the target timeline clip. If the playhead is over the target clip,
+   keep this terminal-first:
+
+   ```sh
+   scripts/fcp_ui_test.sh select-playhead-clip
+   ```
+
 3. Apply the effect, enable `Debug Overlay`, and press `Start Host Analysis`:
 
    ```sh

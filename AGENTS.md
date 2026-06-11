@@ -40,15 +40,27 @@ caches into the Event `Analysis Files` cache root, but it must not silently fall
 out-of-bundle or library-wide shared cache. The Event cache contains
 `host-analysis-v2.json`, `host-analysis-index-v2.json`, `host-analysis-render-offset-v2.json`,
 and range-indexed files under `caches/`. If the runtime cannot resolve a writable Event cache
-root, fail visibly with `Project Bundle Cache Unavailable` instead of falling back to a shared
-Application Support cache or a library-wide cache. Cache candidates must be validated
+root, surface `Project Bundle Cache Unavailable` instead of falling back to a shared
+Application Support cache or a library-wide cache. During Final Cut Pro Host Analysis, it may complete the current analyzer
+session in memory and surface `Ready Memory Only - Project Bundle Cache Unavailable`, but it
+must not persist to a shared or out-of-bundle cache and the status must make the missing
+Event cache visible. Cache candidates must be validated
 against the current source frame before reuse. Rejected candidates should be visible in
 logs/status and should not be deleted just because they do not match the current clip.
 `Start Host Analysis` should first reload and use a saved persistent cache when one exists;
-only start a new host analysis when no saved cache can be loaded. It must not delete saved
-cache files. If the loaded cache is rejected for the current clip, the next start should skip
-that rejected cache and request a new analysis. `Clear Host Analysis Cache` is the explicit
-cache-clear path and should show `Cache Cleared`.
+only start a new host analysis when no saved cache can be loaded. If the button callback
+cannot see `FxProjectAPI`, it should still request Host Analysis and let analyzer
+`setupAnalysis` resolve the Event cache root; if setup cannot resolve that root, complete the
+active analysis in memory only and show `Ready Memory Only - Project Bundle Cache
+Unavailable` after completion. It must not delete saved cache files. If the loaded
+cache is rejected for the current clip, the next start should skip that rejected cache and
+request a new analysis. `Clear Host Analysis Cache` is the explicit cache-clear path and
+should show `Cache Cleared`.
+Keep the plug-in target signed with sandbox and security-scoped file entitlements so the
+Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped URL.
+Keep in-progress Host Analysis session state process-wide because Final Cut Pro may call
+setup, frame analysis, and cleanup through different FxPlug instances in the same plug-in
+process. Do not collapse completed cache buckets across clips or sample sizes.
 If Final Cut Pro restores or reports an in-progress Host Analysis while a compatible saved
 cache is already present, the render/cache consumer should still reload and prefer the saved
 cache; transient analyzer callback status must not mask the shared ready cache in the
@@ -368,8 +380,11 @@ For Codex-driven Final Cut Pro UI testing, prefer the repo-local wrapper first:
 ```sh
 scripts/fcp_ui_test.sh env-check
 scripts/fcp_ui_test.sh open-test-library
+scripts/fcp_ui_test.sh open-project "stab test - gh6"
+scripts/fcp_ui_test.sh select-playhead-clip
 scripts/fcp_ui_test.sh apply-and-analyze-selected
 scripts/fcp_ui_test.sh analyze-selected
+scripts/fcp_ui_test.sh start-analysis
 scripts/fcp_ui_test.sh dump-front-window
 scripts/fcp_ui_test.sh list-caches
 ```
@@ -389,6 +404,8 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript set-debug-overlay on
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript set-debug-overlay off
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-project "stab test - gh6"
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript select-playhead-clip
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
 ```
 
@@ -396,9 +413,13 @@ Use it from Keyboard Maestro, Automator Quick Actions, or Terminal when manual F
 validation needs faster access to `Stabilizer Transform`, `Start Host Analysis`, `Debug
 Overlay`, selected Browser projects, or the Inspector. Grant Accessibility permission to
 the app that runs the script.
-For project opening, prefer `open-selected-project` after selecting the project thumbnail
-or list row in the Browser. It uses a real CoreGraphics double-click because ordinary
-AppleScript click repeats can fail to register as a Final Cut Pro double-click.
+For project opening, prefer `open-project PROJECT_NAME` when the target Browser project
+name is known, or `open-selected-project` after selecting the project thumbnail or list row
+in the Browser. These commands use `Clip > Open Clip` because ordinary AppleScript click
+repeats and CoreGraphics double-clicks can fail to register as a Final Cut Pro project
+open in some layouts. Use
+`select-playhead-clip` to reselect the timeline clip under the playhead before running
+`analyze-selected` when Final Cut Pro focus has drifted back to the Browser or search field.
 If FCP UI labels change, use `dump-front-window` to inspect the accessible roles/names and
 update the shared script in the parent workspace. Do not copy a separate version into this
 repo unless the user explicitly asks for repo-local divergence.

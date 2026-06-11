@@ -56,15 +56,19 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-project "stab test - gh6"
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript select-playhead-clip
 ```
 
 These actions use Final Cut Pro Accessibility UI scripting. Grant Accessibility
 permission to the app that runs the script. `start-analysis` and
 `toggle-debug-overlay` fail visibly if the selected clip does not have
 `Stabilizer Transform` applied or the Inspector control is not accessible.
-`open-selected-project` opens the selected Browser project with a CoreGraphics
-double-click, which is more reliable than repeated AppleScript clicks in Final
-Cut Pro.
+`open-project PROJECT_NAME` opens a named Browser project, `open-selected-project`
+opens the selected Browser project, and `select-playhead-clip` reselects the
+timeline clip under the playhead before analysis. Project open commands select
+the Browser item and run `Clip > Open Clip`, which has been more reliable than
+repeated AppleScript clicks in Final Cut Pro.
 
 ## Inspector Controls
 
@@ -136,8 +140,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R324` means FxPlug `0.3.24`
-is rendering original/optimized frames, and `P324` means proxy playback is using
+active render runtime and current source mode: `R328` means FxPlug `0.3.28`
+is rendering original/optimized frames, and `P328` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -283,7 +287,10 @@ the Event `Analysis Files` cache root when the effect configures the active Even
 
 If the runtime cannot resolve a writable Event cache root, the effect shows
 `Project Bundle Cache Unavailable` instead of falling back to a shared user cache or a
-library-wide cache.
+library-wide cache. During a live Final Cut Pro Host Analysis callback, the analyzer can
+still finish the current session in memory and show
+`Ready Memory Only - Project Bundle Cache Unavailable`; that result is usable for the current
+viewer/render session but is not persisted for future reuse.
 Range-specific files under `caches/` include the analyzed range, actual
 `sampleWidth`/`sampleHeight`, frame count, and frame fingerprints in the filename.
 `host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
@@ -296,8 +303,18 @@ set as the authoritative timeline, so a reduced retained source-frame map does
 not prevent a completed prepared path from being saved.
 
 `Start Host Analysis` first tries to reload a saved cache. It starts a new host
-analysis only when no compatible saved cache can be loaded. It must not delete
-saved cache files.
+analysis only when no compatible saved cache can be loaded. If the button
+callback cannot see `FxProjectAPI`, it still asks Final Cut Pro to start Host
+Analysis and lets the analyzer `setupAnalysis` callback resolve the Event cache
+root. If setup still cannot resolve a writable Event cache root, the effect
+finishes the active analyzer pass in memory only and shows `Ready Memory Only -
+Project Bundle Cache Unavailable` after completion. It must not delete saved cache files.
+The installed plug-in bundle is signed with sandbox and security-scoped file
+entitlements so the Host Analysis runtime can open the
+`FxProjectAPI.mediaFolderURL()` security-scoped URL.
+The in-progress Host Analysis store is process-wide so setup, frame analysis,
+and cleanup callbacks can arrive through different FxPlug instances without
+losing the active analysis session.
 
 Cache reuse is based on cache schema, exact analyzed source range, sample size, saved frame
 fingerprints, and current source-frame validation, not the visible FxPlug runtime version.
@@ -317,8 +334,8 @@ show `Cache Incomplete - Run Host Analysis` so incomplete analysis is not silent
 Those stale unusable states do not block later preview/render consumers from rechecking the
 persistent cache signature and loading a newly written compatible cache.
 
-The active runtime uses per-clip stores for in-progress Host Analysis and a process-wide
-shared render/cache store after analysis completes. Bundle-local persistent cache files are
+The active runtime uses a process-wide per-clip store for in-progress Host Analysis and a
+process-wide shared render/cache store after analysis completes. Bundle-local persistent cache files are
 the cross-process reuse path. Preview/render instances with no prepared analysis watch for
 cache file changes and reload validated candidates on demand.
 

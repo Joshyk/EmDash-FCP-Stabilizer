@@ -34,6 +34,8 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-project "stab test - gh6"
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript select-playhead-clip
 ```
 
 - `apply`: reveals the Effects Browser, searches `Stabilizer Transform`, and
@@ -41,8 +43,12 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
 - `start-analysis`: reveals the Inspector and presses `Start Host Analysis`.
 - `toggle-debug-overlay`: reveals the Inspector and toggles `Debug Overlay`.
 - `focus-inspector`: reveals or focuses the Inspector with Command-4.
+- `open-project PROJECT_NAME`: opens a named Browser project through
+  `Clip > Open Clip`.
 - `open-selected-project`: opens the selected Browser project thumbnail or list
-  row with a CoreGraphics double-click.
+  row through `Clip > Open Clip`.
+- `select-playhead-clip`: reselects the timeline clip under the playhead before
+  analysis when focus has drifted to the Browser or search field.
 
 The script uses Final Cut Pro Accessibility UI scripting. Grant Accessibility
 permission to the app that runs it. If FCP's UI labels are different on the
@@ -161,6 +167,15 @@ fallbacks.
   reuse. If the previous cache was rejected for the current clip, the next start skips that
   rejected cache and requests a new analysis. Rejected cache file names are remembered in
   the active FxPlug runtime so the same invalid candidate is not immediately reloaded again.
+  If the button callback cannot see `FxProjectAPI`, the button still requests Host Analysis
+  and lets the analyzer `setupAnalysis` callback resolve the Event cache root. If setup still
+  cannot resolve a writable Event cache root, the analyzer finishes the active pass in memory
+  only and the Inspector shows `Ready Memory Only - Project Bundle Cache Unavailable` after
+  completion. The installed plug-in bundle is signed with sandbox and security-scoped file
+  entitlements so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()`
+  security-scoped URL. The in-progress Host Analysis store is process-wide so setup, frame
+  analysis, and cleanup callbacks can arrive through different FxPlug instances without
+  losing the active analysis session.
   If a saved cache uses an unsupported schema, the Inspector shows
   `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has incomplete prepared
   paths or too few frames for its saved analysis range, the Inspector shows
@@ -216,8 +231,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R324` means FxPlug `0.3.24` is rendering original/optimized
-  frames, while `P324` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R328` means FxPlug `0.3.28` is rendering original/optimized
+  frames, while `P328` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -409,8 +424,10 @@ stay unique to the Event and do not appear as top-level library content:
 Completed analysis is written to this bundle-local path so Final Cut Pro's analyzer and
 preview/render extension processes can reuse the same prepared motion path. If the runtime
 cannot resolve a writable Event cache root, the Inspector shows
-`Project Bundle Cache Unavailable` and the effect does not fall back to a shared user cache
-or a library-wide cache.
+`Project Bundle Cache Unavailable` instead of falling back to a shared user cache or a
+library-wide cache. During a live Host Analysis callback, the current pass may still finish
+in memory as `Ready Memory Only - Project Bundle Cache Unavailable`; that result is not
+persisted for future reuse.
 Older top-level bundle caches at `<active library>.fcpbundle/StabilizerFxPlugHostAnalysis/`
 and older internal bundle caches at
 `<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` are moved into
