@@ -25,10 +25,14 @@ analysis fallback; if Metal analysis resources are unavailable, fail the Host An
 visibly in logs/status.
 
 Completed Host Analysis frame sets should be persisted inside the active Final Cut Pro
-library bundle, scoped to the current Event resolved from `FxProjectAPI.mediaFolderURL()`.
-Store the cache under the Event's `Analysis Files/StabilizerFxPlugHostAnalysis/` directory so
-analysis files are unique to that Event and do not appear as top-level library content. The
-runtime may move older top-level `StabilizerFxPlugHostAnalysis/`, media-folder-local
+library bundle, scoped to the current Event resolved from `FxProjectAPI.mediaFolderURL()`
+when the host-provided folder is inside an Event. If the host-provided folder is a library
+temp folder instead of an Event folder, the runtime may use an unambiguous top-level Event
+resolver, such as the single writable Event that already has Final Cut Pro `Analysis Files`;
+ambiguous Event candidates must fail visibly instead of writing to the wrong Event. Store the
+cache under the Event's `Analysis Files/StabilizerFxPlugHostAnalysis/` directory so analysis
+files are unique to that Event and do not appear as top-level library content. The runtime
+may move older top-level `StabilizerFxPlugHostAnalysis/`, media-folder-local
 `StabilizerFxPlugHostAnalysis/`, or `__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/`
 caches into the Event `Analysis Files` cache root, but it must not silently fall back to an
 out-of-bundle or library-wide shared cache. The Event cache contains

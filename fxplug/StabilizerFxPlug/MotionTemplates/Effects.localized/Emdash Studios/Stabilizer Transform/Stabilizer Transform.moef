@@ -288,7 +288,7 @@
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
-					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.22" value="Needs Analysis | FxPlug 0.3.22"/>
+					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.23" value="Needs Analysis | FxPlug 0.3.23"/>
 				<parameter name="Stabilizer Info" id="32" flags="12884904021" default="No Analysis" value="No Analysis"/>
 				<parameter name="Host Analysis Cache Identity" id="33" flags="12884901906" default="" value=""/>
 				<parameter name="Render Revision" id="20" flags="12884901906" default="0" value="0"/>

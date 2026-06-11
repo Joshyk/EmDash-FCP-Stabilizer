@@ -136,8 +136,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R322` means FxPlug `0.3.22`
-is rendering original/optimized frames, and `P322` means proxy playback is using
+active render runtime and current source mode: `R323` means FxPlug `0.3.23`
+is rendering original/optimized frames, and `P323` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -261,9 +261,12 @@ media to see the stabilized source frame.
 ## Cache Behavior
 
 Completed Host Analysis is written inside the active Final Cut Pro library bundle, scoped to
-the Event that owns the current project/media folder. The cache root lives under that Event's
-`Analysis Files` directory so analysis files stay unique to the Event and do not appear as
-top-level library content:
+the Event that owns the current project/media folder. If Final Cut Pro reports a library temp
+folder instead of an Event folder, the runtime uses an unambiguous top-level Event resolver,
+such as the single writable Event that already has Final Cut Pro `Analysis Files`, and fails
+visibly when the Event remains ambiguous. The cache root lives under that Event's `Analysis
+Files` directory so analysis files stay unique to the Event and do not appear as top-level
+library content:
 
 ```text
 <active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json

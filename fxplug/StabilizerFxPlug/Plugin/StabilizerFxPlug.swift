@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.22"
+private let stabilizerFxPlugVersion = "0.3.23"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1139,9 +1139,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 try projectAPI.mediaFolderURL(&mediaURL)
                 if let projectMediaURL = mediaURL as URL?,
                    let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL),
-                   let eventRoot = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot) {
+                   let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot) {
                     let didStartAccess = projectMediaURL.startAccessingSecurityScopedResource()
-                    let cacheRoot = Self.eventHostAnalysisCacheRoot(in: eventRoot)
+                    let cacheRoot = Self.eventHostAnalysisCacheRoot(in: eventResolution.eventRoot)
                     Self.migrateLegacyHostAnalysisCacheIfNeeded(
                         from: Self.legacyHostAnalysisCacheRoot(under: projectMediaURL),
                         to: cacheRoot
@@ -1158,7 +1158,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                         cacheRoot,
                         securityScopedURL: didStartAccess ? projectMediaURL : nil
                     )
-                    NSLog("StabilizerFxPlug: using FxProjectAPI Event Host Analysis cache at \(cacheRoot.path) inside \(eventRoot.path).")
+                    NSLog("StabilizerFxPlug: using \(eventResolution.sourceDescription) Event Host Analysis cache at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
                     return true
                 }
                 if let projectMediaURL = mediaURL as URL?,
@@ -1168,7 +1168,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                     return false
                 } else if let projectMediaURL = mediaURL as URL? {
-                    let reason = "FxProjectAPI media folder is not inside a Final Cut Pro event: \(projectMediaURL.path)"
+                    let reason = "FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
                     NSLog("StabilizerFxPlug: \(reason)")
                     hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                     return false
@@ -1276,14 +1276,20 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         return nil
     }
 
-    private static func fcpEventRoot(containing url: URL, in bundleRoot: URL) -> URL? {
+    private struct FCPEventRootResolution {
+        let eventRoot: URL
+        let sourceDescription: String
+    }
+
+    private static func fcpEventRoot(containing url: URL, in bundleRoot: URL) -> FCPEventRootResolution? {
         let bundleRoot = bundleRoot.standardizedFileURL
         var current = url.standardizedFileURL
+        var ancestorEventRoot: URL?
         while current.path != "/" && current.path.hasPrefix(bundleRoot.path) {
             if current.path != bundleRoot.path {
                 let eventMarkerURL = current.appendingPathComponent("CurrentVersion.fcpevent", isDirectory: false)
                 if FileManager.default.fileExists(atPath: eventMarkerURL.path) {
-                    return current
+                    ancestorEventRoot = current
                 }
             }
             if current.path == bundleRoot.path {
@@ -1291,7 +1297,63 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             }
             current.deleteLastPathComponent()
         }
+        if let ancestorEventRoot {
+            return FCPEventRootResolution(
+                eventRoot: ancestorEventRoot,
+                sourceDescription: "FxProjectAPI media-folder ancestor"
+            )
+        }
+        if let analysisFilesEventRoot = singleTopLevelEventWithExistingAnalysisFiles(in: bundleRoot) {
+            return FCPEventRootResolution(
+                eventRoot: analysisFilesEventRoot,
+                sourceDescription: "single existing Event Analysis Files"
+            )
+        }
+        if let onlyEventRoot = singleTopLevelEvent(in: bundleRoot) {
+            return FCPEventRootResolution(
+                eventRoot: onlyEventRoot,
+                sourceDescription: "single top-level library Event"
+            )
+        }
         return nil
+    }
+
+    private static func singleTopLevelEventWithExistingAnalysisFiles(in bundleRoot: URL) -> URL? {
+        let eventRoots = topLevelEventRoots(in: bundleRoot).filter { eventRoot in
+            let analysisFilesURL = eventRoot.appendingPathComponent("Analysis Files", isDirectory: true)
+            var isDirectory = ObjCBool(false)
+            return FileManager.default.fileExists(atPath: analysisFilesURL.path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+                && FileManager.default.isWritableFile(atPath: analysisFilesURL.path)
+        }
+        return eventRoots.count == 1 ? eventRoots[0] : nil
+    }
+
+    private static func singleTopLevelEvent(in bundleRoot: URL) -> URL? {
+        let eventRoots = topLevelEventRoots(in: bundleRoot)
+        return eventRoots.count == 1 ? eventRoots[0] : nil
+    }
+
+    private static func topLevelEventRoots(in bundleRoot: URL) -> [URL] {
+        let bundleRoot = bundleRoot.standardizedFileURL
+        guard let childURLs = try? FileManager.default.contentsOfDirectory(
+            at: bundleRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return childURLs
+            .filter { childURL in
+                let childIsDirectory = (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                guard childIsDirectory else {
+                    return false
+                }
+                let eventMarkerURL = childURL.appendingPathComponent("CurrentVersion.fcpevent", isDirectory: false)
+                return FileManager.default.fileExists(atPath: eventMarkerURL.path)
+            }
+            .map { $0.standardizedFileURL }
+            .sorted { $0.path < $1.path }
     }
 
     private static func expectedInputRange(from state: StabilizerPluginState) -> HostAnalysisExpectedRange? {
