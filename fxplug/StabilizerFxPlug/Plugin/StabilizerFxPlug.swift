@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.23"
+private let stabilizerFxPlugVersion = "0.3.24"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1137,11 +1137,36 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             var mediaURL: NSURL?
             do {
                 try projectAPI.mediaFolderURL(&mediaURL)
-                if let projectMediaURL = mediaURL as URL?,
-                   let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL),
-                   let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot) {
+                if let projectMediaURL = mediaURL as URL? {
+                    let projectMediaURL = projectMediaURL.standardizedFileURL
                     let didStartAccess = projectMediaURL.startAccessingSecurityScopedResource()
+                    var shouldRetainSecurityScopedAccess = false
+                    defer {
+                        if didStartAccess && !shouldRetainSecurityScopedAccess {
+                            projectMediaURL.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                    guard let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL) else {
+                        let reason = "FxProjectAPI media folder is not inside a .fcpbundle: \(projectMediaURL.path)"
+                        NSLog("StabilizerFxPlug: \(reason)")
+                        hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        return false
+                    }
+                    guard let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot) else {
+                        let reason = "FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
+                        NSLog("StabilizerFxPlug: \(reason)")
+                        hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        return false
+                    }
                     let cacheRoot = Self.eventHostAnalysisCacheRoot(in: eventResolution.eventRoot)
+                    do {
+                        try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+                    } catch {
+                        let reason = "Event Analysis Files cache root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
+                        NSLog("StabilizerFxPlug: \(reason)")
+                        hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        return false
+                    }
                     Self.migrateLegacyHostAnalysisCacheIfNeeded(
                         from: Self.legacyHostAnalysisCacheRoot(under: projectMediaURL),
                         to: cacheRoot
@@ -1158,26 +1183,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                         cacheRoot,
                         securityScopedURL: didStartAccess ? projectMediaURL : nil
                     )
+                    shouldRetainSecurityScopedAccess = didStartAccess
                     NSLog("StabilizerFxPlug: using \(eventResolution.sourceDescription) Event Host Analysis cache at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
                     return true
                 }
-                if let projectMediaURL = mediaURL as URL?,
-                   Self.fcpBundleRoot(containing: projectMediaURL) == nil {
-                    let reason = "FxProjectAPI media folder is not inside a .fcpbundle: \(projectMediaURL.path)"
-                    NSLog("StabilizerFxPlug: \(reason)")
-                    hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
-                    return false
-                } else if let projectMediaURL = mediaURL as URL? {
-                    let reason = "FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
-                    NSLog("StabilizerFxPlug: \(reason)")
-                    hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
-                    return false
-                } else {
-                    let reason = "FxProjectAPI did not provide a project media folder URL."
-                    NSLog("StabilizerFxPlug: \(reason)")
-                    hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
-                    return false
-                }
+                let reason = "FxProjectAPI did not provide a project media folder URL."
+                NSLog("StabilizerFxPlug: \(reason)")
+                hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                return false
             } catch {
                 let reason = "FxProjectAPI media folder unavailable: \(error.localizedDescription)"
                 NSLog("StabilizerFxPlug: \(reason)")
@@ -1324,7 +1337,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             var isDirectory = ObjCBool(false)
             return FileManager.default.fileExists(atPath: analysisFilesURL.path, isDirectory: &isDirectory)
                 && isDirectory.boolValue
-                && FileManager.default.isWritableFile(atPath: analysisFilesURL.path)
         }
         return eventRoots.count == 1 ? eventRoots[0] : nil
     }

@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PARENT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 FCP_HELPER="${PARENT_DIR}/scripts/fcp_stabilizer_shortcuts.applescript"
 TEST_LIBRARY="${PARENT_DIR}/test_fcp_project/test.fcpbundle"
-CACHE_ROOT="${TEST_LIBRARY}/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis"
+CACHE_ROOT="${TEST_LIBRARY}/test/Analysis Files/StabilizerFxPlugHostAnalysis"
 FEEDBACK_TOOL="${ROOT_DIR}/fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh"
 
 usage() {
