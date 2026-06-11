@@ -297,11 +297,7 @@ fragment float4 fragmentShader(
     if (transform->debugOverlay > 0.5) {
         outputColor.a = 1.0;
         float2 pixel = uv * transform->outputSize;
-        float overlayScale = clamp(
-            min(transform->outputSize.x / 3840.0, transform->outputSize.y / 2160.0) * 1.35,
-            0.75,
-            2.25
-        );
+        float overlayScale = clamp(transform->debugOverlayScale, 0.25, 2.25);
         float panelX = pixel.x - (16.0 * overlayScale);
         float panelY = pixel.y - (16.0 * overlayScale);
         float labelWidth = 44.0 * overlayScale;

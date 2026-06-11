@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.3.13"
+private let stabilizerFxPlugVersion = "0.3.14"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -701,6 +701,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
     }
 
+    private static func debugOverlayScale(outputWidth: Int, outputHeight: Int, renderSourceIsProxy: Bool) -> Float {
+        let width = max(1, outputWidth)
+        let height = max(1, outputHeight)
+        let baseScale = min(Float(width) / 3840.0, Float(height) / 2160.0) * 1.35
+        let minimumScale: Float = renderSourceIsProxy ? 0.25 : 0.75
+        return min(max(baseScale, minimumScale), 2.25)
+    }
+
     private func publishHostAnalysisStatus(force: Bool = false, statusOverride: String? = nil) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
         statusLock.lock()
@@ -810,7 +818,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             return
         }
         let parameterNeedsUpdate = currentParameterValue.map { abs($0 - revision) >= 0.5 } ?? false
-        if let currentParameterValue,
+        if currentParameterValue != nil,
            !parameterNeedsUpdate {
             statusLock.lock()
             lastPublishedRenderRevision = revision
@@ -1084,16 +1092,24 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform = .identity
         }
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
-        if abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
+        let renderStoreRevision = hostAnalysisStore.revision
+        let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
+        if renderStoreChangedStatus || abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
                 infoForce: true,
                 revision: renderInvalidationToken,
+                revisionForce: renderStoreChangedStatus,
                 currentRenderRevision: state.renderRevision
             )
         }
         let renderSourceIsProxy = renderUsesPreparedAnalysis
             && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImages[0]) != nil
+        let debugOverlayScale = Self.debugOverlayScale(
+            outputWidth: Int(outputWidth),
+            outputHeight: Int(outputHeight),
+            renderSourceIsProxy: renderSourceIsProxy
+        )
         let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
         let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
         let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.03)
@@ -1169,7 +1185,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * masterStrength,
             edgeMode: Float(state.edgeDisplayMode),
             debugOverlay: state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? 1.0 : 0.0,
-            debugMode: renderSourceIsProxy ? 2.0 : 1.0
+            debugMode: renderSourceIsProxy ? 2.0 : 1.0,
+            debugOverlayScale: debugOverlayScale
         )
         if state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis {
             publishHostAnalysisRenderDiagnostics(

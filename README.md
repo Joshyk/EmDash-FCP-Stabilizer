@@ -136,13 +136,13 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R313` means FxPlug `0.3.13`
-is rendering original/optimized frames, and `P313` means proxy playback is using
+active render runtime and current source mode: `R314` means FxPlug `0.3.14`
+is rendering original/optimized frames, and `P314` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
-The overlay scales from the current render output to keep one readable viewer
-footprint across original and proxy playback, while staying larger than the old
-compact panel.
+The overlay scales from the current render output with a lower proxy minimum so
+Final Cut Pro proxy playback keeps roughly the same viewer footprint as original
+media, while staying larger than the old compact panel.
 
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep
@@ -239,7 +239,8 @@ prepared motion paths. A validated analysis continues to drive preview/render
 when Final Cut Pro plays proxy media; proxy media is rejected only for Host
 Analysis input and for validating an unvalidated cache. When proxy playback uses
 a loaded cache before original-media validation, the render path keeps the hidden
-preview revision current so Final Cut Pro shows the stabilized proxy preview.
+preview revision, `Host Analysis Status`, and `Stabilizer Info` current so Final
+Cut Pro shows the stabilized proxy preview and reports `Proxy Preview`.
 When original-media validation has mapped a trimmed timeline render time back to
 the analyzed source time, that offset is saved with the Host Analysis cache identity
 so a separate proxy render instance can sample the same prepared motion path.

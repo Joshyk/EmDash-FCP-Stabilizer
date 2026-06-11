@@ -67,6 +67,7 @@ typedef struct StabilizerTransformUniforms {
     float edgeMode;
     float debugOverlay;
     float debugMode;
+    float debugOverlayScale;
 } StabilizerTransformUniforms;
 
 #endif

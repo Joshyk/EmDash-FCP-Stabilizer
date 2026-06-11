@@ -174,6 +174,10 @@ surface `Source Media Unavailable - Check FCP Proxy`, leave the saved Host Analy
 intact, and avoid drawing Debug Overlay diagnostics over the placeholder frame. When render
 uses a saved analysis while the current source is proxy-scaled, status should make that
 visible as proxy preview instead of silently promoting the cache to ordinary `Ready`.
+Render-time transitions between original/optimized and proxy preview should publish
+`Host Analysis Status`, `Stabilizer Info`, and the hidden render revision when the shared
+store revision changes, even if the render callback already holds a locally matching hidden
+revision value.
 When original-media validation maps a trimmed timeline render time back to the analyzed
 source time, render instances should persist that offset with the Host Analysis cache
 identity so proxy-only render instances and processes can sample the same prepared motion
