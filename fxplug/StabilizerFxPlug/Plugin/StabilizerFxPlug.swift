@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.3.9"
+private let stabilizerFxPlugVersion = "0.3.11"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -124,9 +124,10 @@ private enum StabilizerOriginalMediaPolicy {
         guard scaleX.isFinite, scaleY.isFinite else {
             return "Host Analysis received a source frame with invalid pixel transform; original media could not be confirmed."
         }
-        guard max(scaleX, scaleY) <= 1.0 + proxyScaleTolerance else {
+        let scaleDelta = max(abs(scaleX - 1.0), abs(scaleY - 1.0))
+        guard scaleDelta <= proxyScaleTolerance else {
             return String(
-                format: "Host Analysis received proxy-scaled media (pixel transform %.2fx, %.2fx). Use original media and rerun Host Analysis.",
+                format: "Host Analysis received scaled/proxy media (pixel transform %.2fx, %.2fx). Use original media and rerun Host Analysis.",
                 scaleX,
                 scaleY
             )
@@ -719,8 +720,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
     }
 
-    private func publishStabilizerInfo(force: Bool = false, state: StabilizerPluginState? = nil) {
-        let info = Self.stabilizerInfoText(analysisInfo: hostAnalysisStore.infoText, state: state)
+    private func publishStabilizerInfo(
+        force: Bool = false,
+        state: StabilizerPluginState? = nil,
+        analysisInfoOverride: String? = nil
+    ) {
+        let analysisInfo = analysisInfoOverride ?? hostAnalysisStore.infoText
+        let info = Self.stabilizerInfoText(analysisInfo: analysisInfo, state: state)
         statusLock.lock()
         let shouldPublish = force || info != lastPublishedInfo
         statusLock.unlock()
@@ -834,7 +840,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
         } else {
             publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
-            publishStabilizerInfo(force: true)
+            publishStabilizerInfo(force: true, analysisInfoOverride: analysisStore.infoText)
             publishRenderRevision(analysisStore.renderInvalidationToken, force: true)
         }
     }
@@ -2229,7 +2235,6 @@ private final class StabilizerHostAnalysisStore {
         lock.lock()
         let shouldMarkProxyPreview = preparedAnalysis != nil
             && status != .proxyPreview
-            && status != .sourceUnavailable
         if shouldMarkProxyPreview {
             status = .proxyPreview
             analysisInfoText = "Using saved Host Analysis for proxy playback. If Final Cut Pro shows Missing Proxy, switch Viewer playback to Original/Optimized or create proxy media."

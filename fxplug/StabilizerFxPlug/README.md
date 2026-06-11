@@ -199,6 +199,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   original-media validation can happen later when original frames are available. The render
   path keeps the hidden preview revision current in this state so Final Cut Pro shows the
   stabilized proxy preview without switching back to original media first.
+  Proxy/scaled media is detected when the source pixel transform differs from original
+  `1.0x/1.0x` in either direction, so reduced-resolution proxy frames do not validate
+  against and reject a good original-media cache.
 - If Final Cut Pro is set to proxy playback but the proxy file is missing, render receives
   the Missing Proxy placeholder rather than original footage. The plug-in reports
   `Source Media Unavailable - Check FCP Proxy`, keeps the saved cache intact, and suppresses
@@ -221,7 +224,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   the Inspector shows `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has
   incomplete prepared paths or too few frames for its saved analysis range, it shows
   `Cache Incomplete - Run Host Analysis`. The file remains on disk and the next start
-  requests new analysis for the current build.
+  requests new analysis for the current build. Those stale unusable states do not block later
+  preview/render consumers from rechecking the persistent cache signature and loading a newly
+  written compatible cache.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
@@ -229,7 +234,10 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   run, the status advances as `Analyzing Host Frames (N)`. If Final Cut Pro restores an
   in-progress analysis state while a compatible saved cache is already present, the plug-in
   prefers the saved cache and keeps the shared Ready/cache status visible instead of letting
-  transient analyzer callback status mask it.
+  transient analyzer callback status mask it. When the analyzer callback is the active
+  state, `Host Analysis Status` and `Stabilizer Info` come from that same in-progress
+  analysis store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata
+  from another clip.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
   version, active correction bands (`Footstep jitter <= 1s`, `Stride wobble <= 2s`,
   `Walking Bob <= 2.5s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest

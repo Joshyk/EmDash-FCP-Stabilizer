@@ -39,7 +39,12 @@ Cache` is the explicit cache-clear path and should show `Cache Cleared`.
 If Final Cut Pro restores or reports an in-progress Host Analysis while a compatible saved
 cache is already present, the render/cache consumer should still reload and prefer the saved
 cache; transient analyzer callback status must not mask the shared ready cache in the
-Inspector.
+Inspector. When analyzer callback status is the only active state, `Host Analysis Status`
+and `Stabilizer Info` should both be published from that same in-progress analysis store;
+do not combine `Analyzing Host Frames (N)` with stale shared-cache metadata from a previous
+clip. Stale `Cache Unsupported` or `Cache Incomplete` status must not stop later
+preview/render consumers from noticing a changed persistent cache signature and loading a
+new compatible saved cache.
 Persistent cache compatibility is based on cache schema and current source-frame
 validation, not the visible FxPlug runtime version. Render-only version bumps should reuse
 saved Host Analysis cache candidates. The loader should also consider current and legacy
@@ -167,6 +172,10 @@ surface `Source Media Unavailable - Check FCP Proxy`, leave the saved Host Analy
 intact, and avoid drawing Debug Overlay diagnostics over the placeholder frame. When render
 uses a saved analysis while the current source is proxy-scaled, status should make that
 visible as proxy preview instead of silently promoting the cache to ordinary `Ready`.
+Proxy/scaled media detection should treat pixel transforms that deviate from original
+`1.0x/1.0x` in either direction as scaled media: Host Analysis must reject those frames,
+while render playback with a saved analysis should keep using the prepared original-media
+motion path instead of validating fingerprints against the scaled proxy frame.
 When the
 effective overall transform strength is zero, rendering must
 bypass prepared motion-path sampling and output an identity transform with no debug overlay.

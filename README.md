@@ -151,7 +151,10 @@ display a stale saved info string until the effect is reapplied.
 During a real Host Analysis pass the status advances as `Analyzing Host Frames
 (N)`. If Final Cut Pro restores an in-progress analysis state while a compatible
 saved cache exists, the plug-in prefers the saved cache and keeps the shared
-Ready/cache status visible.
+Ready/cache status visible. When an analyzer callback is still the active state,
+`Host Analysis Status` and `Stabilizer Info` are published from that same
+in-progress analysis store, so the Inspector does not combine `Analyzing Host
+Frames (N)` with stale cache metadata from another clip.
 
 ## Host Analysis
 
@@ -232,6 +235,9 @@ when Final Cut Pro plays proxy media; proxy media is rejected only for Host
 Analysis input and for validating an unvalidated cache. When proxy playback uses
 a loaded cache before original-media validation, the render path keeps the hidden
 preview revision current so Final Cut Pro shows the stabilized proxy preview.
+Proxy/scaled media is detected when the source pixel transform differs from original
+`1.0x/1.0x` in either direction, so reduced-resolution proxy frames do not get treated as
+ordinary original frames and reject a good saved cache.
 If Final Cut Pro is set to proxy playback but the proxy media is missing, the
 host supplies a Missing Proxy placeholder rather than the original footage. The
 effect now reports `Source Media Unavailable - Check FCP Proxy`, keeps the saved
@@ -278,6 +284,8 @@ instead of being silently ignored or deleted. This keeps stale caches available
 for older builds while the current effect asks for a new analysis. Supported-schema
 caches with incomplete prepared path arrays or too few frames for the saved analysis range
 show `Cache Incomplete - Run Host Analysis` so incomplete analysis is not silently reused.
+Those stale unusable states do not block later preview/render consumers from rechecking the
+persistent cache signature and loading a newly written compatible cache.
 
 The active runtime uses per-clip stores for in-progress Host Analysis and a
 process-wide shared render/cache store after analysis completes. Persistent

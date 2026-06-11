@@ -202,7 +202,10 @@ fallbacks.
   During a real analysis run, the status advances as `Analyzing Host Frames (N)`.
   If Final Cut Pro restores an in-progress analysis state while a compatible saved cache is
   already present, the plug-in prefers the saved cache and keeps the shared Ready/cache
-  status visible instead of letting transient analyzer callback status mask it.
+  status visible instead of letting transient analyzer callback status mask it. When the
+  analyzer callback is the active state, `Host Analysis Status` and `Stabilizer Info` come
+  from that same in-progress analysis store instead of mixing `Analyzing Host Frames (N)`
+  with stale cache metadata from another clip.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
   `Walking Bob`, `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame
@@ -326,6 +329,9 @@ FxPlug.
   original-media validation can happen later when original frames are available. The render
   path keeps the hidden preview revision current in this state so the stabilized proxy
   preview appears without switching back to original media first.
+  Proxy/scaled media is detected when the source pixel transform differs from original
+  `1.0x/1.0x` in either direction, so reduced-resolution proxy frames do not validate
+  against and reject a good original-media cache.
 - If Final Cut Pro is set to proxy playback and the proxy file is missing, the Viewer sends
   the plug-in a Missing Proxy placeholder instead of the original image. The effect reports
   `Source Media Unavailable - Check FCP Proxy`, leaves the Host Analysis cache on disk, and
@@ -409,6 +415,8 @@ also left on disk, but the Inspector shows `Cache Unsupported - Run Host Analysi
 current-build analysis is explicitly required. Supported-schema caches with incomplete
 prepared path arrays or incomplete frame coverage show `Cache Incomplete - Run Host
 Analysis` for the same reason.
+Those stale unusable states do not prevent preview/render consumers from noticing later
+persistent cache changes and loading a newly written compatible cache.
 
 New cache files store prepared motion paths, per-frame timestamps, blur values,
 search-radius edge-hit counts, and fingerprints instead of every frame's full luma sample.
