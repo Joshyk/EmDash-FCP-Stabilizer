@@ -188,6 +188,12 @@ analyzer/render processes do not publish the same invalidation value for
 different clips. The plug-in skips setting that hidden parameter when Final Cut
 Pro already has the same value, avoiding repeated preview invalidation during
 effect load.
+Viewer-side render instances also monitor the shared persistent cache location.
+If an analyzer instance finishes in another FxPlug process, the viewer-side
+instance loads the completed cache and publishes the hidden render revision so
+stale preview frames redraw from the prepared motion path.
+If Final Cut Pro rejects a hidden revision update, the plug-in does not mark it
+as published, so a later monitor tick or callback can retry.
 
 The analysis path:
 

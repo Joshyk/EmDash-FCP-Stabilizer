@@ -185,9 +185,10 @@ fallbacks.
   Completed analysis is then published to the process-wide shared render/cache store and
   persisted to the shared user Application Support cache using the prepared analysis frame
   set, so analyzer and preview/render processes can hand off the prepared motion path
-  through validated cache files. Preview/render and plug-in state callbacks detect cache
-  file changes even when they already hold an older prepared analysis, then reload
-  candidates and update the hidden render revision without starting Host Analysis.
+  through validated cache files. Preview/render instances also monitor the persisted cache
+  location and detect cache file changes even when they already hold an older prepared
+  analysis, then reload candidates and update the hidden render revision without starting
+  Host Analysis.
   A cache whose fingerprints do not match the current source frame is
   rejected instead of being accepted by time proximity alone. `Start Host Analysis` is the
   only path that requests Host Analysis from Final Cut Pro.
@@ -348,13 +349,15 @@ FxPlug.
   Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,
   blur values, and search-radius edge-hit counts. Older prepared caches are marked
   unsupported and require a new Host Analysis run.
-- Host Analysis/cache state changes update a hidden render revision parameter. Plug-in
-  state callbacks also check saved cache changes so Final Cut Pro invalidates cached
-  preview frames and redraws from the prepared motion path after a serial analysis finishes.
+- Host Analysis/cache state changes update a hidden render revision parameter. Viewer-side
+  instances also monitor saved cache changes so Final Cut Pro invalidates cached preview
+  frames and redraws from the prepared motion path after a serial analysis finishes.
   The hidden render revision is a process-independent small numeric token, not a local
   analysis counter, so analyzer and render processes cannot publish the same invalidation
   value for different completed clips. The plug-in skips setting that hidden parameter when
-  Final Cut Pro already has the same value to avoid repeated effect-load invalidation.
+  Final Cut Pro already has the same value to avoid repeated effect-load invalidation. If
+  Final Cut Pro rejects the hidden update, the plug-in does not record it as published, so a
+  later cache monitor tick or callback can retry.
 - Trimmed clips are supported by matching the current render frame fingerprint against the
   analyzed Host Analysis frame set. If Final Cut Pro reports render time in a different time
   domain than analysis time, the effect applies that offset before reading the prepared

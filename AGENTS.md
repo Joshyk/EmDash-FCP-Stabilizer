@@ -125,7 +125,12 @@ when analyzer and render use different FxPlug processes. Do not use per-process 
 counters as the hidden render invalidation value because analyzer and render processes can
 generate the same counter value for different completed clips. Do not repeatedly set the
 hidden render revision when Final Cut Pro already holds the same value, because that can keep
-the effect in a loading/invalidation loop. Fingerprint mismatches must reject a
+the effect in a loading/invalidation loop. Render/preview instances should also monitor the
+shared persistent cache location and publish the hidden render revision when a compatible
+completed cache appears, because analyzer callbacks may complete in a different FxPlug
+instance or process than the stale viewer preview. A failed hidden parameter update should
+not be recorded as published; a later valid callback or monitor tick should retry.
+Fingerprint mismatches must reject a
 candidate instead of accepting a different clip by time proximity alone. If Final Cut Pro keeps
 reporting a busy state when the serial queue tries to drain, keep the request queued visibly
 and retry later. A queued start request must remain a pending request for that effect

@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.3.7"
+private let stabilizerFxPlugVersion = "0.3.8"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -160,11 +160,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
     private let analysisSessionLock = NSLock()
+    private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.StabilizerFxPlug.PersistentCacheMonitor")
     private var lastPublishedStatus = ""
     private var lastPublishedInfo = ""
     private var lastPublishedRenderRevision: Double?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalysisStore: StabilizerHostAnalysisStore?
+    private var persistentCacheMonitor: DispatchSourceTimer?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
     }
@@ -180,7 +182,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         self.apiManager = apiManager
         super.init()
         _ = Self.sharedHostAnalysisStore
+        startPersistentCacheMonitor()
         NSLog("StabilizerFxPlug: runtime initialized version \(stabilizerFxPlugVersion).")
+    }
+
+    deinit {
+        persistentCacheMonitor?.cancel()
     }
 
     func addParameters() throws {
@@ -794,16 +801,17 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         statusLock.lock()
         let shouldPublish = force || lastPublishedRenderRevision != revision
-        if shouldPublish {
-            lastPublishedRenderRevision = revision
-        }
         statusLock.unlock()
         guard shouldPublish,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
         }
-        if !settingAPI.setFloatValue(revision, toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
+        if settingAPI.setFloatValue(revision, toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
+            statusLock.lock()
+            lastPublishedRenderRevision = revision
+            statusLock.unlock()
+        } else {
             NSLog("StabilizerFxPlug: failed to update Render Revision parameter.")
         }
     }
@@ -833,6 +841,26 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             return
         }
         publishAnalysisCallbackStatus(analysisStore)
+    }
+
+    private func startPersistentCacheMonitor() {
+        let timer = DispatchSource.makeTimerSource(queue: persistentCacheMonitorQueue)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.75)
+        timer.setEventHandler { [weak self] in
+            self?.pollPersistentCacheForPreviewInvalidation()
+        }
+        persistentCacheMonitor = timer
+        timer.resume()
+    }
+
+    private func pollPersistentCacheForPreviewInvalidation() {
+        let loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded()
+        guard loadedCache || hostAnalysisStore.hasCompletedAnalysis else {
+            return
+        }
+        publishHostAnalysisStatus(force: loadedCache)
+        publishStabilizerInfo(force: loadedCache)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken)
     }
 
     private func setActiveAnalysisStore(_ store: StabilizerHostAnalysisStore?) {

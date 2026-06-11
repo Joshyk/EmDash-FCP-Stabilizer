@@ -49,6 +49,9 @@ estimators, or Transform-keyframe writers back into this target.
   outside-source pixels, making stabilization movement visible when needed.
 - Updates a hidden render revision parameter when Host Analysis/cache state changes so Final
   Cut Pro refreshes the preview from the prepared motion paths.
+- Monitors the shared persistent cache location from render/preview instances and publishes
+  that hidden revision when an analyzer instance in another process finishes a compatible
+  cache.
 - Shares the in-process Host Analysis store across FxPlug analyzer/render instances so a
   completed analysis can drive smoothing in playback.
 - Keeps rejected cache candidates on disk for other clips.
