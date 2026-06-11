@@ -135,8 +135,10 @@ disappear while high-side gate jumps and low-confidence warp evidence are
 suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
-bands and tracking state. It also includes a compact runtime-version row for the
-active render runtime. It does not control black outside-source pixels;
+bands and tracking state. It also includes a compact runtime/source row for the
+active render runtime and current source mode: `R313` means FxPlug `0.3.13`
+is rendering original/optimized frames, and `P313` means proxy playback is using
+the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output to keep one readable viewer
 footprint across original and proxy playback, while staying larger than the old
@@ -197,6 +199,9 @@ instance loads the completed cache and publishes the hidden render revision so
 stale preview frames redraw from the prepared motion path.
 If Final Cut Pro rejects a hidden revision update, the plug-in does not mark it
 as published, so a later monitor tick or callback can retry.
+If Final Cut Pro still reports an older hidden revision value, the runtime also
+republishes the current token instead of assuming the previous publish reached
+the host.
 Analyzer completion and cache-monitor ticks publish status/info/render revision
 from the FxPlug main queue, which keeps Final Cut Pro's preview invalidation in
 the same path as ordinary parameter updates.
@@ -235,6 +240,9 @@ when Final Cut Pro plays proxy media; proxy media is rejected only for Host
 Analysis input and for validating an unvalidated cache. When proxy playback uses
 a loaded cache before original-media validation, the render path keeps the hidden
 preview revision current so Final Cut Pro shows the stabilized proxy preview.
+When original-media validation has mapped a trimmed timeline render time back to
+the analyzed source time, that offset is saved with the Host Analysis cache identity
+so a separate proxy render instance can sample the same prepared motion path.
 Proxy/scaled media is detected when the source pixel transform differs from original
 `1.0x/1.0x` in either direction, so reduced-resolution proxy frames do not get treated as
 ordinary original frames and reject a good saved cache.
@@ -297,7 +305,7 @@ on demand.
 
 `Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`,
 live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `SHRP`, `RES`, and
-search-radius `HIT`, `WLK`, and compact runtime-version bars. Labels use raw English control/diagnostic abbreviations;
+search-radius `HIT`, `WLK`, and compact runtime/source bars. Labels use raw English control/diagnostic abbreviations;
 do not translate them in the preview.
 
 The overlay bars are normalized magnitudes or quality signals, not signed directions:

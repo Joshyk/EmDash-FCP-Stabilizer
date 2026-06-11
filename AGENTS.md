@@ -102,7 +102,9 @@ confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `SHRP`
 `RES`, and `HIT` should all be quality bars where higher means better tracking evidence
 and lower means weaker evidence. `WLK` should show the walking-band tracking gate used by
 Footstep Jitter, Stride Wobble, and Walking Bob. Debug Overlay should also expose a compact
-active runtime version row so stale saved Inspector strings do not hide which binary is rendering.
+active runtime/source row so stale saved Inspector strings do not hide which binary is rendering:
+`R###` means an original/optimized render frame is using that FxPlug runtime version, while
+`P###` means a proxy render frame is using the same saved Host Analysis path.
 The overlay panel should scale proportionally to the current render output so Final Cut Pro
 original/proxy playback presents one readable viewer footprint; high-resolution original
 frames must not make the bars tiny, and proxy output must not make them balloon over the
@@ -172,6 +174,10 @@ surface `Source Media Unavailable - Check FCP Proxy`, leave the saved Host Analy
 intact, and avoid drawing Debug Overlay diagnostics over the placeholder frame. When render
 uses a saved analysis while the current source is proxy-scaled, status should make that
 visible as proxy preview instead of silently promoting the cache to ordinary `Ready`.
+When original-media validation maps a trimmed timeline render time back to the analyzed
+source time, render instances should persist that offset with the Host Analysis cache
+identity so proxy-only render instances and processes can sample the same prepared motion
+path instead of falling back to an unmapped timeline time.
 Proxy/scaled media detection should treat pixel transforms that deviate from original
 `1.0x/1.0x` in either direction as scaled media: Host Analysis must reject those frames,
 while render playback with a saved analysis should keep using the prepared original-media
@@ -183,7 +189,9 @@ Render-time frame/window lookup should use the sorted prepared frame times direc
 of repeatedly scanning the full analysis frame set on every preview sample.
 When Host Analysis/cache state changes, update a hidden render-affecting revision parameter
 so Final Cut Pro invalidates the preview/render cache and the viewer reflects the prepared
-stabilization immediately.
+stabilization immediately. If Final Cut Pro reports a stale hidden revision value after an
+attempted publish, keep retrying the same revision instead of treating a plug-in-local
+publish record as proof that the host accepted it.
 Render playback should favor the smoothest visible pan over low per-frame compute cost:
 after calculating the prepared-path transform, sample neighboring render times symmetrically
 and blend the final automatic transform with zero phase so the preview does not step between

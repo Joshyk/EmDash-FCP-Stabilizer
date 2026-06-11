@@ -66,6 +66,7 @@ typedef struct StabilizerTransformUniforms {
     vector_float2 perspective;
     float edgeMode;
     float debugOverlay;
+    float debugMode;
 } StabilizerTransformUniforms;
 
 #endif

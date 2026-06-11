@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.3.11"
+private let stabilizerFxPlugVersion = "0.3.13"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -809,15 +809,16 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         guard revision > 0.0 else {
             return
         }
+        let parameterNeedsUpdate = currentParameterValue.map { abs($0 - revision) >= 0.5 } ?? false
         if let currentParameterValue,
-           abs(currentParameterValue - revision) < 0.5 {
+           !parameterNeedsUpdate {
             statusLock.lock()
             lastPublishedRenderRevision = revision
             statusLock.unlock()
             return
         }
         statusLock.lock()
-        let shouldPublish = force || lastPublishedRenderRevision != revision
+        let shouldPublish = force || parameterNeedsUpdate || lastPublishedRenderRevision != revision
         statusLock.unlock()
         guard shouldPublish,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
@@ -886,7 +887,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         statusForce: Bool,
         infoForce: Bool,
         revision: Double,
-        revisionForce: Bool = false
+        revisionForce: Bool = false,
+        currentRenderRevision: Double? = nil
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self else {
@@ -894,7 +896,11 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             }
             self.publishHostAnalysisStatus(force: statusForce)
             self.publishStabilizerInfo(force: infoForce)
-            self.publishRenderRevision(revision, force: revisionForce)
+            self.publishRenderRevision(
+                revision,
+                currentParameterValue: currentRenderRevision,
+                force: revisionForce
+            )
         }
     }
 
@@ -1079,10 +1085,15 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
         if abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
-            publishHostAnalysisStatus()
-            publishStabilizerInfo(state: state)
-            publishRenderRevision(renderInvalidationToken, currentParameterValue: state.renderRevision)
+            publishPreviewInvalidationOnMain(
+                statusForce: true,
+                infoForce: true,
+                revision: renderInvalidationToken,
+                currentRenderRevision: state.renderRevision
+            )
         }
+        let renderSourceIsProxy = renderUsesPreparedAnalysis
+            && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImages[0]) != nil
         let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
         let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
         let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.03)
@@ -1157,7 +1168,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             shear: autoTransform.shear * masterStrength,
             perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * masterStrength,
             edgeMode: Float(state.edgeDisplayMode),
-            debugOverlay: state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? 1.0 : 0.0
+            debugOverlay: state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? 1.0 : 0.0,
+            debugMode: renderSourceIsProxy ? 2.0 : 1.0
         )
         if state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis {
             publishHostAnalysisRenderDiagnostics(
@@ -1454,10 +1466,24 @@ private struct PersistedHostAnalysisIndexEntry: Codable {
     let lastFingerprint: String
 }
 
+private struct PersistedRenderTimeOffsetIndex: Codable {
+    let version: Int
+    var entries: [PersistedRenderTimeOffsetEntry]
+}
+
+private struct PersistedRenderTimeOffsetEntry: Codable {
+    let cacheIdentity: String
+    let offsetSeconds: Double
+    let savedAt: Double
+    let renderSeconds: Double
+    let analysisSeconds: Double
+}
+
 private struct LoadedPersistentHostAnalysisCache {
     let fileName: String
     let url: URL
     let cache: PersistedHostAnalysisCache
+    let identity: String
     let frames: [StabilizerAnalysisFrame]
     let preparedAnalysis: StabilizerPreparedAnalysis
 }
@@ -1473,6 +1499,7 @@ private final class StabilizerHostAnalysisStore {
     private static let cacheDirectoryName = "StabilizerFxPlug"
     private static let cacheFileName = "host-analysis-v2.json"
     private static let cacheIndexFileName = "host-analysis-index-v2.json"
+    private static let renderTimeOffsetFileName = "host-analysis-render-offset-v2.json"
     private static let cacheStorageDirectoryName = "caches"
     private static let analysisScratchDirectoryName = "analysis-work"
     private static let legacyCacheBundleIdentifiers = [
@@ -1486,6 +1513,7 @@ private final class StabilizerHostAnalysisStore {
     private var preparedAnalysis: StabilizerPreparedAnalysis?
     private var persistentCacheCandidates: [URL] = []
     private var activePersistentCacheFileName: String?
+    private var activePersistentCacheIdentity: String?
     private var rejectedPersistentCacheFileNames = Set<String>()
     private var activeRange: CMTimeRange = .invalid
     private var activeFrameDuration: CMTime = .invalid
@@ -1590,6 +1618,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
+        activePersistentCacheIdentity = nil
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: true)
         activeRange = range
         activeFrameDuration = frameDuration
@@ -1654,6 +1683,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
+        activePersistentCacheIdentity = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
@@ -1680,6 +1710,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
+        activePersistentCacheIdentity = nil
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: false)
         activeRange = .invalid
         activeFrameDuration = .invalid
@@ -1705,6 +1736,9 @@ private final class StabilizerHostAnalysisStore {
         framesByTimeKey.removeAll(keepingCapacity: true)
         streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        persistentCacheCandidates.removeAll(keepingCapacity: false)
+        activePersistentCacheFileName = nil
+        activePersistentCacheIdentity = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
@@ -1786,6 +1820,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = snapshot.preparedAnalysis
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
+        activePersistentCacheIdentity = snapshot.activePersistentCacheIdentity
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: true)
         activeRange = snapshot.activeRange
         activeFrameDuration = snapshot.activeFrameDuration
@@ -2079,12 +2114,20 @@ private final class StabilizerHostAnalysisStore {
             try FileManager.default.createDirectory(at: Self.cacheStorageDirectoryURL, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(cache)
             let cacheFileName = Self.persistentCacheFileName(for: cache, frames: framesToPersist)
+            guard let cacheIdentity = Self.persistentCacheIdentity(for: cache, frames: framesToPersist) else {
+                NSLog("StabilizerFxPlug: failed to save Host Analysis cache because the prepared frame fingerprints were incomplete.")
+                return
+            }
             let cacheURL = Self.cacheStorageDirectoryURL.appendingPathComponent(cacheFileName, isDirectory: false)
             try data.write(to: cacheURL, options: .atomic)
             try data.write(to: Self.cacheURL, options: .atomic)
             if let indexEntry = Self.indexEntry(for: cache, fileName: cacheFileName, frames: framesToPersist) {
                 try Self.updatePersistentCacheIndex(with: indexEntry)
             }
+            lock.lock()
+            activePersistentCacheFileName = cacheFileName
+            activePersistentCacheIdentity = cacheIdentity
+            lock.unlock()
             Self.bumpPersistentCacheGeneration()
             NSLog("StabilizerFxPlug: saved sample-size Host Analysis cache \(sampleWidth)x\(sampleHeight) with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
         } catch {
@@ -2116,6 +2159,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = prepared
         if markFinished {
             activePersistentCacheFileName = nil
+            activePersistentCacheIdentity = nil
             streamingAnalysisBuilder = nil
         }
         if markFinished {
@@ -2176,7 +2220,8 @@ private final class StabilizerHostAnalysisStore {
         status: HostAnalysisStatus,
         latestSourceFrameInfo: StabilizerSourceFrameInfo?,
         latestSampleSize: (width: Int, height: Int)?,
-        analysisInfoText: String
+        analysisInfoText: String,
+        activePersistentCacheIdentity: String?
     ) {
         lock.lock()
         let snapshot = (
@@ -2190,7 +2235,8 @@ private final class StabilizerHostAnalysisStore {
             status: status,
             latestSourceFrameInfo: latestSourceFrameInfo,
             latestSampleSize: latestSampleSize,
-            analysisInfoText: analysisInfoText
+            analysisInfoText: analysisInfoText,
+            activePersistentCacheIdentity: activePersistentCacheIdentity
         )
         lock.unlock()
         return snapshot
@@ -2268,6 +2314,7 @@ private final class StabilizerHostAnalysisStore {
         preparedAnalysis = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
+        activePersistentCacheIdentity = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         finished = false
@@ -2364,7 +2411,16 @@ private final class StabilizerHostAnalysisStore {
         lock.lock()
         renderToAnalysisOffsetSeconds = offsetSeconds
         renderToAnalysisOffsetProbeAttempted = true
+        let cacheIdentity = activePersistentCacheIdentity
         lock.unlock()
+        if let cacheIdentity {
+            Self.saveRenderTimeOffset(
+                cacheIdentity: cacheIdentity,
+                offsetSeconds: offsetSeconds,
+                renderSeconds: renderSeconds,
+                analysisSeconds: matchedAnalysisFrame.time
+            )
+        }
     }
 
     private func matchedAnalysisFrame(for currentFrame: StabilizerAnalysisFrame, in frames: [StabilizerAnalysisFrame]) -> StabilizerAnalysisFrame? {
@@ -2430,13 +2486,19 @@ private final class StabilizerHostAnalysisStore {
         framesByTimeKey = Dictionary(uniqueKeysWithValues: loadedCache.frames.map { (Self.timeKey($0.time), $0) })
         preparedAnalysis = loadedCache.preparedAnalysis
         activePersistentCacheFileName = loadedCache.fileName
+        activePersistentCacheIdentity = loadedCache.identity
         activeRange = CMTimeRange(
             start: CMTime(seconds: loadedCache.cache.rangeStartSeconds, preferredTimescale: 600),
             duration: CMTime(seconds: loadedCache.cache.rangeDurationSeconds, preferredTimescale: 600)
         )
         activeFrameDuration = CMTime(seconds: loadedCache.cache.frameDurationSeconds, preferredTimescale: 600)
-        renderToAnalysisOffsetSeconds = nil
-        renderToAnalysisOffsetProbeAttempted = false
+        if let savedOffset = Self.savedRenderTimeOffset(for: loadedCache.identity) {
+            renderToAnalysisOffsetSeconds = savedOffset
+            renderToAnalysisOffsetProbeAttempted = true
+        } else {
+            renderToAnalysisOffsetSeconds = nil
+            renderToAnalysisOffsetProbeAttempted = false
+        }
         finished = true
         validationState = .pending
         status = .cacheLoaded
@@ -2568,6 +2630,7 @@ private final class StabilizerHostAnalysisStore {
             [
                 Self.cacheURL(in: directoryURL),
                 Self.cacheIndexURL(in: directoryURL),
+                Self.renderTimeOffsetURL(in: directoryURL),
                 Self.cacheStorageDirectoryURL(in: directoryURL)
             ]
         }
@@ -3002,7 +3065,7 @@ private final class StabilizerHostAnalysisStore {
                 NSLog("StabilizerFxPlug: ignoring incomplete Host Analysis cache at \(url.path): \(coverageReason).")
                 return nil
             }
-            guard persistentCacheIdentity(for: cache, frames: frames) != nil else {
+            guard let cacheIdentity = persistentCacheIdentity(for: cache, frames: frames) else {
                 NSLog("StabilizerFxPlug: ignoring Host Analysis cache with incomplete fingerprints at \(url.path).")
                 return nil
             }
@@ -3042,6 +3105,7 @@ private final class StabilizerHostAnalysisStore {
                 fileName: url.lastPathComponent,
                 url: url,
                 cache: lightweightCache,
+                identity: cacheIdentity,
                 frames: frames,
                 preparedAnalysis: prepared
             )
@@ -3148,6 +3212,66 @@ private final class StabilizerHostAnalysisStore {
         ].joined(separator: ":")
     }
 
+    private static func savedRenderTimeOffset(for cacheIdentity: String) -> Double? {
+        guard FileManager.default.fileExists(atPath: renderTimeOffsetURL.path) else {
+            return nil
+        }
+        do {
+            let data = try Data(contentsOf: renderTimeOffsetURL)
+            let index = try JSONDecoder().decode(PersistedRenderTimeOffsetIndex.self, from: data)
+            guard index.version == cacheSchemaVersion else {
+                return nil
+            }
+            let entry = index.entries.first { $0.cacheIdentity == cacheIdentity }
+            guard let offset = entry?.offsetSeconds, offset.isFinite else {
+                return nil
+            }
+            return offset
+        } catch {
+            NSLog("StabilizerFxPlug: failed to load render-time offset map: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private static func saveRenderTimeOffset(cacheIdentity: String, offsetSeconds: Double, renderSeconds: Double, analysisSeconds: Double) {
+        guard offsetSeconds.isFinite,
+              renderSeconds.isFinite,
+              analysisSeconds.isFinite
+        else {
+            return
+        }
+        var entries: [PersistedRenderTimeOffsetEntry] = []
+        if FileManager.default.fileExists(atPath: renderTimeOffsetURL.path) {
+            do {
+                let data = try Data(contentsOf: renderTimeOffsetURL)
+                let index = try JSONDecoder().decode(PersistedRenderTimeOffsetIndex.self, from: data)
+                if index.version == cacheSchemaVersion {
+                    entries = index.entries
+                }
+            } catch {
+                NSLog("StabilizerFxPlug: rebuilding render-time offset map after load failure: \(error.localizedDescription)")
+            }
+        }
+        let entry = PersistedRenderTimeOffsetEntry(
+            cacheIdentity: cacheIdentity,
+            offsetSeconds: offsetSeconds,
+            savedAt: Date().timeIntervalSince1970,
+            renderSeconds: renderSeconds,
+            analysisSeconds: analysisSeconds
+        )
+        entries.removeAll { $0.cacheIdentity == cacheIdentity }
+        entries.insert(entry, at: 0)
+        entries.sort { $0.savedAt > $1.savedAt }
+        let index = PersistedRenderTimeOffsetIndex(version: cacheSchemaVersion, entries: Array(entries.prefix(32)))
+        do {
+            try FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(index)
+            try data.write(to: renderTimeOffsetURL, options: .atomic)
+        } catch {
+            NSLog("StabilizerFxPlug: failed to save render-time offset map: \(error.localizedDescription)")
+        }
+    }
+
     private static func persistentCacheFingerprints(for frames: [StabilizerAnalysisFrame]) -> (first: String, middle: String, last: String)? {
         guard let firstFrame = frames.first,
               let lastFrame = frames.last
@@ -3233,6 +3357,10 @@ private final class StabilizerHostAnalysisStore {
         cacheIndexURL(in: cacheDirectoryURL)
     }
 
+    private static var renderTimeOffsetURL: URL {
+        renderTimeOffsetURL(in: cacheDirectoryURL)
+    }
+
     private static var cacheStorageDirectoryURL: URL {
         cacheStorageDirectoryURL(in: cacheDirectoryURL)
     }
@@ -3247,6 +3375,10 @@ private final class StabilizerHostAnalysisStore {
 
     private static func cacheIndexURL(in directoryURL: URL) -> URL {
         directoryURL.appendingPathComponent(cacheIndexFileName, isDirectory: false)
+    }
+
+    private static func renderTimeOffsetURL(in directoryURL: URL) -> URL {
+        directoryURL.appendingPathComponent(renderTimeOffsetFileName, isDirectory: false)
     }
 
     private static func cacheStorageDirectoryURL(in directoryURL: URL) -> URL {

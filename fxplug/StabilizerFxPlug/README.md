@@ -198,7 +198,12 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available. The render
   path keeps the hidden preview revision current in this state so Final Cut Pro shows the
-  stabilized proxy preview without switching back to original media first.
+  stabilized proxy preview without switching back to original media first. If Final Cut Pro
+  still reports an older hidden revision value, the runtime retries publishing the current
+  token instead of treating a plug-in-local publish record as enough.
+  When original-media validation maps a trimmed timeline render time back to the analyzed
+  source time, the runtime saves that offset with the Host Analysis cache identity so
+  proxy-only render instances can sample the same prepared motion path.
   Proxy/scaled media is detected when the source pixel transform differs from original
   `1.0x/1.0x` in either direction, so reduced-resolution proxy frames do not validate
   against and reject a good original-media cache.
@@ -243,12 +248,14 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   `Walking Bob <= 2.5s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available. Older saved timeline instances may keep
-  stale saved Inspector strings, so use the compact runtime-version row in `Debug Overlay`
+  stale saved Inspector strings, so use the compact runtime/source row in `Debug Overlay`
   to confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime-version diagnostics so Final Cut Pro runtime analysis can be checked. The overlay scales
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R313` means
+  FxPlug `0.3.13` is rendering original/optimized frames, and `P313` means proxy playback is
+  using the saved Host Analysis path. The overlay scales
   from the current render output to keep one readable viewer footprint across original/proxy
   playback, while staying larger than the old compact panel. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
