@@ -357,6 +357,22 @@ repo at:
 /Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript
 ```
 
+For Codex-driven Final Cut Pro UI testing, prefer the repo-local wrapper first:
+
+```sh
+scripts/fcp_ui_test.sh env-check
+scripts/fcp_ui_test.sh open-test-library
+scripts/fcp_ui_test.sh apply-and-analyze-selected
+scripts/fcp_ui_test.sh analyze-selected
+scripts/fcp_ui_test.sh dump-front-window
+scripts/fcp_ui_test.sh list-caches
+```
+
+The wrapper keeps the common UI test flow terminal-first and uses the shared AppleScript
+under the hood. Use free-form Computer Use only after these explicit commands fail or when a
+new UI path has no helper command yet. See `docs/codex-fcp-ui-testing.md` for the expected
+selected-clip workflow and cache-backed diagnostics.
+
 From this repo, run it through the parent-relative path:
 
 ```sh
