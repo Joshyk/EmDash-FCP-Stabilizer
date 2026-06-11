@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.18"
+private let stabilizerFxPlugVersion = "0.3.21"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -199,6 +199,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private var lastPublishedInfo = ""
     private var lastPublishedRenderRevision: Double?
     private var lastPublishedHostAnalysisCacheIdentity: String?
+    private var lastScheduledPostAnalysisPublishRevision: Double?
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalysisStore: StabilizerHostAnalysisStore?
@@ -986,6 +987,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         if loadedCache {
             publishHostAnalysisCacheIdentityOnMain(hostAnalysisStore.activeCacheIdentity, force: false)
         }
+        schedulePostAnalysisPreviewInvalidationRetries(
+            revision: hostAnalysisStore.renderInvalidationToken,
+            cacheIdentity: hostAnalysisStore.activeCacheIdentity
+        )
         publishPreviewInvalidationOnMain(
             statusForce: loadedCache,
             infoForce: loadedCache,
@@ -1075,6 +1080,38 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         DispatchQueue.main.async { [weak self] in
             self?.publishHostAnalysisCacheIdentity(identity, force: force)
+        }
+    }
+
+    private func schedulePostAnalysisPreviewInvalidationRetries(revision: Double, cacheIdentity: String?) {
+        guard revision > 0.0 else {
+            return
+        }
+        statusLock.lock()
+        if lastScheduledPostAnalysisPublishRevision == revision {
+            statusLock.unlock()
+            return
+        }
+        lastScheduledPostAnalysisPublishRevision = revision
+        statusLock.unlock()
+
+        // FCP can keep cleanup-time main-queue parameter updates stale; publish once in
+        // the active callback/monitor context, then retry briefly on the main queue.
+        publishHostAnalysisCacheIdentity(cacheIdentity, force: true)
+        publishHostAnalysisStatus(force: true)
+        publishStabilizerInfo(force: true)
+        publishRenderRevision(revision, force: true)
+
+        for delay in [0.0, 0.25, 1.0, 2.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.publishHostAnalysisCacheIdentity(cacheIdentity, force: true)
+                self.publishHostAnalysisStatus(force: true)
+                self.publishStabilizerInfo(force: true)
+                self.publishRenderRevision(revision, force: true)
+            }
         }
     }
 
@@ -1700,13 +1737,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             throw error
         }
         hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
-        publishHostAnalysisCacheIdentityOnMain(hostAnalysisStore.activeCacheIdentity, force: true)
+        let completedCacheIdentity = hostAnalysisStore.activeCacheIdentity
+        let completedRenderRevision = hostAnalysisStore.renderInvalidationToken
         setActiveAnalysisStore(nil)
-        publishPreviewInvalidationOnMain(
-            statusForce: true,
-            infoForce: true,
-            revision: hostAnalysisStore.renderInvalidationToken,
-            revisionForce: true
+        schedulePostAnalysisPreviewInvalidationRetries(
+            revision: completedRenderRevision,
+            cacheIdentity: completedCacheIdentity
         )
         Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
     }
