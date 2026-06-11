@@ -183,10 +183,10 @@ fallbacks.
   busy/requested state. Queued starts still check Final Cut Pro's actual analysis state
   before starting.
   Completed analysis is then published to the process-wide shared render/cache store and
-  persisted inside the active Final Cut Pro `.fcpbundle` using the host-provided
-  `FxProjectAPI` media folder and the prepared analysis frame set, so analyzer and
-  preview/render processes can hand off the prepared motion path through validated cache
-  files. Preview/render instances also monitor the persisted bundle cache location and
+  persisted inside the active Final Cut Pro `.fcpbundle` using a host-provided bundle media
+  folder when available, otherwise the single open Final Cut Pro library bundle. The
+  prepared analysis frame set is saved so analyzer and preview/render processes can hand
+  off the prepared motion path through validated cache files. Preview/render instances also monitor the persisted bundle cache location and
   detect cache file changes even when they already hold an older prepared analysis, then
   reload candidates and update the hidden render revision without starting Host Analysis.
   A cache whose fingerprints do not match the current source frame is
@@ -216,8 +216,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R315` means FxPlug `0.3.15` is rendering original/optimized
-  frames, while `P315` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R316` means FxPlug `0.3.16` is rendering original/optimized
+  frames, while `P316` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -390,15 +390,16 @@ FxPlug.
 ## Host Analysis Cache
 
 The latest Host Analysis compatibility alias is written inside the active Final Cut Pro
-library bundle, using the host-provided project media folder from `FxProjectAPI`:
+library bundle. The runtime uses a host-provided `.fcpbundle` media folder when available,
+otherwise it resolves the single open Final Cut Pro library bundle:
 
 ```text
 <active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-v2.json
 ```
 
 Completed analysis is written to this bundle-local path so Final Cut Pro's analyzer and
-preview/render extension processes can reuse the same prepared motion path. If the host does
-not provide a writable URL inside a `.fcpbundle`, the Inspector shows
+preview/render extension processes can reuse the same prepared motion path. If the runtime
+cannot resolve exactly one writable open `.fcpbundle`, the Inspector shows
 `Project Bundle Cache Unavailable` and the effect does not fall back to a shared user cache.
 
 The cache index is written to:

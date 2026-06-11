@@ -136,8 +136,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R315` means FxPlug `0.3.15`
-is rendering original/optimized frames, and `P315` means proxy playback is using
+active render runtime and current source mode: `R316` means FxPlug `0.3.16`
+is rendering original/optimized frames, and `P316` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -256,8 +256,10 @@ media to see the stabilized source frame.
 
 ## Cache Behavior
 
-Completed Host Analysis is written inside the active Final Cut Pro library bundle, using
-the host-provided project media folder from `FxProjectAPI`:
+Completed Host Analysis is written inside the active Final Cut Pro library bundle. The
+runtime uses a host-provided `.fcpbundle` media folder when Final Cut Pro supplies one;
+otherwise it resolves the single open Final Cut Pro library bundle and writes directly under
+that bundle:
 
 ```text
 <active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-v2.json
@@ -265,9 +267,9 @@ the host-provided project media folder from `FxProjectAPI`:
 <active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/caches/
 ```
 
-If Final Cut Pro does not provide a writable media-folder URL inside a `.fcpbundle`, the
-effect shows `Project Bundle Cache Unavailable` instead of falling back to a shared user
-cache. Range-specific files under `caches/` include the analyzed range, actual
+If the runtime cannot resolve exactly one writable open `.fcpbundle`, the effect shows
+`Project Bundle Cache Unavailable` instead of falling back to a shared user cache.
+Range-specific files under `caches/` include the analyzed range, actual
 `sampleWidth`/`sampleHeight`, frame count, and frame fingerprints in the filename.
 `host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
 cache.

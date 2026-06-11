@@ -16,8 +16,8 @@ estimators, or Transform-keyframe writers back into this target.
   analysis failures are reported as Host Analysis failures instead of silently falling back
   to CPU analysis.
 - Persists completed Host Analysis frame sets inside the active Final Cut Pro `.fcpbundle`,
-  under the host-provided `FxProjectAPI` media folder and a
-  `StabilizerFxPlugHostAnalysis/` cache directory.
+  using a host-provided bundle media folder when available, otherwise the single open Final
+  Cut Pro library bundle, and a `StabilizerFxPlugHostAnalysis/` cache directory.
 - Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema,
   exact analyzed source range, sample size, saved fingerprints, and current source-frame
   validation still match. Unsupported schema candidates are reported in the Inspector and
@@ -59,7 +59,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Requests only the current render frame through `scheduleInputs`; stabilization is driven
   by prepared Host Analysis paths.
 - Shows `Project Bundle Cache Unavailable` instead of falling back to a shared user cache
-  when Final Cut Pro does not provide a writable `.fcpbundle` cache location.
+  when the runtime cannot resolve exactly one writable open `.fcpbundle` cache location.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, and optional small-clamp Far-field Warp while keeping render scale fixed at 1.0.
@@ -254,8 +254,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R315` means
-  FxPlug `0.3.15` is rendering original/optimized frames, and `P315` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R316` means
+  FxPlug `0.3.16` is rendering original/optimized frames, and `P316` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic

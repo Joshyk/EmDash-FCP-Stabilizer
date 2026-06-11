@@ -25,12 +25,13 @@ analysis fallback; if Metal analysis resources are unavailable, fail the Host An
 visibly in logs/status.
 
 Completed Host Analysis frame sets should be persisted inside the active Final Cut Pro
-library bundle, under the FxPlug project media folder returned by `FxProjectAPI` and a
-`StabilizerFxPlugHostAnalysis/` cache directory. The bundle cache contains
+library bundle, under a host-provided `.fcpbundle` project media folder when available, or
+under the single open Final Cut Pro library bundle when `FxProjectAPI` does not provide a
+bundle path. Use a `StabilizerFxPlugHostAnalysis/` cache directory. The bundle cache contains
 `host-analysis-v2.json`, `host-analysis-index-v2.json`, `host-analysis-render-offset-v2.json`,
-and range-indexed files under `caches/`. If the host does not provide a writable URL inside
-the active `.fcpbundle`, fail visibly with `Project Bundle Cache Unavailable` instead of
-falling back to a shared Application Support cache. Cache candidates must be validated
+and range-indexed files under `caches/`. If the runtime cannot resolve exactly one writable
+open `.fcpbundle`, fail visibly with `Project Bundle Cache Unavailable` instead of falling
+back to a shared Application Support cache. Cache candidates must be validated
 against the current source frame before reuse. Rejected candidates should be visible in
 logs/status and should not be deleted just because they do not match the current clip.
 `Start Host Analysis` should first reload and use a saved persistent cache when one exists;
@@ -123,8 +124,8 @@ active runtime uses a process-wide shared Host Analysis render/cache store after
 because Final Cut Pro may call analyzer and preview/render through different FxPlug
 instances. Persistent cache files are the cross-process reuse path after source-frame
 validation. Completed analysis should be written to the active `.fcpbundle` project cache
-directory provided by `FxProjectAPI`, not to a shared user Application Support cache or only
-to the current extension container. When an analyzer instance saves a completed cache,
+directory, not to a shared user Application Support cache or only to the current extension
+container. When an analyzer instance saves a completed cache,
 render/preview instances and plug-in state callbacks should notice cache file changes, reload
 persistent cache candidates on demand, and update the hidden render revision with a
 process-independent small numeric token even when they already hold an older prepared

@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.15"
+private let stabilizerFxPlugVersion = "0.3.16"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -101,6 +101,11 @@ private struct HostAnalysisExpectedRange {
             && durationSeconds.isFinite
             && durationSeconds > 0.0
     }
+}
+
+private enum FinalCutLibraryBundleResolution {
+    case success(URL)
+    case failure(String)
 }
 
 private struct StabilizerSourceFrameInfo {
@@ -1083,36 +1088,50 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     @discardableResult
     private func configureProjectBundleCacheDirectory() -> Bool {
-        guard let projectAPI = apiManager.api(for: FxProjectAPI.self) as? FxProjectAPI else {
-            hostAnalysisStore.markProjectCacheUnavailable(reason: "FxProjectAPI unavailable")
-            return false
+        if StabilizerHostAnalysisStore.hasConfiguredProjectBundleCacheDirectory {
+            return true
         }
-        var mediaURL: NSURL?
-        do {
-            try projectAPI.mediaFolderURL(&mediaURL)
-        } catch {
-            hostAnalysisStore.markProjectCacheUnavailable(reason: error.localizedDescription)
-            return false
+        if let projectAPI = apiManager.api(for: FxProjectAPI.self) as? FxProjectAPI {
+            var mediaURL: NSURL?
+            do {
+                try projectAPI.mediaFolderURL(&mediaURL)
+                if let projectMediaURL = mediaURL as URL?,
+                   let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL) {
+                    let didStartAccess = projectMediaURL.startAccessingSecurityScopedResource()
+                    let cacheRoot = projectMediaURL
+                        .appendingPathComponent("StabilizerFxPlugHostAnalysis", isDirectory: true)
+                        .standardizedFileURL
+                    StabilizerHostAnalysisStore.configureProjectBundleCacheDirectory(
+                        cacheRoot,
+                        securityScopedURL: didStartAccess ? projectMediaURL : nil
+                    )
+                    NSLog("StabilizerFxPlug: using FxProjectAPI Host Analysis cache at \(cacheRoot.path) inside \(bundleRoot.path).")
+                    return true
+                }
+                if let projectMediaURL = mediaURL as URL? {
+                    NSLog("StabilizerFxPlug: FxProjectAPI media folder is not inside a .fcpbundle: \(projectMediaURL.path)")
+                } else {
+                    NSLog("StabilizerFxPlug: FxProjectAPI did not provide a project media folder URL.")
+                }
+            } catch {
+                NSLog("StabilizerFxPlug: FxProjectAPI media folder unavailable: \(error.localizedDescription)")
+            }
+        } else {
+            NSLog("StabilizerFxPlug: FxProjectAPI unavailable; resolving Final Cut Pro library bundle from open libraries.")
         }
-        guard let projectMediaURL = mediaURL as URL? else {
-            let reason = "host did not provide a project media folder URL"
+
+        switch Self.singleOpenFinalCutLibraryBundleURL() {
+        case .success(let bundleRoot):
+            let cacheRoot = bundleRoot
+                .appendingPathComponent("StabilizerFxPlugHostAnalysis", isDirectory: true)
+                .standardizedFileURL
+            StabilizerHostAnalysisStore.configureProjectBundleCacheDirectory(cacheRoot, securityScopedURL: nil)
+            NSLog("StabilizerFxPlug: using open Final Cut Pro library Host Analysis cache at \(cacheRoot.path).")
+            return true
+        case .failure(let reason):
             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
             return false
         }
-        guard let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL) else {
-            hostAnalysisStore.markProjectCacheUnavailable(reason: "project media URL is not inside a .fcpbundle: \(projectMediaURL.path)")
-            return false
-        }
-        let didStartAccess = projectMediaURL.startAccessingSecurityScopedResource()
-        let cacheRoot = projectMediaURL
-            .appendingPathComponent("StabilizerFxPlugHostAnalysis", isDirectory: true)
-            .standardizedFileURL
-        StabilizerHostAnalysisStore.configureProjectBundleCacheDirectory(
-            cacheRoot,
-            securityScopedURL: didStartAccess ? projectMediaURL : nil
-        )
-        NSLog("StabilizerFxPlug: using FCP bundle Host Analysis cache at \(cacheRoot.path) inside \(bundleRoot.path).")
-        return true
     }
 
     private static func fcpBundleRoot(containing url: URL) -> URL? {
@@ -1124,6 +1143,43 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             current.deleteLastPathComponent()
         }
         return nil
+    }
+
+    private static func singleOpenFinalCutLibraryBundleURL() -> FinalCutLibraryBundleResolution {
+        let source = """
+        tell application "Final Cut Pro"
+            set bundlePaths to {}
+            repeat with libraryItem in libraries
+                set end of bundlePaths to POSIX path of (file of libraryItem as alias)
+            end repeat
+            set AppleScript's text item delimiters to linefeed
+            return bundlePaths as text
+        end tell
+        """
+        guard let script = NSAppleScript(source: source) else {
+            return .failure("could not create Final Cut Pro library resolver script")
+        }
+        var errorInfo: NSDictionary?
+        let descriptor = script.executeAndReturnError(&errorInfo)
+        if let errorInfo {
+            let message = (errorInfo[NSAppleScript.errorMessage] as? String)
+                ?? (errorInfo.description)
+            return .failure("could not read open Final Cut Pro libraries: \(message)")
+        }
+        let paths = (descriptor.stringValue ?? "")
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let bundleURLs = paths
+            .map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+            .filter { $0.pathExtension == "fcpbundle" }
+        guard !bundleURLs.isEmpty else {
+            return .failure("no open Final Cut Pro .fcpbundle library was reported")
+        }
+        guard bundleURLs.count == 1 else {
+            return .failure("multiple Final Cut Pro libraries are open; close other libraries before running Host Analysis")
+        }
+        return .success(bundleURLs[0])
     }
 
     private static func expectedInputRange(from state: StabilizerPluginState) -> HostAnalysisExpectedRange? {
@@ -1821,6 +1877,13 @@ private final class StabilizerHostAnalysisStore {
         if changed {
             bumpPersistentCacheGeneration()
         }
+    }
+
+    static var hasConfiguredProjectBundleCacheDirectory: Bool {
+        projectCacheDirectoryLock.lock()
+        let configured = projectBundleCacheDirectoryURL != nil
+        projectCacheDirectoryLock.unlock()
+        return configured
     }
 
     var statusText: String {
