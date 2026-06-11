@@ -136,8 +136,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R314` means FxPlug `0.3.14`
-is rendering original/optimized frames, and `P314` means proxy playback is using
+active render runtime and current source mode: `R315` means FxPlug `0.3.15`
+is rendering original/optimized frames, and `P315` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -256,18 +256,21 @@ media to see the stabilized source frame.
 
 ## Cache Behavior
 
-Completed Host Analysis is written to the shared user cache:
+Completed Host Analysis is written inside the active Final Cut Pro library bundle, using
+the host-provided project media folder from `FxProjectAPI`:
 
 ```text
-/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json
-/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-index-v2.json
-/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/
+<active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-v2.json
+<active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
+<active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/caches/
 ```
 
-Range-specific files under `caches/` include the actual `sampleWidth` and
-`sampleHeight` in the filename, and the cache index retains candidates
-independently per sample size. `host-analysis-v2.json` is kept as the latest
-compatibility alias, not as the only retained cache.
+If Final Cut Pro does not provide a writable media-folder URL inside a `.fcpbundle`, the
+effect shows `Project Bundle Cache Unavailable` instead of falling back to a shared user
+cache. Range-specific files under `caches/` include the analyzed range, actual
+`sampleWidth`/`sampleHeight`, frame count, and frame fingerprints in the filename.
+`host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
+cache.
 
 Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, and fingerprints instead of
@@ -279,9 +282,10 @@ not prevent a completed prepared path from being saved.
 analysis only when no compatible saved cache can be loaded. It must not delete
 saved cache files.
 
-Cache reuse is based on cache schema and current source-frame validation, not
-the visible FxPlug runtime version. Render-only version bumps should reuse
-compatible Host Analysis caches.
+Cache reuse is based on cache schema, exact analyzed source range, sample size, saved frame
+fingerprints, and current source-frame validation, not the visible FxPlug runtime version.
+Render-only version bumps should reuse compatible Host Analysis caches from the active
+`.fcpbundle`.
 
 Rejected cache candidates are visible in status/log output and are remembered by
 file identity inside the active runtime, so the same invalid candidate is not
@@ -296,11 +300,10 @@ show `Cache Incomplete - Run Host Analysis` so incomplete analysis is not silent
 Those stale unusable states do not block later preview/render consumers from rechecking the
 persistent cache signature and loading a newly written compatible cache.
 
-The active runtime uses per-clip stores for in-progress Host Analysis and a
-process-wide shared render/cache store after analysis completes. Persistent
-cache files are the cross-process reuse path. Preview/render instances with no
-prepared analysis watch for cache file changes and reload validated candidates
-on demand.
+The active runtime uses per-clip stores for in-progress Host Analysis and a process-wide
+shared render/cache store after analysis completes. Bundle-local persistent cache files are
+the cross-process reuse path. Preview/render instances with no prepared analysis watch for
+cache file changes and reload validated candidates on demand.
 
 ## Diagnostics
 
@@ -359,6 +362,7 @@ notable unremoved shake` against a saved Host Analysis cache:
 
 ```sh
 fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
+  --cache /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-v2.json \
   --time 5.0 \
   --note "notable unremoved shake"
 ```
@@ -366,18 +370,16 @@ fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
 `--time` is clip-relative: `0.0` is the start of the Host Analysis range saved
 in the cache. With `--time`, the CLI reports the highest-score frame inside the
 requested `--window` and prints the selected clip time separately from the
-requested note time. The CLI reads
-`~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` by
-default, or another cache with `--cache /path/to/host-analysis-v2.json`. Use
-`--json` for machine-readable output, `--turn-window` to match a non-default
-Inspector `Turn Detection Window`, and `--output-size 1920x1080` when you want
-pixel estimates scaled to a target preview size.
+requested note time. For bundle-local caches, pass
+`--cache-root /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis` or
+`--cache /path/to/host-analysis-v2.json`. Use `--json` for machine-readable output,
+`--turn-window` to match a non-default Inspector `Turn Detection Window`, and
+`--output-size 1920x1080` when you want pixel estimates scaled to a target preview size.
 
-Use `--list-caches` to list the latest shared cache and range-specific cache
-files under `~/Library/Application Support/StabilizerFxPlug`. It reports each
-file as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing
-or deleting anything; add `--cache-root /path/to/root` to inspect another cache
-root explicitly.
+Use `--list-caches --cache-root /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis`
+to list the latest bundle cache and range-specific cache files. It reports each file as
+`READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing or deleting
+anything.
 
 The report prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order
 bands using the saved prepared paths, tracking confidence, residuals, blur,

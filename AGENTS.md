@@ -24,18 +24,20 @@ plug-in runtime for luma downsampling and frame-to-frame motion search. Do not a
 analysis fallback; if Metal analysis resources are unavailable, fail the Host Analysis path
 visibly in logs/status.
 
-Completed Host Analysis frame sets should be persisted by the FxPlug runtime at
-`/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json`,
-`/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-index-v2.json`,
-and range-indexed files under
-`/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/`. Cache candidates
-must be validated against the current source frame before reuse. Rejected candidates should
-be visible in logs/status and should not be deleted just because they do not match the
-current clip. `Start Host Analysis` should first reload and use a saved persistent cache
-when one exists; only start a new host analysis when no saved cache can be loaded. It must
-not delete saved cache files. If the loaded cache is rejected for the current clip, the next
-start should skip that rejected cache and request a new analysis. `Clear Host Analysis
-Cache` is the explicit cache-clear path and should show `Cache Cleared`.
+Completed Host Analysis frame sets should be persisted inside the active Final Cut Pro
+library bundle, under the FxPlug project media folder returned by `FxProjectAPI` and a
+`StabilizerFxPlugHostAnalysis/` cache directory. The bundle cache contains
+`host-analysis-v2.json`, `host-analysis-index-v2.json`, `host-analysis-render-offset-v2.json`,
+and range-indexed files under `caches/`. If the host does not provide a writable URL inside
+the active `.fcpbundle`, fail visibly with `Project Bundle Cache Unavailable` instead of
+falling back to a shared Application Support cache. Cache candidates must be validated
+against the current source frame before reuse. Rejected candidates should be visible in
+logs/status and should not be deleted just because they do not match the current clip.
+`Start Host Analysis` should first reload and use a saved persistent cache when one exists;
+only start a new host analysis when no saved cache can be loaded. It must not delete saved
+cache files. If the loaded cache is rejected for the current clip, the next start should skip
+that rejected cache and request a new analysis. `Clear Host Analysis Cache` is the explicit
+cache-clear path and should show `Cache Cleared`.
 If Final Cut Pro restores or reports an in-progress Host Analysis while a compatible saved
 cache is already present, the render/cache consumer should still reload and prefer the saved
 cache; transient analyzer callback status must not mask the shared ready cache in the
@@ -45,13 +47,12 @@ do not combine `Analyzing Host Frames (N)` with stale shared-cache metadata from
 clip. Stale `Cache Unsupported` or `Cache Incomplete` status must not stop later
 preview/render consumers from noticing a changed persistent cache signature and loading a
 new compatible saved cache.
-Persistent cache compatibility is based on cache schema and current source-frame
-validation, not the visible FxPlug runtime version. Render-only version bumps should reuse
-saved Host Analysis cache candidates. The loader should also consider current and legacy
-Stabilizer container cache locations so bundle-id migrations do not force a new analysis
-when the cache schema is still supported. Unsupported schema candidates should surface
-`Cache Unsupported - Run Host Analysis` in the Inspector, remain on disk, and require an
-explicit new Host Analysis run instead of being silently ignored or deleted. Supported-schema
+Persistent cache compatibility is based on cache schema, exact analyzed source range, sample
+size, frame fingerprints, and current source-frame validation, not the visible FxPlug runtime
+version. Render-only version bumps should reuse saved Host Analysis cache candidates from the
+active `.fcpbundle`. Unsupported schema candidates should surface `Cache Unsupported - Run
+Host Analysis` in the Inspector, remain on disk, and require an explicit new Host Analysis
+run instead of being silently ignored or deleted. Supported-schema
 caches with incomplete prepared path arrays or incomplete frame coverage for the saved
 analysis range should surface `Cache Incomplete - Run Host Analysis`, remain on disk, and
 require a new Host Analysis run.
@@ -60,10 +61,9 @@ Host Analysis should read user-controlled `Sample Size` once when analysis start
 Inspector default should be `10%` so quick Debug Overlay tuning can start without a full
 source-size pass, while still offering `100%`, `75%`, `50%`, `25%`, and `10%` options. The
 sample image must always be derived from the original clip dimensions using the selected
-percentage option. Long clips should keep that requested percentage. In-progress analysis should stream frame-to-frame motion in memory and
-keep only the previous luma buffer needed for the next Metal motion search; do not write
-per-frame `.luma` scratch files or store analysis files inside a Final Cut Pro library/project
-bundle.
+percentage option. Long clips should keep that requested percentage. In-progress analysis
+should stream frame-to-frame motion in memory and keep only the previous luma buffer needed
+for the next Metal motion search; do not write per-frame `.luma` scratch files.
 Persistent cache files should store prepared paths, frame timing, blur values, and
 fingerprints instead of every frame's full luma sample.
 Cache candidates should be sample-size-scoped. Do not collapse different `Sample Size`
@@ -122,13 +122,14 @@ including clips with different actual sample sizes, never share a streaming buil
 active runtime uses a process-wide shared Host Analysis render/cache store after completion
 because Final Cut Pro may call analyzer and preview/render through different FxPlug
 instances. Persistent cache files are the cross-process reuse path after source-frame
-validation. Completed analysis should be written to the shared user Application Support
-cache path, not only to the current extension container. When an analyzer instance saves a
-completed cache, render/preview instances and plug-in state callbacks should notice cache
-file changes, reload persistent cache candidates on demand, and update the hidden render
-revision with a process-independent small numeric token even when they already hold an older
-prepared analysis; this keeps the stabilized preview visible after serial queued analysis and
-when analyzer and render use different FxPlug processes. Do not use per-process revision
+validation. Completed analysis should be written to the active `.fcpbundle` project cache
+directory provided by `FxProjectAPI`, not to a shared user Application Support cache or only
+to the current extension container. When an analyzer instance saves a completed cache,
+render/preview instances and plug-in state callbacks should notice cache file changes, reload
+persistent cache candidates on demand, and update the hidden render revision with a
+process-independent small numeric token even when they already hold an older prepared
+analysis; this keeps the stabilized preview visible after serial queued analysis and when
+analyzer and render use different FxPlug processes. Do not use per-process revision
 counters as the hidden render invalidation value because analyzer and render processes can
 generate the same counter value for different completed clips. Do not repeatedly set the
 hidden render revision when Final Cut Pro already holds the same value, because that can keep

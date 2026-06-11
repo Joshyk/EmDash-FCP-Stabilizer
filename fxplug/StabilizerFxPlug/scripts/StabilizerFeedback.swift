@@ -6,8 +6,8 @@ private struct FeedbackError: Error, CustomStringConvertible {
 }
 
 private struct Options {
-    var cachePath = "~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json"
-    var cacheRoot = "~/Library/Application Support/StabilizerFxPlug"
+    var cachePath: String?
+    var cacheRoot: String?
     var relativeTime: Double?
     var note: String?
     var windowSeconds = 0.25
@@ -1459,12 +1459,13 @@ private func parseOptions() throws -> Options {
 private func printUsage() {
     print("""
     usage:
-      stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
-      stabilizer_feedback.sh --time 5.0 --json
+      stabilizer_feedback.sh --cache /path/to/host-analysis-v2.json --time 5.0 --note "notable unremoved shake"
+      stabilizer_feedback.sh --cache /path/to/host-analysis-v2.json --time 5.0 --json
       stabilizer_feedback.sh --cache /path/to/host-analysis-v2.json --limit 5
-      stabilizer_feedback.sh --list-caches
+      stabilizer_feedback.sh --list-caches --cache-root /path/to/StabilizerFxPlugHostAnalysis
 
     time is clip-relative: 0.0 is the Host Analysis range start.
+    caches are stored inside the active Final Cut Pro library bundle under StabilizerFxPlugHostAnalysis.
     --turn-window should match the Inspector Turn Detection Window when it is not 6.0.
     --list-caches reports saved cache readiness without repairing cache files.
     """)
@@ -1487,14 +1488,20 @@ private let iso8601Formatter: ISO8601DateFormatter = {
 do {
     let options = try parseOptions()
     if options.listCaches {
-        let entries = cacheInventory(rootPath: options.cacheRoot)
+        guard let cacheRoot = options.cacheRoot else {
+            throw FeedbackError(description: "--list-caches requires --cache-root pointing to the library bundle's StabilizerFxPlugHostAnalysis directory")
+        }
+        let entries = cacheInventory(rootPath: cacheRoot)
         if options.json {
-            try renderCacheInventoryJSON(entries, rootPath: options.cacheRoot)
+            try renderCacheInventoryJSON(entries, rootPath: cacheRoot)
         } else {
-            renderCacheInventoryHuman(entries, rootPath: options.cacheRoot)
+            renderCacheInventoryHuman(entries, rootPath: cacheRoot)
         }
     } else {
-        let analysis = try loadAnalysis(path: options.cachePath)
+        guard let cachePath = options.cachePath else {
+            throw FeedbackError(description: "feedback requires --cache pointing to a bundle-local host-analysis cache file")
+        }
+        let analysis = try loadAnalysis(path: cachePath)
         let assessments = try chooseAssessments(analysis: analysis, options: options)
         if options.json {
             try renderJSON(assessments, analysis: analysis, options: options)

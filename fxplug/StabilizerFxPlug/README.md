@@ -15,14 +15,13 @@ estimators, or Transform-keyframe writers back into this target.
   samples and run frame-to-frame block matching while preparing the motion paths. Metal
   analysis failures are reported as Host Analysis failures instead of silently falling back
   to CPU analysis.
-- Persists completed Host Analysis frame sets to
-  `/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json` as
-  the latest cache and to range-indexed files under
-  `/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/`.
-- Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema
-  and current source-frame validation still match. The loader checks current and legacy
-  Stabilizer container cache locations so bundle-id migrations do not force analysis again.
-  Unsupported schema candidates are reported in the Inspector and left on disk.
+- Persists completed Host Analysis frame sets inside the active Final Cut Pro `.fcpbundle`,
+  under the host-provided `FxProjectAPI` media folder and a
+  `StabilizerFxPlugHostAnalysis/` cache directory.
+- Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema,
+  exact analyzed source range, sample size, saved fingerprints, and current source-frame
+  validation still match. Unsupported schema candidates are reported in the Inspector and
+  left on disk.
 - Streams in-progress Host Analysis motion directly through Metal and keeps only the
   previous luma buffer needed for the next frame-to-frame motion search. It does not write
   per-frame `.luma` scratch files.
@@ -49,9 +48,9 @@ estimators, or Transform-keyframe writers back into this target.
   outside-source pixels, making stabilization movement visible when needed.
 - Updates a hidden render revision parameter when Host Analysis/cache state changes so Final
   Cut Pro refreshes the preview from the prepared motion paths.
-- Monitors the shared persistent cache location from render/preview instances and publishes
-  that hidden revision when an analyzer instance in another process finishes a compatible
-  cache.
+- Monitors the bundle-local persistent cache location from render/preview instances and
+  publishes that hidden revision when an analyzer instance in another process finishes a
+  compatible cache.
 - Publishes analyzer-completion and cache-monitor status/info/render revision updates from
   the FxPlug main queue so Final Cut Pro invalidates stale preview frames.
 - Shares the in-process Host Analysis store across FxPlug analyzer/render instances so a
@@ -59,7 +58,8 @@ estimators, or Transform-keyframe writers back into this target.
 - Keeps rejected cache candidates on disk for other clips.
 - Requests only the current render frame through `scheduleInputs`; stabilization is driven
   by prepared Host Analysis paths.
-- Does not write analysis files into a Final Cut Pro library or project bundle.
+- Shows `Project Bundle Cache Unavailable` instead of falling back to a shared user cache
+  when Final Cut Pro does not provide a writable `.fcpbundle` cache location.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, and optional small-clamp Far-field Warp while keeping render scale fixed at 1.0.
@@ -254,8 +254,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R314` means
-  FxPlug `0.3.14` is rendering original/optimized frames, and `P314` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R315` means
+  FxPlug `0.3.15` is rendering original/optimized frames, and `P315` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic
@@ -291,14 +291,16 @@ Use `scripts/stabilizer_feedback.sh` to compare a review note against the saved
 Host Analysis cache without launching Final Cut Pro:
 
 ```sh
-scripts/stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
+scripts/stabilizer_feedback.sh \
+  --cache /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-v2.json \
+  --time 5.0 \
+  --note "notable unremoved shake"
 ```
 
-Run `scripts/stabilizer_feedback.sh --list-caches` to inspect saved cache
-readiness before assessing a note. It lists the latest shared cache and
-range-specific files as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE`
-without repairing or deleting them; `--cache-root /path/to/root` inspects an
-explicit alternate root.
+Run `scripts/stabilizer_feedback.sh --list-caches --cache-root /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis`
+to inspect saved cache readiness before assessing a note. It lists the latest bundle cache
+and range-specific files as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE`
+without repairing, promoting, or deleting them.
 
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining shake from the prepared motion paths and tracking diagnostics, then

@@ -183,12 +183,12 @@ fallbacks.
   busy/requested state. Queued starts still check Final Cut Pro's actual analysis state
   before starting.
   Completed analysis is then published to the process-wide shared render/cache store and
-  persisted to the shared user Application Support cache using the prepared analysis frame
-  set, so analyzer and preview/render processes can hand off the prepared motion path
-  through validated cache files. Preview/render instances also monitor the persisted cache
-  location and detect cache file changes even when they already hold an older prepared
-  analysis, then reload candidates and update the hidden render revision without starting
-  Host Analysis.
+  persisted inside the active Final Cut Pro `.fcpbundle` using the host-provided
+  `FxProjectAPI` media folder and the prepared analysis frame set, so analyzer and
+  preview/render processes can hand off the prepared motion path through validated cache
+  files. Preview/render instances also monitor the persisted bundle cache location and
+  detect cache file changes even when they already hold an older prepared analysis, then
+  reload candidates and update the hidden render revision without starting Host Analysis.
   A cache whose fingerprints do not match the current source frame is
   rejected instead of being accepted by time proximity alone. `Start Host Analysis` is the
   only path that requests Host Analysis from Final Cut Pro.
@@ -216,8 +216,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R314` means FxPlug `0.3.14` is rendering original/optimized
-  frames, while `P314` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R315` means FxPlug `0.3.15` is rendering original/optimized
+  frames, while `P315` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -239,28 +239,31 @@ fallbacks.
 To turn a review note into diagnostics, run the cache-backed feedback tool:
 
 ```sh
-fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh --time 5.0 --note "notable unremoved shake"
+fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
+  --cache /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-v2.json \
+  --time 5.0 \
+  --note "notable unremoved shake"
 ```
 
 `--time` is clip-relative, so `5.0` means five seconds after the saved Host
-Analysis range starts. The default cache path is
-`~/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json`; pass
-`--cache` for a range-specific file under the `caches/` directory. Add `--json`
-for structured output, `--window 0.5` to inspect the strongest frame near the
-note, `--turn-window` to match a non-default Inspector `Turn Detection Window`,
-and `--output-size 1920x1080` to scale translation estimates to a preview size.
+Analysis range starts. For bundle-local caches, pass
+`--cache-root /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis` or
+`--cache` for a range-specific file under that root's `caches/` directory. Add
+`--json` for structured output, `--window 0.5` to inspect the strongest frame near
+the note, `--turn-window` to match a non-default Inspector `Turn Detection Window`, and
+`--output-size 1920x1080` to scale translation estimates to a preview size.
 
-Use `--list-caches` to inspect saved cache readiness before diagnosing a note:
+Use `--list-caches` with the bundle cache root to inspect saved cache readiness before
+diagnosing a note:
 
 ```sh
-fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh --list-caches
+fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh --list-caches \
+  --cache-root /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis
 ```
 
-The listing checks the latest shared cache and range-specific cache files under
-`~/Library/Application Support/StabilizerFxPlug`, reporting `READY`,
-`INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE`. It does not repair, delete, or
-promote cache files. Use `--cache-root /path/to/root` only when you explicitly
-want to inspect a different cache root.
+The listing checks the latest bundle cache and range-specific cache files, reporting
+`READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE`. It does not repair, delete, or
+promote cache files.
 
 The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
 paths and prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order,
@@ -291,8 +294,8 @@ FxPlug.
 - The effect always uses Host Analysis. It asks Final Cut Pro to run a forward GPU
   analysis, uses Metal compute inside the FxPlug runtime to downsample source frames and
   run frame-to-frame block matching, stores prepared frame analysis inside the plug-in
-  runtime, persists completed analysis to the FxPlug Application Support cache, and renders
-  from that analyzed frame set.
+  runtime, persists completed analysis inside the active `.fcpbundle` project cache, and
+  renders from that analyzed frame set.
 - Host Analysis reads `Sample Size` once when analysis starts. Long-clip analysis keeps the
   requested percentage of the original clip size and streams frame-to-frame motion directly
   through Metal while retaining only the previous luma buffer needed for the next motion
@@ -386,33 +389,33 @@ FxPlug.
 
 ## Host Analysis Cache
 
-The latest Host Analysis compatibility alias is written to:
+The latest Host Analysis compatibility alias is written inside the active Final Cut Pro
+library bundle, using the host-provided project media folder from `FxProjectAPI`:
 
 ```text
-/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-v2.json
+<active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-v2.json
 ```
 
-Completed analysis is written to this shared user Application Support path so Final Cut
-Pro's analyzer and preview/render extension processes can reuse the same prepared motion
-path. The loader also checks current and legacy Stabilizer container cache locations so a
-bundle-id or runtime migration does not require rerunning analysis when the cache schema is
-still supported.
+Completed analysis is written to this bundle-local path so Final Cut Pro's analyzer and
+preview/render extension processes can reuse the same prepared motion path. If the host does
+not provide a writable URL inside a `.fcpbundle`, the Inspector shows
+`Project Bundle Cache Unavailable` and the effect does not fall back to a shared user cache.
 
 The cache index is written to:
 
 ```text
-/Users/justadev/Library/Application Support/StabilizerFxPlug/host-analysis-index-v2.json
+<active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
 ```
 
 Range-specific, sample-size-scoped cache files are stored under:
 
 ```text
-/Users/justadev/Library/Application Support/StabilizerFxPlug/caches/
+<active library>.fcpbundle/.../StabilizerFxPlugHostAnalysis/caches/
 ```
 
-Those filenames include the actual `sampleWidth` and `sampleHeight`, and the cache index
-retains entries independently per sample size instead of pruning all sizes through one
-global bucket.
+Those filenames include the analyzed range, actual `sampleWidth` and `sampleHeight`, frame
+count, and saved fingerprints. The cache index retains entries independently per sample size
+instead of pruning all sizes through one global bucket.
 
 On load, the effect validates the current source frame against saved frame fingerprints
 before using a persisted cache. If a lightweight cache frame no longer has retained
@@ -428,12 +431,8 @@ persistent cache changes and loading a newly written compatible cache.
 
 New cache files store prepared motion paths, per-frame timestamps, blur values,
 search-radius edge-hit counts, and fingerprints instead of every frame's full luma sample.
-This keeps cache reuse available without writing long-clip `Sample Size` pixel buffers into
-JSON.
-
-The effect does not store analysis files inside a Final Cut Pro library or project bundle.
-The FCP bundle path is host-owned, and moving large scratch files there would still consume
-the same disk while risking library corruption.
+This keeps bundle-local cache reuse available without writing long-clip `Sample Size` pixel
+buffers into JSON.
 
 ## Development
 
