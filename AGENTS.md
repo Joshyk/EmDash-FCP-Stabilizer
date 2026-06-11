@@ -25,17 +25,17 @@ analysis fallback; if Metal analysis resources are unavailable, fail the Host An
 visibly in logs/status.
 
 Completed Host Analysis frame sets should be persisted inside the active Final Cut Pro
-library bundle, using the host-provided `.fcpbundle` path when available, or the single open
-Final Cut Pro library bundle when `FxProjectAPI` does not provide a bundle path. Store the
-cache under `__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` so Final Cut Pro does not
-see a top-level `StabilizerFxPlugHostAnalysis` folder as library event/media content. The
-runtime may move older top-level `StabilizerFxPlugHostAnalysis/` caches into that internal
-bundle location, but it must not silently fall back to an out-of-bundle shared cache. The
-bundle cache contains
+library bundle, scoped to the current Event resolved from `FxProjectAPI.mediaFolderURL()`.
+Store the cache under the Event's `Analysis Files/StabilizerFxPlugHostAnalysis/` directory so
+analysis files are unique to that Event and do not appear as top-level library content. The
+runtime may move older top-level `StabilizerFxPlugHostAnalysis/`, media-folder-local
+`StabilizerFxPlugHostAnalysis/`, or `__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/`
+caches into the Event `Analysis Files` cache root, but it must not silently fall back to an
+out-of-bundle or library-wide shared cache. The Event cache contains
 `host-analysis-v2.json`, `host-analysis-index-v2.json`, `host-analysis-render-offset-v2.json`,
-and range-indexed files under `caches/`. If the runtime cannot resolve exactly one writable
-open `.fcpbundle`, fail visibly with `Project Bundle Cache Unavailable` instead of falling
-back to a shared Application Support cache. Cache candidates must be validated
+and range-indexed files under `caches/`. If the runtime cannot resolve a writable Event cache
+root, fail visibly with `Project Bundle Cache Unavailable` instead of falling back to a shared
+Application Support cache or a library-wide cache. Cache candidates must be validated
 against the current source frame before reuse. Rejected candidates should be visible in
 logs/status and should not be deleted just because they do not match the current clip.
 `Start Host Analysis` should first reload and use a saved persistent cache when one exists;

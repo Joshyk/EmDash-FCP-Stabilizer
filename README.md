@@ -136,8 +136,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R321` means FxPlug `0.3.21`
-is rendering original/optimized frames, and `P321` means proxy playback is using
+active render runtime and current source mode: `R322` means FxPlug `0.3.22`
+is rendering original/optimized frames, and `P322` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -260,23 +260,25 @@ media to see the stabilized source frame.
 
 ## Cache Behavior
 
-Completed Host Analysis is written inside the active Final Cut Pro library bundle. The
-runtime uses a host-provided `.fcpbundle` path when Final Cut Pro supplies one; otherwise it
-resolves the single open Final Cut Pro library bundle. The cache root lives under Final Cut
-Pro's internal bundle data folder so it does not appear as a top-level library event/media
-folder:
+Completed Host Analysis is written inside the active Final Cut Pro library bundle, scoped to
+the Event that owns the current project/media folder. The cache root lives under that Event's
+`Analysis Files` directory so analysis files stay unique to the Event and do not appear as
+top-level library content:
 
 ```text
-<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/host-analysis-v2.json
-<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
-<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/caches/
+<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/caches/
 ```
 
 Older top-level bundle caches at `<active library>.fcpbundle/StabilizerFxPlugHostAnalysis/`
-are moved into the internal cache root when the effect configures the active library cache.
+and older internal bundle caches at
+`<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` are moved into
+the Event `Analysis Files` cache root when the effect configures the active Event cache.
 
-If the runtime cannot resolve exactly one writable open `.fcpbundle`, the effect shows
-`Project Bundle Cache Unavailable` instead of falling back to a shared user cache.
+If the runtime cannot resolve a writable Event cache root, the effect shows
+`Project Bundle Cache Unavailable` instead of falling back to a shared user cache or a
+library-wide cache.
 Range-specific files under `caches/` include the analyzed range, actual
 `sampleWidth`/`sampleHeight`, frame count, and frame fingerprints in the filename.
 `host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
@@ -372,7 +374,7 @@ notable unremoved shake` against a saved Host Analysis cache:
 
 ```sh
 fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
-  --cache /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/host-analysis-v2.json \
+  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json" \
   --time 5.0 \
   --note "notable unremoved shake"
 ```
@@ -381,12 +383,12 @@ fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
 in the cache. With `--time`, the CLI reports the highest-score frame inside the
 requested `--window` and prints the selected clip time separately from the
 requested note time. For bundle-local caches, pass
-`--cache-root /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis` or
+`--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"` or
 `--cache /path/to/host-analysis-v2.json`. Use `--json` for machine-readable output,
 `--turn-window` to match a non-default Inspector `Turn Detection Window`, and
 `--output-size 1920x1080` when you want pixel estimates scaled to a target preview size.
 
-Use `--list-caches --cache-root /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis`
+Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"`
 to list the latest bundle cache and range-specific cache files. It reports each file as
 `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing or deleting
 anything.

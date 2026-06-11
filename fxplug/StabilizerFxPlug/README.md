@@ -16,10 +16,9 @@ estimators, or Transform-keyframe writers back into this target.
   analysis failures are reported as Host Analysis failures instead of silently falling back
   to CPU analysis.
 - Persists completed Host Analysis frame sets inside the active Final Cut Pro `.fcpbundle`,
-  using a host-provided bundle path when available, otherwise the single open Final Cut Pro
-  library bundle. The cache lives under
-  `__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` so it is not exposed as a top-level
-  library event/media folder.
+  scoped to the Event that owns the current project/media folder. The cache lives under
+  `Analysis Files/StabilizerFxPlugHostAnalysis/` so analysis files are unique to that Event
+  and are not exposed as top-level library content.
 - Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema,
   exact analyzed source range, sample size, saved fingerprints, and current source-frame
   validation still match. Unsupported schema candidates are reported in the Inspector and
@@ -61,7 +60,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Requests only the current render frame through `scheduleInputs`; stabilization is driven
   by prepared Host Analysis paths.
 - Shows `Project Bundle Cache Unavailable` instead of falling back to a shared user cache
-  when the runtime cannot resolve exactly one writable open `.fcpbundle` cache location.
+  when the runtime cannot resolve a writable Event `Analysis Files` cache root.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, and optional small-clamp Far-field Warp while keeping render scale fixed at 1.0.
@@ -259,8 +258,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R321` means
-  FxPlug `0.3.21` is rendering original/optimized frames, and `P321` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R322` means
+  FxPlug `0.3.22` is rendering original/optimized frames, and `P322` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic
@@ -297,12 +296,12 @@ Host Analysis cache without launching Final Cut Pro:
 
 ```sh
 scripts/stabilizer_feedback.sh \
-  --cache /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/host-analysis-v2.json \
+  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json" \
   --time 5.0 \
   --note "notable unremoved shake"
 ```
 
-Run `scripts/stabilizer_feedback.sh --list-caches --cache-root /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis`
+Run `scripts/stabilizer_feedback.sh --list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"`
 to inspect saved cache readiness before assessing a note. It lists the latest bundle cache
 and range-specific files as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE`
 without repairing, promoting, or deleting them.

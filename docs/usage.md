@@ -183,8 +183,8 @@ fallbacks.
   busy/requested state. Queued starts still check Final Cut Pro's actual analysis state
   before starting.
   Completed analysis is then published to the process-wide shared render/cache store and
-  persisted inside the active Final Cut Pro `.fcpbundle` using a host-provided bundle media
-  folder when available, otherwise the single open Final Cut Pro library bundle. The
+  persisted inside the current Final Cut Pro Event's `Analysis Files` cache root resolved
+  from the host-provided media folder. The
   prepared analysis frame set is saved so analyzer and preview/render processes can hand
   off the prepared motion path through validated cache files. Preview/render instances also monitor the persisted bundle cache location and
   detect cache file changes even when they already hold an older prepared analysis, then
@@ -216,8 +216,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R321` means FxPlug `0.3.21` is rendering original/optimized
-  frames, while `P321` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R322` means FxPlug `0.3.22` is rendering original/optimized
+  frames, while `P322` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -240,14 +240,14 @@ To turn a review note into diagnostics, run the cache-backed feedback tool:
 
 ```sh
 fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
-  --cache /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/host-analysis-v2.json \
+  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json" \
   --time 5.0 \
   --note "notable unremoved shake"
 ```
 
 `--time` is clip-relative, so `5.0` means five seconds after the saved Host
 Analysis range starts. For bundle-local caches, pass
-`--cache-root /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis` or
+`--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"` or
 `--cache` for a range-specific file under that root's `caches/` directory. Add
 `--json` for structured output, `--window 0.5` to inspect the strongest frame near
 the note, `--turn-window` to match a non-default Inspector `Turn Detection Window`, and
@@ -258,7 +258,7 @@ diagnosing a note:
 
 ```sh
 fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh --list-caches \
-  --cache-root /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis
+  --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"
 ```
 
 The listing checks the latest bundle cache and range-specific cache files, reporting
@@ -393,32 +393,34 @@ FxPlug.
 ## Host Analysis Cache
 
 The latest Host Analysis compatibility alias is written inside the active Final Cut Pro
-library bundle. The runtime uses a host-provided `.fcpbundle` path when available,
-otherwise it resolves the single open Final Cut Pro library bundle. The cache root lives
-under Final Cut Pro's internal bundle data folder so it does not appear as a top-level
-library event/media folder:
+library bundle, scoped to the Event that owns the current project/media folder. The cache
+root lives under that Event's `Analysis Files` directory so analysis files stay unique to the
+Event and do not appear as top-level library content:
 
 ```text
-<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/host-analysis-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json
 ```
 
 Completed analysis is written to this bundle-local path so Final Cut Pro's analyzer and
 preview/render extension processes can reuse the same prepared motion path. If the runtime
-cannot resolve exactly one writable open `.fcpbundle`, the Inspector shows
-`Project Bundle Cache Unavailable` and the effect does not fall back to a shared user cache.
+cannot resolve a writable Event cache root, the Inspector shows
+`Project Bundle Cache Unavailable` and the effect does not fall back to a shared user cache
+or a library-wide cache.
 Older top-level bundle caches at `<active library>.fcpbundle/StabilizerFxPlugHostAnalysis/`
-are moved into the internal cache root when the effect configures the active library cache.
+and older internal bundle caches at
+`<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` are moved into
+the Event `Analysis Files` cache root when the effect configures the active Event cache.
 
 The cache index is written to:
 
 ```text
-<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
 ```
 
 Range-specific, sample-size-scoped cache files are stored under:
 
 ```text
-<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/caches/
+<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/caches/
 ```
 
 Those filenames include the analyzed range, actual `sampleWidth` and `sampleHeight`, frame
