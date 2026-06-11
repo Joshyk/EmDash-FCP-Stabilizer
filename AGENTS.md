@@ -25,9 +25,13 @@ analysis fallback; if Metal analysis resources are unavailable, fail the Host An
 visibly in logs/status.
 
 Completed Host Analysis frame sets should be persisted inside the active Final Cut Pro
-library bundle, under a host-provided `.fcpbundle` project media folder when available, or
-under the single open Final Cut Pro library bundle when `FxProjectAPI` does not provide a
-bundle path. Use a `StabilizerFxPlugHostAnalysis/` cache directory. The bundle cache contains
+library bundle, using the host-provided `.fcpbundle` path when available, or the single open
+Final Cut Pro library bundle when `FxProjectAPI` does not provide a bundle path. Store the
+cache under `__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` so Final Cut Pro does not
+see a top-level `StabilizerFxPlugHostAnalysis` folder as library event/media content. The
+runtime may move older top-level `StabilizerFxPlugHostAnalysis/` caches into that internal
+bundle location, but it must not silently fall back to an out-of-bundle shared cache. The
+bundle cache contains
 `host-analysis-v2.json`, `host-analysis-index-v2.json`, `host-analysis-render-offset-v2.json`,
 and range-indexed files under `caches/`. If the runtime cannot resolve exactly one writable
 open `.fcpbundle`, fail visibly with `Project Bundle Cache Unavailable` instead of falling

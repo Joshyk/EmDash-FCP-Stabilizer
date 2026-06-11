@@ -16,8 +16,10 @@ estimators, or Transform-keyframe writers back into this target.
   analysis failures are reported as Host Analysis failures instead of silently falling back
   to CPU analysis.
 - Persists completed Host Analysis frame sets inside the active Final Cut Pro `.fcpbundle`,
-  using a host-provided bundle media folder when available, otherwise the single open Final
-  Cut Pro library bundle, and a `StabilizerFxPlugHostAnalysis/` cache directory.
+  using a host-provided bundle path when available, otherwise the single open Final Cut Pro
+  library bundle. The cache lives under
+  `__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` so it is not exposed as a top-level
+  library event/media folder.
 - Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema,
   exact analyzed source range, sample size, saved fingerprints, and current source-frame
   validation still match. Unsupported schema candidates are reported in the Inspector and
@@ -292,12 +294,12 @@ Host Analysis cache without launching Final Cut Pro:
 
 ```sh
 scripts/stabilizer_feedback.sh \
-  --cache /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis/host-analysis-v2.json \
+  --cache /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/host-analysis-v2.json \
   --time 5.0 \
   --note "notable unremoved shake"
 ```
 
-Run `scripts/stabilizer_feedback.sh --list-caches --cache-root /path/to/library.fcpbundle/.../StabilizerFxPlugHostAnalysis`
+Run `scripts/stabilizer_feedback.sh --list-caches --cache-root /path/to/library.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis`
 to inspect saved cache readiness before assessing a note. It lists the latest bundle cache
 and range-specific files as `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE`
 without repairing, promoting, or deleting them.

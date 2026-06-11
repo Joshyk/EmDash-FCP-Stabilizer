@@ -1098,9 +1098,15 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 if let projectMediaURL = mediaURL as URL?,
                    let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL) {
                     let didStartAccess = projectMediaURL.startAccessingSecurityScopedResource()
-                    let cacheRoot = projectMediaURL
-                        .appendingPathComponent("StabilizerFxPlugHostAnalysis", isDirectory: true)
-                        .standardizedFileURL
+                    let cacheRoot = Self.hostAnalysisCacheRoot(in: bundleRoot)
+                    Self.migrateLegacyHostAnalysisCacheIfNeeded(
+                        from: Self.legacyHostAnalysisCacheRoot(under: projectMediaURL),
+                        to: cacheRoot
+                    )
+                    Self.migrateLegacyHostAnalysisCacheIfNeeded(
+                        from: Self.legacyHostAnalysisCacheRoot(under: bundleRoot),
+                        to: cacheRoot
+                    )
                     StabilizerHostAnalysisStore.configureProjectBundleCacheDirectory(
                         cacheRoot,
                         securityScopedURL: didStartAccess ? projectMediaURL : nil
@@ -1122,15 +1128,83 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
         switch Self.singleOpenFinalCutLibraryBundleURL() {
         case .success(let bundleRoot):
-            let cacheRoot = bundleRoot
-                .appendingPathComponent("StabilizerFxPlugHostAnalysis", isDirectory: true)
-                .standardizedFileURL
+            let cacheRoot = Self.hostAnalysisCacheRoot(in: bundleRoot)
+            Self.migrateLegacyHostAnalysisCacheIfNeeded(
+                from: Self.legacyHostAnalysisCacheRoot(under: bundleRoot),
+                to: cacheRoot
+            )
             StabilizerHostAnalysisStore.configureProjectBundleCacheDirectory(cacheRoot, securityScopedURL: nil)
             NSLog("StabilizerFxPlug: using open Final Cut Pro library Host Analysis cache at \(cacheRoot.path).")
             return true
         case .failure(let reason):
             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
             return false
+        }
+    }
+
+    private static func hostAnalysisCacheRoot(in bundleRoot: URL) -> URL {
+        bundleRoot
+            .appendingPathComponent("__.fcpdata.apple.com", isDirectory: true)
+            .appendingPathComponent("StabilizerFxPlugHostAnalysis", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    private static func legacyHostAnalysisCacheRoot(under rootURL: URL) -> URL {
+        rootURL
+            .appendingPathComponent("StabilizerFxPlugHostAnalysis", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    private static func migrateLegacyHostAnalysisCacheIfNeeded(from legacyURL: URL, to cacheRoot: URL) {
+        let legacyURL = legacyURL.standardizedFileURL
+        let cacheRoot = cacheRoot.standardizedFileURL
+        guard legacyURL.path != cacheRoot.path,
+              FileManager.default.fileExists(atPath: legacyURL.path)
+        else {
+            return
+        }
+
+        do {
+            try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+            try moveDirectoryContentsPreservingExistingFiles(from: legacyURL, to: cacheRoot)
+            let remainingItems = try FileManager.default.contentsOfDirectory(atPath: legacyURL.path)
+            if remainingItems.isEmpty {
+                try FileManager.default.removeItem(at: legacyURL)
+                NSLog("StabilizerFxPlug: moved legacy Host Analysis cache from \(legacyURL.path) to \(cacheRoot.path).")
+            } else {
+                NSLog("StabilizerFxPlug: left legacy Host Analysis cache at \(legacyURL.path) because \(remainingItems.count) item(s) could not be moved without overwriting newer files.")
+            }
+        } catch {
+            NSLog("StabilizerFxPlug: failed to migrate legacy Host Analysis cache from \(legacyURL.path) to \(cacheRoot.path): \(error.localizedDescription)")
+        }
+    }
+
+    private static func moveDirectoryContentsPreservingExistingFiles(from sourceURL: URL, to destinationURL: URL) throws {
+        let itemURLs = try FileManager.default.contentsOfDirectory(
+            at: sourceURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        for itemURL in itemURLs {
+            let destinationItemURL = destinationURL.appendingPathComponent(itemURL.lastPathComponent)
+            let itemIsDirectory = (try? itemURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            var destinationIsDirectory = ObjCBool(false)
+            let destinationExists = FileManager.default.fileExists(atPath: destinationItemURL.path, isDirectory: &destinationIsDirectory)
+
+            if destinationExists {
+                if itemIsDirectory && destinationIsDirectory.boolValue {
+                    try moveDirectoryContentsPreservingExistingFiles(from: itemURL, to: destinationItemURL)
+                    let remainingItems = try FileManager.default.contentsOfDirectory(atPath: itemURL.path)
+                    if remainingItems.isEmpty {
+                        try FileManager.default.removeItem(at: itemURL)
+                    }
+                } else {
+                    NSLog("StabilizerFxPlug: keeping legacy Host Analysis cache item \(itemURL.path) because \(destinationItemURL.path) already exists.")
+                }
+                continue
+            }
+
+            try FileManager.default.moveItem(at: itemURL, to: destinationItemURL)
         }
     }
 
