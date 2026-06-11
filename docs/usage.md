@@ -231,8 +231,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R328` means FxPlug `0.3.28` is rendering original/optimized
-  frames, while `P328` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R330` means FxPlug `0.3.30` is rendering original/optimized
+  frames, while `P330` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -426,8 +426,8 @@ preview/render extension processes can reuse the same prepared motion path. If t
 cannot resolve a writable Event cache root, the Inspector shows
 `Project Bundle Cache Unavailable` instead of falling back to a shared user cache or a
 library-wide cache. During a live Host Analysis callback, the current pass may still finish
-in memory as `Ready Memory Only - Project Bundle Cache Unavailable`; that result is not
-persisted for future reuse.
+in memory as `Ready Memory Only - Project Bundle Cache Unavailable`; that result can drive
+the current viewer/render session, but it is not persisted for future reuse.
 Older top-level bundle caches at `<active library>.fcpbundle/StabilizerFxPlugHostAnalysis/`
 and older internal bundle caches at
 `<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` are moved into

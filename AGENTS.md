@@ -41,10 +41,11 @@ out-of-bundle or library-wide shared cache. The Event cache contains
 `host-analysis-v2.json`, `host-analysis-index-v2.json`, `host-analysis-render-offset-v2.json`,
 and range-indexed files under `caches/`. If the runtime cannot resolve a writable Event cache
 root, surface `Project Bundle Cache Unavailable` instead of falling back to a shared
-Application Support cache or a library-wide cache. During Final Cut Pro Host Analysis, it may complete the current analyzer
-session in memory and surface `Ready Memory Only - Project Bundle Cache Unavailable`, but it
-must not persist to a shared or out-of-bundle cache and the status must make the missing
-Event cache visible. Cache candidates must be validated
+Application Support cache or a library-wide cache. During Final Cut Pro Host Analysis, it
+may complete the current analyzer session in memory and surface `Ready Memory Only - Project
+Bundle Cache Unavailable`; that completed in-memory analysis may drive the current
+viewer/render session, but it must not persist to a shared or out-of-bundle cache and the
+status must make the missing Event cache visible. Cache candidates must be validated
 against the current source frame before reuse. Rejected candidates should be visible in
 logs/status and should not be deleted just because they do not match the current clip.
 `Start Host Analysis` should first reload and use a saved persistent cache when one exists;
@@ -52,7 +53,8 @@ only start a new host analysis when no saved cache can be loaded. If the button 
 cannot see `FxProjectAPI`, it should still request Host Analysis and let analyzer
 `setupAnalysis` resolve the Event cache root; if setup cannot resolve that root, complete the
 active analysis in memory only and show `Ready Memory Only - Project Bundle Cache
-Unavailable` after completion. It must not delete saved cache files. If the loaded
+Unavailable` after completion. That in-memory result may drive the current viewer/render
+session only; it must not delete saved cache files. If the loaded
 cache is rejected for the current clip, the next start should skip that rejected cache and
 request a new analysis. `Clear Host Analysis Cache` is the explicit cache-clear path and
 should show `Cache Cleared`.

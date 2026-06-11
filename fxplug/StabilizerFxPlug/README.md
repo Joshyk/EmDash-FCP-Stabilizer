@@ -62,9 +62,10 @@ estimators, or Transform-keyframe writers back into this target.
 - Shows `Project Bundle Cache Unavailable` instead of falling back to a shared user cache
   when the runtime cannot resolve a writable Event `Analysis Files` cache root. A live Final
   Cut Pro Host Analysis pass may still complete in memory as `Ready Memory Only - Project
-  Bundle Cache Unavailable`, but that result is not persisted. If Final Cut Pro reports a
-  library temp folder instead of an Event folder, the runtime uses an unambiguous top-level
-  Event resolver and fails visibly when the Event remains ambiguous.
+  Bundle Cache Unavailable`; that result can drive the current viewer/render session, but it
+  is not persisted. If Final Cut Pro reports a library temp folder instead of an Event
+  folder, the runtime uses an unambiguous top-level Event resolver and fails visibly when the
+  Event remains ambiguous.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, and optional small-clamp Far-field Warp while keeping render scale fixed at 1.0.
@@ -270,8 +271,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R328` means
-  FxPlug `0.3.28` is rendering original/optimized frames, and `P328` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R330` means
+  FxPlug `0.3.30` is rendering original/optimized frames, and `P330` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic

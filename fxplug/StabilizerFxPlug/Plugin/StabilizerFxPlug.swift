@@ -28,7 +28,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.28"
+private let stabilizerFxPlugVersion = "0.3.30"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
@@ -198,6 +198,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private var lastPublishedRenderRevision: Double?
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
+    private var lastRenderAnalysisDecision = ""
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var persistentCacheMonitor: DispatchSourceTimer?
@@ -925,6 +926,18 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
     }
 
+    private func publishRenderAnalysisDecisionIfChanged(_ decision: String) {
+        statusLock.lock()
+        let shouldPublish = lastRenderAnalysisDecision != decision
+        if shouldPublish {
+            lastRenderAnalysisDecision = decision
+        }
+        statusLock.unlock()
+        if shouldPublish {
+            os_log("%{public}@", log: stabilizerHostAnalysisLog, type: .default, decision)
+        }
+    }
+
     private func publishAnalysisCallbackStatus(_ analysisStore: StabilizerHostAnalysisStore) {
         if hostAnalysisStore.hasCompletedAnalysis {
             publishHostAnalysisStatus(force: true)
@@ -1539,8 +1552,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         var renderUsesPreparedAnalysis = false
         let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
+        let hasCompletedHostAnalysis = hostAnalysisStore.hasCompletedAnalysis
+        let configuredProjectBundleCache = transformEnabled && !hasCompletedHostAnalysis
+            ? configureProjectBundleCacheDirectory(markUnavailable: false)
+            : false
+        let canUseHostAnalysisStoreForRender = transformEnabled
+            && (hasCompletedHostAnalysis || configuredProjectBundleCache)
         if transformEnabled,
-           configureProjectBundleCacheDirectory(),
+           canUseHostAnalysisStoreForRender,
            let preparedAnalysis = hostAnalysisStore.preparedAnalysisForRender(
                validating: sourceImages[0],
                at: renderTime,
@@ -1570,6 +1589,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         } else {
             autoTransform = .identity
         }
+        publishRenderAnalysisDecisionIfChanged(
+            "Render Host Analysis decision | FxPlug \(stabilizerFxPlugVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
+        )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
         let renderStoreRevision = hostAnalysisStore.revision
         let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
@@ -2476,6 +2498,16 @@ private final class StabilizerHostAnalysisStore {
                     NSLog("StabilizerFxPlug: using range-matched Host Analysis cache for proxy render: \(rejectionReason)")
                     return analysis
                 }
+                if activeIdentity == nil,
+                   hasCompletedInMemoryAnalysis {
+                    markProxyPreviewForRender(reason: rejectionReason)
+                    updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
+                    os_log("Using in-memory Host Analysis for render despite scaled or incomplete source-frame metadata: %{public}@",
+                           log: stabilizerHostAnalysisLog,
+                           type: .default,
+                           rejectionReason)
+                    return analysis
+                }
 
                 markProxyNeedsOriginalValidationForRender(reason: rejectionReason)
                 return nil
@@ -2917,6 +2949,16 @@ private final class StabilizerHostAnalysisStore {
         let frames = framesByTimeKey.values.sorted { $0.time < $1.time }
         lock.unlock()
         return frames
+    }
+
+    private var hasCompletedInMemoryAnalysis: Bool {
+        lock.lock()
+        let hasCompleted = finished
+            && validationState != .rejected
+            && preparedAnalysis != nil
+            && activePersistentCacheIdentity == nil
+        lock.unlock()
+        return hasCompleted
     }
 
     private func currentValidationState() -> HostAnalysisValidationState {
