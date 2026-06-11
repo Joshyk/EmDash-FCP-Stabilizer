@@ -399,6 +399,8 @@ selected-clip workflow and cache-backed diagnostics.
 From this repo, run it through the parent-relative path:
 
 ```sh
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript export-xml
+osascript ../scripts/fcp_stabilizer_shortcuts.applescript import-xml
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
@@ -412,9 +414,9 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
 ```
 
 Use it from Keyboard Maestro, Automator Quick Actions, or Terminal when manual FCP
-validation needs faster access to `Stabilizer Transform`, `Start Host Analysis`, `Debug
-Overlay`, selected Browser projects, or the Inspector. Grant Accessibility permission to
-the app that runs the script.
+validation needs faster access to XML export/import dialogs, `Stabilizer Transform`,
+`Start Host Analysis`, `Debug Overlay`, selected Browser projects, or the Inspector. Grant
+Accessibility permission to the app that runs the script.
 For project opening, prefer `open-project PROJECT_NAME` when the target Browser project
 name is known, or `open-selected-project` after selecting the project thumbnail or list row
 in the Browser. These commands use `Clip > Open Clip` because ordinary AppleScript click
