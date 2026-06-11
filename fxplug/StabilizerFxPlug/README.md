@@ -26,6 +26,9 @@ estimators, or Transform-keyframe writers back into this target.
 - Streams in-progress Host Analysis motion directly through Metal and keeps only the
   previous luma buffer needed for the next frame-to-frame motion search. It does not write
   per-frame `.luma` scratch files.
+- Isolates concurrent in-progress Host Analysis callbacks with a process-wide session
+  registry, so different clips and actual sample sizes do not share a streaming builder.
+  Ambiguous callbacks fail visibly instead of being appended to an arbitrary active clip.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
@@ -241,15 +244,18 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   active pass in memory only and the Inspector shows `Ready Memory Only - Project Bundle
   Cache Unavailable` after completion. The installed plug-in bundle is signed with sandbox
   and security-scoped file entitlements so the Host Analysis runtime can open the
-  `FxProjectAPI.mediaFolderURL()` security-scoped URL. The in-progress Host Analysis store is
-  process-wide so setup, frame analysis, and cleanup callbacks can arrive through different
-  FxPlug instances without losing the active analysis session. If a saved cache uses an unsupported schema,
+  `FxProjectAPI.mediaFolderURL()` security-scoped URL. The in-progress Host Analysis
+  session registry is process-wide and contains per-session stores, so setup, frame
+  analysis, and cleanup callbacks can arrive through different FxPlug instances without
+  losing or mixing the active analysis session. If a saved cache uses an unsupported schema,
   the Inspector shows `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has
   incomplete prepared paths or too few frames for its saved analysis range, it shows
   `Cache Incomplete - Run Host Analysis`. The file remains on disk and the next start
   requests new analysis for the current build. Those stale unusable states do not block later
   preview/render consumers from rechecking the persistent cache signature and loading a newly
-  written compatible cache.
+  written compatible cache. If another clip has an active or reserved Host Analysis session
+  in the same plug-in process, the request is kept in `Queued Host Analysis` until that
+  session finishes.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
@@ -271,8 +277,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R330` means
-  FxPlug `0.3.30` is rendering original/optimized frames, and `P330` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R331` means
+  FxPlug `0.3.31` is rendering original/optimized frames, and `P331` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic

@@ -62,7 +62,9 @@ Keep the plug-in target signed with sandbox and security-scoped file entitlement
 Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped URL.
 Keep in-progress Host Analysis session state process-wide because Final Cut Pro may call
 setup, frame analysis, and cleanup through different FxPlug instances in the same plug-in
-process. Do not collapse completed cache buckets across clips or sample sizes.
+process. That process-wide state must isolate per-clip in-progress stores; ambiguous
+callbacks should fail visibly instead of appending frames to an arbitrary active clip. Do
+not collapse completed cache buckets across clips or sample sizes.
 If Final Cut Pro restores or reports an in-progress Host Analysis while a compatible saved
 cache is already present, the render/cache consumer should still reload and prefer the saved
 cache; transient analyzer callback status must not mask the shared ready cache in the
@@ -142,8 +144,11 @@ Host Analysis playback must render from prepared motion paths for the active FxP
 preview callbacks must not auto-start Host Analysis. If Final Cut Pro reports that another
 Host Analysis is already requested or running, queue the requested effect instance for
 serial analysis and surface `Queued Host Analysis` in the Inspector instead of failing
-silently. In-progress Host Analysis state must be per clip/session so requested clips,
-including clips with different actual sample sizes, never share a streaming builder. The
+silently. Also queue the request when this plug-in process already has an active or
+reserved Host Analysis session for another clip, even if the host reports the current
+effect as not analyzing. In-progress Host Analysis state must be per clip/session so
+requested clips, including clips with different actual sample sizes, never share a
+streaming builder. The
 active runtime uses a process-wide shared Host Analysis render/cache store after completion
 because Final Cut Pro may call analyzer and preview/render through different FxPlug
 instances. Persistent cache files are the cross-process reuse path after source-frame

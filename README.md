@@ -140,8 +140,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R330` means FxPlug `0.3.30`
-is rendering original/optimized frames, and `P330` means proxy playback is using
+active render runtime and current source mode: `R331` means FxPlug `0.3.31`
+is rendering original/optimized frames, and `P331` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -173,14 +173,19 @@ falling back to CPU analysis.
 Each active Host Analysis run owns its own in-progress session store. Different
 clips can be requested while another clip is running, and clips whose selected
 `Sample Size` resolves to different actual pixel dimensions do not share the
-same streaming builder.
+same streaming builder. The process-wide callback registry resolves analyzer
+frames by active session range, owner, source frame, and sample size; if Final
+Cut Pro delivers a callback that matches multiple active sessions, the plug-in
+fails that callback visibly instead of appending the frame to an arbitrary clip.
 
 When `Start Host Analysis` is pressed while Final Cut Pro reports that another
-analysis is already requested or running, the effect enters `Queued Host
-Analysis` instead of failing. The process-wide queue starts queued clips one at a
-time as the host becomes available. Queued start requests are retained until
-they either start or are explicitly cleared, and a completed analysis from an
-earlier clip does not satisfy a later queued clip.
+analysis is already requested or running, or while this plug-in process already
+has an active/reserved Host Analysis session for another clip, the effect enters
+`Queued Host Analysis` instead of failing or mixing callback frames. The
+process-wide queue starts queued clips one at a time as the host becomes
+available. Queued start requests are retained until they either start or are
+explicitly cleared, and a completed analysis from an earlier clip does not
+satisfy a later queued clip.
 Analysis callback instances clear process-wide analysis bookkeeping, because
 Final Cut Pro may deliver setup/analyze/cleanup to a different FxPlug instance
 than the Inspector button instance that requested the run. The Inspector start
@@ -312,9 +317,10 @@ Project Bundle Cache Unavailable` after completion. It must not delete saved cac
 The installed plug-in bundle is signed with sandbox and security-scoped file
 entitlements so the Host Analysis runtime can open the
 `FxProjectAPI.mediaFolderURL()` security-scoped URL.
-The in-progress Host Analysis store is process-wide so setup, frame analysis,
-and cleanup callbacks can arrive through different FxPlug instances without
-losing the active analysis session.
+The in-progress Host Analysis session registry is process-wide and contains
+per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
+through different FxPlug instances without losing or mixing the active analysis
+session.
 
 Cache reuse is based on cache schema, exact analyzed source range, sample size, saved frame
 fingerprints, and current source-frame validation, not the visible FxPlug runtime version.

@@ -28,7 +28,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.30"
+private let stabilizerFxPlugVersion = "0.3.31"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
@@ -105,6 +105,17 @@ private struct HostAnalysisExpectedRange {
     }
 }
 
+private struct ActiveHostAnalysisRoute {
+    let sessionID: UUID
+    let store: StabilizerHostAnalysisStore
+    let sampleSize: (width: Int, height: Int)?
+}
+
+private enum ActiveHostAnalysisCleanupRoute {
+    case resolved(sessionID: UUID, store: StabilizerHostAnalysisStore)
+    case failed(reason: String)
+}
+
 private struct StabilizerSourceFrameInfo {
     let sourceWidth: Int
     let sourceHeight: Int
@@ -117,6 +128,152 @@ private struct StabilizerSourceFrameInfo {
 
     var pixelScaleDescription: String {
         String(format: "%.2fx/%.2fx", pixelScaleX, pixelScaleY)
+    }
+}
+
+private final class ActiveHostAnalysisSession {
+    let id = UUID()
+    let ownerObjectID: ObjectIdentifier
+    let store: StabilizerHostAnalysisStore
+    let range: CMTimeRange
+    let frameDuration: CMTime
+    let requestedSampleScalePercent: Double
+
+    private let startSeconds: Double
+    private let durationSeconds: Double
+    private let frameDurationSeconds: Double
+    private var observedSourceInfo: StabilizerSourceFrameInfo?
+    private var observedSampleSize: (width: Int, height: Int)?
+    private var lastFrameTimeKey: Int64?
+    private(set) var lastTouchedAt = Date()
+    var hasAcceptedFrame: Bool {
+        lastFrameTimeKey != nil
+    }
+
+    init(
+        ownerObjectID: ObjectIdentifier,
+        store: StabilizerHostAnalysisStore,
+        range: CMTimeRange,
+        frameDuration: CMTime,
+        requestedSampleScalePercent: Double
+    ) {
+        self.ownerObjectID = ownerObjectID
+        self.store = store
+        self.range = range
+        self.frameDuration = frameDuration
+        self.requestedSampleScalePercent = requestedSampleScalePercent
+        startSeconds = CMTimeGetSeconds(range.start)
+        durationSeconds = CMTimeGetSeconds(range.duration)
+        frameDurationSeconds = CMTimeGetSeconds(frameDuration)
+    }
+
+    func score(
+        frameTime: CMTime,
+        sourceInfo: StabilizerSourceFrameInfo?,
+        ownerObjectID: ObjectIdentifier,
+        preferredSessionID: UUID?
+    ) -> (score: Int, sampleSize: (width: Int, height: Int)?)? {
+        let frameSeconds = CMTimeGetSeconds(frameTime)
+        guard frameSeconds.isFinite else {
+            return nil
+        }
+
+        var score = 0
+        if isInRange(frameSeconds) {
+            score += 10
+        } else {
+            return nil
+        }
+
+        if preferredSessionID == id {
+            score += 60
+        }
+        if ownerObjectID == self.ownerObjectID {
+            score += 30
+        }
+
+        var expectedSampleSize: (width: Int, height: Int)?
+        if let sourceInfo {
+            expectedSampleSize = sampleSize(for: sourceInfo)
+            if let observedSourceInfo {
+                guard sourceInfo.matches(observedSourceInfo) else {
+                    return nil
+                }
+                score += 25
+            }
+            if let observedSampleSize {
+                guard let expectedSampleSize,
+                      observedSampleSize.width == expectedSampleSize.width,
+                      observedSampleSize.height == expectedSampleSize.height
+                else {
+                    return nil
+                }
+                score += 25
+            }
+        }
+
+        if let lastFrameTimeKey {
+            let frameTimeKey = StabilizerHostAnalysisStore.timeKey(frameSeconds)
+            guard frameTimeKey >= lastFrameTimeKey else {
+                return nil
+            }
+            score += frameTimeKey == lastFrameTimeKey ? 1 : 8
+        } else {
+            score += 5
+        }
+
+        return (score: score, sampleSize: expectedSampleSize)
+    }
+
+    func recordAcceptedFrame(
+        frameTime: CMTime,
+        sourceInfo: StabilizerSourceFrameInfo,
+        sampleSize: (width: Int, height: Int)
+    ) {
+        observedSourceInfo = sourceInfo
+        observedSampleSize = sampleSize
+        lastFrameTimeKey = StabilizerHostAnalysisStore.timeKey(CMTimeGetSeconds(frameTime))
+        lastTouchedAt = Date()
+    }
+
+    func sampleSize(for sourceInfo: StabilizerSourceFrameInfo) -> (width: Int, height: Int) {
+        AutoStabilizationEstimator.sampleSize(
+            sourceWidth: sourceInfo.sourceWidth,
+            sourceHeight: sourceInfo.sourceHeight,
+            scalePercent: requestedSampleScalePercent
+        )
+    }
+
+    var debugDescription: String {
+        String(
+            format: "%@ %.3f+%.3fs sample %.0f%% frames %d",
+            id.uuidString,
+            startSeconds,
+            durationSeconds,
+            requestedSampleScalePercent,
+            store.frameCount
+        )
+    }
+
+    private func isInRange(_ frameSeconds: Double) -> Bool {
+        guard startSeconds.isFinite,
+              durationSeconds.isFinite,
+              durationSeconds > 0.0
+        else {
+            return true
+        }
+        let tolerance = max(1.0 / 600.0, frameDurationSeconds.isFinite ? frameDurationSeconds * 1.5 : 1.0 / 30.0)
+        return frameSeconds >= startSeconds - tolerance
+            && frameSeconds <= startSeconds + durationSeconds + tolerance
+    }
+}
+
+private extension StabilizerSourceFrameInfo {
+    func matches(_ other: StabilizerSourceFrameInfo) -> Bool {
+        sourceWidth == other.sourceWidth
+            && sourceHeight == other.sourceHeight
+            && abs(pixelScaleX - other.pixelScaleX) <= 0.001
+            && abs(pixelScaleY - other.pixelScaleY) <= 0.001
     }
 }
 
@@ -184,7 +341,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static var serialAnalysisCallbackDrainInProgress = false
     private static var serialAnalysisNextCallbackDrainAt = Date.distantPast
     private static let activeAnalysisStoreLock = NSLock()
-    private static var activeAnalysisStore: StabilizerHostAnalysisStore?
+    private static var activeAnalysisSessions: [UUID: ActiveHostAnalysisSession] = [:]
+    private static var hostAnalysisStartReserved = false
     private static let stabilizerInfoViewLock = NSLock()
     private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private static var latestStabilizerInfo = "FxPlug \(stabilizerFxPlugVersion)\nNo Analysis"
@@ -201,6 +359,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private var lastRenderAnalysisDecision = ""
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
+    private var activeAnalyzerSessionID: UUID?
     private var persistentCacheMonitor: DispatchSourceTimer?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
@@ -621,6 +780,27 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             }
             return .failed
         }
+        guard Self.reserveHostAnalysisStartIfAvailable() else {
+            let reason = "ActiveHostAnalysisSession"
+            if allowSerialQueue && force {
+                let position = Self.enqueueSerialAnalysis(self)
+                hostAnalysisStore.markQueued(position: position, reason: reason)
+                publishHostAnalysisStatus(force: true)
+                publishStabilizerInfo(force: true)
+                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+                NSLog("StabilizerFxPlug: queued Host Analysis request at position \(position) because another clip has an active or reserved Host Analysis session.")
+                os_log("Queued Host Analysis because another clip has an active or reserved session at position %{public}d.", log: stabilizerHostAnalysisLog, type: .default, position)
+                Self.scheduleSerialAnalysisQueueDrain()
+                return .queued
+            }
+            if force {
+                hostAnalysisStore.markStartFailed(reason: reason)
+            }
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+            return .failed
+        }
         do {
             Self.removeQueuedSerialAnalysis(self)
             try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
@@ -634,6 +814,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         } catch {
             NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
             os_log("Host Analysis request failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
+            Self.releaseHostAnalysisStartReservation()
             Self.removeQueuedSerialAnalysis(self)
             hostAnalysisStore.markStartFailed(reason: error.localizedDescription)
             publishHostAnalysisStatus(force: true)
@@ -766,6 +947,24 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 continue
             }
         }
+    }
+
+    private static func reserveHostAnalysisStartIfAvailable() -> Bool {
+        activeAnalysisStoreLock.lock()
+        defer { activeAnalysisStoreLock.unlock() }
+        guard !hostAnalysisStartReserved,
+              activeAnalysisSessions.isEmpty
+        else {
+            return false
+        }
+        hostAnalysisStartReserved = true
+        return true
+    }
+
+    private static func releaseHostAnalysisStartReservation() {
+        activeAnalysisStoreLock.lock()
+        hostAnalysisStartReserved = false
+        activeAnalysisStoreLock.unlock()
     }
 
     private static func analysisStateDescription(_ state: FxAnalysisState) -> String {
@@ -1035,23 +1234,165 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
     }
 
-    private func setActiveAnalysisStore(_ store: StabilizerHostAnalysisStore?) {
+    private func registerActiveAnalysisSession(
+        store: StabilizerHostAnalysisStore,
+        range: CMTimeRange,
+        frameDuration: CMTime,
+        requestedSampleScalePercent: Double
+    ) -> UUID {
+        let session = ActiveHostAnalysisSession(
+            ownerObjectID: ObjectIdentifier(self),
+            store: store,
+            range: range,
+            frameDuration: frameDuration,
+            requestedSampleScalePercent: requestedSampleScalePercent
+        )
         Self.activeAnalysisStoreLock.lock()
-        Self.activeAnalysisStore = store
+        Self.hostAnalysisStartReserved = false
+        Self.activeAnalysisSessions[session.id] = session
+        Self.activeAnalysisStoreLock.unlock()
+        activeAnalyzerSessionID = session.id
+        return session.id
+    }
+
+    private func resolveActiveAnalysisSession(
+        frameTime: CMTime,
+        sourceInfo: StabilizerSourceFrameInfo?
+    ) throws -> ActiveHostAnalysisRoute {
+        let ownerObjectID = ObjectIdentifier(self)
+        let preferredSessionID = activeAnalyzerSessionID
+        Self.activeAnalysisStoreLock.lock()
+        let candidates = Self.activeAnalysisSessions.values.compactMap { session -> (session: ActiveHostAnalysisSession, score: Int, sampleSize: (width: Int, height: Int)?)? in
+            guard let match = session.score(
+                frameTime: frameTime,
+                sourceInfo: sourceInfo,
+                ownerObjectID: ownerObjectID,
+                preferredSessionID: preferredSessionID
+            ) else {
+                return nil
+            }
+            return (session: session, score: match.score, sampleSize: match.sampleSize)
+        }.sorted { first, second in
+            if first.score == second.score {
+                return first.session.lastTouchedAt > second.session.lastTouchedAt
+            }
+            return first.score > second.score
+        }
+        Self.activeAnalysisStoreLock.unlock()
+
+        guard let bestCandidate = candidates.first else {
+            throw hostAnalysisRoutingError("Stabilizer Host Analysis frame had no matching active per-clip session; setupAnalysis did not isolate this callback.")
+        }
+        let unclaimedCandidateCount = candidates.filter { !$0.session.hasAcceptedFrame }.count
+        if unclaimedCandidateCount > 1 {
+            let descriptions = candidates.prefix(4).map { $0.session.debugDescription }.joined(separator: " | ")
+            throw hostAnalysisRoutingError("Stabilizer Host Analysis frame matched multiple uninitialized per-clip sessions; refusing to infer a clip from callback instance alone. Active sessions: \(descriptions)")
+        }
+        if candidates.count > 1,
+           let secondCandidate = candidates.dropFirst().first,
+           secondCandidate.score == bestCandidate.score {
+            let descriptions = candidates.prefix(4).map { $0.session.debugDescription }.joined(separator: " | ")
+            throw hostAnalysisRoutingError("Stabilizer Host Analysis frame matched multiple active per-clip sessions; refusing to mix clips. Active sessions: \(descriptions)")
+        }
+
+        return ActiveHostAnalysisRoute(
+            sessionID: bestCandidate.session.id,
+            store: bestCandidate.session.store,
+            sampleSize: bestCandidate.sampleSize
+        )
+    }
+
+    private func recordActiveAnalysisFrameAccepted(
+        sessionID: UUID,
+        frameTime: CMTime,
+        sourceInfo: StabilizerSourceFrameInfo,
+        sampleSize: (width: Int, height: Int)
+    ) {
+        Self.activeAnalysisStoreLock.lock()
+        Self.activeAnalysisSessions[sessionID]?.recordAcceptedFrame(
+            frameTime: frameTime,
+            sourceInfo: sourceInfo,
+            sampleSize: sampleSize
+        )
         Self.activeAnalysisStoreLock.unlock()
     }
 
-    private func currentActiveAnalysisStore() -> StabilizerHostAnalysisStore? {
+    private func takeActiveAnalysisSessionForCleanup() -> ActiveHostAnalysisCleanupRoute {
+        let ownerObjectID = ObjectIdentifier(self)
+        let preferredSessionID = activeAnalyzerSessionID
         Self.activeAnalysisStoreLock.lock()
-        let store = Self.activeAnalysisStore
-        Self.activeAnalysisStoreLock.unlock()
-        return store
+        defer {
+            Self.activeAnalysisStoreLock.unlock()
+        }
+
+        if let preferredSessionID,
+           let session = Self.activeAnalysisSessions.removeValue(forKey: preferredSessionID) {
+            activeAnalyzerSessionID = nil
+            return .resolved(sessionID: session.id, store: session.store)
+        }
+
+        let ownerSessions = Self.activeAnalysisSessions.values.filter { $0.ownerObjectID == ownerObjectID }
+        if ownerSessions.count == 1,
+           let session = ownerSessions.first {
+            Self.activeAnalysisSessions.removeValue(forKey: session.id)
+            activeAnalyzerSessionID = nil
+            return .resolved(sessionID: session.id, store: session.store)
+        }
+
+        if Self.activeAnalysisSessions.count == 1,
+           let session = Self.activeAnalysisSessions.values.first {
+            Self.activeAnalysisSessions.removeValue(forKey: session.id)
+            activeAnalyzerSessionID = nil
+            return .resolved(sessionID: session.id, store: session.store)
+        }
+
+        if Self.activeAnalysisSessions.isEmpty {
+            return .failed(reason: "Stabilizer Host Analysis cleanup had no active per-clip session.")
+        }
+
+        let descriptions = Self.activeAnalysisSessions.values
+            .sorted { $0.lastTouchedAt > $1.lastTouchedAt }
+            .prefix(4)
+            .map(\.debugDescription)
+            .joined(separator: " | ")
+        return .failed(reason: "Stabilizer Host Analysis cleanup could not identify which per-clip session to finish. Active sessions: \(descriptions)")
     }
 
-    private func abandonActiveAnalysisAfterFailure() {
-        setActiveAnalysisStore(nil)
+    private func removeActiveAnalysisSession(_ sessionID: UUID?) {
+        Self.activeAnalysisStoreLock.lock()
+        if let sessionID {
+            Self.activeAnalysisSessions.removeValue(forKey: sessionID)
+            if activeAnalyzerSessionID == sessionID {
+                activeAnalyzerSessionID = nil
+            }
+        } else if let activeAnalyzerSessionID {
+            Self.activeAnalysisSessions.removeValue(forKey: activeAnalyzerSessionID)
+            self.activeAnalyzerSessionID = nil
+        } else if Self.activeAnalysisSessions.count == 1,
+                  let sessionID = Self.activeAnalysisSessions.keys.first {
+            Self.activeAnalysisSessions.removeValue(forKey: sessionID)
+        }
+        if Self.activeAnalysisSessions.isEmpty {
+            Self.hostAnalysisStartReserved = false
+        }
+        Self.activeAnalysisStoreLock.unlock()
+    }
+
+    private func abandonActiveAnalysisAfterFailure(sessionID: UUID?) {
+        removeActiveAnalysisSession(sessionID)
         Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+    }
+
+    private func hostAnalysisRoutingError(_ reason: String) -> NSError {
+        NSLog("StabilizerFxPlug: \(reason)")
+        os_log("%{public}@", log: stabilizerHostAnalysisLog, type: .error, reason)
+        Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
+        return NSError(
+            domain: "com.justadev.StabilizerFxPlug",
+            code: Int(kFxError_AnalysisError),
+            userInfo: [NSLocalizedDescriptionKey: reason]
+        )
     }
 
     private func updatePreferredHostAnalysisCacheIdentity(_ identity: String?) {
@@ -1751,16 +2092,28 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             os_log("setupAnalysis continuing in memory because the Event cache root is unavailable; completed analysis will not be persisted.", log: stabilizerHostAnalysisLog, type: .error)
         }
         let analysisStore = StabilizerHostAnalysisStore()
+        let requestedSampleScalePercent = requestedSampleScalePercent(at: analysisRange.start)
         analysisStore.begin(
             range: analysisRange,
             frameDuration: frameDuration,
-            requestedSampleScalePercent: requestedSampleScalePercent(at: analysisRange.start)
+            requestedSampleScalePercent: requestedSampleScalePercent
         )
         lastPublishedActiveAnalysisFrameCount = 0
-        setActiveAnalysisStore(analysisStore)
-        os_log("setupAnalysis created an active in-progress store.", log: stabilizerHostAnalysisLog, type: .default)
+        let sessionID = registerActiveAnalysisSession(
+            store: analysisStore,
+            range: analysisRange,
+            frameDuration: frameDuration,
+            requestedSampleScalePercent: requestedSampleScalePercent
+        )
+        os_log(
+            "setupAnalysis created active in-progress store %{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            sessionID.uuidString
+        )
         NSLog(
-            "StabilizerFxPlug: setup Host Analysis range %.3f+%.3f seconds, frameDuration %.6f seconds.",
+            "StabilizerFxPlug: setup Host Analysis session %@ range %.3f+%.3f seconds, frameDuration %.6f seconds.",
+            sessionID.uuidString,
             CMTimeGetSeconds(analysisRange.start),
             CMTimeGetSeconds(analysisRange.duration),
             CMTimeGetSeconds(frameDuration)
@@ -1775,46 +2128,43 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     func analyzeFrame(_ frame: FxImageTile!, at frameTime: CMTime) throws {
-        guard let analysisStore = currentActiveAnalysisStore() else {
-            let reason = "Stabilizer Host Analysis session store was unavailable; setupAnalysis did not create an active per-clip cache."
-            NSLog("StabilizerFxPlug: \(reason)")
-            os_log("analyzeFrame failed at %{public}.6f seconds because the active in-progress store was unavailable.", log: stabilizerHostAnalysisLog, type: .error, CMTimeGetSeconds(frameTime))
-            throw NSError(
-                domain: "com.justadev.StabilizerFxPlug",
-                code: Int(kFxError_AnalysisError),
-                userInfo: [NSLocalizedDescriptionKey: reason]
-            )
-        }
         guard let frame else {
-            abandonActiveAnalysisAfterFailure()
+            let route = try? resolveActiveAnalysisSession(frameTime: frameTime, sourceInfo: nil)
+            abandonActiveAnalysisAfterFailure(sessionID: route?.sessionID)
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
                 userInfo: [NSLocalizedDescriptionKey: "StabilizerFxPlug host analysis supplied no frame."]
             )
         }
+        let frameInfo = StabilizerOriginalMediaPolicy.frameInfo(for: frame)
         if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: frame) {
-            analysisStore.rejectProxyAnalysis(reason: rejectionReason)
-            publishAnalysisCallbackStatus(analysisStore)
-            abandonActiveAnalysisAfterFailure()
+            let route = try resolveActiveAnalysisSession(frameTime: frameTime, sourceInfo: frameInfo)
+            route.store.rejectProxyAnalysis(reason: rejectionReason)
+            publishAnalysisCallbackStatus(route.store)
+            abandonActiveAnalysisAfterFailure(sessionID: route.sessionID)
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
                 userInfo: [NSLocalizedDescriptionKey: rejectionReason]
             )
         }
-        guard let frameInfo = StabilizerOriginalMediaPolicy.frameInfo(for: frame) else {
+        guard let frameInfo else {
             let reason = "Host Analysis could not read the original clip size for Sample Size."
-            analysisStore.rejectProxyAnalysis(reason: reason)
-            publishAnalysisCallbackStatus(analysisStore)
-            abandonActiveAnalysisAfterFailure()
+            let route = try resolveActiveAnalysisSession(frameTime: frameTime, sourceInfo: nil)
+            route.store.rejectProxyAnalysis(reason: reason)
+            publishAnalysisCallbackStatus(route.store)
+            abandonActiveAnalysisAfterFailure(sessionID: route.sessionID)
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
                 code: Int(kFxError_AnalysisError),
                 userInfo: [NSLocalizedDescriptionKey: reason]
             )
         }
-        let sampleSize = analysisStore.sampleSize(for: frameInfo)
+        let route = try resolveActiveAnalysisSession(frameTime: frameTime, sourceInfo: frameInfo)
+        guard let sampleSize = route.sampleSize else {
+            throw hostAnalysisRoutingError("Stabilizer Host Analysis session could not derive a sample size for the current clip frame.")
+        }
         do {
             let analysisFrame = try AutoStabilizationEstimator.analysisFrame(
                 from: frame,
@@ -1822,35 +2172,49 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 sampleWidth: sampleSize.width,
                 sampleHeight: sampleSize.height
             )
-            try analysisStore.append(analysisFrame, sourceInfo: frameInfo)
-            if analysisStore.frameCount == 1 {
+            try route.store.append(analysisFrame, sourceInfo: frameInfo)
+            recordActiveAnalysisFrameAccepted(
+                sessionID: route.sessionID,
+                frameTime: frameTime,
+                sourceInfo: frameInfo,
+                sampleSize: sampleSize
+            )
+            if route.store.frameCount == 1 {
                 os_log(
-                    "Received first Host Analysis frame at %{public}.3f seconds, sample %{public}dx%{public}d.",
+                    "Received first Host Analysis frame for session %{public}@ at %{public}.3f seconds, sample %{public}dx%{public}d.",
                     log: stabilizerHostAnalysisLog,
                     type: .default,
+                    route.sessionID.uuidString,
                     CMTimeGetSeconds(frameTime),
                     analysisFrame.sampleWidth,
                     analysisFrame.sampleHeight
                 )
                 NSLog(
-                    "StabilizerFxPlug: received first Host Analysis frame at %.3f seconds, sample %dx%d.",
+                    "StabilizerFxPlug: received first Host Analysis frame for session %@ at %.3f seconds, sample %dx%d.",
+                    route.sessionID.uuidString,
                     CMTimeGetSeconds(frameTime),
                     analysisFrame.sampleWidth,
                     analysisFrame.sampleHeight
                 )
             }
-            publishActiveAnalysisProgressIfNeeded(analysisStore)
+            publishActiveAnalysisProgressIfNeeded(route.store)
         } catch {
-            abandonActiveAnalysisAfterFailure()
+            abandonActiveAnalysisAfterFailure(sessionID: route.sessionID)
             throw error
         }
     }
 
     func cleanupAnalysis() throws {
-        guard let analysisStore = currentActiveAnalysisStore() else {
-            let reason = "Stabilizer Host Analysis cleanup had no active per-clip cache."
+        let cleanupRoute = takeActiveAnalysisSessionForCleanup()
+        let sessionID: UUID
+        let analysisStore: StabilizerHostAnalysisStore
+        switch cleanupRoute {
+        case .resolved(let resolvedSessionID, let resolvedStore):
+            sessionID = resolvedSessionID
+            analysisStore = resolvedStore
+        case .failed(let reason):
             NSLog("StabilizerFxPlug: \(reason)")
-            os_log("cleanupAnalysis failed because the active in-progress store was unavailable.", log: stabilizerHostAnalysisLog, type: .error)
+            os_log("cleanupAnalysis failed: %{public}@", log: stabilizerHostAnalysisLog, type: .error, reason)
             Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
             throw NSError(
                 domain: "com.justadev.StabilizerFxPlug",
@@ -1862,14 +2226,19 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             try analysisStore.finish()
         } catch {
             publishAnalysisCallbackStatus(analysisStore)
-            abandonActiveAnalysisAfterFailure()
+            abandonActiveAnalysisAfterFailure(sessionID: sessionID)
             throw error
         }
         hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
-        os_log("cleanupAnalysis completed %{public}d analyzed frame(s).", log: stabilizerHostAnalysisLog, type: .default, analysisStore.frameCount)
+        os_log(
+            "cleanupAnalysis completed session %{public}@ with %{public}d analyzed frame(s).",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            sessionID.uuidString,
+            analysisStore.frameCount
+        )
         let completedCacheIdentity = hostAnalysisStore.activeCacheIdentity
         let completedRenderRevision = hostAnalysisStore.renderInvalidationToken
-        setActiveAnalysisStore(nil)
         schedulePostAnalysisPreviewInvalidationRetries(
             revision: completedRenderRevision,
             cacheIdentity: completedCacheIdentity

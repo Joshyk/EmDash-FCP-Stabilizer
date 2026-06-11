@@ -173,9 +173,9 @@ fallbacks.
   only and the Inspector shows `Ready Memory Only - Project Bundle Cache Unavailable` after
   completion. The installed plug-in bundle is signed with sandbox and security-scoped file
   entitlements so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()`
-  security-scoped URL. The in-progress Host Analysis store is process-wide so setup, frame
-  analysis, and cleanup callbacks can arrive through different FxPlug instances without
-  losing the active analysis session.
+  security-scoped URL. The in-progress Host Analysis session registry is process-wide and
+  contains per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
+  through different FxPlug instances without losing or mixing the active analysis session.
   If a saved cache uses an unsupported schema, the Inspector shows
   `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has incomplete prepared
   paths or too few frames for its saved analysis range, the Inspector shows
@@ -206,14 +206,18 @@ fallbacks.
   reload candidates and update the hidden render revision without starting Host Analysis.
   A cache whose fingerprints do not match the current source frame is
   rejected instead of being accepted by time proximity alone. `Start Host Analysis` is the
-  only path that requests Host Analysis from Final Cut Pro.
+  only path that requests Host Analysis from Final Cut Pro. Concurrent analyzer callbacks
+  are routed through a process-wide session registry with per-clip in-progress stores; if a
+  callback cannot be assigned unambiguously, the plug-in fails visibly instead of mixing
+  frames between clips.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse. It appends
   the current FxPlug runtime version when Final Cut Pro accepts status parameter
   updates. `Queued Host Analysis` means this clip is waiting for the plug-in's serial Host
-  Analysis queue to start it after the currently active host run finishes; it should advance
-  automatically after the active host run finishes unless Final Cut Pro still reports busy.
+  Analysis queue to start it after the currently active or reserved host run finishes; it
+  should advance automatically after the active host run finishes unless Final Cut Pro still
+  reports busy.
   During a real analysis run, the status advances as `Analyzing Host Frames (N)`.
   If Final Cut Pro restores an in-progress analysis state while a compatible saved cache is
   already present, the plug-in prefers the saved cache and keeps the shared Ready/cache
@@ -231,8 +235,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R330` means FxPlug `0.3.30` is rendering original/optimized
-  frames, while `P330` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R331` means FxPlug `0.3.31` is rendering original/optimized
+  frames, while `P331` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
