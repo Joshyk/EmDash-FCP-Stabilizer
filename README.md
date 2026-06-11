@@ -136,8 +136,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R316` means FxPlug `0.3.16`
-is rendering original/optimized frames, and `P316` means proxy playback is using
+active render runtime and current source mode: `R318` means FxPlug `0.3.18`
+is rendering original/optimized frames, and `P318` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -238,9 +238,13 @@ to the analyzed frame set and applying that time offset before sampling the
 prepared motion paths. A validated analysis continues to drive preview/render
 when Final Cut Pro plays proxy media; proxy media is rejected only for Host
 Analysis input and for validating an unvalidated cache. When proxy playback uses
-a loaded cache before original-media validation, the render path keeps the hidden
-preview revision, `Host Analysis Status`, and `Stabilizer Info` current so Final
-Cut Pro shows the stabilized proxy preview and reports `Proxy Preview`.
+a loaded cache before original-media validation, the render path uses the active
+range-matched cache identity even if Final Cut Pro has not yet returned the
+hidden cache identity parameter. If a stale saved identity points at a different
+range, the same render callback drops it and reloads a compatible saved cache
+before giving up, then keeps the hidden preview revision, `Host Analysis Status`,
+and `Stabilizer Info` current so Final Cut Pro shows the stabilized proxy preview
+and reports `Proxy Preview`.
 When original-media validation has mapped a trimmed timeline render time back to
 the analyzed source time, that offset is saved with the Host Analysis cache identity
 so a separate proxy render instance can sample the same prepared motion path.

@@ -27,7 +27,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.16"
+private let stabilizerFxPlugVersion = "0.3.18"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -532,7 +532,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         if let expectedRange,
            let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
            !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            publishHostAnalysisCacheIdentity(nil, force: true)
+            publishHostAnalysisCacheIdentityOnMain(nil, force: true)
         }
         hostAnalysisStore.reset()
         let loadedPersistentCache: Bool
@@ -984,7 +984,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             return
         }
         if loadedCache {
-            publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
+            publishHostAnalysisCacheIdentityOnMain(hostAnalysisStore.activeCacheIdentity, force: false)
         }
         publishPreviewInvalidationOnMain(
             statusForce: loadedCache,
@@ -1065,6 +1065,16 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             cacheIdentityLock.unlock()
         } else {
             NSLog("StabilizerFxPlug: failed to update Host Analysis Cache Identity parameter.")
+        }
+    }
+
+    private func publishHostAnalysisCacheIdentityOnMain(_ identity: String?, force: Bool = false) {
+        if Thread.isMainThread {
+            publishHostAnalysisCacheIdentity(identity, force: force)
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.publishHostAnalysisCacheIdentity(identity, force: force)
         }
     }
 
@@ -1265,6 +1275,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         return range.isValid ? range : nil
     }
 
+    private func currentRenderExpectedRange(from state: StabilizerPluginState) -> HostAnalysisExpectedRange? {
+        currentInputRange() ?? Self.expectedInputRange(from: state)
+    }
+
     private func requestedSampleScalePercent(at time: CMTime) -> Double {
         var sampleScale = StabilizerSampleScale.defaultScale.rawValue
         if let paramAPI = apiManager.api(for: FxParameterRetrievalAPI_v6.self) as? FxParameterRetrievalAPI_v6 {
@@ -1401,7 +1415,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let transformEnabled = masterStrength > 0.0001
         let autoTransform: StabilizerAutoTransform
         var renderUsesPreparedAnalysis = false
-        let expectedRange = Self.expectedInputRange(from: state)
+        let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
         if transformEnabled,
            configureProjectBundleCacheDirectory(),
@@ -1412,7 +1426,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                expectedRange: expectedRange
            ) {
             renderUsesPreparedAnalysis = true
-            publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
+            publishHostAnalysisCacheIdentityOnMain(hostAnalysisStore.activeCacheIdentity, force: false)
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             autoTransform = AutoStabilizationEstimator.estimate(
                 preparedAnalysis: preparedAnalysis,
@@ -1686,7 +1700,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             throw error
         }
         hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
-        publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: true)
+        publishHostAnalysisCacheIdentityOnMain(hostAnalysisStore.activeCacheIdentity, force: true)
         setActiveAnalysisStore(nil)
         publishPreviewInvalidationOnMain(
             statusForce: true,
@@ -2298,25 +2312,26 @@ private final class StabilizerHostAnalysisStore {
             if let activeIdentity,
                !Self.cacheIdentity(activeIdentity, matches: expectedRange) {
                 deactivateActiveCacheForRangeMismatch()
-                guard activateNextPersistentCache(afterRejecting: nil, expectedRange: expectedRange) else {
-                    return nil
+                if activateNextPersistentCache(afterRejecting: nil, expectedRange: expectedRange) {
+                    continue
                 }
-                continue
+                if loadPersistentCache(expectedRange: expectedRange) {
+                    continue
+                }
+                return nil
             }
 
             if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) {
-                guard let preferredIdentity,
-                      !preferredIdentity.isEmpty,
-                      activeIdentity == preferredIdentity,
-                      Self.cacheIdentity(preferredIdentity, matches: expectedRange)
-                else {
-                    markProxyNeedsOriginalValidationForRender(reason: rejectionReason)
-                    return nil
+                if let activeIdentity,
+                   Self.cacheIdentity(activeIdentity, matches: expectedRange) {
+                    markProxyPreviewForRender(reason: rejectionReason)
+                    updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
+                    NSLog("StabilizerFxPlug: using range-matched Host Analysis cache for proxy render: \(rejectionReason)")
+                    return analysis
                 }
-                markProxyPreviewForRender(reason: rejectionReason)
-                updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
-                NSLog("StabilizerFxPlug: using clip-scoped Host Analysis cache for proxy render: \(rejectionReason)")
-                return analysis
+
+                markProxyNeedsOriginalValidationForRender(reason: rejectionReason)
+                return nil
             }
 
             if state == .validated || state == .notRequired {
