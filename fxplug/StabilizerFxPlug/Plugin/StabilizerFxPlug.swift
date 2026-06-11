@@ -26,7 +26,7 @@ private enum ParameterID: UInt32 {
     case strideWobbleRotationStrength = 31
 }
 
-private let stabilizerFxPlugVersion = "0.3.8"
+private let stabilizerFxPlugVersion = "0.3.9"
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -103,6 +103,17 @@ private struct StabilizerSourceFrameInfo {
 
 private enum StabilizerOriginalMediaPolicy {
     private static let proxyScaleTolerance = 0.05
+
+    static func sourceUnavailableReason(for frame: FxImageTile) -> String? {
+        guard let requestError = frame.requestError else {
+            return nil
+        }
+        let message = requestError.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            return "Final Cut Pro did not provide a source frame for render."
+        }
+        return "Final Cut Pro did not provide a source frame for render: \(message)"
+    }
 
     static func proxyRejectionReason(for frame: FxImageTile) -> String? {
         guard let frameInfo = frameInfo(for: frame) else {
@@ -858,9 +869,27 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         guard loadedCache || hostAnalysisStore.hasCompletedAnalysis else {
             return
         }
-        publishHostAnalysisStatus(force: loadedCache)
-        publishStabilizerInfo(force: loadedCache)
-        publishRenderRevision(hostAnalysisStore.renderInvalidationToken)
+        publishPreviewInvalidationOnMain(
+            statusForce: loadedCache,
+            infoForce: loadedCache,
+            revision: hostAnalysisStore.renderInvalidationToken
+        )
+    }
+
+    private func publishPreviewInvalidationOnMain(
+        statusForce: Bool,
+        infoForce: Bool,
+        revision: Double,
+        revisionForce: Bool = false
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.publishHostAnalysisStatus(force: statusForce)
+            self.publishStabilizerInfo(force: infoForce)
+            self.publishRenderRevision(revision, force: revisionForce)
+        }
     }
 
     private func setActiveAnalysisStore(_ store: StabilizerHostAnalysisStore?) {
@@ -1017,14 +1046,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let masterStrength = Float(max(0.0, state.strength))
         let transformEnabled = masterStrength > 0.0001
         let autoTransform: StabilizerAutoTransform
+        var renderUsesPreparedAnalysis = false
         if transformEnabled,
            let preparedAnalysis = hostAnalysisStore.preparedAnalysisForRender(validating: sourceImages[0], at: renderTime) {
-            let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
-            if abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
-                publishHostAnalysisStatus()
-                publishStabilizerInfo(state: state)
-                publishRenderRevision(renderInvalidationToken, currentParameterValue: state.renderRevision)
-            }
+            renderUsesPreparedAnalysis = true
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             autoTransform = AutoStabilizationEstimator.estimate(
                 preparedAnalysis: preparedAnalysis,
@@ -1045,6 +1070,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             )
         } else {
             autoTransform = .identity
+        }
+        let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
+        if abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
+            publishHostAnalysisStatus()
+            publishStabilizerInfo(state: state)
+            publishRenderRevision(renderInvalidationToken, currentParameterValue: state.renderRevision)
         }
         let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
         let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
@@ -1120,9 +1151,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             shear: autoTransform.shear * masterStrength,
             perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * masterStrength,
             edgeMode: Float(state.edgeDisplayMode),
-            debugOverlay: state.debugOverlay && transformEnabled ? 1.0 : 0.0
+            debugOverlay: state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? 1.0 : 0.0
         )
-        if state.debugOverlay && transformEnabled {
+        if state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis {
             publishHostAnalysisRenderDiagnostics(
                 frameCount: Int(state.hostAnalysisFrameCount),
                 panSmoothSeconds: state.panSmoothSeconds,
@@ -1266,9 +1297,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         hostAnalysisStore.installCompletedAnalysis(from: analysisStore)
         setActiveAnalysisStore(nil)
-        publishHostAnalysisStatus(force: true)
-        publishStabilizerInfo(force: true)
-        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+        publishPreviewInvalidationOnMain(
+            statusForce: true,
+            infoForce: true,
+            revision: hostAnalysisStore.renderInvalidationToken,
+            revisionForce: true
+        )
         Self.scheduleSerialAnalysisQueueDrain(after: 0.2)
     }
 }
@@ -1348,6 +1382,8 @@ private enum HostAnalysisStatus {
     case cacheIncomplete
     case cacheCleared
     case proxyRejected
+    case proxyPreview
+    case sourceUnavailable
 }
 
 private struct PersistedHostAnalysisCache: Codable {
@@ -1518,6 +1554,13 @@ private final class StabilizerHostAnalysisStore {
             return "Cache Cleared"
         case .proxyRejected:
             return "Proxy Media Rejected - Use Original Media"
+        case .proxyPreview:
+            if hasPreparedAnalysis {
+                return "Proxy Preview (\(frameCount) frames)"
+            }
+            return "Needs Analysis"
+        case .sourceUnavailable:
+            return "Source Media Unavailable - Check FCP Proxy"
         }
     }
 
@@ -1755,6 +1798,12 @@ private final class StabilizerHostAnalysisStore {
     }
 
     func preparedAnalysisForRender(validating sourceImage: FxImageTile, at renderTime: CMTime) -> StabilizerPreparedAnalysis? {
+        if let unavailableReason = StabilizerOriginalMediaPolicy.sourceUnavailableReason(for: sourceImage) {
+            markSourceUnavailableForRender(reason: unavailableReason)
+            NSLog("StabilizerFxPlug: source frame unavailable during render: \(unavailableReason)")
+            return nil
+        }
+
         while true {
             if shouldReloadPersistentCacheForConsumer(), loadPersistentCache() {
                 continue
@@ -1767,19 +1816,20 @@ private final class StabilizerHostAnalysisStore {
             }
 
             let state = currentValidationState()
-            if state == .validated || state == .notRequired {
-                markReadyAfterOriginalMediaReturnedIfNeeded()
-                updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
-                return analysis
-            }
             if state == .rejected {
                 return nil
             }
 
             if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) {
-                markReadyForProxyRenderIfNeeded()
+                markProxyPreviewForRender(reason: rejectionReason)
                 updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
                 NSLog("StabilizerFxPlug: using loaded Host Analysis cache for render before original-media validation because current playback frame is proxy media: \(rejectionReason)")
+                return analysis
+            }
+
+            if state == .validated || state == .notRequired {
+                markReadyAfterOriginalMediaReturnedIfNeeded()
+                updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
                 return analysis
             }
 
@@ -2167,25 +2217,39 @@ private final class StabilizerHostAnalysisStore {
 
     private func markReadyAfterOriginalMediaReturnedIfNeeded() {
         lock.lock()
-        if status == .proxyRejected, preparedAnalysis != nil {
+        if (status == .proxyRejected || status == .proxyPreview || status == .sourceUnavailable),
+           preparedAnalysis != nil {
             status = .ready
             bumpRevisionLocked()
         }
         lock.unlock()
     }
 
-    private func markReadyForProxyRenderIfNeeded() {
+    private func markProxyPreviewForRender(reason: String) {
         lock.lock()
-        let shouldMarkReady = preparedAnalysis != nil
-            && (status == .cacheLoaded || status == .proxyRejected)
-        if shouldMarkReady {
-            status = .ready
+        let shouldMarkProxyPreview = preparedAnalysis != nil
+            && status != .proxyPreview
+            && status != .sourceUnavailable
+        if shouldMarkProxyPreview {
+            status = .proxyPreview
+            analysisInfoText = "Using saved Host Analysis for proxy playback. If Final Cut Pro shows Missing Proxy, switch Viewer playback to Original/Optimized or create proxy media."
             bumpRevisionLocked()
         }
         lock.unlock()
-        if shouldMarkReady {
-            NSLog("StabilizerFxPlug: keeping prepared Host Analysis active for proxy preview before original-media validation.")
+        if shouldMarkProxyPreview {
+            NSLog("StabilizerFxPlug: keeping prepared Host Analysis active for proxy preview before original-media validation: \(reason)")
         }
+    }
+
+    private func markSourceUnavailableForRender(reason: String) {
+        lock.lock()
+        let shouldMarkSourceUnavailable = status != .sourceUnavailable
+        if shouldMarkSourceUnavailable {
+            status = .sourceUnavailable
+            analysisInfoText = "Render source unavailable. \(reason) Switch Viewer playback to Original/Optimized or create proxy media."
+            bumpRevisionLocked()
+        }
+        lock.unlock()
     }
 
     private func rejectPersistentCache(reason: String) {

@@ -52,6 +52,8 @@ estimators, or Transform-keyframe writers back into this target.
 - Monitors the shared persistent cache location from render/preview instances and publishes
   that hidden revision when an analyzer instance in another process finishes a compatible
   cache.
+- Publishes analyzer-completion and cache-monitor status/info/render revision updates from
+  the FxPlug main queue so Final Cut Pro invalidates stale preview frames.
 - Shares the in-process Host Analysis store across FxPlug analyzer/render instances so a
   completed analysis can drive smoothing in playback.
 - Keeps rejected cache candidates on disk for other clips.
@@ -197,6 +199,11 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   original-media validation can happen later when original frames are available. The render
   path keeps the hidden preview revision current in this state so Final Cut Pro shows the
   stabilized proxy preview without switching back to original media first.
+- If Final Cut Pro is set to proxy playback but the proxy file is missing, render receives
+  the Missing Proxy placeholder rather than original footage. The plug-in reports
+  `Source Media Unavailable - Check FCP Proxy`, keeps the saved cache intact, and suppresses
+  Debug Overlay diagnostics over the placeholder. Switch Viewer playback to
+  Original/Optimized or create proxy media to inspect the stabilized image.
 - `Edge Display Mode`: chooses whether transformed pixels outside the source image stretch
   edge pixels or draw black.
 - Host Analysis is always used. It requests GPU analysis frames from the host. Incomplete

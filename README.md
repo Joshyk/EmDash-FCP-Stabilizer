@@ -194,6 +194,9 @@ instance loads the completed cache and publishes the hidden render revision so
 stale preview frames redraw from the prepared motion path.
 If Final Cut Pro rejects a hidden revision update, the plug-in does not mark it
 as published, so a later monitor tick or callback can retry.
+Analyzer completion and cache-monitor ticks publish status/info/render revision
+from the FxPlug main queue, which keeps Final Cut Pro's preview invalidation in
+the same path as ordinary parameter updates.
 
 The analysis path:
 
@@ -229,6 +232,12 @@ when Final Cut Pro plays proxy media; proxy media is rejected only for Host
 Analysis input and for validating an unvalidated cache. When proxy playback uses
 a loaded cache before original-media validation, the render path keeps the hidden
 preview revision current so Final Cut Pro shows the stabilized proxy preview.
+If Final Cut Pro is set to proxy playback but the proxy media is missing, the
+host supplies a Missing Proxy placeholder rather than the original footage. The
+effect now reports `Source Media Unavailable - Check FCP Proxy`, keeps the saved
+analysis cache intact, and suppresses debug overlay diagnostics over that
+placeholder. Switch Viewer playback back to Original/Optimized or create proxy
+media to see the stabilized source frame.
 
 ## Cache Behavior
 

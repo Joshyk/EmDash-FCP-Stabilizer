@@ -326,6 +326,11 @@ FxPlug.
   original-media validation can happen later when original frames are available. The render
   path keeps the hidden preview revision current in this state so the stabilized proxy
   preview appears without switching back to original media first.
+- If Final Cut Pro is set to proxy playback and the proxy file is missing, the Viewer sends
+  the plug-in a Missing Proxy placeholder instead of the original image. The effect reports
+  `Source Media Unavailable - Check FCP Proxy`, leaves the Host Analysis cache on disk, and
+  does not draw Debug Overlay diagnostics over that placeholder. Switch Viewer playback to
+  Original/Optimized or create proxy media before judging the stabilized preview.
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
   Footstep Jitter impulse path, a fixed `2.0` second Stride Wobble band, and a Y-only
@@ -357,7 +362,9 @@ FxPlug.
   value for different completed clips. The plug-in skips setting that hidden parameter when
   Final Cut Pro already has the same value to avoid repeated effect-load invalidation. If
   Final Cut Pro rejects the hidden update, the plug-in does not record it as published, so a
-  later cache monitor tick or callback can retry.
+  later cache monitor tick or callback can retry. Analyzer completion and cache-monitor
+  ticks dispatch that status/info/render revision publication onto the FxPlug main queue
+  before calling Final Cut Pro's parameter-setting API.
 - Trimmed clips are supported by matching the current render frame fingerprint against the
   analyzed Host Analysis frame set. If Final Cut Pro reports render time in a different time
   domain than analysis time, the effect applies that offset before reading the prepared

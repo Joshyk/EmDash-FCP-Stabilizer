@@ -130,6 +130,9 @@ shared persistent cache location and publish the hidden render revision when a c
 completed cache appears, because analyzer callbacks may complete in a different FxPlug
 instance or process than the stale viewer preview. A failed hidden parameter update should
 not be recorded as published; a later valid callback or monitor tick should retry.
+Analyzer completion and persistent-cache monitor ticks should dispatch the status/info/render
+revision publication onto the FxPlug main queue before calling `FxParameterSettingAPI`, so
+Final Cut Pro treats the hidden revision as a real preview invalidation.
 Fingerprint mismatches must reject a
 candidate instead of accepting a different clip by time proximity alone. If Final Cut Pro keeps
 reporting a busy state when the serial queue tries to drain, keep the request queued visibly
@@ -158,7 +161,13 @@ and for validating an unvalidated persisted cache. If a saved Host Analysis cach
 while Final Cut Pro is currently playing proxy media, render playback should still use the
 loaded cache immediately rather than requiring re-analysis, keep the preview invalidation
 revision moving so the stabilized proxy preview appears, and let original-media validation
-happen later when original frames are available. When the
+happen later when original frames are available. If Final Cut Pro cannot provide the render
+source frame, such as when Viewer playback is set to missing proxy media, render should
+surface `Source Media Unavailable - Check FCP Proxy`, leave the saved Host Analysis cache
+intact, and avoid drawing Debug Overlay diagnostics over the placeholder frame. When render
+uses a saved analysis while the current source is proxy-scaled, status should make that
+visible as proxy preview instead of silently promoting the cache to ordinary `Ready`.
+When the
 effective overall transform strength is zero, rendering must
 bypass prepared motion-path sampling and output an identity transform with no debug overlay.
 Render-time frame/window lookup should use the sorted prepared frame times directly instead
