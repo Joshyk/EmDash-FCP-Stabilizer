@@ -28,7 +28,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.32"
+private let stabilizerFxPlugVersion = "0.3.33"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
@@ -341,7 +341,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static var serialAnalysisNextCallbackDrainAt = Date.distantPast
     private static let activeAnalysisStoreLock = NSLock()
     private static var activeAnalysisSessions: [UUID: ActiveHostAnalysisSession] = [:]
-    private static var hostAnalysisStartReserved = false
     private static let stabilizerInfoViewLock = NSLock()
     private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private static var latestStabilizerInfo = "FxPlug \(stabilizerFxPlugVersion)\nNo Analysis"
@@ -779,27 +778,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             }
             return .failed
         }
-        guard Self.reserveHostAnalysisStartIfAvailable() else {
-            let reason = "ActiveHostAnalysisSession"
-            if allowSerialQueue && force {
-                let position = Self.enqueueSerialAnalysis(self)
-                hostAnalysisStore.markQueued(position: position, reason: reason)
-                publishHostAnalysisStatus(force: true)
-                publishStabilizerInfo(force: true)
-                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-                NSLog("StabilizerFxPlug: queued Host Analysis request at position \(position) because another clip has an active or reserved Host Analysis session.")
-                os_log("Queued Host Analysis because another clip has an active or reserved session at position %{public}d.", log: stabilizerHostAnalysisLog, type: .default, position)
-                Self.scheduleSerialAnalysisQueueDrain()
-                return .queued
-            }
-            if force {
-                hostAnalysisStore.markStartFailed(reason: reason)
-            }
-            publishHostAnalysisStatus(force: true)
-            publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-            return .failed
-        }
         do {
             Self.removeQueuedSerialAnalysis(self)
             try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
@@ -813,7 +791,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         } catch {
             NSLog("StabilizerFxPlug: Host Analysis request failed: \(error.localizedDescription)")
             os_log("Host Analysis request failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
-            Self.releaseHostAnalysisStartReservation()
             Self.removeQueuedSerialAnalysis(self)
             hostAnalysisStore.markStartFailed(reason: error.localizedDescription)
             publishHostAnalysisStatus(force: true)
@@ -936,24 +913,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 continue
             }
         }
-    }
-
-    private static func reserveHostAnalysisStartIfAvailable() -> Bool {
-        activeAnalysisStoreLock.lock()
-        defer { activeAnalysisStoreLock.unlock() }
-        guard !hostAnalysisStartReserved,
-              activeAnalysisSessions.isEmpty
-        else {
-            return false
-        }
-        hostAnalysisStartReserved = true
-        return true
-    }
-
-    private static func releaseHostAnalysisStartReservation() {
-        activeAnalysisStoreLock.lock()
-        hostAnalysisStartReserved = false
-        activeAnalysisStoreLock.unlock()
     }
 
     private static func analysisStateDescription(_ state: FxAnalysisState) -> String {
@@ -1237,7 +1196,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             requestedSampleScalePercent: requestedSampleScalePercent
         )
         Self.activeAnalysisStoreLock.lock()
-        Self.hostAnalysisStartReserved = false
         Self.activeAnalysisSessions[session.id] = session
         Self.activeAnalysisStoreLock.unlock()
         activeAnalyzerSessionID = session.id
@@ -1360,9 +1318,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         } else if Self.activeAnalysisSessions.count == 1,
                   let sessionID = Self.activeAnalysisSessions.keys.first {
             Self.activeAnalysisSessions.removeValue(forKey: sessionID)
-        }
-        if Self.activeAnalysisSessions.isEmpty {
-            Self.hostAnalysisStartReserved = false
         }
         Self.activeAnalysisStoreLock.unlock()
     }

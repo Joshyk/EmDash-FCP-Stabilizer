@@ -140,8 +140,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R332` means FxPlug `0.3.32`
-is rendering original/optimized frames, and `P332` means proxy playback is using
+active render runtime and current source mode: `R333` means FxPlug `0.3.33`
+is rendering original/optimized frames, and `P333` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -178,16 +178,13 @@ frames by active session range, owner, source frame, and sample size; if Final
 Cut Pro delivers a callback that matches multiple active sessions, the plug-in
 fails that callback visibly instead of appending the frame to an arbitrary clip.
 
-When `Start Host Analysis` is pressed while Final Cut Pro reports that another
-analysis is already requested or running, or while this plug-in process already
-has an active/reserved Host Analysis session for another clip, the effect enters
-`Queued Host Analysis` instead of failing or mixing callback frames. The
-process-wide queue starts queued clips one at a time as the host becomes
-available. Queued start requests are retained until they either start or are
-explicitly cleared, and a completed analysis from an earlier clip does not
-satisfy a later queued clip. Queue drain runs as one-shot retry passes after
-analysis callbacks complete; if Final Cut Pro is still busy, the request stays
-queued and another pass is scheduled.
+When `Start Host Analysis` is pressed on more than one clip, each clip requests
+its own Final Cut Pro Host Analysis run so Final Cut Pro can show the work in
+Background Tasks and start the next run when the previous run finishes. If Final
+Cut Pro reports that the current effect is already requested or running, the
+Inspector shows `Queued Host Analysis` and the plug-in keeps that start request
+visible until a retry pass can hand it to the host. A completed analysis from an
+earlier clip does not satisfy a later queued clip.
 Analysis callback instances clear process-wide analysis bookkeeping, because
 Final Cut Pro may deliver setup/analyze/cleanup to a different FxPlug instance
 than the Inspector button instance that requested the run. The Inspector start

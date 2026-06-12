@@ -10,12 +10,13 @@
    `Cache Incomplete - Run Host Analysis`.
 5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
-`Start Host Analysis` requests the active effect clip from Final Cut Pro. If Final Cut Pro
-reports that another analysis is already requested or running, the Inspector shows
-`Queued Host Analysis` and the effect waits in a process-wide serial queue. Queued clips
-start one at a time as earlier Host Analysis runs finish. A queued clip remains a real
-pending start request until it starts or you clear it; another clip's completed analysis is
-not treated as completion for the queued clip.
+`Start Host Analysis` requests the active effect clip from Final Cut Pro. Multiple selected
+clips should each hand their own Host Analysis request to Final Cut Pro so Background Tasks
+can show the queued work and start the next run when the previous run finishes. If Final Cut
+Pro reports that the current effect is already requested or running, the Inspector shows
+`Queued Host Analysis` and the plug-in keeps that start request visible until a retry pass
+can hand it to the host. Another clip's completed analysis is not treated as completion for
+the queued clip.
 Debug installs clean stale `Stabilizer Transform copy...` Motion Template folders in the
 `Emdash Studios` group so Final Cut Pro does not list duplicate Stabilizer effects.
 The Debug scheme and install step fail if Final Cut Pro is running, because building or
@@ -214,11 +215,11 @@ fallbacks.
   `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse. It appends
   the current FxPlug runtime version when Final Cut Pro accepts status parameter
-  updates. `Queued Host Analysis` means this clip is waiting for the plug-in's serial Host
-  Analysis queue to start it after the currently active or reserved host run finishes; it
-  should advance automatically after the active host run finishes unless Final Cut Pro still
-  reports busy. Queue drain runs in one-shot retry passes after analysis callbacks complete;
-  if the host is still busy, the request remains queued and another pass is scheduled.
+  updates. `Queued Host Analysis` means Final Cut Pro reported that this effect already has
+  an analysis requested or running, so the plug-in is keeping the start request visible until
+  a retry pass can hand it to the host. Different clips should normally hand separate
+  requests to Final Cut Pro so they appear in Background Tasks rather than waiting in the
+  plug-in queue.
   During a real analysis run, the status advances as `Analyzing Host Frames (N)`.
   If Final Cut Pro restores an in-progress analysis state while a compatible saved cache is
   already present, the plug-in prefers the saved cache and keeps the shared Ready/cache
@@ -236,8 +237,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R332` means FxPlug `0.3.32` is rendering original/optimized
-  frames, while `P332` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R333` means FxPlug `0.3.33` is rendering original/optimized
+  frames, while `P333` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker

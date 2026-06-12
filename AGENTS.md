@@ -144,12 +144,13 @@ Host Analysis playback must render from prepared motion paths for the active FxP
 preview callbacks must not auto-start Host Analysis. If Final Cut Pro reports that another
 Host Analysis is already requested or running, queue the requested effect instance for
 serial analysis and surface `Queued Host Analysis` in the Inspector instead of failing
-silently. Also queue the request when this plug-in process already has an active or
-reserved Host Analysis session for another clip, even if the host reports the current
-effect as not analyzing. Queue drain should run as retryable one-shot passes after
-analysis callbacks complete; if the host is still busy, keep the request visibly queued and
-schedule another pass. In-progress Host Analysis state must be per clip/session so requested
-clips, including clips with different actual sample sizes, never share a streaming builder. The
+silently. Do not block a different clip's `startForwardAnalysis` just because this plug-in
+process already has an active Host Analysis session; let Final Cut Pro put both requests in
+Background Tasks and start the second run after the first. Queue drain should run as
+retryable one-shot passes after analysis callbacks complete only for requests that the host
+itself reported as already requested/running. In-progress Host Analysis state must be per
+clip/session so requested clips, including clips with different actual sample sizes, never
+share a streaming builder. The
 active runtime uses a process-wide shared Host Analysis render/cache store after completion
 because Final Cut Pro may call analyzer and preview/render through different FxPlug
 instances. Persistent cache files are the cross-process reuse path after source-frame
