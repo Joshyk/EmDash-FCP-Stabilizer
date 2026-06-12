@@ -140,8 +140,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R339` means FxPlug `0.3.39`
-is rendering original/optimized frames, and `P339` means proxy playback is using
+active render runtime and current source mode: `R340` means FxPlug `0.3.40`
+is rendering original/optimized frames, and `P340` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -193,6 +193,11 @@ busy/requested state. Final Cut Pro's own analysis state remains the authority
 before any queued request can start. The queue stores the `FxAnalysisAPI` obtained
 when Start was pressed, so retry passes do not drop the request just because the
 API cannot be reacquired from a later callback context.
+When Final Cut Pro cannot provide a writable Event cache root, completed
+memory-only analyses are retained by analyzed timeline range plus sample/fingerprint
+identity in the plug-in process, so a later queued clip does not discard stabilization
+for an earlier clip or collide with another clip that has the same source-time range
+in the same viewer session.
 Preview/render and plug-in state callbacks check the persistent cache signature,
 so a queued clip that completes in a different FxPlug process can replace an
 older prepared path and update the hidden render revision without requiring

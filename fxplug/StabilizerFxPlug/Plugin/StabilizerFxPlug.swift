@@ -28,7 +28,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.39"
+private let stabilizerFxPlugVersion = "0.3.40"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
@@ -2416,6 +2416,27 @@ private struct LoadedPersistentHostAnalysisCache {
 }
 
 private final class StabilizerHostAnalysisStore {
+    private typealias CompletedHostAnalysisSnapshot = (
+        frames: [StabilizerAnalysisFrame],
+        preparedAnalysis: StabilizerPreparedAnalysis?,
+        activeRange: CMTimeRange,
+        activeFrameDuration: CMTime,
+        activeRequestedSampleScalePercent: Double,
+        finished: Bool,
+        validationState: HostAnalysisValidationState,
+        status: HostAnalysisStatus,
+        latestSourceFrameInfo: StabilizerSourceFrameInfo?,
+        latestSampleSize: (width: Int, height: Int)?,
+        analysisInfoText: String,
+        activePersistentCacheIdentity: String?
+    )
+
+    private struct CompletedMemoryHostAnalysis {
+        let identity: String
+        let rangeKey: String
+        let snapshot: CompletedHostAnalysisSnapshot
+    }
+
     private static let cacheSchemaVersion = 14
     private static let supportedCacheSchemaVersions: Set<Int> = [14]
     private static let persistentCacheGenerationLock = NSLock()
@@ -2424,6 +2445,7 @@ private final class StabilizerHostAnalysisStore {
     private static var projectBundleCacheDirectoryURL: URL?
     private static var retainedSecurityScopedProjectURLs: [URL] = []
     private static let maxPersistentCacheEntriesPerSampleSize = 8
+    private static let maxCompletedMemoryAnalyses = 8
     private static let maxPersistentCacheReadBytes = 629_145_600
     private static let cacheValidationMeanDifferenceThreshold: Float = 18.0
     private static let cacheFileName = "host-analysis-v2.json"
@@ -2436,6 +2458,11 @@ private final class StabilizerHostAnalysisStore {
     private var framesByTimeKey: [Int64: StabilizerAnalysisFrame] = [:]
     private var streamingAnalysisBuilder: StreamingStabilizationAnalysisBuilder?
     private var preparedAnalysis: StabilizerPreparedAnalysis?
+    private var activeCompletedMemoryAnalysisIdentity: String?
+    private var completedMemoryAnalysesByIdentity: [String: CompletedMemoryHostAnalysis] = [:]
+    private var completedMemoryAnalysisIdentitiesByRangeKey: [String: [String]] = [:]
+    private var completedMemoryAnalysisOrder: [String] = []
+    private var rejectedCompletedMemoryAnalysisIdentities = Set<String>()
     private var persistentCachesByIdentity: [String: LoadedPersistentHostAnalysisCache] = [:]
     private var persistentCacheCandidates: [URL] = []
     private var activePersistentCacheFileName: String?
@@ -2579,6 +2606,7 @@ private final class StabilizerHostAnalysisStore {
         framesByTimeKey.removeAll(keepingCapacity: true)
         streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        activeCompletedMemoryAnalysisIdentity = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
@@ -2655,6 +2683,7 @@ private final class StabilizerHostAnalysisStore {
         framesByTimeKey.removeAll(keepingCapacity: true)
         streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        activeCompletedMemoryAnalysisIdentity = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
@@ -2682,6 +2711,11 @@ private final class StabilizerHostAnalysisStore {
         framesByTimeKey.removeAll(keepingCapacity: true)
         streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        activeCompletedMemoryAnalysisIdentity = nil
+        completedMemoryAnalysesByIdentity.removeAll(keepingCapacity: false)
+        completedMemoryAnalysisIdentitiesByRangeKey.removeAll(keepingCapacity: false)
+        completedMemoryAnalysisOrder.removeAll(keepingCapacity: false)
+        rejectedCompletedMemoryAnalysisIdentities.removeAll(keepingCapacity: false)
         persistentCachesByIdentity.removeAll(keepingCapacity: false)
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
@@ -2711,6 +2745,7 @@ private final class StabilizerHostAnalysisStore {
         framesByTimeKey.removeAll(keepingCapacity: true)
         streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        activeCompletedMemoryAnalysisIdentity = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
@@ -2790,9 +2825,21 @@ private final class StabilizerHostAnalysisStore {
     func installCompletedAnalysis(from completedStore: StabilizerHostAnalysisStore) {
         let snapshot = completedStore.completedAnalysisSnapshot()
         lock.lock()
+        installCompletedAnalysisLocked(snapshot)
+        activeCompletedMemoryAnalysisIdentity = retainCompletedMemoryAnalysisLocked(snapshot)
+        bumpRevisionLocked()
+        lock.unlock()
+        NSLog("StabilizerFxPlug: installed completed Host Analysis session with \(snapshot.frames.count) frame(s) into shared render store.")
+    }
+
+    private func installCompletedAnalysisLocked(
+        _ snapshot: CompletedHostAnalysisSnapshot,
+        validationStateOverride: HostAnalysisValidationState? = nil
+    ) {
         framesByTimeKey = Dictionary(uniqueKeysWithValues: snapshot.frames.map { (Self.timeKey($0.time), $0) })
         streamingAnalysisBuilder = nil
         preparedAnalysis = snapshot.preparedAnalysis
+        activeCompletedMemoryAnalysisIdentity = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = snapshot.activePersistentCacheIdentity
@@ -2803,14 +2850,76 @@ private final class StabilizerHostAnalysisStore {
         renderToAnalysisOffsetSeconds = nil
         renderToAnalysisOffsetProbeAttempted = false
         finished = snapshot.finished
-        validationState = snapshot.validationState
+        validationState = validationStateOverride ?? snapshot.validationState
         status = snapshot.status
         latestSourceFrameInfo = snapshot.latestSourceFrameInfo
         latestSampleSize = snapshot.latestSampleSize
         analysisInfoText = snapshot.analysisInfoText
+    }
+
+    private func retainCompletedMemoryAnalysisLocked(_ snapshot: CompletedHostAnalysisSnapshot) -> String? {
+        guard snapshot.finished,
+              snapshot.preparedAnalysis != nil,
+              snapshot.activePersistentCacheIdentity == nil,
+              let rangeKey = Self.completedMemoryAnalysisRangeKey(range: snapshot.activeRange),
+              let identity = Self.completedMemoryAnalysisIdentity(snapshot: snapshot, rangeKey: rangeKey)
+        else {
+            return nil
+        }
+        completedMemoryAnalysesByIdentity[identity] = CompletedMemoryHostAnalysis(
+            identity: identity,
+            rangeKey: rangeKey,
+            snapshot: snapshot
+        )
+        var rangeIdentities = completedMemoryAnalysisIdentitiesByRangeKey[rangeKey] ?? []
+        rangeIdentities.removeAll { $0 == identity }
+        rangeIdentities.append(identity)
+        completedMemoryAnalysisIdentitiesByRangeKey[rangeKey] = rangeIdentities
+        completedMemoryAnalysisOrder.removeAll { $0 == identity }
+        completedMemoryAnalysisOrder.append(identity)
+        rejectedCompletedMemoryAnalysisIdentities.remove(identity)
+        while completedMemoryAnalysisOrder.count > Self.maxCompletedMemoryAnalyses,
+              let evictedIdentity = completedMemoryAnalysisOrder.first {
+            completedMemoryAnalysisOrder.removeFirst()
+            if let evicted = completedMemoryAnalysesByIdentity.removeValue(forKey: evictedIdentity) {
+                completedMemoryAnalysisIdentitiesByRangeKey[evicted.rangeKey]?.removeAll { $0 == evictedIdentity }
+                if completedMemoryAnalysisIdentitiesByRangeKey[evicted.rangeKey]?.isEmpty == true {
+                    completedMemoryAnalysisIdentitiesByRangeKey.removeValue(forKey: evicted.rangeKey)
+                }
+            }
+            rejectedCompletedMemoryAnalysisIdentities.remove(evictedIdentity)
+        }
+        return identity
+    }
+
+    private func activateCompletedMemoryAnalysisIfNeeded(expectedRange: HostAnalysisExpectedRange) -> Bool {
+        guard let expectedKey = Self.completedMemoryAnalysisRangeKey(expectedRange: expectedRange) else {
+            return false
+        }
+        lock.lock()
+        if activePersistentCacheIdentity == nil,
+           finished,
+           preparedAnalysis != nil,
+           Self.completedMemoryAnalysisRangeKey(range: activeRange) == expectedKey {
+            lock.unlock()
+            return true
+        }
+        guard let memoryAnalysis = nextCompletedMemoryAnalysisLocked(rangeKey: expectedKey) else {
+            lock.unlock()
+            return false
+        }
+        installCompletedAnalysisLocked(memoryAnalysis.snapshot, validationStateOverride: .pending)
+        activeCompletedMemoryAnalysisIdentity = memoryAnalysis.identity
         bumpRevisionLocked()
         lock.unlock()
-        NSLog("StabilizerFxPlug: installed completed Host Analysis session with \(snapshot.frames.count) frame(s) into shared render store.")
+        os_log(
+            "Activated in-memory Host Analysis for expected range key %{public}@ identity %{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            expectedKey,
+            memoryAnalysis.identity
+        )
+        return true
     }
 
     func preparedAnalysisForRender(
@@ -2830,6 +2939,9 @@ private final class StabilizerHostAnalysisStore {
            !preferredIdentity.isEmpty,
            Self.cacheIdentity(preferredIdentity, matches: expectedRange) {
             _ = activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange)
+        }
+        if let expectedRange, expectedRange.isValid {
+            _ = activateCompletedMemoryAnalysisIfNeeded(expectedRange: expectedRange)
         }
 
         while true {
@@ -2856,6 +2968,16 @@ private final class StabilizerHostAnalysisStore {
                     continue
                 }
                 if loadPersistentCache(expectedRange: expectedRange) {
+                    continue
+                }
+                return nil
+            }
+            if activeIdentity == nil,
+               let expectedRange,
+               expectedRange.isValid,
+               activeCompletedMemoryAnalysisDoesNotMatch(expectedRange: expectedRange) {
+                deactivateActiveCompletedMemoryAnalysisForRangeMismatch()
+                if activateCompletedMemoryAnalysisIfNeeded(expectedRange: expectedRange) {
                     continue
                 }
                 return nil
@@ -2891,7 +3013,14 @@ private final class StabilizerHostAnalysisStore {
             }
 
             if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
+                if activateNextCompletedMemoryAnalysis(afterRejecting: rejectionReason, expectedRange: expectedRange) {
+                    continue
+                }
                 guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange) else {
+                    if activeIdentity == nil {
+                        rejectActiveInMemoryAnalysis(reason: rejectionReason)
+                        return nil
+                    }
                     rejectPersistentCache(reason: rejectionReason)
                     return nil
                 }
@@ -2901,7 +3030,9 @@ private final class StabilizerHostAnalysisStore {
             lock.lock()
             if validationState == .pending {
                 validationState = .validated
-                status = .ready
+                if status != .projectCacheUnavailable {
+                    status = .ready
+                }
                 bumpRevisionLocked()
             }
             lock.unlock()
@@ -3282,20 +3413,7 @@ private final class StabilizerHostAnalysisStore {
         return analysis
     }
 
-    private func completedAnalysisSnapshot() -> (
-        frames: [StabilizerAnalysisFrame],
-        preparedAnalysis: StabilizerPreparedAnalysis?,
-        activeRange: CMTimeRange,
-        activeFrameDuration: CMTime,
-        activeRequestedSampleScalePercent: Double,
-        finished: Bool,
-        validationState: HostAnalysisValidationState,
-        status: HostAnalysisStatus,
-        latestSourceFrameInfo: StabilizerSourceFrameInfo?,
-        latestSampleSize: (width: Int, height: Int)?,
-        analysisInfoText: String,
-        activePersistentCacheIdentity: String?
-    ) {
+    private func completedAnalysisSnapshot() -> CompletedHostAnalysisSnapshot {
         lock.lock()
         let snapshot = (
             frames: framesByTimeKey.values.sorted { $0.time < $1.time },
@@ -3409,7 +3527,32 @@ private final class StabilizerHostAnalysisStore {
         framesByTimeKey.removeAll(keepingCapacity: true)
         streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        activeCompletedMemoryAnalysisIdentity = nil
         persistentCacheCandidates.removeAll(keepingCapacity: false)
+        activePersistentCacheFileName = nil
+        activePersistentCacheIdentity = nil
+        activeRange = .invalid
+        activeFrameDuration = .invalid
+        renderToAnalysisOffsetSeconds = nil
+        renderToAnalysisOffsetProbeAttempted = false
+        finished = false
+        validationState = .rejected
+        status = .cacheRejected
+        bumpRevisionLocked()
+        lock.unlock()
+        NSLog("StabilizerFxPlug: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(reason).")
+    }
+
+    private func rejectActiveInMemoryAnalysis(reason: String) {
+        lock.lock()
+        let rejectedIdentity = activeCompletedMemoryAnalysisIdentity
+        if let rejectedIdentity {
+            rejectedCompletedMemoryAnalysisIdentities.insert(rejectedIdentity)
+        }
+        framesByTimeKey.removeAll(keepingCapacity: true)
+        streamingAnalysisBuilder = nil
+        preparedAnalysis = nil
+        activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
         activeRange = .invalid
@@ -3417,9 +3560,10 @@ private final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .rejected
         status = .cacheRejected
+        analysisInfoText = "In-memory Host Analysis did not match the current clip. Run Host Analysis again."
         bumpRevisionLocked()
         lock.unlock()
-        NSLog("StabilizerFxPlug: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(reason).")
+        NSLog("StabilizerFxPlug: rejected in-memory Host Analysis \(rejectedIdentity ?? "<unknown>"): \(reason).")
     }
 
     private func persistentCacheRejectionReason(for analysis: StabilizerPreparedAnalysis, validating sourceImage: FxImageTile, at renderTime: CMTime) -> String? {
@@ -3542,6 +3686,7 @@ private final class StabilizerHostAnalysisStore {
         framesByTimeKey.removeAll(keepingCapacity: true)
         streamingAnalysisBuilder = nil
         preparedAnalysis = nil
+        activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
         activeRange = .invalid
@@ -3557,6 +3702,84 @@ private final class StabilizerHostAnalysisStore {
         if let oldFileName {
             NSLog("StabilizerFxPlug: deactivated Host Analysis cache \(oldFileName) because its range does not match the active clip.")
         }
+    }
+
+    private func activeCompletedMemoryAnalysisDoesNotMatch(expectedRange: HostAnalysisExpectedRange) -> Bool {
+        guard let expectedKey = Self.completedMemoryAnalysisRangeKey(expectedRange: expectedRange) else {
+            return false
+        }
+        lock.lock()
+        let hasActiveMemoryAnalysis = activePersistentCacheIdentity == nil
+            && preparedAnalysis != nil
+            && finished
+        let activeKey = Self.completedMemoryAnalysisRangeKey(range: activeRange)
+        lock.unlock()
+        return hasActiveMemoryAnalysis && activeKey != expectedKey
+    }
+
+    private func deactivateActiveCompletedMemoryAnalysisForRangeMismatch() {
+        lock.lock()
+        let oldIdentity = activeCompletedMemoryAnalysisIdentity
+        framesByTimeKey.removeAll(keepingCapacity: true)
+        streamingAnalysisBuilder = nil
+        preparedAnalysis = nil
+        activeCompletedMemoryAnalysisIdentity = nil
+        activePersistentCacheFileName = nil
+        activePersistentCacheIdentity = nil
+        activeRange = .invalid
+        activeFrameDuration = .invalid
+        renderToAnalysisOffsetSeconds = nil
+        renderToAnalysisOffsetProbeAttempted = false
+        finished = false
+        validationState = .notRequired
+        status = .needsAnalysis
+        analysisInfoText = "No matching in-memory Host Analysis for the active clip range."
+        bumpRevisionLocked()
+        lock.unlock()
+        if let oldIdentity {
+            NSLog("StabilizerFxPlug: deactivated in-memory Host Analysis \(oldIdentity) because its range does not match the active clip.")
+        }
+    }
+
+    private func activateNextCompletedMemoryAnalysis(afterRejecting rejectionReason: String?, expectedRange: HostAnalysisExpectedRange?) -> Bool {
+        guard let expectedRange,
+              let rangeKey = Self.completedMemoryAnalysisRangeKey(expectedRange: expectedRange)
+        else {
+            return false
+        }
+
+        lock.lock()
+        if let rejectionReason,
+           let rejectedIdentity = activeCompletedMemoryAnalysisIdentity {
+            rejectedCompletedMemoryAnalysisIdentities.insert(rejectedIdentity)
+            NSLog("StabilizerFxPlug: rejected in-memory Host Analysis \(rejectedIdentity): \(rejectionReason).")
+        }
+        guard let memoryAnalysis = nextCompletedMemoryAnalysisLocked(rangeKey: rangeKey) else {
+            lock.unlock()
+            return false
+        }
+        installCompletedAnalysisLocked(memoryAnalysis.snapshot, validationStateOverride: .pending)
+        activeCompletedMemoryAnalysisIdentity = memoryAnalysis.identity
+        bumpRevisionLocked()
+        lock.unlock()
+        NSLog("StabilizerFxPlug: activated alternate in-memory Host Analysis \(memoryAnalysis.identity) for range \(rangeKey).")
+        return true
+    }
+
+    private func nextCompletedMemoryAnalysisLocked(rangeKey: String) -> CompletedMemoryHostAnalysis? {
+        guard let identities = completedMemoryAnalysisIdentitiesByRangeKey[rangeKey] else {
+            return nil
+        }
+        for identity in identities.reversed() {
+            guard identity != activeCompletedMemoryAnalysisIdentity,
+                  !rejectedCompletedMemoryAnalysisIdentities.contains(identity),
+                  let memoryAnalysis = completedMemoryAnalysesByIdentity[identity]
+            else {
+                continue
+            }
+            return memoryAnalysis
+        }
+        return nil
     }
 
     private func activateNextPersistentCache(afterRejecting rejectionReason: String?, expectedRange: HostAnalysisExpectedRange?) -> Bool {
@@ -3610,6 +3833,7 @@ private final class StabilizerHostAnalysisStore {
         persistentCachesByIdentity[loadedCache.identity] = loadedCache
         framesByTimeKey = Dictionary(uniqueKeysWithValues: loadedCache.frames.map { (Self.timeKey($0.time), $0) })
         preparedAnalysis = loadedCache.preparedAnalysis
+        activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = loadedCache.fileName
         activePersistentCacheIdentity = loadedCache.identity
         activeRange = CMTimeRange(
@@ -3782,6 +4006,51 @@ private final class StabilizerHostAnalysisStore {
 
     static func timeKey(_ seconds: Double) -> Int64 {
         Int64((seconds * 600.0).rounded())
+    }
+
+    private static func completedMemoryAnalysisRangeKey(range: CMTimeRange) -> String? {
+        let startSeconds = CMTimeGetSeconds(range.start)
+        let durationSeconds = CMTimeGetSeconds(range.duration)
+        guard startSeconds.isFinite,
+              durationSeconds.isFinite,
+              durationSeconds > 0.0
+        else {
+            return nil
+        }
+        return "\(timeKey(startSeconds)):\(timeKey(durationSeconds))"
+    }
+
+    private static func completedMemoryAnalysisRangeKey(expectedRange: HostAnalysisExpectedRange) -> String? {
+        guard expectedRange.isValid else {
+            return nil
+        }
+        return "\(timeKey(expectedRange.startSeconds)):\(timeKey(expectedRange.durationSeconds))"
+    }
+
+    private static func completedMemoryAnalysisIdentity(snapshot: CompletedHostAnalysisSnapshot, rangeKey: String) -> String? {
+        guard let preparedAnalysis = snapshot.preparedAnalysis,
+              let firstFrame = preparedAnalysis.frames.first,
+              let fingerprints = persistentCacheFingerprints(for: preparedAnalysis.frames)
+        else {
+            NSLog("StabilizerFxPlug: could not retain completed in-memory Host Analysis because frame fingerprints were incomplete.")
+            return nil
+        }
+        let frameDurationSeconds = CMTimeGetSeconds(snapshot.activeFrameDuration)
+        guard frameDurationSeconds.isFinite else {
+            return nil
+        }
+        return [
+            "memory",
+            "\(cacheSchemaVersion)",
+            rangeKey,
+            "\(timeKey(frameDurationSeconds))",
+            "\(firstFrame.sampleWidth)",
+            "\(firstFrame.sampleHeight)",
+            "\(preparedAnalysis.frames.count)",
+            fingerprints.first,
+            fingerprints.middle,
+            fingerprints.last
+        ].joined(separator: ":")
     }
 
     static func cacheIdentity(_ identity: String, matches expectedRange: HostAnalysisExpectedRange?) -> Bool {

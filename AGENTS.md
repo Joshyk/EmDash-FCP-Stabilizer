@@ -186,6 +186,10 @@ retry callbacks must not drop the queued request just because `FxAnalysisAPI` ca
 reacquired from a later callback context. Do not use plug-in-local active markers as the authority for blocking another
 Inspector `Start Host Analysis` action; the start path should ask Final Cut Pro's
 `analysisStateForEffect()` and queue only when the host reports a busy/requested state.
+When analysis completes memory-only because the Event cache root is unavailable, keep
+completed in-process analyses isolated by analyzed timeline range plus sample/fingerprint
+identity so serial analysis of a later clip does not discard the earlier clip's usable
+viewer result or collide with another clip that has the same source-time range.
 Do not re-run full block matching across
 the analyzed frame set on every render frame. Keep `Host Analysis
 Status` visible in the Inspector, update it to `Ready (... frames)` after completed

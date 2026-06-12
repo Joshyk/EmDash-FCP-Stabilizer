@@ -197,6 +197,11 @@ fallbacks.
   busy/requested state. Queued starts still check Final Cut Pro's actual analysis state
   before starting, and the queued request keeps the `FxAnalysisAPI` obtained when Start
   was pressed so retry drain does not need to reacquire it from a later callback context.
+  If the Event cache root is unavailable and analysis completes memory-only, the plug-in
+  keeps completed memory-only analyses by analyzed timeline range plus sample/fingerprint
+  identity for the current process so serial analysis of another clip does not discard the
+  earlier clip's viewer result or collide with another clip that has the same source-time
+  range.
   Completed analysis is then published to the process-wide shared render/cache store and
   persisted inside the current Final Cut Pro Event's `Analysis Files` cache root resolved
   from the host-provided media folder. The
@@ -235,8 +240,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R339` means FxPlug `0.3.39` is rendering original/optimized
-  frames, while `P339` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R340` means FxPlug `0.3.40` is rendering original/optimized
+  frames, while `P340` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
