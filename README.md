@@ -140,8 +140,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R340` means FxPlug `0.3.40`
-is rendering original/optimized frames, and `P340` means proxy playback is using
+active render runtime and current source mode: `R341` means FxPlug `0.3.41`
+is rendering original/optimized frames, and `P341` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -277,10 +277,14 @@ media to see the stabilized source frame.
 Completed Host Analysis is written inside the active Final Cut Pro library bundle, scoped to
 the Event that owns the current project/media folder. If Final Cut Pro reports a library temp
 folder instead of an Event folder, the runtime uses an unambiguous top-level Event resolver,
-such as the single Event that already has Final Cut Pro `Analysis Files`. The resolver starts
-access to the host-provided media folder before inspecting the library bundle, then verifies
-the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root. It fails visibly
-when the Event remains ambiguous or that directory cannot be created. The cache root lives
+such as the single Event that already has Final Cut Pro `Analysis Files`. If multiple Events
+have `Analysis Files`, the resolver compares the active Host Analysis range against Final Cut
+Pro `Analysis Files/Stabilization` range folder names and only selects a unique match. The
+resolver starts access to the host-provided media folder before inspecting the library bundle,
+then verifies the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root.
+It logs the media folder URL, bundle root, Event candidates, selected Event, and rejection
+reason with public `os_log` fields. It fails visibly as `Project Bundle Cache Unavailable -
+Ambiguous Event` when the Event remains ambiguous. The cache root lives
 under that Event's `Analysis Files` directory so analysis files stay unique to the Event and
 do not appear as top-level library content:
 
@@ -300,9 +304,12 @@ If the runtime cannot resolve a writable Event cache root, the effect shows
 library-wide cache. During a live Final Cut Pro Host Analysis callback, the analyzer can
 still finish the current session in memory and show
 `Ready Memory Only - Project Bundle Cache Unavailable`; that result is usable for the current
-viewer/render session but is not persisted for future reuse.
-Range-specific files under `caches/` include the analyzed range, actual
-`sampleWidth`/`sampleHeight`, frame count, and frame fingerprints in the filename.
+viewer/render session but is not persisted to any shared or out-of-bundle location. If the
+Event cache root becomes available later, the completed in-memory analysis is saved into that
+Event cache and the Inspector returns to ordinary `Ready (...)` status.
+Range-specific files under `caches/` include a readable clip label when available, analyzed
+start/end, actual `sampleWidth`/`sampleHeight`, frame count, and representative frame
+fingerprints in the filename.
 `host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
 cache.
 
@@ -318,7 +325,8 @@ callback cannot see `FxProjectAPI`, it still asks Final Cut Pro to start Host
 Analysis and lets the analyzer `setupAnalysis` callback resolve the Event cache
 root. If setup still cannot resolve a writable Event cache root, the effect
 finishes the active analyzer pass in memory only and shows `Ready Memory Only -
-Project Bundle Cache Unavailable` after completion. It must not delete saved cache files.
+Project Bundle Cache Unavailable` after completion until a later callback can resolve the
+Event cache root and save the completed result. It must not delete saved cache files.
 The installed plug-in bundle is signed with sandbox and security-scoped file
 entitlements so the Host Analysis runtime can open the
 `FxProjectAPI.mediaFolderURL()` security-scoped URL.

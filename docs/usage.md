@@ -170,7 +170,8 @@ fallbacks.
   and lets the analyzer `setupAnalysis` callback resolve the Event cache root. If setup still
   cannot resolve a writable Event cache root, the analyzer finishes the active pass in memory
   only and the Inspector shows `Ready Memory Only - Project Bundle Cache Unavailable` after
-  completion. The installed plug-in bundle is signed with sandbox and security-scoped file
+  completion until a later callback can resolve the Event cache root and save the completed
+  result. The installed plug-in bundle is signed with sandbox and security-scoped file
   entitlements so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()`
   security-scoped URL. The in-progress Host Analysis session registry is process-wide and
   contains per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
@@ -240,8 +241,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R340` means FxPlug `0.3.40` is rendering original/optimized
-  frames, while `P340` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R341` means FxPlug `0.3.41` is rendering original/optimized
+  frames, while `P341` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -420,11 +421,15 @@ The latest Host Analysis compatibility alias is written inside the active Final 
 library bundle, scoped to the Event that owns the current project/media folder. If Final Cut
 Pro reports a library temp folder instead of an Event folder, the runtime uses an
 unambiguous top-level Event resolver, such as the single Event that already has Final Cut Pro
-`Analysis Files`. It starts access to the host-provided media folder before inspecting the
-library bundle, then verifies the selected Event by creating the `StabilizerFxPlugHostAnalysis`
-cache root. It fails visibly when the Event remains ambiguous or that directory cannot be
-created. The cache root lives under that Event's `Analysis Files` directory so analysis files
-stay unique to the Event and do not appear as top-level library content:
+`Analysis Files`. If multiple Events have `Analysis Files`, the resolver compares the active
+Host Analysis range against Final Cut Pro `Analysis Files/Stabilization` range folder names
+and only selects a unique match. It starts access to the host-provided media folder before
+inspecting the library bundle, then verifies the selected Event by creating the
+`StabilizerFxPlugHostAnalysis` cache root. Resolver logs include the media folder URL, bundle
+root, Event candidates, selected Event, and rejection reason. It fails visibly as
+`Project Bundle Cache Unavailable - Ambiguous Event` when the Event remains ambiguous. The
+cache root lives under that Event's `Analysis Files` directory so analysis files stay unique
+to the Event and do not appear as top-level library content:
 
 ```text
 <active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json
@@ -436,7 +441,9 @@ cannot resolve a writable Event cache root, the Inspector shows
 `Project Bundle Cache Unavailable` instead of falling back to a shared user cache or a
 library-wide cache. During a live Host Analysis callback, the current pass may still finish
 in memory as `Ready Memory Only - Project Bundle Cache Unavailable`; that result can drive
-the current viewer/render session, but it is not persisted for future reuse.
+the current viewer/render session, but it is not persisted to any shared or out-of-bundle
+location. If the Event cache root becomes available later, the completed in-memory analysis
+is saved into that Event cache and the Inspector returns to ordinary `Ready (...)` status.
 Older top-level bundle caches at `<active library>.fcpbundle/StabilizerFxPlugHostAnalysis/`
 and older internal bundle caches at
 `<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` are moved into
@@ -454,9 +461,11 @@ Range-specific, sample-size-scoped cache files are stored under:
 <active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/caches/
 ```
 
-Those filenames include the analyzed range, actual `sampleWidth` and `sampleHeight`, frame
-count, and saved fingerprints. The cache index retains entries independently per sample size
-instead of pruning all sizes through one global bucket.
+Those filenames include a readable clip label when available, analyzed start/end, actual
+`sampleWidth` and `sampleHeight`, frame count, and representative saved fingerprints. The
+cache index stores the clip label, range start/end, sample size, fingerprints, and cache
+identity, and retains entries independently per sample size instead of pruning all sizes
+through one global bucket.
 
 On load, the effect validates the current source frame against saved frame fingerprints
 before using a persisted cache. If a lightweight cache frame no longer has retained

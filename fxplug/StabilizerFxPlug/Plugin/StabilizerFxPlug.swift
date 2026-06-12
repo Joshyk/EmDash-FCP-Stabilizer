@@ -28,12 +28,13 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.40"
+private let stabilizerFxPlugVersion = "0.3.41"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 private let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
+private let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -97,6 +98,10 @@ private struct HostAnalysisExpectedRange {
     let startSeconds: Double
     let durationSeconds: Double
     let frameDurationSeconds: Double
+
+    var endSeconds: Double {
+        startSeconds + durationSeconds
+    }
 
     var isValid: Bool {
         startSeconds.isFinite
@@ -656,7 +661,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             }
         }
         let expectedRange = Self.expectedInputRange(from: state)
-        if configureProjectBundleCacheDirectory() {
+        if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
                hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
@@ -694,7 +699,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         }
         hostAnalysisStore.reset()
         let loadedPersistentCache: Bool
-        if configureProjectBundleCacheDirectory(markUnavailable: false) {
+        if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
                hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
                 loadedPersistentCache = true
@@ -720,7 +725,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     @objc(clearHostAnalysisCache)
     func clearHostAnalysisCache() {
         Self.removeQueuedSerialAnalysis(self)
-        guard configureProjectBundleCacheDirectory() else {
+        guard configureProjectBundleCacheDirectory(expectedRange: currentInputRange()) else {
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -1165,7 +1170,8 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     private func pollPersistentCacheForPreviewInvalidation() {
-        guard configureProjectBundleCacheDirectory() else {
+        let expectedRange = currentInputRange()
+        guard configureProjectBundleCacheDirectory(expectedRange: expectedRange) else {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
                 infoForce: true,
@@ -1173,7 +1179,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             )
             return
         }
-        let expectedRange = currentInputRange()
         if let expectedRange,
            let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
            !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
@@ -1491,8 +1496,12 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     }
 
     @discardableResult
-    private func configureProjectBundleCacheDirectory(markUnavailable: Bool = true) -> Bool {
+    private func configureProjectBundleCacheDirectory(
+        markUnavailable: Bool = true,
+        expectedRange: HostAnalysisExpectedRange? = nil
+    ) -> Bool {
         if StabilizerHostAnalysisStore.hasConfiguredProjectBundleCacheDirectory {
+            _ = hostAnalysisStore.persistCompletedAnalysisIfPossible()
             return true
         }
         if let projectAPI = apiManager.api(for: FxProjectAPI.self) as? FxProjectAPI {
@@ -1511,14 +1520,24 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     guard let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL) else {
                         let reason = "FxProjectAPI media folder is not inside a .fcpbundle: \(projectMediaURL.path)"
                         NSLog("StabilizerFxPlug: \(reason)")
+                        os_log("Event cache resolver rejected mediaFolderURL %{public}@ because it is not inside a .fcpbundle.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                         }
                         return false
                     }
-                    guard let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot) else {
-                        let reason = "FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
+                    os_log(
+                        "Event cache resolver input mediaFolderURL=%{public}@ bundleRoot=%{public}@ expectedRange=%{public}@.",
+                        log: stabilizerHostAnalysisLog,
+                        type: .default,
+                        projectMediaURL.path,
+                        bundleRoot.path,
+                        Self.expectedRangeDescription(expectedRange)
+                    )
+                    guard let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot, expectedRange: expectedRange) else {
+                        let reason = "Ambiguous Event for Host Analysis cache. FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
                         NSLog("StabilizerFxPlug: \(reason)")
+                        os_log("Event cache resolver rejected mediaFolderURL %{public}@ in bundle %{public}@ because no unambiguous Event candidate was selected.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path, bundleRoot.path)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                         }
@@ -1530,6 +1549,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     } catch {
                         let reason = "Event Analysis Files cache root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
                         NSLog("StabilizerFxPlug: \(reason)")
+                        os_log("Event cache resolver selected Event %{public}@ but cache root creation failed at %{public}@: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, eventResolution.eventRoot.path, cacheRoot.path, error.localizedDescription)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                         }
@@ -1549,14 +1569,25 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     )
                     StabilizerHostAnalysisStore.configureProjectBundleCacheDirectory(
                         cacheRoot,
-                        securityScopedURL: didStartAccess ? projectMediaURL : nil
+                        securityScopedURL: didStartAccess ? projectMediaURL : nil,
+                        eventName: eventResolution.eventRoot.lastPathComponent
                     )
                     shouldRetainSecurityScopedAccess = didStartAccess
                     NSLog("StabilizerFxPlug: using \(eventResolution.sourceDescription) Event Host Analysis cache at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
+                    os_log(
+                        "Event cache resolver selected Event %{public}@ by %{public}@; cacheRoot=%{public}@.",
+                        log: stabilizerHostAnalysisLog,
+                        type: .default,
+                        eventResolution.eventRoot.lastPathComponent,
+                        eventResolution.sourceDescription,
+                        cacheRoot.path
+                    )
+                    _ = hostAnalysisStore.persistCompletedAnalysisIfPossible()
                     return true
                 }
                 let reason = "FxProjectAPI did not provide a project media folder URL."
                 NSLog("StabilizerFxPlug: \(reason)")
+                os_log("Event cache resolver rejected because FxProjectAPI did not provide mediaFolderURL.", log: stabilizerHostAnalysisLog, type: .error)
                 if markUnavailable {
                     hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                 }
@@ -1564,6 +1595,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             } catch {
                 let reason = "FxProjectAPI media folder unavailable: \(error.localizedDescription)"
                 NSLog("StabilizerFxPlug: \(reason)")
+                os_log("Event cache resolver rejected because mediaFolderURL failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
                 if markUnavailable {
                     hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                 }
@@ -1572,6 +1604,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         } else {
             let reason = "FxProjectAPI unavailable; Event Analysis Files cache cannot be resolved."
             NSLog("StabilizerFxPlug: \(reason)")
+            os_log("Event cache resolver rejected because FxProjectAPI is unavailable.", log: stabilizerHostAnalysisLog, type: .error)
             if markUnavailable {
                 hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
             }
@@ -1668,8 +1701,20 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let sourceDescription: String
     }
 
-    private static func fcpEventRoot(containing url: URL, in bundleRoot: URL) -> FCPEventRootResolution? {
+    private static func fcpEventRoot(
+        containing url: URL,
+        in bundleRoot: URL,
+        expectedRange: HostAnalysisExpectedRange?
+    ) -> FCPEventRootResolution? {
         let bundleRoot = bundleRoot.standardizedFileURL
+        let eventRoots = topLevelEventRoots(in: bundleRoot)
+        os_log(
+            "Event cache resolver candidates in %{public}@: %{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            bundleRoot.path,
+            eventRoots.map(eventCandidateDescription).joined(separator: " | ")
+        )
         var current = url.standardizedFileURL
         var ancestorEventRoot: URL?
         while current.path != "/" && current.path.hasPrefix(bundleRoot.path) {
@@ -1685,39 +1730,149 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             current.deleteLastPathComponent()
         }
         if let ancestorEventRoot {
+            os_log(
+                "Event cache resolver selected ancestor Event %{public}@ for mediaFolderURL %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                ancestorEventRoot.path,
+                url.path
+            )
             return FCPEventRootResolution(
                 eventRoot: ancestorEventRoot,
                 sourceDescription: "FxProjectAPI media-folder ancestor"
             )
         }
-        if let analysisFilesEventRoot = singleTopLevelEventWithExistingAnalysisFiles(in: bundleRoot) {
+        let analysisFilesEventRoots = eventRootsWithExistingAnalysisFiles(from: eventRoots)
+        if analysisFilesEventRoots.count == 1,
+           let analysisFilesEventRoot = analysisFilesEventRoots.first {
+            os_log(
+                "Event cache resolver selected the only Event with Analysis Files: %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                analysisFilesEventRoot.path
+            )
             return FCPEventRootResolution(
                 eventRoot: analysisFilesEventRoot,
                 sourceDescription: "single existing Event Analysis Files"
             )
         }
-        if let onlyEventRoot = singleTopLevelEvent(in: bundleRoot) {
+        if analysisFilesEventRoots.count > 1,
+           let stabilizationMatch = eventRootMatchingExistingStabilizationAnalysis(
+                expectedRange: expectedRange,
+                in: analysisFilesEventRoots
+           ) {
+            os_log(
+                "Event cache resolver selected Event %{public}@ by FCP Stabilization range match for %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                stabilizationMatch.path,
+                expectedRangeDescription(expectedRange)
+            )
+            return FCPEventRootResolution(
+                eventRoot: stabilizationMatch,
+                sourceDescription: "FCP Stabilization range match"
+            )
+        }
+        if eventRoots.count == 1,
+           let onlyEventRoot = eventRoots.first {
+            os_log(
+                "Event cache resolver selected the only top-level Event: %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                onlyEventRoot.path
+            )
             return FCPEventRootResolution(
                 eventRoot: onlyEventRoot,
                 sourceDescription: "single top-level library Event"
             )
         }
+        os_log(
+            "Event cache resolver rejected ambiguous Event candidates. Analysis Files candidates=%{public}d total candidates=%{public}d expectedRange=%{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .error,
+            analysisFilesEventRoots.count,
+            eventRoots.count,
+            expectedRangeDescription(expectedRange)
+        )
         return nil
     }
 
-    private static func singleTopLevelEventWithExistingAnalysisFiles(in bundleRoot: URL) -> URL? {
-        let eventRoots = topLevelEventRoots(in: bundleRoot).filter { eventRoot in
+    private static func eventRootsWithExistingAnalysisFiles(from eventRoots: [URL]) -> [URL] {
+        eventRoots.filter { eventRoot in
             let analysisFilesURL = eventRoot.appendingPathComponent("Analysis Files", isDirectory: true)
             var isDirectory = ObjCBool(false)
             return FileManager.default.fileExists(atPath: analysisFilesURL.path, isDirectory: &isDirectory)
                 && isDirectory.boolValue
         }
-        return eventRoots.count == 1 ? eventRoots[0] : nil
     }
 
-    private static func singleTopLevelEvent(in bundleRoot: URL) -> URL? {
-        let eventRoots = topLevelEventRoots(in: bundleRoot)
-        return eventRoots.count == 1 ? eventRoots[0] : nil
+    private static func eventRootMatchingExistingStabilizationAnalysis(
+        expectedRange: HostAnalysisExpectedRange?,
+        in eventRoots: [URL]
+    ) -> URL? {
+        guard let expectedRange, expectedRange.isValid else {
+            return nil
+        }
+        let startKey = StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds)
+        let endKey = StabilizerHostAnalysisStore.timeKey(expectedRange.endSeconds)
+        let matchedRoots = eventRoots.filter { eventRoot in
+            stabilizationAnalysisDirectoryNames(in: eventRoot).contains { name in
+                stabilizationAnalysisName(name, matchesStartKey: startKey, endKey: endKey)
+            }
+        }
+        return matchedRoots.count == 1 ? matchedRoots[0] : nil
+    }
+
+    private static func stabilizationAnalysisDirectoryNames(in eventRoot: URL) -> [String] {
+        let stabilizationURL = eventRoot
+            .appendingPathComponent("Analysis Files", isDirectory: true)
+            .appendingPathComponent("Stabilization", isDirectory: true)
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: stabilizationURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return urls.compactMap { url in
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            return isDirectory ? url.lastPathComponent : nil
+        }
+    }
+
+    private static func stabilizationAnalysisName(_ name: String, matchesStartKey startKey: Int64, endKey: Int64) -> Bool {
+        let pattern = #"(-?\d+)-(-?\d+)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return false
+        }
+        let range = NSRange(name.startIndex..<name.endIndex, in: name)
+        let matches = expression.matches(in: name, range: range)
+        return matches.contains { match in
+            guard match.numberOfRanges >= 3,
+                  let startRange = Range(match.range(at: 1), in: name),
+                  let endRange = Range(match.range(at: 2), in: name),
+                  let candidateStart = Int64(String(name[startRange])),
+                  let candidateEnd = Int64(String(name[endRange]))
+            else {
+                return false
+            }
+            return abs(candidateStart - startKey) <= 1
+                && abs(candidateEnd - endKey) <= 1
+        }
+    }
+
+    private static func eventCandidateDescription(_ eventRoot: URL) -> String {
+        let analysisFilesURL = eventRoot.appendingPathComponent("Analysis Files", isDirectory: true)
+        let hasAnalysisFiles = FileManager.default.fileExists(atPath: analysisFilesURL.path)
+        let stabilizationCount = stabilizationAnalysisDirectoryNames(in: eventRoot).count
+        return "\(eventRoot.lastPathComponent)(analysisFiles:\(hasAnalysisFiles ? "yes" : "no"), stabilization:\(stabilizationCount))"
+    }
+
+    private static func expectedRangeDescription(_ expectedRange: HostAnalysisExpectedRange?) -> String {
+        guard let expectedRange, expectedRange.isValid else {
+            return "none"
+        }
+        return "start\(StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds))-end\(StabilizerHostAnalysisStore.timeKey(expectedRange.endSeconds))-duration\(StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds))"
     }
 
     private static func topLevelEventRoots(in bundleRoot: URL) -> [URL] {
@@ -1895,7 +2050,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
         let hasCompletedHostAnalysis = hostAnalysisStore.hasCompletedAnalysis
         let configuredProjectBundleCache = transformEnabled && !hasCompletedHostAnalysis
-            ? configureProjectBundleCacheDirectory(markUnavailable: false)
+            ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)
             : false
         let canUseHostAnalysisStoreForRender = transformEnabled
             && (hasCompletedHostAnalysis || configuredProjectBundleCache)
@@ -2087,9 +2242,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             CMTimeGetSeconds(analysisRange.duration),
             CMTimeGetSeconds(frameDuration)
         )
-        if !configureProjectBundleCacheDirectory() {
+        let expectedRange = HostAnalysisExpectedRange(
+            startSeconds: CMTimeGetSeconds(analysisRange.start),
+            durationSeconds: CMTimeGetSeconds(analysisRange.duration),
+            frameDurationSeconds: CMTimeGetSeconds(frameDuration)
+        )
+        if !configureProjectBundleCacheDirectory(expectedRange: expectedRange.isValid ? expectedRange : nil) {
             NSLog("StabilizerFxPlug: setup Host Analysis will continue in memory because the Event cache root is unavailable.")
-            os_log("setupAnalysis continuing in memory because the Event cache root is unavailable; completed analysis will not be persisted.", log: stabilizerHostAnalysisLog, type: .error)
+            os_log("setupAnalysis continuing in memory because the Event cache root is unavailable; completed analysis will persist later if the Event cache root becomes available.", log: stabilizerHostAnalysisLog, type: .error)
         }
         let analysisStore = StabilizerHostAnalysisStore()
         let requestedSampleScalePercent = requestedSampleScalePercent(at: analysisRange.start)
@@ -2117,11 +2277,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             CMTimeGetSeconds(analysisRange.start),
             CMTimeGetSeconds(analysisRange.duration),
             CMTimeGetSeconds(frameDuration)
-        )
-        let expectedRange = HostAnalysisExpectedRange(
-            startSeconds: CMTimeGetSeconds(analysisRange.start),
-            durationSeconds: CMTimeGetSeconds(analysisRange.duration),
-            frameDurationSeconds: CMTimeGetSeconds(frameDuration)
         )
         _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange.isValid ? expectedRange : nil)
         publishAnalysisCallbackStatus(analysisStore)
@@ -2333,11 +2488,14 @@ private enum HostAnalysisStatus {
 private struct PersistedHostAnalysisCache: Codable {
     let schemaVersion: Int
     let createdAt: Double
+    let clipLabel: String?
     let rangeStartSeconds: Double
     let rangeDurationSeconds: Double
+    let rangeEndSeconds: Double?
     let frameDurationSeconds: Double
     let sampleWidth: Int
     let sampleHeight: Int
+    let eventName: String?
     let frames: [PersistedHostAnalysisFrame]
     let residuals: [Float]?
     let rollMotion: [Float]?
@@ -2381,8 +2539,10 @@ private struct PersistedHostAnalysisIndex: Codable {
 private struct PersistedHostAnalysisIndexEntry: Codable {
     let cacheFileName: String
     let createdAt: Double
+    let clipLabel: String?
     let rangeStartSeconds: Double
     let rangeDurationSeconds: Double
+    let rangeEndSeconds: Double?
     let frameDurationSeconds: Double
     let sampleWidth: Int
     let sampleHeight: Int
@@ -2390,6 +2550,7 @@ private struct PersistedHostAnalysisIndexEntry: Codable {
     let firstFingerprint: String
     let middleFingerprint: String
     let lastFingerprint: String
+    let fingerprints: [String]?
     let cacheIdentity: String?
 }
 
@@ -2425,6 +2586,7 @@ private final class StabilizerHostAnalysisStore {
         finished: Bool,
         validationState: HostAnalysisValidationState,
         status: HostAnalysisStatus,
+        projectCacheUnavailableStatusText: String,
         latestSourceFrameInfo: StabilizerSourceFrameInfo?,
         latestSampleSize: (width: Int, height: Int)?,
         analysisInfoText: String,
@@ -2443,6 +2605,7 @@ private final class StabilizerHostAnalysisStore {
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
     private static var projectBundleCacheDirectoryURL: URL?
+    private static var projectBundleCacheEventName: String?
     private static var retainedSecurityScopedProjectURLs: [URL] = []
     private static let maxPersistentCacheEntriesPerSampleSize = 8
     private static let maxCompletedMemoryAnalyses = 8
@@ -2476,6 +2639,7 @@ private final class StabilizerHostAnalysisStore {
     private var finished = false
     private var validationState: HostAnalysisValidationState = .notRequired
     private var status: HostAnalysisStatus = .needsAnalysis
+    private var projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
     private var analysisRevision: UInt64 = 0
     private var renderRevisionToken: Double = 0.0
     private var observedPersistentCacheGeneration: UInt64 = 0
@@ -2514,11 +2678,12 @@ private final class StabilizerHostAnalysisStore {
         return activePersistentCacheIdentity
     }
 
-    static func configureProjectBundleCacheDirectory(_ directoryURL: URL, securityScopedURL: URL?) {
+    static func configureProjectBundleCacheDirectory(_ directoryURL: URL, securityScopedURL: URL?, eventName: String) {
         let standardizedDirectoryURL = directoryURL.standardizedFileURL
         projectCacheDirectoryLock.lock()
         let changed = projectBundleCacheDirectoryURL?.path != standardizedDirectoryURL.path
         projectBundleCacheDirectoryURL = standardizedDirectoryURL
+        projectBundleCacheEventName = eventName
         if let securityScopedURL {
             let standardizedSecurityURL = securityScopedURL.standardizedFileURL
             if !retainedSecurityScopedProjectURLs.contains(where: { $0.path == standardizedSecurityURL.path }) {
@@ -2529,6 +2694,13 @@ private final class StabilizerHostAnalysisStore {
         if changed {
             bumpPersistentCacheGeneration()
         }
+    }
+
+    private static var currentProjectBundleCacheEventName: String? {
+        projectCacheDirectoryLock.lock()
+        let eventName = projectBundleCacheEventName
+        projectCacheDirectoryLock.unlock()
+        return eventName
     }
 
     static var hasConfiguredProjectBundleCacheDirectory: Bool {
@@ -2543,6 +2715,7 @@ private final class StabilizerHostAnalysisStore {
         let currentStatus = status
         let frameCount = framesByTimeKey.count
         let hasPreparedAnalysis = preparedAnalysis != nil
+        let unavailableStatusText = projectCacheUnavailableStatusText
         lock.unlock()
 
         switch currentStatus {
@@ -2571,9 +2744,9 @@ private final class StabilizerHostAnalysisStore {
             return "Cache Cleared"
         case .projectCacheUnavailable:
             if hasPreparedAnalysis {
-                return "Ready Memory Only - \(stabilizerProjectCacheUnavailableMessage)"
+                return "Ready Memory Only - \(unavailableStatusText)"
             }
-            return stabilizerProjectCacheUnavailableMessage
+            return unavailableStatusText
         case .proxyRejected:
             return "Proxy Media Rejected - Use Original Media"
         case .proxyPreview:
@@ -2619,6 +2792,7 @@ private final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .validated
         status = .analyzing
+        projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Analyzing..."
@@ -2668,10 +2842,16 @@ private final class StabilizerHostAnalysisStore {
 
     func markProjectCacheUnavailable(reason: String) {
         lock.lock()
+        let statusText = reason.localizedCaseInsensitiveContains("Ambiguous Event")
+            ? stabilizerAmbiguousEventCacheUnavailableMessage
+            : stabilizerProjectCacheUnavailableMessage
         if preparedAnalysis == nil {
             status = .projectCacheUnavailable
-            analysisInfoText = "\(stabilizerProjectCacheUnavailableMessage). \(reason)"
+            projectCacheUnavailableStatusText = statusText
+            analysisInfoText = "\(statusText). \(reason)"
             bumpRevisionLocked()
+        } else {
+            projectCacheUnavailableStatusText = statusText
         }
         lock.unlock()
         NSLog("StabilizerFxPlug: project bundle Host Analysis cache unavailable: \(reason)")
@@ -2695,6 +2875,7 @@ private final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
+        projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "No Analysis"
@@ -2729,6 +2910,7 @@ private final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .cacheCleared
+        projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Cache Cleared"
@@ -2757,6 +2939,7 @@ private final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .proxyRejected
+        projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         analysisInfoText = "Rejected proxy media. Use original media and rerun Host Analysis."
         bumpRevisionLocked()
         lock.unlock()
@@ -2852,6 +3035,7 @@ private final class StabilizerHostAnalysisStore {
         finished = snapshot.finished
         validationState = validationStateOverride ?? snapshot.validationState
         status = snapshot.status
+        projectCacheUnavailableStatusText = snapshot.projectCacheUnavailableStatusText
         latestSourceFrameInfo = snapshot.latestSourceFrameInfo
         latestSampleSize = snapshot.latestSampleSize
         analysisInfoText = snapshot.analysisInfoText
@@ -3096,7 +3280,9 @@ private final class StabilizerHostAnalysisStore {
                 sampleWidth: activeCandidate.cache.sampleWidth,
                 sampleHeight: activeCandidate.cache.sampleHeight,
                 sourceInfo: nil,
-                prefix: "Loaded Cache"
+                prefix: "Loaded Cache",
+                eventName: activeCandidate.cache.eventName ?? Self.currentProjectBundleCacheEventName,
+                cacheIdentity: activeCandidate.identity
             )
             lock.unlock()
             NSLog("StabilizerFxPlug: loaded persisted Host Analysis cache \(activeCandidate.fileName) with \(activeCandidate.frames.count) frames; \(candidateURLs.count) lazy alternate cache(s) available.")
@@ -3215,7 +3401,9 @@ private final class StabilizerHostAnalysisStore {
         sampleWidth: Int?,
         sampleHeight: Int?,
         sourceInfo: StabilizerSourceFrameInfo?,
-        prefix: String
+        prefix: String,
+        eventName: String? = nil,
+        cacheIdentity: String? = nil
     ) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -3229,22 +3417,51 @@ private final class StabilizerHostAnalysisStore {
         } else {
             sampleText = "unknown"
         }
-        return "\(prefix) \(dateText) | frames \(frameCount) | sample \(sampleText) | source \(sourceText) | pixel scale \(scaleText)"
+        var text = "\(prefix) \(dateText) | frames \(frameCount) | sample \(sampleText) | source \(sourceText) | pixel scale \(scaleText)"
+        if let eventName, !eventName.isEmpty {
+            text += " | Event \(eventName)"
+        }
+        if let cacheIdentity, !cacheIdentity.isEmpty {
+            text += " | cache \(shortCacheIdentity(cacheIdentity))"
+        }
+        return text
     }
 
-    private func persistIfCompleted() {
-        let snapshot: (frames: [StabilizerAnalysisFrame], prepared: StabilizerPreparedAnalysis?, range: CMTimeRange, frameDuration: CMTime) = {
+    @discardableResult
+    func persistCompletedAnalysisIfPossible() -> Bool {
+        lock.lock()
+        let shouldPersist = finished
+            && preparedAnalysis != nil
+            && activePersistentCacheIdentity == nil
+            && validationState != .rejected
+        lock.unlock()
+        guard shouldPersist else {
+            return false
+        }
+        return persistIfCompleted()
+    }
+
+    @discardableResult
+    private func persistIfCompleted() -> Bool {
+        let snapshot: (
+            frames: [StabilizerAnalysisFrame],
+            prepared: StabilizerPreparedAnalysis?,
+            range: CMTimeRange,
+            frameDuration: CMTime,
+            sourceInfo: StabilizerSourceFrameInfo?
+        ) = {
             lock.lock()
             let frames = framesByTimeKey.values.sorted { $0.time < $1.time }
             let prepared = preparedAnalysis
             let range = activeRange
             let frameDuration = activeFrameDuration
+            let sourceInfo = latestSourceFrameInfo
             lock.unlock()
-            return (frames, prepared, range, frameDuration)
+            return (frames, prepared, range, frameDuration, sourceInfo)
         }()
 
         guard let prepared = snapshot.prepared, prepared.frames.count >= 3 else {
-            return
+            return false
         }
         guard let cacheDirectoryURL = Self.cacheDirectoryURL,
               let cacheStorageDirectoryURL = Self.cacheStorageDirectoryURL,
@@ -3252,11 +3469,12 @@ private final class StabilizerHostAnalysisStore {
         else {
             lock.lock()
             status = .projectCacheUnavailable
+            projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
             analysisInfoText = "\(stabilizerProjectCacheUnavailableMessage). Host did not provide a writable Event Analysis Files cache root."
             bumpRevisionLocked()
             lock.unlock()
             NSLog("StabilizerFxPlug: failed to save Host Analysis cache because no FCP bundle cache root is configured.")
-            return
+            return false
         }
         let framesToPersist = prepared.frames
         if snapshot.frames.count != framesToPersist.count {
@@ -3273,15 +3491,21 @@ private final class StabilizerHostAnalysisStore {
         let rangeDurationSeconds = suppliedRangeDurationSeconds.isFinite
             ? suppliedRangeDurationSeconds
             : max(frameDurationSeconds, (lastFrameTime - firstFrameTime) + frameDurationSeconds)
+        let rangeEndSeconds = rangeStartSeconds + rangeDurationSeconds
+        let clipLabel = Self.defaultClipLabel
+        let eventName = Self.currentProjectBundleCacheEventName
 
         let cache = PersistedHostAnalysisCache(
             schemaVersion: Self.cacheSchemaVersion,
             createdAt: Date().timeIntervalSince1970,
+            clipLabel: clipLabel,
             rangeStartSeconds: rangeStartSeconds,
             rangeDurationSeconds: rangeDurationSeconds,
+            rangeEndSeconds: rangeEndSeconds,
             frameDurationSeconds: frameDurationSeconds,
             sampleWidth: sampleWidth,
             sampleHeight: sampleHeight,
+            eventName: eventName,
             frames: framesToPersist.map {
                 PersistedHostAnalysisFrame(
                     time: $0.time,
@@ -3316,12 +3540,12 @@ private final class StabilizerHostAnalysisStore {
         do {
             try FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: cacheStorageDirectoryURL, withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(cache)
             let cacheFileName = Self.persistentCacheFileName(for: cache, frames: framesToPersist)
             guard let cacheIdentity = Self.persistentCacheIdentity(for: cache, frames: framesToPersist) else {
                 NSLog("StabilizerFxPlug: failed to save Host Analysis cache because the prepared frame fingerprints were incomplete.")
-                return
+                return false
             }
+            let data = try JSONEncoder().encode(cache)
             let cacheURL = cacheStorageDirectoryURL.appendingPathComponent(cacheFileName, isDirectory: false)
             try data.write(to: cacheURL, options: .atomic)
             try data.write(to: latestCacheURL, options: .atomic)
@@ -3331,11 +3555,36 @@ private final class StabilizerHostAnalysisStore {
             lock.lock()
             activePersistentCacheFileName = cacheFileName
             activePersistentCacheIdentity = cacheIdentity
+            activeCompletedMemoryAnalysisIdentity = nil
+            status = .ready
+            projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+            analysisInfoText = Self.infoText(
+                completedAt: Date(timeIntervalSince1970: cache.createdAt),
+                frameCount: framesToPersist.count,
+                sampleWidth: sampleWidth,
+                sampleHeight: sampleHeight,
+                sourceInfo: snapshot.sourceInfo,
+                prefix: "Saved Cache",
+                eventName: eventName,
+                cacheIdentity: cacheIdentity
+            )
+            bumpRevisionLocked()
             lock.unlock()
             Self.bumpPersistentCacheGeneration()
             NSLog("StabilizerFxPlug: saved sample-size Host Analysis cache \(sampleWidth)x\(sampleHeight) with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
+            os_log(
+                "Saved Host Analysis Event cache file %{public}@ for Event %{public}@ identity %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                cacheURL.lastPathComponent,
+                eventName ?? "<unknown>",
+                Self.shortCacheIdentity(cacheIdentity)
+            )
+            return true
         } catch {
             NSLog("StabilizerFxPlug: failed to save Host Analysis cache: \(error.localizedDescription)")
+            os_log("Failed to save Host Analysis Event cache: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
+            return false
         }
     }
 
@@ -3424,6 +3673,7 @@ private final class StabilizerHostAnalysisStore {
             finished: finished,
             validationState: validationState,
             status: status,
+            projectCacheUnavailableStatusText: projectCacheUnavailableStatusText,
             latestSourceFrameInfo: latestSourceFrameInfo,
             latestSampleSize: latestSampleSize,
             analysisInfoText: analysisInfoText,
@@ -3851,6 +4101,17 @@ private final class StabilizerHostAnalysisStore {
         finished = true
         validationState = .pending
         status = .cacheLoaded
+        projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+        analysisInfoText = Self.infoText(
+            completedAt: Date(timeIntervalSince1970: loadedCache.cache.createdAt),
+            frameCount: loadedCache.frames.count,
+            sampleWidth: loadedCache.cache.sampleWidth,
+            sampleHeight: loadedCache.cache.sampleHeight,
+            sourceInfo: nil,
+            prefix: "Loaded Cache",
+            eventName: loadedCache.cache.eventName ?? Self.currentProjectBundleCacheEventName,
+            cacheIdentity: loadedCache.identity
+        )
         observedPersistentCacheGeneration = Self.currentPersistentCacheGeneration()
         bumpRevisionLocked()
     }
@@ -4491,11 +4752,14 @@ private final class StabilizerHostAnalysisStore {
             let lightweightCache = PersistedHostAnalysisCache(
                 schemaVersion: cache.schemaVersion,
                 createdAt: cache.createdAt,
+                clipLabel: cache.clipLabel,
                 rangeStartSeconds: cache.rangeStartSeconds,
                 rangeDurationSeconds: cache.rangeDurationSeconds,
+                rangeEndSeconds: cache.rangeEndSeconds,
                 frameDurationSeconds: cache.frameDurationSeconds,
                 sampleWidth: cache.sampleWidth,
                 sampleHeight: cache.sampleHeight,
+                eventName: cache.eventName,
                 frames: [],
                 residuals: cache.residuals,
                 rollMotion: cache.rollMotion,
@@ -4591,8 +4855,10 @@ private final class StabilizerHostAnalysisStore {
         return PersistedHostAnalysisIndexEntry(
             cacheFileName: fileName,
             createdAt: cache.createdAt,
+            clipLabel: cache.clipLabel,
             rangeStartSeconds: cache.rangeStartSeconds,
             rangeDurationSeconds: cache.rangeDurationSeconds,
+            rangeEndSeconds: Self.rangeEndSeconds(for: cache),
             frameDurationSeconds: cache.frameDurationSeconds,
             sampleWidth: cache.sampleWidth,
             sampleHeight: cache.sampleHeight,
@@ -4600,6 +4866,7 @@ private final class StabilizerHostAnalysisStore {
             firstFingerprint: fingerprints.first,
             middleFingerprint: fingerprints.middle,
             lastFingerprint: fingerprints.last,
+            fingerprints: [fingerprints.first, fingerprints.middle, fingerprints.last],
             cacheIdentity: persistentCacheIdentity(for: cache, frames: frames)
         )
     }
@@ -4609,7 +4876,8 @@ private final class StabilizerHostAnalysisStore {
         let first = fingerprints?.first.prefix(12) ?? "unknown"
         let middle = fingerprints?.middle.prefix(12) ?? "unknown"
         let last = fingerprints?.last.prefix(12) ?? "unknown"
-        return "host-analysis-v2-r\(timeKey(cache.rangeStartSeconds))-d\(timeKey(cache.rangeDurationSeconds))-s\(cache.sampleWidth)x\(cache.sampleHeight)-n\(frames.count)-\(first)-\(middle)-\(last).json"
+        let clipLabel = safeCacheFileComponent(cache.clipLabel ?? defaultClipLabel)
+        return "host-analysis-v2-\(clipLabel)-start\(timeKey(cache.rangeStartSeconds))-end\(timeKey(rangeEndSeconds(for: cache)))-sample\(cache.sampleWidth)x\(cache.sampleHeight)-n\(frames.count)-\(first)-\(middle)-\(last).json"
     }
 
     private static func persistentCacheIdentity(for cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) -> String? {
@@ -4626,8 +4894,56 @@ private final class StabilizerHostAnalysisStore {
             "\(frames.count)",
             fingerprints.first,
             fingerprints.middle,
-            fingerprints.last
+            fingerprints.last,
+            "end\(timeKey(rangeEndSeconds(for: cache)))",
+            safeCacheFileComponent(cache.clipLabel ?? defaultClipLabel)
         ].joined(separator: ":")
+    }
+
+    private static var defaultClipLabel: String {
+        "clip"
+    }
+
+    private static func rangeEndSeconds(for cache: PersistedHostAnalysisCache) -> Double {
+        if let rangeEndSeconds = cache.rangeEndSeconds, rangeEndSeconds.isFinite {
+            return rangeEndSeconds
+        }
+        return cache.rangeStartSeconds + cache.rangeDurationSeconds
+    }
+
+    private static func safeCacheFileComponent(_ rawValue: String, maxLength: Int = 48) -> String {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        var result = ""
+        var previousWasSeparator = false
+        for scalar in rawValue.unicodeScalars {
+            if allowed.contains(scalar) {
+                result.unicodeScalars.append(scalar)
+                previousWasSeparator = false
+            } else if !previousWasSeparator {
+                result.append("-")
+                previousWasSeparator = true
+            }
+            if result.count >= maxLength {
+                break
+            }
+        }
+        let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-._"))
+        return trimmed.isEmpty ? defaultClipLabel : trimmed
+    }
+
+    private static func shortCacheIdentity(_ identity: String) -> String {
+        let parts = identity.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 10 else {
+            return String(identity.prefix(72))
+        }
+        let label = parts.count >= 12 ? parts[11] : defaultClipLabel
+        let start = parts[1]
+        let duration = parts[2]
+        let sampleWidth = parts.count > 4 ? parts[4] : "?"
+        let sampleHeight = parts.count > 5 ? parts[5] : "?"
+        let first = String(parts[7].prefix(8))
+        let last = String(parts[9].prefix(8))
+        return "\(label) start\(start) duration\(duration) sample\(sampleWidth)x\(sampleHeight) \(first)-\(last)"
     }
 
     private static func savedRenderTimeOffset(for cacheIdentity: String) -> Double? {

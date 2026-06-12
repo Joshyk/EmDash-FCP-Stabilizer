@@ -30,8 +30,11 @@ when the host-provided folder is inside an Event. If the host-provided folder is
 temp folder instead of an Event folder, the runtime may use an unambiguous top-level Event
 resolver, such as the single Event that already has Final Cut Pro `Analysis Files`; it should
 start access to the host-provided media folder before inspecting the library bundle and verify
-the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root. Ambiguous Event
-candidates must fail visibly instead of writing to the wrong Event. Store the cache under the
+the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root. When multiple
+Events have `Analysis Files`, the resolver should use the active Host Analysis range and
+existing Final Cut Pro `Analysis Files/Stabilization` range names to choose a single Event.
+Ambiguous Event candidates must fail visibly as `Project Bundle Cache Unavailable -
+Ambiguous Event` instead of writing to the wrong Event. Store the cache under the
 Event's `Analysis Files/StabilizerFxPlugHostAnalysis/` directory so analysis files are unique
 to that Event and do not appear as top-level library content. The runtime
 may move older top-level `StabilizerFxPlugHostAnalysis/`, media-folder-local
@@ -39,13 +42,20 @@ may move older top-level `StabilizerFxPlugHostAnalysis/`, media-folder-local
 caches into the Event `Analysis Files` cache root, but it must not silently fall back to an
 out-of-bundle or library-wide shared cache. The Event cache contains
 `host-analysis-v2.json`, `host-analysis-index-v2.json`, `host-analysis-render-offset-v2.json`,
-and range-indexed files under `caches/`. If the runtime cannot resolve a writable Event cache
+and range-indexed files under `caches/`. Range-indexed cache filenames and index entries
+should include a readable clip label when available, analyzed start/end, actual sample size,
+frame count, and representative fingerprints; correctness still depends on saved
+fingerprints and source-frame validation, not the label. If the runtime cannot resolve a writable Event cache
 root, surface `Project Bundle Cache Unavailable` instead of falling back to a shared
 Application Support cache or a library-wide cache. During Final Cut Pro Host Analysis, it
 may complete the current analyzer session in memory and surface `Ready Memory Only - Project
 Bundle Cache Unavailable`; that completed in-memory analysis may drive the current
 viewer/render session, but it must not persist to a shared or out-of-bundle cache and the
-status must make the missing Event cache visible. Cache candidates must be validated
+status must make the missing Event cache visible. If an Event cache root becomes available
+later, the completed in-memory analysis should be persisted to that Event cache and the
+Inspector should move to ordinary `Ready (...)` status instead of leaving `Ready Memory Only`
+behind. Resolver decisions must log the host `mediaFolderURL`, bundle root, Event candidates,
+selected Event, and rejection reason with public `os_log` fields. Cache candidates must be validated
 against the current source frame before reuse. Rejected candidates should be visible in
 logs/status and should not be deleted just because they do not match the current clip.
 `Start Host Analysis` should first reload and use a saved persistent cache when one exists;
@@ -53,8 +63,9 @@ only start a new host analysis when no saved cache can be loaded. If the button 
 cannot see `FxProjectAPI`, it should still request Host Analysis and let analyzer
 `setupAnalysis` resolve the Event cache root; if setup cannot resolve that root, complete the
 active analysis in memory only and show `Ready Memory Only - Project Bundle Cache
-Unavailable` after completion. That in-memory result may drive the current viewer/render
-session only; it must not delete saved cache files. If the loaded
+Unavailable` after completion until an Event cache root is resolved and the result can be
+saved. That in-memory result may drive the current viewer/render session only; it must not
+delete saved cache files. If the loaded
 cache is rejected for the current clip, the next start should skip that rejected cache and
 request a new analysis. `Clear Host Analysis Cache` is the explicit cache-clear path and
 should show `Cache Cleared`.

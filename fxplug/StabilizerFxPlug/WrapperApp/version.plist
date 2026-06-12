@@ -5,9 +5,9 @@
 	<key>BuildVersion</key>
 	<string>100</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.40</string>
+	<string>0.3.41</string>
 	<key>CFBundleVersion</key>
-	<string>340</string>
+	<string>341</string>
 	<key>ProjectName</key>
 	<string>FxPlugExtras</string>
 	<key>SourceVersion</key>

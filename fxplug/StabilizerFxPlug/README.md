@@ -18,7 +18,9 @@ estimators, or Transform-keyframe writers back into this target.
 - Persists completed Host Analysis frame sets inside the active Final Cut Pro `.fcpbundle`,
   scoped to the Event that owns the current project/media folder. The cache lives under
   `Analysis Files/StabilizerFxPlugHostAnalysis/` so analysis files are unique to that Event
-  and are not exposed as top-level library content.
+  and are not exposed as top-level library content. If the host reports a library temp folder,
+  the resolver uses a single Event with `Analysis Files`, or a unique Final Cut Pro
+  `Analysis Files/Stabilization` range match when multiple Events are candidates.
 - Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema,
   exact analyzed source range, sample size, saved fingerprints, and current source-frame
   validation still match. Unsupported schema candidates are reported in the Inspector and
@@ -66,9 +68,10 @@ estimators, or Transform-keyframe writers back into this target.
   when the runtime cannot resolve a writable Event `Analysis Files` cache root. A live Final
   Cut Pro Host Analysis pass may still complete in memory as `Ready Memory Only - Project
   Bundle Cache Unavailable`; that result can drive the current viewer/render session, but it
-  is not persisted. If Final Cut Pro reports a library temp folder instead of an Event
-  folder, the runtime uses an unambiguous top-level Event resolver and fails visibly when the
-  Event remains ambiguous.
+  is only persisted later if the Event cache root becomes available. If Final Cut Pro reports
+  a library temp folder instead of an Event folder, the runtime uses an unambiguous top-level
+  Event resolver and fails visibly when the Event remains ambiguous as
+  `Project Bundle Cache Unavailable - Ambiguous Event`.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, and optional small-clamp Far-field Warp while keeping render scale fixed at 1.0.
@@ -242,7 +245,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   it still requests Host Analysis and lets analyzer `setupAnalysis` resolve the Event cache
   root. If setup still cannot resolve a writable Event cache root, the analyzer finishes the
   active pass in memory only and the Inspector shows `Ready Memory Only - Project Bundle
-  Cache Unavailable` after completion. The installed plug-in bundle is signed with sandbox
+  Cache Unavailable` after completion until a later callback can resolve the Event cache root
+  and save the completed result. The installed plug-in bundle is signed with sandbox
   and security-scoped file entitlements so the Host Analysis runtime can open the
   `FxProjectAPI.mediaFolderURL()` security-scoped URL. The in-progress Host Analysis
   session registry is process-wide and contains per-session stores, so setup, frame
@@ -283,8 +287,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R340` means
-  FxPlug `0.3.40` is rendering original/optimized frames, and `P340` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R341` means
+  FxPlug `0.3.41` is rendering original/optimized frames, and `P341` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic
