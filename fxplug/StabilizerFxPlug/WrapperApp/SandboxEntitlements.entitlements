@@ -12,5 +12,9 @@
 	<array>
 		<string>/Library/Containers/com.apple.FinalCut/Data/Library/Preferences/com.apple.FinalCut.plist</string>
 	</array>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/test.fcpbundle/</string>
+	</array>
 </dict>
 </plist>

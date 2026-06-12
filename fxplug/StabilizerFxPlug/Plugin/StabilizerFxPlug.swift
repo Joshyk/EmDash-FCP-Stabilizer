@@ -29,7 +29,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.43"
+private let stabilizerFxPlugVersion = "0.3.53"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
@@ -656,17 +656,13 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             state.inputRangeStartSeconds = inputRange.startSeconds
             state.inputRangeDurationSeconds = inputRange.durationSeconds
             state.inputFrameDurationSeconds = inputRange.frameDurationSeconds
-            if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: inputRange) {
-                publishHostAnalysisCacheIdentity(nil, force: true)
-            }
         }
         let expectedRange = Self.expectedInputRange(from: state)
         if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
+               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
-            } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange) {
+            } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
@@ -693,19 +689,14 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
         let expectedRange = currentInputRange()
-        if let expectedRange,
-           let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            publishHostAnalysisCacheIdentityOnMain(nil, force: true)
-        }
         hostAnalysisStore.reset()
         let loadedPersistentCache: Bool
         if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
+               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 loadedPersistentCache = true
             } else {
-                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(expectedRange: expectedRange)
+                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true)
             }
         } else {
             loadedPersistentCache = false
@@ -1936,7 +1927,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                         var isStale = false
                         let url = try URL(
                             resolvingBookmarkData: bookmarkData,
-                            options: [.withoutUI, .withSecurityScope],
+                            options: [.withoutUI],
                             relativeTo: nil,
                             bookmarkDataIsStale: &isStale
                         ).standardizedFileURL
@@ -1963,9 +1954,9 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                             )
                         } else {
                             os_log(
-                                "Active library resolver resolved %{public}@ without security-scoped access; filesystem validation will decide writability.",
+                                "Active library resolver resolved regular active library bookmark %{public}@ without a security-scoped lease; filesystem validation will decide writability.",
                                 log: stabilizerHostAnalysisLog,
-                                type: .error,
+                                type: .default,
                                 url.path
                             )
                         }
@@ -2217,11 +2208,21 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     private static func topLevelEventRoots(in bundleRoot: URL) -> [URL] {
         let bundleRoot = bundleRoot.standardizedFileURL
-        guard let childURLs = try? FileManager.default.contentsOfDirectory(
-            at: bundleRoot,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+        let childURLs: [URL]
+        do {
+            childURLs = try FileManager.default.contentsOfDirectory(
+                at: bundleRoot,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            os_log(
+                "Event cache resolver could not list active library bundle %{public}@: %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                bundleRoot.path,
+                error.localizedDescription
+            )
             return []
         }
         return childURLs
@@ -2388,10 +2389,10 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         var renderUsesPreparedAnalysis = false
         let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
-        let hasCompletedHostAnalysis = hostAnalysisStore.hasCompletedAnalysis
-        let configuredProjectBundleCache = transformEnabled && !hasCompletedHostAnalysis
+        let configuredProjectBundleCache = transformEnabled
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)
             : false
+        let hasCompletedHostAnalysis = hostAnalysisStore.hasCompletedAnalysis
         let canUseHostAnalysisStoreForRender = transformEnabled
             && (hasCompletedHostAnalysis || configuredProjectBundleCache)
         if transformEnabled,
@@ -3454,26 +3455,34 @@ private final class StabilizerHostAnalysisStore {
     ) -> StabilizerPreparedAnalysis? {
         if let unavailableReason = StabilizerOriginalMediaPolicy.sourceUnavailableReason(for: sourceImage) {
             markSourceUnavailableForRender(reason: unavailableReason)
+            os_log(
+                "Render could not validate Host Analysis cache because the source frame is unavailable. reason=%{public}@ expectedRange=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                unavailableReason,
+                Self.expectedRangeDescription(expectedRange)
+            )
             NSLog("StabilizerFxPlug: source frame unavailable during render: \(unavailableReason)")
             return nil
         }
 
         let preferredIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let preferredIdentity,
-           !preferredIdentity.isEmpty,
-           Self.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            _ = activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange)
+           !preferredIdentity.isEmpty {
+            _ = activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true)
         }
         if let expectedRange, expectedRange.isValid {
             _ = activateCompletedMemoryAnalysisIfNeeded(expectedRange: expectedRange)
         }
 
         while true {
-            if shouldReloadPersistentCacheForConsumer(), loadPersistentCache(expectedRange: expectedRange) {
+            if shouldReloadPersistentCacheForConsumer(), loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true) {
                 continue
             }
             guard let analysis = preparedAnalysisSnapshot() else {
-                guard activateNextPersistentCache(afterRejecting: nil, expectedRange: expectedRange) else {
+                guard activateNextPersistentCache(afterRejecting: nil, expectedRange: expectedRange, allowRangeMismatch: true)
+                    || loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true)
+                else {
                     return nil
                 }
                 continue
@@ -3487,14 +3496,57 @@ private final class StabilizerHostAnalysisStore {
             let activeIdentity = activeCacheIdentity
             if let activeIdentity,
                !Self.cacheIdentity(activeIdentity, matches: expectedRange) {
-                deactivateActiveCacheForRangeMismatch()
-                if activateNextPersistentCache(afterRejecting: nil, expectedRange: expectedRange) {
+                if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
+                    guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
+                        if let proxyReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) {
+                            if Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange),
+                               Self.renderSeconds(CMTimeGetSeconds(renderTime), isInside: analysis.frames) {
+                                os_log(
+                                    "Using start-matched range-mismatched Host Analysis cache for scaled/proxy preview before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                    log: stabilizerHostAnalysisLog,
+                                    type: .default,
+                                    activeIdentity,
+                                    Self.expectedRangeDescription(expectedRange),
+                                    proxyReason,
+                                    rejectionReason
+                                )
+                                markProxyPreviewForRender(reason: proxyReason)
+                                return analysis
+                            }
+                            os_log(
+                                "Range-mismatched Host Analysis cache could not be validated while source media is scaled or missing original transform. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                log: stabilizerHostAnalysisLog,
+                                type: .error,
+                                activeIdentity,
+                                Self.expectedRangeDescription(expectedRange),
+                                proxyReason,
+                                rejectionReason
+                            )
+                            markProxyNeedsOriginalValidationForRender(reason: proxyReason)
+                            return nil
+                        }
+                        rejectPersistentCache(reason: rejectionReason)
+                        return nil
+                    }
                     continue
+                } else {
+                    lock.lock()
+                    validationState = .validated
+                    if status != .projectCacheUnavailable {
+                        status = .ready
+                    }
+                    bumpRevisionLocked()
+                    lock.unlock()
+                    os_log(
+                        "Accepted range-mismatched Host Analysis cache after source-frame fingerprint validation. identity=%{public}@ expectedRange=%{public}@.",
+                        log: stabilizerHostAnalysisLog,
+                        type: .default,
+                        activeIdentity,
+                        Self.expectedRangeDescription(expectedRange)
+                    )
+                    releaseRetainedAnalysisPixels()
+                    return analysis
                 }
-                if loadPersistentCache(expectedRange: expectedRange) {
-                    continue
-                }
-                return nil
             }
             if activeIdentity == nil,
                let expectedRange,
@@ -3502,6 +3554,12 @@ private final class StabilizerHostAnalysisStore {
                activeCompletedMemoryAnalysisDoesNotMatch(expectedRange: expectedRange) {
                 deactivateActiveCompletedMemoryAnalysisForRangeMismatch()
                 if activateCompletedMemoryAnalysisIfNeeded(expectedRange: expectedRange) {
+                    continue
+                }
+                if activateNextPersistentCache(afterRejecting: nil, expectedRange: expectedRange, allowRangeMismatch: true) {
+                    continue
+                }
+                if loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true) {
                     continue
                 }
                 return nil
@@ -3540,7 +3598,7 @@ private final class StabilizerHostAnalysisStore {
                 if activateNextCompletedMemoryAnalysis(afterRejecting: rejectionReason, expectedRange: expectedRange) {
                     continue
                 }
-                guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange) else {
+                guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                     if activeIdentity == nil {
                         rejectActiveInMemoryAnalysis(reason: rejectionReason)
                         return nil
@@ -3588,7 +3646,7 @@ private final class StabilizerHostAnalysisStore {
     }
 
     @discardableResult
-    func loadPersistentCache(expectedRange: HostAnalysisExpectedRange? = nil) -> Bool {
+    func loadPersistentCache(expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
         defer {
             markCurrentPersistentCacheGenerationObserved()
         }
@@ -3607,9 +3665,19 @@ private final class StabilizerHostAnalysisStore {
             guard let activeCandidate = Self.loadPersistentCache(at: activeURL) else {
                 continue
             }
-            guard Self.cache(activeCandidate.cache, matches: expectedRange) else {
+            let matchesExpectedRange = Self.cache(activeCandidate.cache, matches: expectedRange)
+            guard allowRangeMismatch || matchesExpectedRange else {
                 NSLog("StabilizerFxPlug: skipped Host Analysis cache \(activeCandidate.fileName) because its range does not match the active clip.")
                 continue
+            }
+            if !matchesExpectedRange {
+                os_log(
+                    "Loaded range-mismatched Host Analysis cache %{public}@ for source-frame fingerprint validation. expectedRange=%{public}@.",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    activeCandidate.fileName,
+                    Self.expectedRangeDescription(expectedRange)
+                )
             }
             lock.lock()
             installPersistentCacheLocked(activeCandidate)
@@ -3640,18 +3708,19 @@ private final class StabilizerHostAnalysisStore {
         return false
     }
 
-    func reloadPersistentCacheForConsumerIfNeeded(expectedRange: HostAnalysisExpectedRange? = nil) -> Bool {
+    func reloadPersistentCacheForConsumerIfNeeded(expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
         guard shouldReloadPersistentCacheForConsumer() else {
             return false
         }
-        return loadPersistentCache(expectedRange: expectedRange)
+        return loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: allowRangeMismatch)
     }
 
-    func activatePersistentCache(identity: String, expectedRange: HostAnalysisExpectedRange? = nil) -> Bool {
+    func activatePersistentCache(identity: String, expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
         let trimmedIdentity = identity.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedIdentity.isEmpty,
-              Self.cacheIdentity(trimmedIdentity, matches: expectedRange)
-        else {
+        guard !trimmedIdentity.isEmpty else {
+            return false
+        }
+        guard allowRangeMismatch || Self.cacheIdentity(trimmedIdentity, matches: expectedRange) else {
             return false
         }
 
@@ -3673,7 +3742,7 @@ private final class StabilizerHostAnalysisStore {
         for candidateURL in Self.persistentCacheCandidateURLs() {
             guard let candidate = Self.loadPersistentCache(at: candidateURL),
                   candidate.identity == trimmedIdentity,
-                  Self.cache(candidate.cache, matches: expectedRange)
+                  (allowRangeMismatch || Self.cache(candidate.cache, matches: expectedRange))
             else {
                 continue
             }
@@ -4372,7 +4441,11 @@ private final class StabilizerHostAnalysisStore {
         return nil
     }
 
-    private func activateNextPersistentCache(afterRejecting rejectionReason: String?, expectedRange: HostAnalysisExpectedRange?) -> Bool {
+    private func activateNextPersistentCache(
+        afterRejecting rejectionReason: String?,
+        expectedRange: HostAnalysisExpectedRange?,
+        allowRangeMismatch: Bool = false
+    ) -> Bool {
         while true {
             lock.lock()
             let rejectedFileName = activePersistentCacheFileName
@@ -4396,9 +4469,19 @@ private final class StabilizerHostAnalysisStore {
                 NSLog("StabilizerFxPlug: skipped unavailable Host Analysis cache candidate \(nextURL.lastPathComponent); \(remainingURLCount) lazy alternate cache(s) remain.")
                 continue
             }
-            guard Self.cache(nextCandidate.cache, matches: expectedRange) else {
+            let matchesExpectedRange = Self.cache(nextCandidate.cache, matches: expectedRange)
+            guard allowRangeMismatch || matchesExpectedRange else {
                 NSLog("StabilizerFxPlug: skipped Host Analysis cache candidate \(nextCandidate.fileName) because its range does not match the active clip.")
                 continue
+            }
+            if !matchesExpectedRange {
+                os_log(
+                    "Activated range-mismatched Host Analysis cache candidate %{public}@ for source-frame fingerprint validation. expectedRange=%{public}@.",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    nextCandidate.fileName,
+                    Self.expectedRangeDescription(expectedRange)
+                )
             }
 
             lock.lock()
@@ -4668,6 +4751,27 @@ private final class StabilizerHostAnalysisStore {
         }
         return rangeStartKey == timeKey(expectedRange.startSeconds)
             && rangeDurationKey == timeKey(expectedRange.durationSeconds)
+    }
+
+    private static func cacheIdentityStartMatches(_ identity: String, expectedRange: HostAnalysisExpectedRange?) -> Bool {
+        guard let expectedRange, expectedRange.isValid else {
+            return true
+        }
+        let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
+        let startIndex = parts.count >= 10 ? 1 : 0
+        guard parts.count > startIndex,
+              let rangeStartKey = Int64(parts[startIndex])
+        else {
+            return false
+        }
+        return rangeStartKey == timeKey(expectedRange.startSeconds)
+    }
+
+    private static func expectedRangeDescription(_ expectedRange: HostAnalysisExpectedRange?) -> String {
+        guard let expectedRange, expectedRange.isValid else {
+            return "none"
+        }
+        return "start\(timeKey(expectedRange.startSeconds))-duration\(timeKey(expectedRange.durationSeconds))"
     }
 
     private static func cache(_ cache: PersistedHostAnalysisCache, matches expectedRange: HostAnalysisExpectedRange?) -> Bool {

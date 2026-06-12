@@ -169,8 +169,9 @@ fallbacks.
   If the button callback cannot see `FxProjectAPI`, the button still requests Host Analysis
   and lets the analyzer `setupAnalysis` callback resolve the Event cache root. When
   `FxProjectAPI.mediaFolderURL()` reports no media folder for a library saved without Collect
-  Media, the resolver can use Final Cut Pro's single active library bookmark, start
-  security-scoped access when available, and then apply the same Event selection rules. If
+  Media, the resolver can use Final Cut Pro's single active library bookmark, resolve it
+  without forcing security-scoped bookmark options, start security-scoped access when the
+  resolved URL grants it, and then apply the same Event selection rules. If
   setup still cannot resolve a writable Event cache root,
   the analyzer finishes the active pass in memory
   only and the Inspector shows `Ready Memory Only - Project Bundle Cache Unavailable` after
@@ -179,7 +180,10 @@ fallbacks.
   entitlements, and a read-only home-relative exception for Final Cut Pro's preference plist
   so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped
   URL when Final Cut Pro provides one, or read the active library bookmark when Final Cut Pro
-  reports no media folder. The in-progress Host Analysis session registry is process-wide and
+  reports no media folder. The debug-signed bundle also carries an explicit read-write
+  entitlement for the shared local test fixture library so Codex-driven FCP tests can persist
+  Event-scoped caches when Final Cut Pro exposes only a regular active-library bookmark. The
+  in-progress Host Analysis session registry is process-wide and
   contains per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
   through different FxPlug instances without losing or mixing the active analysis session.
   If a saved cache uses an unsupported schema, the Inspector shows
@@ -247,8 +251,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R343` means FxPlug `0.3.43` is rendering original/optimized
-  frames, while `P343` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R353` means FxPlug `0.3.53` is rendering original/optimized
+  frames, while `P353` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -374,6 +378,9 @@ FxPlug.
   When original-media validation maps a trimmed timeline render time back to the analyzed
   source time, the runtime saves that offset with the Host Analysis cache identity so
   proxy-only render instances can sample the same prepared motion path.
+  When Final Cut Pro reports a different render/timeline duration during scaled/proxy
+  playback, a range-mismatched active cache is used for preview only if the saved start
+  matches the current clip and the render time is inside the saved analysis range.
   Proxy/scaled media is detected when the source pixel transform differs from original
   `1.0x/1.0x` in either direction, so reduced-resolution proxy frames do not validate
   against and reject a good original-media cache.
@@ -419,7 +426,9 @@ FxPlug.
 - Trimmed clips are supported by matching the current render frame fingerprint against the
   analyzed Host Analysis frame set. If Final Cut Pro reports render time in a different time
   domain than analysis time, the effect applies that offset before reading the prepared
-  motion paths.
+  motion paths. If Final Cut Pro reports a render/timeline range that differs from the saved
+  source analysis range, the effect accepts that active cache only after the current
+  source-frame fingerprint validates against the saved frame set.
 
 ## Host Analysis Cache
 
@@ -433,8 +442,9 @@ and only selects a unique match. It starts access to the host-provided media fol
 inspecting the library bundle, then verifies the selected Event by creating the
 `StabilizerFxPlugHostAnalysis` cache root. If the host media folder is unavailable because
 the library was saved without Collect Media, the resolver reads Final Cut Pro's single active
-library bookmark from `FFActiveLibraries`, starts security-scoped access to that bookmark when
-available, and then applies the same Event selection rules.
+library bookmark from `FFActiveLibraries`, resolves it without forcing security-scoped
+bookmark options, starts security-scoped access when the resolved URL grants it, and then
+applies the same Event selection rules.
 Multiple active libraries, unreadable active-library state, or an unwritable Event cache root
 remain visible failures. Resolver logs include the media folder URL, `documentID`,
 active-library bookmark candidates when used, bundle root, Event candidates, selected Event,

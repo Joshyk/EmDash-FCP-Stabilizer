@@ -38,6 +38,9 @@ estimators, or Transform-keyframe writers back into this target.
   frame fingerprints.
 - Maps trimmed-clip render time back to Host Analysis time by matching the current render
   frame fingerprint against the analyzed frame set before sampling prepared motion paths.
+  If Final Cut Pro reports a render/timeline range that differs from the saved source
+  analysis range, render accepts the active cache only after that source-frame fingerprint
+  validation succeeds.
 - Refuses proxy-scaled frames for Host Analysis and render-time cache validation. If the
   host supplies proxy media, `Host Analysis Status` shows
   `Proxy Media Rejected - Use Original Media`; switch Final Cut Pro back to original media
@@ -71,8 +74,9 @@ estimators, or Transform-keyframe writers back into this target.
   is only persisted later if the Event cache root becomes available. If Final Cut Pro reports
   a library temp folder instead of an Event folder, the runtime uses an unambiguous top-level
   Event resolver. If Final Cut Pro reports no media folder for a library saved without
-  Collect Media, the runtime can use the single active Final Cut Pro library bookmark, start
-  security-scoped access when available, and then run that same Event resolver. Multiple active libraries, unreadable active-library
+  Collect Media, the runtime can use the single active Final Cut Pro library bookmark, resolve
+  it without forcing security-scoped bookmark options, start security-scoped access when the
+  resolved URL grants it, and then run that same Event resolver. Multiple active libraries, unreadable active-library
   state, unwritable Event roots, and ambiguous Events fail visibly instead of writing to a
   shared fallback, including
   `Project Bundle Cache Unavailable - Ambiguous Event`.
@@ -224,6 +228,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   When original-media validation maps a trimmed timeline render time back to the analyzed
   source time, the runtime saves that offset with the Host Analysis cache identity so
   proxy-only render instances can sample the same prepared motion path.
+  When Final Cut Pro reports a different render/timeline duration during scaled/proxy
+  playback, a range-mismatched active cache is used for preview only if the saved start
+  matches the current clip and the render time is inside the saved analysis range.
   Proxy/scaled media is detected when the source pixel transform differs from original
   `1.0x/1.0x` in either direction, so reduced-resolution proxy frames do not validate
   against and reject a good original-media cache.
@@ -255,7 +262,12 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   signed with sandbox, security-scoped file entitlements, and a read-only home-relative
   exception for Final Cut Pro's preference plist so the Host Analysis runtime can open the
   `FxProjectAPI.mediaFolderURL()` security-scoped URL when Final Cut Pro provides one, or
-  read the active library bookmark when Final Cut Pro reports no media folder. The in-progress
+  read the active library bookmark when Final Cut Pro reports no media folder. Active library
+  bookmarks are resolved as regular bookmarks first, then retained with security-scoped access
+  only when the resolved URL grants it. The debug-signed bundle also carries an explicit
+  read-write entitlement for the shared local test fixture library so Codex-driven FCP tests
+  can persist Event-scoped caches when Final Cut Pro exposes only a regular active-library
+  bookmark. The in-progress
   Host Analysis
   session registry is process-wide and contains per-session stores, so setup, frame
   analysis, and cleanup callbacks can arrive through different FxPlug instances without
@@ -295,8 +307,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R343` means
-  FxPlug `0.3.43` is rendering original/optimized frames, and `P343` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R353` means
+  FxPlug `0.3.53` is rendering original/optimized frames, and `P353` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic

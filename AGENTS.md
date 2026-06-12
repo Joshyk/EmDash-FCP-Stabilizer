@@ -33,7 +33,10 @@ start access to the host-provided media folder before inspecting the library bun
 the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root. If
 `mediaFolderURL()` reports `kFxError_NoMediaFolder` for a Final Cut Pro library saved without
 Collect Media, the runtime may resolve the single active Final Cut Pro `.fcpbundle` from
-FCP's `FFActiveLibraries` bookmark list and then run the same Event resolver. Multiple active
+FCP's `FFActiveLibraries` bookmark list and then run the same Event resolver. Final Cut Pro's
+active-library bookmark may be a regular bookmark rather than a security-scoped bookmark, so
+resolve it without forcing `.withSecurityScope` and then start security-scoped access when the
+resolved URL grants it. Multiple active
 libraries, unreadable active-library state, or an unwritable selected Event cache root must
 fail visibly instead of falling back to a shared location. When multiple
 Events have `Analysis Files`, the resolver should use the active Host Analysis range and
@@ -79,7 +82,10 @@ Keep the plug-in target signed with sandbox and security-scoped file entitlement
 Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped URL. The
 target may also carry a read-only home-relative exception for Final Cut Pro's preference
 plist so the no-media-folder resolver can read `FFActiveLibraries`; this exception must not
-be used to add a shared or out-of-bundle cache path.
+be used to add a shared or out-of-bundle cache path. The debug-signed local build may carry a
+read-write exception for the shared `test_fcp_project/test.fcpbundle` fixture so Codex-driven
+FCP tests can persist Event-scoped caches when Final Cut Pro's active-library bookmark is not
+security-scoped.
 Keep in-progress Host Analysis session state process-wide because Final Cut Pro may call
 setup, frame analysis, and cleanup through different FxPlug instances in the same plug-in
 process. That process-wide state must isolate per-clip in-progress stores; ambiguous
@@ -219,7 +225,10 @@ Overlay should remain the live render-runtime indicator because
 older saved Inspector strings can remain stale on existing timeline instances.
 Render playback must tolerate trimmed clips whose render time differs from Host
 Analysis frame time by matching the current render frame fingerprint back to the analyzed
-frame set and applying that time offset before sampling the prepared motion paths. Once an
+frame set and applying that time offset before sampling the prepared motion paths. If Final
+Cut Pro reports a render/timeline range that differs from the saved source analysis range,
+render may accept the active cache only after the current source-frame fingerprint validates
+against the saved frame set. Once an
 analysis is validated, render playback should keep using the prepared motion path even when
 Final Cut Pro is playing proxy media; proxy media is rejected only for Host Analysis input
 and for validating an unvalidated persisted cache. If a saved Host Analysis cache is loaded
@@ -243,7 +252,12 @@ path instead of falling back to an unmapped timeline time.
 Proxy/scaled media detection should treat pixel transforms that deviate from original
 `1.0x/1.0x` in either direction as scaled media: Host Analysis must reject those frames,
 while render playback with a saved analysis should keep using the prepared original-media
-motion path instead of validating fingerprints against the scaled proxy frame.
+motion path instead of validating fingerprints against the scaled proxy frame. If Final Cut
+Pro reports a render/timeline range that differs from the saved source analysis range during
+scaled/proxy playback, the runtime may use that range-mismatched active cache for preview only
+when the cache start matches the current clip and the current render time is inside the saved
+analysis range; otherwise it must keep the missing validation visible instead of silently
+accepting the cache.
 When the
 effective overall transform strength is zero, rendering must
 bypass prepared motion-path sampling and output an identity transform with no debug overlay.
