@@ -140,8 +140,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R341` means FxPlug `0.3.41`
-is rendering original/optimized frames, and `P341` means proxy playback is using
+active render runtime and current source mode: `R343` means FxPlug `0.3.43`
+is rendering original/optimized frames, and `P343` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -282,9 +282,16 @@ have `Analysis Files`, the resolver compares the active Host Analysis range agai
 Pro `Analysis Files/Stabilization` range folder names and only selects a unique match. The
 resolver starts access to the host-provided media folder before inspecting the library bundle,
 then verifies the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root.
-It logs the media folder URL, bundle root, Event candidates, selected Event, and rejection
-reason with public `os_log` fields. It fails visibly as `Project Bundle Cache Unavailable -
-Ambiguous Event` when the Event remains ambiguous. The cache root lives
+If `FxProjectAPI.mediaFolderURL()` reports that the library has no media folder because it
+was saved without Collect Media, the resolver reads Final Cut Pro's single active library
+bookmark from `FFActiveLibraries`, starts security-scoped access to that bookmark when
+available, and then applies the same Event selection rules. Multiple
+active libraries, unreadable active-library state, or an unwritable Event cache root remain
+visible failures; the runtime does not write to a shared fallback. It logs the media folder
+URL, `documentID`, active-library bookmark candidates when used, bundle root, Event
+candidates, selected Event, and rejection reason with public `os_log` fields. It fails
+visibly as `Project Bundle Cache Unavailable - Ambiguous Event` when the Event remains
+ambiguous. The cache root lives
 under that Event's `Analysis Files` directory so analysis files stay unique to the Event and
 do not appear as top-level library content:
 
@@ -323,13 +330,16 @@ not prevent a completed prepared path from being saved.
 analysis only when no compatible saved cache can be loaded. If the button
 callback cannot see `FxProjectAPI`, it still asks Final Cut Pro to start Host
 Analysis and lets the analyzer `setupAnalysis` callback resolve the Event cache
-root. If setup still cannot resolve a writable Event cache root, the effect
+root through either the host media folder or the single active library bookmark. If setup
+still cannot resolve a writable Event cache root, the effect
 finishes the active analyzer pass in memory only and shows `Ready Memory Only -
 Project Bundle Cache Unavailable` after completion until a later callback can resolve the
 Event cache root and save the completed result. It must not delete saved cache files.
-The installed plug-in bundle is signed with sandbox and security-scoped file
-entitlements so the Host Analysis runtime can open the
-`FxProjectAPI.mediaFolderURL()` security-scoped URL.
+The installed plug-in bundle is signed with sandbox, security-scoped file
+entitlements, and a read-only home-relative exception for Final Cut Pro's preference plist
+so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped
+URL when Final Cut Pro provides one, or read the active library bookmark when Final Cut Pro
+reports no media folder.
 The in-progress Host Analysis session registry is process-wide and contains
 per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
 through different FxPlug instances without losing or mixing the active analysis

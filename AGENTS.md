@@ -30,7 +30,12 @@ when the host-provided folder is inside an Event. If the host-provided folder is
 temp folder instead of an Event folder, the runtime may use an unambiguous top-level Event
 resolver, such as the single Event that already has Final Cut Pro `Analysis Files`; it should
 start access to the host-provided media folder before inspecting the library bundle and verify
-the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root. When multiple
+the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root. If
+`mediaFolderURL()` reports `kFxError_NoMediaFolder` for a Final Cut Pro library saved without
+Collect Media, the runtime may resolve the single active Final Cut Pro `.fcpbundle` from
+FCP's `FFActiveLibraries` bookmark list and then run the same Event resolver. Multiple active
+libraries, unreadable active-library state, or an unwritable selected Event cache root must
+fail visibly instead of falling back to a shared location. When multiple
 Events have `Analysis Files`, the resolver should use the active Host Analysis range and
 existing Final Cut Pro `Analysis Files/Stabilization` range names to choose a single Event.
 Ambiguous Event candidates must fail visibly as `Project Bundle Cache Unavailable -
@@ -54,8 +59,9 @@ viewer/render session, but it must not persist to a shared or out-of-bundle cach
 status must make the missing Event cache visible. If an Event cache root becomes available
 later, the completed in-memory analysis should be persisted to that Event cache and the
 Inspector should move to ordinary `Ready (...)` status instead of leaving `Ready Memory Only`
-behind. Resolver decisions must log the host `mediaFolderURL`, bundle root, Event candidates,
-selected Event, and rejection reason with public `os_log` fields. Cache candidates must be validated
+behind. Resolver decisions must log the host `mediaFolderURL`, `documentID`, active-library
+bookmark candidates when used, bundle root, Event candidates, selected Event, and rejection
+reason with public `os_log` fields. Cache candidates must be validated
 against the current source frame before reuse. Rejected candidates should be visible in
 logs/status and should not be deleted just because they do not match the current clip.
 `Start Host Analysis` should first reload and use a saved persistent cache when one exists;
@@ -70,7 +76,10 @@ cache is rejected for the current clip, the next start should skip that rejected
 request a new analysis. `Clear Host Analysis Cache` is the explicit cache-clear path and
 should show `Cache Cleared`.
 Keep the plug-in target signed with sandbox and security-scoped file entitlements so the
-Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped URL.
+Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped URL. The
+target may also carry a read-only home-relative exception for Final Cut Pro's preference
+plist so the no-media-folder resolver can read `FFActiveLibraries`; this exception must not
+be used to add a shared or out-of-bundle cache path.
 Keep in-progress Host Analysis session state process-wide because Final Cut Pro may call
 setup, frame analysis, and cleanup through different FxPlug instances in the same plug-in
 process. That process-wide state must isolate per-clip in-progress stores; ambiguous

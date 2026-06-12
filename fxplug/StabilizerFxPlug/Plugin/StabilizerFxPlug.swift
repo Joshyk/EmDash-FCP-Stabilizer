@@ -1,5 +1,6 @@
 import AppKit
 import CoreMedia
+import Darwin
 import Foundation
 import Metal
 import os.log
@@ -28,7 +29,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.41"
+private let stabilizerFxPlugVersion = "0.3.43"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
@@ -1505,6 +1506,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             return true
         }
         if let projectAPI = apiManager.api(for: FxProjectAPI.self) as? FxProjectAPI {
+            let projectDocumentID = Self.projectDocumentID(from: projectAPI)
             var mediaURL: NSURL?
             do {
                 try projectAPI.mediaFolderURL(&mediaURL)
@@ -1543,51 +1545,33 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                         }
                         return false
                     }
-                    let cacheRoot = Self.eventHostAnalysisCacheRoot(in: eventResolution.eventRoot)
-                    do {
-                        try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
-                    } catch {
-                        let reason = "Event Analysis Files cache root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
-                        NSLog("StabilizerFxPlug: \(reason)")
-                        os_log("Event cache resolver selected Event %{public}@ but cache root creation failed at %{public}@: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, eventResolution.eventRoot.path, cacheRoot.path, error.localizedDescription)
-                        if markUnavailable {
-                            hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
-                        }
-                        return false
+                    let configured = configureEventHostAnalysisCache(
+                        bundleRoot: bundleRoot,
+                        eventResolution: eventResolution,
+                        retainedSecurityScopedURL: didStartAccess ? projectMediaURL : nil,
+                        legacyRoots: [
+                            Self.legacyHostAnalysisCacheRoot(under: projectMediaURL),
+                            Self.legacyHostAnalysisCacheRoot(under: bundleRoot),
+                            Self.internalBundleHostAnalysisCacheRoot(in: bundleRoot)
+                        ],
+                        markUnavailable: markUnavailable
+                    )
+                    if configured {
+                        shouldRetainSecurityScopedAccess = didStartAccess
                     }
-                    Self.migrateLegacyHostAnalysisCacheIfNeeded(
-                        from: Self.legacyHostAnalysisCacheRoot(under: projectMediaURL),
-                        to: cacheRoot
-                    )
-                    Self.migrateLegacyHostAnalysisCacheIfNeeded(
-                        from: Self.legacyHostAnalysisCacheRoot(under: bundleRoot),
-                        to: cacheRoot
-                    )
-                    Self.migrateLegacyHostAnalysisCacheIfNeeded(
-                        from: Self.internalBundleHostAnalysisCacheRoot(in: bundleRoot),
-                        to: cacheRoot
-                    )
-                    StabilizerHostAnalysisStore.configureProjectBundleCacheDirectory(
-                        cacheRoot,
-                        securityScopedURL: didStartAccess ? projectMediaURL : nil,
-                        eventName: eventResolution.eventRoot.lastPathComponent
-                    )
-                    shouldRetainSecurityScopedAccess = didStartAccess
-                    NSLog("StabilizerFxPlug: using \(eventResolution.sourceDescription) Event Host Analysis cache at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
-                    os_log(
-                        "Event cache resolver selected Event %{public}@ by %{public}@; cacheRoot=%{public}@.",
-                        log: stabilizerHostAnalysisLog,
-                        type: .default,
-                        eventResolution.eventRoot.lastPathComponent,
-                        eventResolution.sourceDescription,
-                        cacheRoot.path
-                    )
-                    _ = hostAnalysisStore.persistCompletedAnalysisIfPossible()
-                    return true
+                    return configured
                 }
                 let reason = "FxProjectAPI did not provide a project media folder URL."
                 NSLog("StabilizerFxPlug: \(reason)")
                 os_log("Event cache resolver rejected because FxProjectAPI did not provide mediaFolderURL.", log: stabilizerHostAnalysisLog, type: .error)
+                if configureActiveFinalCutLibraryCacheDirectory(
+                    markUnavailable: markUnavailable,
+                    expectedRange: expectedRange,
+                    triggerReason: reason,
+                    projectDocumentID: projectDocumentID
+                ) {
+                    return true
+                }
                 if markUnavailable {
                     hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                 }
@@ -1596,6 +1580,15 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 let reason = "FxProjectAPI media folder unavailable: \(error.localizedDescription)"
                 NSLog("StabilizerFxPlug: \(reason)")
                 os_log("Event cache resolver rejected because mediaFolderURL failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
+                if Self.isNoMediaFolderError(error),
+                   configureActiveFinalCutLibraryCacheDirectory(
+                        markUnavailable: markUnavailable,
+                        expectedRange: expectedRange,
+                        triggerReason: reason,
+                        projectDocumentID: projectDocumentID
+                   ) {
+                    return true
+                }
                 if markUnavailable {
                     hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                 }
@@ -1605,11 +1598,157 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             let reason = "FxProjectAPI unavailable; Event Analysis Files cache cannot be resolved."
             NSLog("StabilizerFxPlug: \(reason)")
             os_log("Event cache resolver rejected because FxProjectAPI is unavailable.", log: stabilizerHostAnalysisLog, type: .error)
+            if configureActiveFinalCutLibraryCacheDirectory(
+                markUnavailable: markUnavailable,
+                expectedRange: expectedRange,
+                triggerReason: reason,
+                projectDocumentID: nil
+            ) {
+                return true
+            }
             if markUnavailable {
                 hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
             }
             return false
         }
+    }
+
+    @discardableResult
+    private func configureEventHostAnalysisCache(
+        bundleRoot: URL,
+        eventResolution: FCPEventRootResolution,
+        retainedSecurityScopedURL: URL?,
+        legacyRoots: [URL],
+        markUnavailable: Bool
+    ) -> Bool {
+        let cacheRoot = Self.eventHostAnalysisCacheRoot(in: eventResolution.eventRoot)
+        do {
+            try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+        } catch {
+            let reason = "Event Analysis Files cache root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
+            NSLog("StabilizerFxPlug: \(reason)")
+            os_log(
+                "Event cache resolver selected Event %{public}@ in bundle %{public}@ but cache root creation failed at %{public}@: %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                eventResolution.eventRoot.path,
+                bundleRoot.path,
+                cacheRoot.path,
+                error.localizedDescription
+            )
+            if markUnavailable {
+                hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+            }
+            return false
+        }
+
+        for legacyRoot in legacyRoots {
+            Self.migrateLegacyHostAnalysisCacheIfNeeded(from: legacyRoot, to: cacheRoot)
+        }
+        StabilizerHostAnalysisStore.configureProjectBundleCacheDirectory(
+            cacheRoot,
+            securityScopedURL: retainedSecurityScopedURL,
+            eventName: eventResolution.eventRoot.lastPathComponent
+        )
+        NSLog("StabilizerFxPlug: using \(eventResolution.sourceDescription) Event Host Analysis cache at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
+        os_log(
+            "Event cache resolver selected Event %{public}@ by %{public}@; bundleRoot=%{public}@ cacheRoot=%{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            eventResolution.eventRoot.lastPathComponent,
+            eventResolution.sourceDescription,
+            bundleRoot.path,
+            cacheRoot.path
+        )
+        _ = hostAnalysisStore.persistCompletedAnalysisIfPossible()
+        return true
+    }
+
+    @discardableResult
+    private func configureActiveFinalCutLibraryCacheDirectory(
+        markUnavailable: Bool,
+        expectedRange: HostAnalysisExpectedRange?,
+        triggerReason: String,
+        projectDocumentID: UInt?
+    ) -> Bool {
+        let lookup = Self.activeFinalCutLibraryEventRoot(expectedRange: expectedRange, projectDocumentID: projectDocumentID)
+        guard let resolution = lookup.resolution else {
+            let reason = "\(triggerReason) Active Final Cut library resolver failed: \(lookup.rejectReason)"
+            os_log(
+                "Active library resolver rejected trigger=%{public}@ documentID=%{public}@ reason=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                triggerReason,
+                Self.projectDocumentIDDescription(projectDocumentID),
+                lookup.rejectReason
+            )
+            if markUnavailable {
+                hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+            }
+            return false
+        }
+
+        os_log(
+            "Active library resolver selected bundleRoot=%{public}@ Event=%{public}@ trigger=%{public}@ documentID=%{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            resolution.bundleRoot.path,
+            resolution.eventResolution.eventRoot.path,
+            triggerReason,
+            Self.projectDocumentIDDescription(projectDocumentID)
+        )
+        let configured = configureEventHostAnalysisCache(
+            bundleRoot: resolution.bundleRoot,
+            eventResolution: resolution.eventResolution,
+            retainedSecurityScopedURL: resolution.securityScopedURL,
+            legacyRoots: [
+                Self.legacyHostAnalysisCacheRoot(under: resolution.bundleRoot),
+                Self.internalBundleHostAnalysisCacheRoot(in: resolution.bundleRoot)
+            ],
+            markUnavailable: markUnavailable
+        )
+        if !configured {
+            resolution.securityScopedURL?.stopAccessingSecurityScopedResource()
+        }
+        return configured
+    }
+
+    private static func projectDocumentID(from projectAPI: FxProjectAPI) -> UInt? {
+        var documentID = UInt(0)
+        do {
+            try projectAPI.documentID(&documentID)
+            os_log(
+                "Event cache resolver input documentID=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                projectDocumentIDDescription(documentID)
+            )
+            return documentID
+        } catch {
+            os_log(
+                "Event cache resolver could not read documentID: %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                error.localizedDescription
+            )
+            return nil
+        }
+    }
+
+    private static func projectDocumentIDDescription(_ documentID: UInt?) -> String {
+        guard let documentID else {
+            return "unavailable"
+        }
+        return String(documentID)
+    }
+
+    private static func isNoMediaFolderError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == FxPlugErrorDomain as String,
+           nsError.code == Int(kFxError_NoMediaFolder) {
+            return true
+        }
+        return nsError.localizedDescription.localizedCaseInsensitiveContains("no media folder")
     }
 
     private static func eventHostAnalysisCacheRoot(in eventRoot: URL) -> URL {
@@ -1699,6 +1838,207 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private struct FCPEventRootResolution {
         let eventRoot: URL
         let sourceDescription: String
+    }
+
+    private struct FCPActiveLibraryEventResolution {
+        let bundleRoot: URL
+        let eventResolution: FCPEventRootResolution
+        let securityScopedURL: URL?
+    }
+
+    private struct FCPActiveLibraryBundleCandidate {
+        let bundleRoot: URL
+        let securityScopedURL: URL?
+    }
+
+    private static func activeFinalCutLibraryEventRoot(
+        expectedRange: HostAnalysisExpectedRange?,
+        projectDocumentID: UInt?
+    ) -> (resolution: FCPActiveLibraryEventResolution?, rejectReason: String) {
+        let activeLibraries = activeFinalCutLibraryBundleURLs()
+        os_log(
+            "Active library resolver input documentID=%{public}@ expectedRange=%{public}@ candidates=%{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            projectDocumentIDDescription(projectDocumentID),
+            expectedRangeDescription(expectedRange),
+            activeLibraries.bundleURLs.map(\.bundleRoot.path).joined(separator: " | ")
+        )
+        guard activeLibraries.rejectReason == nil else {
+            return (nil, activeLibraries.rejectReason ?? "Active Final Cut library preferences unavailable.")
+        }
+        let bundleCandidates = activeLibraries.bundleURLs
+        guard !bundleCandidates.isEmpty else {
+            return (nil, "Final Cut Pro active library list is empty.")
+        }
+        guard bundleCandidates.count == 1, let bundleCandidate = bundleCandidates.first else {
+            for candidate in bundleCandidates {
+                candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+            }
+            return (nil, "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | "))")
+        }
+        let bundleRoot = bundleCandidate.bundleRoot
+        let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
+        guard FileManager.default.fileExists(atPath: libraryMarkerURL.path) else {
+            bundleCandidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+            return (nil, "Active Final Cut library marker is missing at \(libraryMarkerURL.path)")
+        }
+        guard let eventResolution = fcpEventRoot(
+            containing: internalBundleHostAnalysisCacheRoot(in: bundleRoot),
+            in: bundleRoot,
+            expectedRange: expectedRange
+        ) else {
+            bundleCandidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+            return (nil, "Ambiguous Event for active Final Cut library \(bundleRoot.path)")
+        }
+        return (
+            FCPActiveLibraryEventResolution(
+                bundleRoot: bundleRoot,
+                eventResolution: FCPEventRootResolution(
+                    eventRoot: eventResolution.eventRoot,
+                    sourceDescription: "Final Cut Pro active library bookmark / \(eventResolution.sourceDescription)"
+                ),
+                securityScopedURL: bundleCandidate.securityScopedURL
+            ),
+            ""
+        )
+    }
+
+    private static func activeFinalCutLibraryBundleURLs() -> (bundleURLs: [FCPActiveLibraryBundleCandidate], rejectReason: String?) {
+        var rejectionReasons: [String] = []
+        for preferenceURL in finalCutPreferenceURLs() {
+            var isDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: preferenceURL.path, isDirectory: &isDirectory),
+                  !isDirectory.boolValue
+            else {
+                rejectionReasons.append("preferences missing at \(preferenceURL.path)")
+                continue
+            }
+            do {
+                let data = try Data(contentsOf: preferenceURL)
+                var plistFormat = PropertyListSerialization.PropertyListFormat.binary
+                guard let plist = try PropertyListSerialization.propertyList(
+                    from: data,
+                    options: [],
+                    format: &plistFormat
+                ) as? [String: Any] else {
+                    rejectionReasons.append("preferences plist is not a dictionary at \(preferenceURL.path)")
+                    continue
+                }
+                guard let bookmarks = plist["FFActiveLibraries"] as? [Data] else {
+                    rejectionReasons.append("FFActiveLibraries missing at \(preferenceURL.path)")
+                    continue
+                }
+                var resolvedCandidates: [FCPActiveLibraryBundleCandidate] = []
+                var bookmarkRejections: [String] = []
+                for (index, bookmarkData) in bookmarks.enumerated() {
+                    do {
+                        var isStale = false
+                        let url = try URL(
+                            resolvingBookmarkData: bookmarkData,
+                            options: [.withoutUI, .withSecurityScope],
+                            relativeTo: nil,
+                            bookmarkDataIsStale: &isStale
+                        ).standardizedFileURL
+                        guard url.pathExtension == "fcpbundle" else {
+                            bookmarkRejections.append("bookmark \(index) resolved outside .fcpbundle: \(url.path)")
+                            continue
+                        }
+                        if isStale {
+                            os_log(
+                                "Active library resolver accepted stale bookmark %{public}@ from %{public}@; filesystem validation will decide writability.",
+                                log: stabilizerHostAnalysisLog,
+                                type: .default,
+                                url.path,
+                                preferenceURL.path
+                            )
+                        }
+                        let didStartAccess = url.startAccessingSecurityScopedResource()
+                        if didStartAccess {
+                            os_log(
+                                "Active library resolver started security-scoped access for %{public}@.",
+                                log: stabilizerHostAnalysisLog,
+                                type: .default,
+                                url.path
+                            )
+                        } else {
+                            os_log(
+                                "Active library resolver resolved %{public}@ without security-scoped access; filesystem validation will decide writability.",
+                                log: stabilizerHostAnalysisLog,
+                                type: .error,
+                                url.path
+                            )
+                        }
+                        resolvedCandidates.append(FCPActiveLibraryBundleCandidate(
+                            bundleRoot: url,
+                            securityScopedURL: didStartAccess ? url : nil
+                        ))
+                    } catch {
+                        bookmarkRejections.append("bookmark \(index) could not be resolved: \(error.localizedDescription)")
+                    }
+                }
+                let uniqueCandidates = uniqueStandardizedBundleCandidates(resolvedCandidates)
+                os_log(
+                    "Active library resolver read %{public}d active library bookmark(s) from %{public}@; resolved=%{public}@ rejects=%{public}@.",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    bookmarks.count,
+                    preferenceURL.path,
+                    uniqueCandidates.map(\.bundleRoot.path).joined(separator: " | "),
+                    bookmarkRejections.joined(separator: " | ")
+                )
+                if !uniqueCandidates.isEmpty {
+                    return (uniqueCandidates, nil)
+                }
+                rejectionReasons.append("no usable FFActiveLibraries .fcpbundle bookmark in \(preferenceURL.path): \(bookmarkRejections.joined(separator: " | "))")
+            } catch {
+                rejectionReasons.append("preferences unreadable at \(preferenceURL.path): \(error.localizedDescription)")
+            }
+        }
+        return ([], rejectionReasons.joined(separator: " ; "))
+    }
+
+    private static func finalCutPreferenceURLs() -> [URL] {
+        let homeURL = realUserHomeDirectoryURL()
+        return [
+            homeURL
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Containers", isDirectory: true)
+                .appendingPathComponent("com.apple.FinalCut", isDirectory: true)
+                .appendingPathComponent("Data", isDirectory: true)
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Preferences", isDirectory: true)
+                .appendingPathComponent("com.apple.FinalCut.plist", isDirectory: false),
+            homeURL
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Preferences", isDirectory: true)
+                .appendingPathComponent("com.apple.FinalCut.plist", isDirectory: false)
+        ]
+    }
+
+    private static func realUserHomeDirectoryURL() -> URL {
+        if let passwd = getpwuid(getuid()),
+           let homeDirectory = passwd.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: homeDirectory), isDirectory: true)
+        }
+        return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+    }
+
+    private static func uniqueStandardizedBundleCandidates(_ candidates: [FCPActiveLibraryBundleCandidate]) -> [FCPActiveLibraryBundleCandidate] {
+        var seen = Set<String>()
+        var unique: [FCPActiveLibraryBundleCandidate] = []
+        for candidate in candidates {
+            let standardizedURL = candidate.bundleRoot.standardizedFileURL
+            if seen.insert(standardizedURL.path).inserted {
+                unique.append(FCPActiveLibraryBundleCandidate(
+                    bundleRoot: standardizedURL,
+                    securityScopedURL: candidate.securityScopedURL
+                ))
+            } else {
+                candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+            }
+        }
+        return unique
     }
 
     private static func fcpEventRoot(

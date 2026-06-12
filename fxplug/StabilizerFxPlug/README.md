@@ -70,7 +70,11 @@ estimators, or Transform-keyframe writers back into this target.
   Bundle Cache Unavailable`; that result can drive the current viewer/render session, but it
   is only persisted later if the Event cache root becomes available. If Final Cut Pro reports
   a library temp folder instead of an Event folder, the runtime uses an unambiguous top-level
-  Event resolver and fails visibly when the Event remains ambiguous as
+  Event resolver. If Final Cut Pro reports no media folder for a library saved without
+  Collect Media, the runtime can use the single active Final Cut Pro library bookmark, start
+  security-scoped access when available, and then run that same Event resolver. Multiple active libraries, unreadable active-library
+  state, unwritable Event roots, and ambiguous Events fail visibly instead of writing to a
+  shared fallback, including
   `Project Bundle Cache Unavailable - Ambiguous Event`.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
@@ -243,12 +247,16 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   reuse. If the previous cache was rejected for the current clip, the next start skips that
   rejected cache and requests a new analysis. If the button callback cannot see `FxProjectAPI`,
   it still requests Host Analysis and lets analyzer `setupAnalysis` resolve the Event cache
-  root. If setup still cannot resolve a writable Event cache root, the analyzer finishes the
-  active pass in memory only and the Inspector shows `Ready Memory Only - Project Bundle
-  Cache Unavailable` after completion until a later callback can resolve the Event cache root
-  and save the completed result. The installed plug-in bundle is signed with sandbox
-  and security-scoped file entitlements so the Host Analysis runtime can open the
-  `FxProjectAPI.mediaFolderURL()` security-scoped URL. The in-progress Host Analysis
+  root through either the host media folder or, when Collect Media is off, the single active
+  Final Cut Pro library bookmark. If setup still cannot resolve a writable Event cache root,
+  the analyzer finishes the active pass in memory only and the Inspector shows `Ready Memory
+  Only - Project Bundle Cache Unavailable` after completion until a later callback can
+  resolve the Event cache root and save the completed result. The installed plug-in bundle is
+  signed with sandbox, security-scoped file entitlements, and a read-only home-relative
+  exception for Final Cut Pro's preference plist so the Host Analysis runtime can open the
+  `FxProjectAPI.mediaFolderURL()` security-scoped URL when Final Cut Pro provides one, or
+  read the active library bookmark when Final Cut Pro reports no media folder. The in-progress
+  Host Analysis
   session registry is process-wide and contains per-session stores, so setup, frame
   analysis, and cleanup callbacks can arrive through different FxPlug instances without
   losing or mixing the active analysis session. If a saved cache uses an unsupported schema,
@@ -287,8 +295,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R341` means
-  FxPlug `0.3.41` is rendering original/optimized frames, and `P341` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R343` means
+  FxPlug `0.3.43` is rendering original/optimized frames, and `P343` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic

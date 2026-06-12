@@ -8,5 +8,9 @@
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/Library/Containers/com.apple.FinalCut/Data/Library/Preferences/com.apple.FinalCut.plist</string>
+	</array>
 </dict>
 </plist>
