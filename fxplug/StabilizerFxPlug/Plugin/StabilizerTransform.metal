@@ -130,8 +130,8 @@ static uint debugModeLabelChar(float debugMode, uint index) {
         return debugMode > 1.5 ? 80 : 82; // P or R
     }
     if (index == 1) { return 51; } // 3
-    if (index == 2) { return 49; } // 1
-    if (index == 3) { return 51; } // 3
+    if (index == 2) { return 53; } // 5
+    if (index == 3) { return 52; } // 4
     return 0;
 }
 
@@ -159,75 +159,66 @@ static uint debugLabelChar(uint row, uint index, float debugMode) {
             if (index == 3) { return 66; } // B
             return 0;
         case 5:
-            if (index == 0) { return 66; } // B
-            if (index == 1) { return 79; } // O
-            if (index == 2) { return 66; } // B
-            return 0;
-        case 6:
             if (index == 0) { return 87; } // W
             if (index == 1) { return 65; } // A
             if (index == 2) { return 82; } // R
             if (index == 3) { return 80; } // P
             return 0;
-        case 7:
+        case 6:
             if (index == 0) { return 84; } // T
             if (index == 1) { return 85; } // U
             if (index == 2) { return 82; } // R
             if (index == 3) { return 78; } // N
             return 0;
-        case 8:
+        case 7:
             if (index == 0) { return 70; } // F
             if (index == 2) { return 81; } // Q
             return 0;
-        case 9:
+        case 8:
             if (index == 0) { return 83; } // S
             if (index == 2) { return 81; } // Q
             return 0;
-        case 10:
-            if (index == 0) { return 66; } // B
-            if (index == 2) { return 81; } // Q
-            return 0;
-        case 11:
+        case 9:
             if (index == 0) { return 87; } // W
             if (index == 2) { return 81; } // Q
             return 0;
-        case 12:
+        case 10:
             if (index == 0) { return 84; } // T
             if (index == 2) { return 81; } // Q
             return 0;
-        case 13:
+        case 11:
             if (index == 0) { return 83; } // S
             if (index == 1) { return 77; } // M
             if (index == 2) { return 84; } // T
             if (index == 3) { return 72; } // H
             return 0;
-        case 14:
+        case 12:
             if (index == 0) { return 84; } // T
             if (index == 1) { return 82; } // R
             if (index == 2) { return 75; } // K
             return 0;
-        case 15:
+        case 13:
             if (index == 0) { return 83; } // S
             if (index == 1) { return 72; } // H
             if (index == 2) { return 82; } // R
             if (index == 3) { return 80; } // P
             return 0;
-        case 16:
+        case 14:
             if (index == 0) { return 82; } // R
             if (index == 1) { return 69; } // E
             if (index == 2) { return 83; } // S
             return 0;
-        case 17:
+        case 15:
             if (index == 0) { return 72; } // H
             if (index == 1) { return 73; } // I
             if (index == 2) { return 84; } // T
             return 0;
-        case 18:
+        case 16:
             if (index == 0) { return 87; } // W
             if (index == 1) { return 76; } // L
             if (index == 2) { return 75; } // K
             return 0;
-        case 19:
+        case 17:
             return debugModeLabelChar(debugMode, index);
         default:
             return 0;
@@ -305,7 +296,7 @@ fragment float4 fragmentShader(
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;
         float panelWidth = labelWidth + labelGap + barWidth;
-        float panelHeight = 20.0 * rowHeight;
+        float panelHeight = 18.0 * rowHeight;
         if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
@@ -330,45 +321,39 @@ fragment float4 fragmentShader(
                 fill = saturate(transform->diagnostic2.w);
                 color = float3(0.2, 0.95, 1.0);
             } else if (row == 6) {
-                fill = saturate(transform->diagnostic5.y);
-                color = float3(1.0, 0.45, 0.25);
-            } else if (row == 7) {
                 fill = saturate(transform->diagnostic2.x);
                 color = float3(0.1, 0.55, 1.0);
-            } else if (row == 8) {
+            } else if (row == 7) {
                 fill = saturate(transform->diagnostic3.y);
                 color = float3(0.55, 0.95, 0.25);
-            } else if (row == 9) {
+            } else if (row == 8) {
                 fill = saturate(transform->diagnostic3.z);
                 color = float3(0.2, 0.65, 1.0);
-            } else if (row == 10) {
+            } else if (row == 9) {
                 fill = saturate(transform->diagnostic3.w);
-                color = float3(0.75, 0.35, 1.0);
-            } else if (row == 11) {
-                fill = saturate(transform->diagnostic4.x);
                 color = float3(1.0, 0.45, 0.25);
-            } else if (row == 12) {
-                fill = saturate(transform->diagnostic5.x);
+            } else if (row == 10) {
+                fill = saturate(transform->diagnostic4.x);
                 color = float3(0.1, 0.55, 1.0);
-            } else if (row == 13) {
+            } else if (row == 11) {
                 fill = saturate(transform->diagnostic3.x);
                 color = float3(0.95, 0.95, 0.95);
-            } else if (row == 14) {
+            } else if (row == 12) {
                 fill = saturate(transform->diagnostic4.y);
                 color = float3(0.2, 1.0, 0.55);
-            } else if (row == 15) {
+            } else if (row == 13) {
                 fill = saturate(transform->diagnostic4.z);
                 color = float3(0.75, 1.0, 0.25);
-            } else if (row == 16) {
+            } else if (row == 14) {
                 fill = saturate(transform->diagnostic4.w);
                 color = float3(1.0, 0.65, 0.15);
-            } else if (row == 17) {
+            } else if (row == 15) {
                 fill = saturate(transform->diagnostic.w);
                 color = float3(1.0, 0.1, 0.1);
-            } else if (row == 18) {
-                fill = saturate(transform->diagnostic5.z);
+            } else if (row == 16) {
+                fill = saturate(transform->diagnostic5.x);
                 color = float3(0.2, 1.0, 0.75);
-            } else if (row == 19) {
+            } else if (row == 17) {
                 fill = 1.0;
                 color = transform->debugMode > 1.5 ? float3(0.2, 0.95, 1.0) : float3(0.2, 1.0, 0.55);
             }

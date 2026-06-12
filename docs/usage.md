@@ -93,8 +93,7 @@ fallbacks.
   is longer than Footstep Jitter but shorter than broad Turn Smoothing. The default is
   `0.65` and the maximum is `4.0`.
 - `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
-  default is `0.70`, so medium vertical follow-through is corrected before the longer
-  Walking Bob pass while still leaving BOB as the broader vertical-cycle correction.
+  default is `0.70`, so medium vertical follow-through is handled by the stride stage.
   Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
   user-facing Stride Wobble window. Its residual gate uses robust window percentiles instead
   of the single worst residual in the window, and its confidence reaches full response
@@ -114,19 +113,6 @@ fallbacks.
   Footstep Jitter X/Y/roll impulse paths are saved separately before the limiter is applied,
   so fine frame-level shake remains available to render-time correction. Short analyzed
   ranges are kept in bounds during cleanup so the prepared cache can be saved.
-- `Walking Bob`: fixed internal `2.5` second Y-axis-only baseline for footstep bob and
-  vertical walking shake left after Footstep Jitter and Stride Wobble. The correction uses
-  the Y band between the stride-smoothed baseline and this slightly longer walking-bob
-  smooth path without changing X or roll. There is no user-facing window control; `Turn
-  Detection Window` has its own Inspector slider. Its confidence uses tracking quality and
-  symmetric window support, robust residuals, and actual Y-band magnitude, so weak block
-  coverage, one-sided clip-edge windows, or tiny vertical bands do not create large vertical
-  waves.
-- `Walking Bob Removal`: direct amount for the Y-only correction. Footstep bounce
-  can be reduced without changing X or roll. This is the final correction stage inside the
-  same effect, and setting it to `0` does not disable Footstep Jitter Y. The default is
-  `0.75`, which is intentionally conservative; higher values can push through low-confidence
-  gating but are clamped during render to avoid adding inverse vertical shake.
 - `Far-field Warp Strength`: bundled small-clamp correction for distant ridge-line shake. It
   uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
   trim after translation and roll are removed. Render uses only the current frame's local
@@ -243,16 +229,16 @@ fallbacks.
   with stale cache metadata from another clip.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
   loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
-  `Walking Bob`, `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame
+  `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame
   count, actual sample image size, source frame size, and pixel transform scale when analysis
   is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
   compact runtime/source row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
-  `BOB`, `WARP`, `TURN`, live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, plus `SMTH`,
+  `WARP`, `TURN`, live `F Q`/`S Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R353` means FxPlug `0.3.53` is rendering original/optimized
-  frames, while `P353` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R354` means FxPlug `0.3.54` is rendering original/optimized
+  frames, while `P354` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -262,10 +248,9 @@ fallbacks.
   smoothed transform delta, strict tracking, walking-band tracking, motion confidence, blur, residual, the raw `foot q`,
   the effective Footstep Jitter X/Y/R correction strength, `stride q`, the effective Stride
   Wobble X/Y/R correction strength, `turn q`, applied `warp q`, shear, yaw/pitch proxy, perspective,
-  edge-hit counts, the X turn and stride components plus Y footstep, stride, and walking-bob
-  components, plus separate `bob q` confidence.
-- Strength values above `1.0` still compensate low-confidence Footstep, Stride Wobble, and
-  Walking Bob detections. Those walking-band controls use a more assertive
+  edge-hit counts, the X turn and stride components plus Y footstep and stride components.
+- Strength values above `1.0` still compensate low-confidence Footstep and Stride Wobble
+  detections. Those walking-band controls use a more assertive
   medium-confidence response than TURN and WARP, but zero confidence still produces zero
   correction.
 
@@ -301,13 +286,12 @@ The listing checks the latest bundle cache and range-specific cache files, repor
 promote cache files.
 
 The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
-paths and prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order,
+paths and prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order,
 while the summary line names the highest remaining band. `FJIT` is measured against
-the outer-frame baseline, then `SWOB`, `BOB`, and `TURN` are measured from that
+the outer-frame baseline, then `SWOB` and `TURN` are measured from that
 footstep-cleaned path. It prints strict tracking and walking-band tracking separately,
 FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
-the raw impulse or band values, and BOB tracking/window support so short
-or one-sided analysis ranges are distinguishable from weak vertical motion. `WARP` `q` matches the applied `W Q` confidence shown by
+the raw impulse or band values. `WARP` `q` matches the applied `W Q` confidence shown by
 Debug Overlay. With `--time`, the report picks the highest-score frame inside
 the requested `--window` and prints both the requested note time and selected
 clip time. The report also prints residual quality, blur quality, block coverage,
@@ -347,7 +331,7 @@ FxPlug.
 - Playback uses prepared motion paths from completed Host Analysis. It must not run full
   frame-to-frame block matching on every rendered playback frame. Host Analysis stores
   separate raw X/Y/roll impulse paths for Footstep Jitter before applying the zero-phase
-  jerk limiter used by broader pan, turn, and bob stages. Those raw footstep paths and their
+  jerk limiter used by broader pan and turn stages. Those raw footstep paths and their
   baselines are sampled continuously at render time so panning does not snap between nearest
   analyzed frames and frame-level shake is not erased before Footstep Jitter can correct it.
   The final automatic transform is also sampled across a `1.20` second symmetric render-time
@@ -357,12 +341,12 @@ FxPlug.
   smooth as possible without rerunning Host Analysis. Debug output reports the raw
   center-frame transform and the smoothing delta so visible stepping can be diagnosed from
   the Inspector. Footstep Jitter X/Y and roll keep the current render frame's impulse
-  correction after the wider Stride/Turn/Bob smoothing pass, so fine distant ridge-line shake
+  correction after the wider Stride/Turn smoothing pass, so fine distant ridge-line shake
   is not averaged out by temporal smoothing. Far-field Warp uses a shorter `0.36` second
   in-range smoothing window so ridge-line correction remains responsive without turning
   single-frame gate changes into swimming. Render-time window selection uses the sorted Host
   Analysis frame times directly, so long prepared caches do not require repeated full-cache
-  scans during playback. Stride, Bob, and Turn confidence use robust residual percentiles
+  scans during playback. Stride and Turn confidence use robust residual percentiles
   rather than the single worst frame in the smoothing window.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
@@ -391,11 +375,10 @@ FxPlug.
   Original/Optimized or create proxy media before judging the stabilized preview.
 - Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
   path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
-  Footstep Jitter impulse path, a fixed `2.0` second Stride Wobble band, and a Y-only
-  fixed `2.5` second Walking Bob band-pass path. Y correction is handled by Footstep Jitter
-  first, Stride Wobble second, and Walking Bob last; Turn Smoothing does not apply to Y.
+  Footstep Jitter impulse path and a fixed `2.0` second Stride Wobble band. Y correction is
+  handled by Footstep Jitter first and Stride Wobble second; Turn Smoothing does not apply to Y.
   This keeps horizontal segmented turns, fine high-frequency shake, medium walking wobble,
-  and footstep vertical bobbing independently tunable without rerunning Host Analysis.
+  and vertical walking wobble tunable without rerunning Host Analysis.
   Footstep Jitter confidence is evaluated on the current render frame instead of inheriting
   the worst residual from the wider turn-detection window.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch

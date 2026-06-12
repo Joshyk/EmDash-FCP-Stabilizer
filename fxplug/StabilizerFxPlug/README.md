@@ -46,8 +46,8 @@ estimators, or Transform-keyframe writers back into this target.
   `Proxy Media Rejected - Use Original Media`; switch Final Cut Pro back to original media
   and rerun Host Analysis.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
-- Combines per-frame Footstep Jitter, fixed-window Stride Wobble, fixed-window Walking Bob,
-  Far-field Warp, and broader Turn Smoothing bands so walking-gimbal shake is separated by
+- Combines per-frame Footstep Jitter, fixed-window Stride Wobble, Far-field Warp, and
+  broader Turn Smoothing bands so walking-gimbal shake is separated by
   time scale without rerunning Host Analysis. Footstep Jitter keeps the current render
   frame's raw impulse after `1.20` second zero-phase smoothing; Far-field Warp uses a
   shorter `0.36` second in-range smoothing window so ridge-line correction stays responsive.
@@ -180,20 +180,11 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
   worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale,
   the Y default is `0.70`, and the rotation default is `0.2` to protect the horizon while
-  step follow-through is kept out of the longer Walking Bob pass. FJIT, SWOB, and BOB use a
+  step follow-through is handled by the stride stage. FJIT and SWOB use a
   count-aware walking-band tracking gate; WARP and TURN keep the stricter tracking gate.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
-- `Walking Bob`: fixed internal `2.5` second Y-only walking bob band after FJIT and SWOB.
-  There is no user-facing BOB window control; Turn Detection has its own Inspector slider.
-  The shorter window keeps BOB from turning weak vertical evidence into a slow image wave.
-  Its confidence uses tracking quality, symmetric window support, robust residuals, and
-  actual Y-band magnitude so weak tracking, one-sided clip-edge windows, or tiny vertical
-  bands do not create large vertical waves.
-- `Walking Bob Removal`: direct amount for the Y-only BOB correction. Setting it to `0` does
-  not disable Footstep Jitter Y, and higher values are clamped during render to avoid inverse
-  vertical shake.
 - `Far-field Warp Strength`: bundled small-clamp WARP correction for distant ridge-line
   shake. It uses a `0.10`/`1.0` second outer-frame linear warp baseline and applies shear,
   yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
@@ -299,39 +290,37 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   from another clip.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
   version, active correction bands (`Footstep jitter <= 1s`, `Stride wobble <= 2s`,
-  `Walking Bob <= 2.5s`, `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
+  `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
   analysis time, frame count, actual sample image size, source frame size, and pixel
   transform scale when analysis is available. Older saved timeline instances may keep
   stale saved Inspector strings, so use the compact runtime/source row in `Debug Overlay`
   to confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
-  `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
+  `ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R353` means
-  FxPlug `0.3.53` is rendering original/optimized frames, and `P353` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R354` means
+  FxPlug `0.3.54` is rendering original/optimized frames, and `P354` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,
-  stride, and walking-bob components.
+  and stride components.
   The labels mean:
   `X` final horizontal correction,
   `Y` final vertical correction,
   `ROLL` final roll correction,
   `FJIT` Footstep Jitter correction activity from the fixed second-based impulse range,
   `SWOB` Stride Wobble correction activity from the fixed internal stride-wobble window,
-  `BOB` Y-only Walking Bob,
   `WARP` Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim,
   `TURN` X-only Turn Smoothing,
   `SMTH` temporal smoothing delta,
   `F Q` Footstep Jitter confidence,
   `S Q` Stride Wobble confidence,
-  `B Q` Walking Bob confidence,
   `W Q` applied Far-field Warp confidence after tracking and search-radius safety gates,
   `T Q` Turn Smoothing confidence,
-  `WLK` walking-band tracking gate for FJIT/SWOB/BOB,
+  `WLK` walking-band tracking gate for FJIT/SWOB,
   `TRK` current frame tracking quality,
   `SHRP` frame sharpness/clarity quality where higher means less blur,
   `RES` residual quality where higher means lower block-matching error, and
@@ -357,12 +346,12 @@ without repairing, promoting, or deleting them.
 
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining shake from the prepared motion paths and tracking diagnostics, then
-prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order. Pass
+prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order. Pass
 `--turn-window` when the Inspector `Turn Detection Window` is not the default `6.0`.
-It uses the same footstep-first band split as render, so `SWOB`, `BOB`, and `TURN`
+It uses the same footstep-first band split as render, so `SWOB` and `TURN`
 diagnostics are computed from the footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band
-tracking confidence, FJIT per-axis and SWOB per-axis confidence, BOB tracking/window support, residual quality, blur quality, block coverage, edge quality, stable WARP tracking support, and WARP
+tracking confidence, FJIT per-axis and SWOB per-axis confidence, residual quality, blur quality, block coverage, edge quality, stable WARP tracking support, and WARP
 tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.

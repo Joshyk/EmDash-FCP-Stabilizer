@@ -131,10 +131,9 @@ repair malformed cache data; mismatched frame/path arrays should fail visibly an
 new Host Analysis run. Its cache inventory mode should list saved cache readiness without
 repairing, deleting, or promoting cache files. Feedback band estimates should mirror the
 render path's order:
-measure Footstep Jitter against the outer-frame baseline first, then compute Stride Wobble,
-Walking Bob, and Turn diagnostics from the footstep-cleaned path. Walking Bob diagnostics
-should expose tracking evidence and symmetric window support so edge-window gating is visible.
-The feedback report should print bands in Debug Overlay/render order (`FJIT`, `SWOB`, `BOB`,
+measure Footstep Jitter against the outer-frame baseline first, then compute Stride Wobble
+and Turn diagnostics from the footstep-cleaned path.
+The feedback report should print bands in Debug Overlay/render order (`FJIT`, `SWOB`,
 `WARP`, `TURN`) and choose the top remaining band separately. Its `--turn-window` option should
 match the Inspector `Turn Detection Window` when that UI value is not the default `6.0`.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,
@@ -150,11 +149,11 @@ reused.
 Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
 raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
 visible while tuning walking footage. Debug Overlay correction rows should keep walking
-components in order before turn correction: `FJIT`, `SWOB`, `BOB`, `WARP`, then `TURN`;
-confidence rows should match as `F Q`, `S Q`, `B Q`, `W Q`, `T Q`. `TRK`, `SHRP`,
+components in order before turn correction: `FJIT`, `SWOB`, `WARP`, then `TURN`;
+confidence rows should match as `F Q`, `S Q`, `W Q`, `T Q`. `TRK`, `SHRP`,
 `RES`, and `HIT` should all be quality bars where higher means better tracking evidence
 and lower means weaker evidence. `WLK` should show the walking-band tracking gate used by
-Footstep Jitter, Stride Wobble, and Walking Bob. Debug Overlay should also expose a compact
+Footstep Jitter and Stride Wobble. Debug Overlay should also expose a compact
 active runtime/source row so stale saved Inspector strings do not hide which binary is rendering:
 `R###` means an original/optimized render frame is using that FxPlug runtime version, while
 `P###` means a proxy render frame is using the same saved Host Analysis path.
@@ -276,8 +275,8 @@ out-of-range samples to the first or last analysis frame, so end frames are not 
 This render-time smoothing must not require rerunning Host Analysis or changing the cache
 schema.
 Render-time smoothing must not average away Footstep Jitter impulses or roll jitter needed
-to stabilize fine distant ridge-line shake. Smooth Turn Smoothing, Stride Wobble, and Walking
-Bob components independently, then recombine them with the current render frame's Footstep
+to stabilize fine distant ridge-line shake. Smooth Turn Smoothing and Stride Wobble
+components independently, then recombine them with the current render frame's Footstep
 Jitter X/Y/roll correction. Footstep Jitter debug/status output should show the raw confidence
 and effective correction strength so low-confidence gating is visible. Far-field Warp should
 not use the full broad transform-smoothing window; keep it on a short in-range render-time
@@ -298,7 +297,7 @@ should be evaluated per render frame from current tracking quality, accepted blo
 blur, local baseline support, surrounding footstep noise, and whether the center frame
 departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
 Medium-confidence response may be curved upward for a more useful debug pass. Footstep
-Jitter, Stride Wobble, and Walking Bob may use a more assertive medium-confidence response
+Jitter and Stride Wobble may use a more assertive medium-confidence response
 than Turn Smoothing and Far-field Warp, but zero confidence must still produce zero
 correction. Moderate landing impulses should not be buried by an overly high
 surrounding-noise threshold.
@@ -310,18 +309,18 @@ weak, but applied correction must clamp at full detected-impulse removal during 
 high slider values do not add inverse shake. Footstep Jitter Rotation Strength should
 default to `0.2` so walking footage keeps a stable horizon unless the user explicitly asks
 for stronger roll correction.
-Medium-period walking shake that is longer than Footstep Jitter but shorter than Walking
-Bob should be handled by the render-time `Stride Wobble` stage. Keep its time window fixed
+Medium-period walking shake that is longer than Footstep Jitter should be handled by the
+render-time `Stride Wobble` stage. Keep its time window fixed
 inside the implementation at `2.0` seconds, expose only X/Y/Rotation strength controls with
 maximum `4.0`, do not add a user-facing Stride Wobble window, compute it from the
-footstep-cleaned baseline, and feed longer Turn Smoothing / Walking Bob bands from the
-stride-smoothed path so the same band is not removed twice. Stride Wobble residual gating
+footstep-cleaned baseline, and feed Turn Smoothing from the stride-smoothed path so the same
+band is not removed twice. Stride Wobble residual gating
 should use robust window evidence instead of the single worst frame in the window, so one
 bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
 full confidence sooner than the broad UI scale, and the default Y strength should remain high
-enough to remove step follow-through before the longer Walking Bob pass. Stride Wobble
+enough to remove step follow-through. Stride Wobble
 Rotation Strength should default to `0.2` for the same horizon-preserving reason.
-Footstep Jitter, Stride Wobble, and Walking Bob may use a count-aware walking-band tracking
+Footstep Jitter and Stride Wobble may use a count-aware walking-band tracking
 gate that eases block coverage only when enough motion blocks were accepted. Far-field Warp
 and Turn Smoothing should keep the stricter tracking gate so weak evidence does not create
 swimming warp or false turn smoothing.
@@ -344,24 +343,12 @@ small output-edge budget during render so large detected pans do not create stre
 jumps in the preview. `Turn Detection Window` must use the Inspector UI value, and its UI
 minimum must be the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than
 SWOB. The turn band should be measured from the stride-smoothed path instead of the raw frame
-path, and Y correction must stay Footstep Jitter first, Stride Wobble second, and Walking Bob
-last so short landing shock is not reintroduced by turn smoothing. TURN confidence should
+path, and Y correction must stay Footstep Jitter first and Stride Wobble second so short
+landing shock is not reintroduced by turn smoothing. TURN confidence should
 require both tracking evidence and a real X turn band; do not keep a hidden minimum turn
 confidence on low-evidence frames.
-Y-axis walking bob that is longer than Stride Wobble but separate from X-only panning should
-be handled by the render-time fixed `2.5` second `Walking Bob` and `Walking Bob Removal`
-path, which corrects the Y-only band between the fixed `2.0` second stride-smoothed baseline
-and the slightly longer walking-bob smoothing window, without changing X or roll and without
-rerunning Host Analysis. Do not expose a user-facing Walking Bob window control.
-Walking Bob should remain in the same effect as the final Y-only correction stage. It must
-use its own confidence/debug value, must not gate or weaken Footstep Jitter Y, and setting
-`Walking Bob Removal` to zero must still allow Footstep Jitter Y to work.
-Walking Bob confidence should be based on current tracking evidence, symmetric window
-support, robust residual evidence, and actual Y-band magnitude so weak block coverage,
-one-sided clip-edge windows, or tiny vertical bands do not create large vertical image waves.
-Walking Bob removal values should clamp at full
-detected-band removal during render so high slider values do not add inverse vertical
-shake, while still allowing values above `1.0` to compensate for low-confidence gating.
+Do not reintroduce a separate post-stride Y-only bounce stage as a render stage,
+Inspector control, debug row, feedback band, or cache-derived diagnostic path.
 
 ## Far-Field Warp And Edges
 

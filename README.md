@@ -14,15 +14,13 @@ built-in Stabilization effect because that effect applies its own internal crop
 and scale.
 
 The effect is designed for outdoor walking shots where the camera is already on
-a gimbal but still has step shock, short wobble, vertical bob, segmented turns,
-and distant ridge-line shake.
+a gimbal but still has step shock, short wobble, segmented turns, and distant
+ridge-line shake.
 
 The main correction stages are:
 
 - `Footstep Jitter`: frame-local X/Y/roll impulse removal for landing shock.
-- `Stride Wobble`: medium-period X/Y/roll cleanup between footstep shock and
-  broad bob.
-- `Walking Bob`: Y-only correction for longer vertical walking bounce.
+- `Stride Wobble`: medium-period X/Y/roll cleanup after footstep shock.
 - `Far-field Warp Strength`: small-clamp deskew, yaw/pitch proxy, and
   perspective trim for distant background shake.
 - `Turn Smoothing`: X-only smoothing for stop-and-go walking turns.
@@ -93,20 +91,19 @@ frame's impulse relative to surrounding footstep noise. Moderate landing impulse
 useful confidence a little sooner, while zero evidence and noisy unsupported frames still
 produce zero correction. The surrounding-noise floor is capped below the full-response point
 so repeated walking motion does not bury a real center-frame landing shock.
-FJIT, SWOB, and BOB use a walking-band tracking gate that slightly eases block coverage only
+FJIT and SWOB use a walking-band tracking gate that slightly eases block coverage only
 when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
 avoid swimming or false turn smoothing.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
 strengths. It is measured from the footstep-cleaned path, then longer Turn
-Smoothing and Walking Bob bands are measured from the stride-smoothed path so
-the same motion is not removed twice. It does not use the raw or jerk-limited
+Smoothing is measured from the stride-smoothed path so the same motion is not
+removed twice. It does not use the raw or jerk-limited
 broad path as its band input. Its residual gate uses robust window percentiles
 instead of letting a single bad frame suppress the whole band. Medium stride
 bands reach full confidence earlier than the broad UI scale so real walking
-follow-through is not left entirely to the longer Walking Bob pass; the Y default
-is `0.70`, high enough to remove medium vertical step wobble before the broader BOB pass.
+follow-through is corrected by the stride stage; the Y default is `0.70`.
 The rotation default is `0.2` to protect the horizon.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
@@ -116,15 +113,6 @@ Y or roll, and is soft-limited to a small output-edge budget during render.
 fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
-
-`Walking Bob` uses a fixed internal `2.5` second Y-only baseline for the remaining
-vertical walking bounce after Footstep Jitter and Stride Wobble. The shorter window keeps
-BOB from turning weak vertical evidence into a slow image wave. The Inspector
-exposes only `Walking Bob Removal`; it does not gate or weaken Footstep Jitter Y.
-Its confidence uses current tracking quality, symmetric window support, robust
-residuals, and actual Y-band magnitude so weak tracking, one-sided clip-edge
-windows, or tiny vertical bands do not create large vertical waves. The default
-removal is `0.75`.
 
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
@@ -140,8 +128,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R353` means FxPlug `0.3.53`
-is rendering original/optimized frames, and `P353` means proxy playback is using
+active render runtime and current source mode: `R354` means FxPlug `0.3.54`
+is rendering original/optimized frames, and `P354` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -239,8 +227,8 @@ render time.
 Render-time smoothing samples neighboring render times symmetrically across a
 `1.20` second zero-phase window and blends the automatic transform. At clip
 edges it averages only in-range neighboring samples instead of duplicating the
-first or last analysis frame. It smooths Stride Wobble, Walking Bob, and Turn
-Smoothing bands without averaging away the current frame's Footstep Jitter
+first or last analysis frame. It smooths Stride Wobble and Turn Smoothing bands
+without averaging away the current frame's Footstep Jitter
 impulse. Far-field Warp uses a separate short `0.36` second in-range smoothing
 window so distant ridge-line correction stays responsive without amplifying
 single-frame gate flicker. Render-time frame lookup uses the sorted Host Analysis
@@ -381,8 +369,8 @@ cache file changes and reload validated candidates on demand.
 
 ## Diagnostics
 
-`Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`,
-live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `SHRP`, `RES`, and
+`Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`,
+live `F Q`/`S Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `SHRP`, `RES`, and
 search-radius `HIT`, `WLK`, and compact runtime/source bars. Labels use raw English control/diagnostic abbreviations;
 do not translate them in the preview.
 
@@ -393,20 +381,18 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `ROLL`: final automatic roll/rotation correction.
 - `FJIT`: Footstep Jitter correction activity from the fixed second-based impulse range.
 - `SWOB`: Stride Wobble correction activity from the fixed internal stride-wobble window.
-- `BOB`: Y-only Walking Bob correction.
 - `WARP`: Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim.
 - `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
 - `SMTH`: render-time temporal smoothing delta.
 - `F Q`: Footstep Jitter confidence.
 - `S Q`: Stride Wobble confidence.
-- `B Q`: Walking Bob confidence.
 - `W Q`: applied Far-field Warp confidence after tracking and search-radius safety gates.
 - `T Q`: Turn Smoothing confidence.
 - `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
 - `SHRP`: frame sharpness/clarity quality; higher means less blur.
 - `RES`: residual quality; higher means lower block-matching residual/error.
 - `HIT`: search-radius headroom quality; higher means fewer searches hit the radius edge.
-- `WLK`: count-aware walking-band tracking quality used by FJIT, SWOB, and BOB.
+- `WLK`: count-aware walking-band tracking quality used by FJIT and SWOB.
 
 `TRK`, `SHRP`, `RES`, and `HIT` are all aligned as quality signals: high is good, low is bad.
 
@@ -416,7 +402,6 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `track q` and `walk q`.
 - `footstep q` and effective Footstep Jitter X/Y/R strength.
 - `stride q` and effective Stride Wobble X/Y/R strength.
-- `bob q`.
 - `turn q`.
 - `warp q`.
 - Tracking and motion confidence.
@@ -424,7 +409,7 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - Search-radius edge-hit counts.
 - Current warp shape values.
 
-Values above `1.0` on Footstep, Stride, and Bob controls boost low-confidence
+Values above `1.0` on Footstep and Stride controls boost low-confidence
 corrections with a curved confidence response. Those walking-band controls use a
 more assertive medium-confidence response than TURN and WARP, but still have no
 hidden minimum confidence floor: zero confidence produces zero correction.
@@ -455,15 +440,15 @@ to list the latest bundle cache and range-specific cache files. It reports each 
 `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing or deleting
 anything.
 
-The report prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order
+The report prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order
 bands using the saved prepared paths, tracking confidence, residuals, blur,
 block coverage, and search-radius edge-hit counts, while the summary line names
 the highest remaining band. The band split mirrors the render path: `FJIT` is
-measured first against the outer-frame baseline, then `SWOB`, `BOB`, and `TURN`
+measured first against the outer-frame baseline, then `SWOB` and `TURN`
 are measured from the footstep-cleaned path. `WARP`
 uses the same local baseline/gate inputs that are then short-smoothed in render,
 and the report includes strict tracking, walking-band tracking, FJIT and SWOB
-per-axis confidence, BOB tracking/window support, residual, blur, block
+per-axis confidence, residual, blur, block
 coverage, edge quality, stable WARP tracking support, and WARP tracking/edge
 gate values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host

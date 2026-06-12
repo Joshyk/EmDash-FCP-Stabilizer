@@ -27,7 +27,6 @@ private struct Strengths {
     var strideY: Double
     var strideR: Double
     var turn: Double
-    var bob: Double
     var warp: Double
 
     static let defaults = Strengths(
@@ -38,7 +37,6 @@ private struct Strengths {
         strideY: 0.70,
         strideR: 0.75,
         turn: 1.0,
-        bob: 0.75,
         warp: 1.0
     )
 }
@@ -354,7 +352,6 @@ private struct AssessmentContext {
 }
 
 private let strideWindowSeconds = 2.0
-private let walkingBobWindowSeconds = 2.5
 private let footstepInnerWindowSeconds = 0.10
 private let footstepOuterWindowSeconds = 1.0
 private let farFieldInnerWindowSeconds = 0.10
@@ -369,7 +366,6 @@ private let footstepFullResponseScale: Float = 0.65
 private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
 private let strideFullResponseScale: Float = 0.65
-private let walkingBobFullScalePixels: Float = 0.65
 private let turnFullScalePixels: Float = 2.0
 private let farFieldWarpTrackingGateStart: Float = 0.26
 private let farFieldWarpTrackingGateFull: Float = 0.56
@@ -538,7 +534,6 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let yScale = outputHeight / Float(max(1, analysis.sampleHeight))
 
     let strideIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: strideWindowSeconds)
-    let bobIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
     let turnWindowSeconds = max(strideWindowSeconds, options.turnWindowSeconds)
     let turnIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: turnWindowSeconds)
     let warpGateIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: farFieldOuterWindowSeconds)
@@ -565,15 +560,12 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideSmoothX = context.strideSmoothedXPath[index]
     let strideSmoothY = context.strideSmoothedYPath[index]
     let strideSmoothR = context.strideSmoothedRPath[index]
-    let bobSmoothY = timeWeightedAverage(context.strideSmoothedYPath, frames: analysis.frames, indices: bobIndices, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
     let turnSmoothX = timeWeightedMonotonicSCurveValue(context.strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
         ?? timeWeightedAverage(context.strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
 
     let strideResidual = percentileValue(analysis.residuals, indices: strideIndices, percentile: 0.70)
-    let bobResidual = percentileValue(analysis.residuals, indices: bobIndices, percentile: 0.70)
     let turnResidual = percentileValue(analysis.residuals, indices: turnIndices, percentile: 0.75)
     let strideTracking = residualAdjustedTrackingConfidence(walkingTracking, residual: strideResidual, multiplier: 0.6)
-    let bobTracking = residualAdjustedTrackingConfidence(walkingTracking, residual: bobResidual, multiplier: 0.4)
     let turnTracking = residualAdjustedTrackingConfidence(tracking, residual: turnResidual, multiplier: 0.9)
 
     let footX = analysis.footstepPathX[index] - footstepBaseX
@@ -599,12 +591,6 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideAppliedR = abs(strideR) * walkingCorrectionFactor(options.strengths.strideR, confidence: strideQR)
     let strideDetected = hypotf(strideX * xScale, strideY * yScale) + (abs(strideR) * 12.0)
     let strideApplied = hypotf(strideAppliedX, strideAppliedY) + (strideAppliedR * 12.0)
-
-    let bobBandY = strideSmoothY - bobSmoothY
-    let bobSupport = symmetricWindowSupport(frames: analysis.frames, centerTime: frame.time, windowSeconds: walkingBobWindowSeconds)
-    let bobQ = walkingBobConfidence(bandValue: bobBandY, trackingConfidence: bobTracking, windowSupport: bobSupport)
-    let bobDetected = abs(bobBandY * yScale)
-    let bobApplied = bobDetected * walkingCorrectionFactor(options.strengths.bob, confidence: bobQ)
 
     let turnBandX = strideSmoothX - turnSmoothX
     let turnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking)
@@ -649,14 +635,6 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             remaining: max(0.0, strideDetected - strideApplied),
             confidence: (strideQX + strideQY + strideQR) / 3.0,
             note: String(format: "stride band X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f", strideX, strideY, strideR, strideQX, strideQY, strideQR)
-        ),
-        BandAssessment(
-            name: "BOB",
-            detected: bobDetected,
-            applied: bobApplied,
-            remaining: max(0.0, bobDetected - bobApplied),
-            confidence: bobQ,
-            note: String(format: "Y band %.3f trk %.2f support %.2f", bobBandY, bobTracking, bobSupport)
         ),
         BandAssessment(
             name: "WARP",
@@ -955,13 +933,6 @@ private func strideConfidence(bandValue: Float, trackingConfidence: Float, fullS
     let noiseFloor = fullScale * 0.10
     let bandQuality = confidenceRamp(magnitude, start: noiseFloor, full: max(noiseFloor + Float.ulpOfOne, fullScale * strideFullResponseScale))
     return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
-}
-
-private func walkingBobConfidence(bandValue: Float, trackingConfidence: Float, windowSupport: Float) -> Float {
-    let magnitude = abs(bandValue)
-    let noiseFloor = walkingBobFullScalePixels * 0.08
-    let bandQuality = confidenceRamp(magnitude, start: noiseFloor, full: max(noiseFloor + Float.ulpOfOne, walkingBobFullScalePixels))
-    return clamp(trackingConfidence * windowSupport * bandQuality, min: 0.0, max: 1.0)
 }
 
 private func turnConfidence(bandValue: Float, trackingConfidence: Float) -> Float {
@@ -1442,8 +1413,6 @@ private func parseOptions() throws -> Options {
             options.strengths.strideR = try nextDouble(for: arg)
         case "--turn":
             options.strengths.turn = try nextDouble(for: arg)
-        case "--bob":
-            options.strengths.bob = try nextDouble(for: arg)
         case "--warp":
             options.strengths.warp = try nextDouble(for: arg)
         case "--help", "-h":

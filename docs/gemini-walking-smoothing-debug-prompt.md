@@ -17,12 +17,11 @@ Repository context:
   - `Stride Wobble X Strength`
   - `Stride Wobble Y Strength`
   - `Stride Wobble Rotation Strength`
-  - `Walking Bob Removal`
   - `Far-field Warp Strength`
   - `Turn Smoothing Strength`
   - `Far-field Warp Strength` defaults to `1.0` and exposes up to `4.0`.
 - Do not add a Footstep Jitter window.
-- Do not expose a Walking Bob window; Walking Bob uses a fixed internal `2.5` second window.
+- Do not recommend a separate post-stride Y-only bounce stage, Inspector control, or diagnostic band.
 - Do not rerun Host Analysis during render.
 - Host Analysis cache schema should be bumped when prepared analysis output semantics change.
 
@@ -35,13 +34,12 @@ Current implementation to review:
   - `rawEstimate` calculates the center-frame correction split into:
     - `macroPixelOffset.x` for X-only Turn Smoothing
     - `microPixelOffset` for Footstep Jitter
-    - `walkingBobPixelOffset` for Walking Bob
+    - `strideWobblePixelOffset` for Stride Wobble
   - `temporallySmoothedEstimate` samples neighboring render times symmetrically and blends the final automatic transform with zero phase.
   - Turn Smoothing applies only to X translation and requires both tracking evidence and a real X turn band, without a hidden minimum turn-confidence floor.
-  - Walking Bob handles Y-only medium-period motion and gates on tracking quality, symmetric window support, robust residuals, and actual Y-band magnitude.
   - Footstep Jitter X/Y and roll use the current center-frame impulse correction so fine ridge-line shake is not averaged away.
   - Footstep Jitter uses per-frame confidence without a hidden minimum floor before applying X/Y/roll correction, checks local baseline support plus surrounding footstep noise, and stays clamped at full detected-impulse removal.
-  - Stride/Walking Bob/Turn residual gates use robust window percentiles rather than the single worst residual in the window.
+  - Stride/Turn residual gates use robust window percentiles rather than the single worst residual in the window.
   - Far-field Warp render gating curves medium-confidence tracking/search-headroom evidence upward while preserving zero correction for zero evidence.
   - Far-field Warp estimates conservative deskew/shear, yaw/pitch proxy, and perspective trim from upper-frame residual blocks after translation and roll are removed.
   - `StabilizerAutoTransform` now carries:
@@ -53,8 +51,8 @@ Current implementation to review:
     - `warpConfidence`, `shear`, `yawPitchProxy`, and `perspective`
     - sample count and smoothing window seconds
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift`
-  - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Footstep Jitter, Stride Wobble, Walking Bob, Far-field Warp, Turn Smoothing, temporal smoothing delta, Footstep/Stride/Bob/Warp/Turn confidence, tracking quality, sharpness, residual quality, and search-radius headroom.
-  - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, tracking/motion confidence, blur, residual, raw `foot q`, effective Footstep Jitter X/Y/R strength, `stride q`, `bob q`, `warp q`, shear, yaw/pitch proxy, perspective, block counts, edge-hit counts, X turn correction, and Y footstep/stride/bob component split.
+  - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Footstep Jitter, Stride Wobble, Far-field Warp, Turn Smoothing, temporal smoothing delta, Footstep/Stride/Warp/Turn confidence, tracking quality, sharpness, residual quality, and search-radius headroom.
+  - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, tracking/motion confidence, blur, residual, raw `foot q`, effective Footstep Jitter X/Y/R strength, `stride q`, `warp q`, shear, yaw/pitch proxy, perspective, block counts, edge-hit counts, X turn correction, and Y footstep/stride component split.
 - `fxplug/StabilizerFxPlug/Plugin/StabilizerTransform.metal`
   - The overlay draws eighteen labeled rows of diagnostic bars.
 
@@ -62,7 +60,7 @@ Please review this implementation for walking-gimbal smoothing quality. Focus on
 
 1. Whether the temporal smoothing is mathematically zero-phase and does not introduce pan lag.
 2. Whether averaging the final transform can weaken Footstep Jitter impulse removal too much.
-3. Whether Turn Smoothing stays X-only while Footstep Jitter and Walking Bob remain correctly ordered for Y correction.
+3. Whether Turn Smoothing stays X-only while Footstep Jitter and Stride Wobble remain correctly ordered for Y correction.
 4. Whether the debug output exposes enough information to diagnose overcorrection, undercorrection, and confidence gating.
 5. Whether the normalization of the debug bars is useful for 1080p and 4K footage.
 6. Any specific code-level changes that would make the walking footage smoother without adding fallbacks, zoom, or render-time block matching.

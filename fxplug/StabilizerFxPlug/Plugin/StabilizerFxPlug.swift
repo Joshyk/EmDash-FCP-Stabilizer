@@ -20,7 +20,6 @@ private enum ParameterID: UInt32 {
     case sampleScale = 19
     case renderRevision = 20
     case panStabilizationStrength = 23
-    case walkingBobStrength = 26
     case edgeDisplayMode = 27
     case farFieldWarpStrength = 28
     case strideWobbleXStrength = 29
@@ -29,10 +28,9 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.53"
+private let stabilizerFxPlugVersion = "0.3.54"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
-private let stabilizerFixedWalkingBobWindowSeconds = 2.5
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 private let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 private let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
@@ -81,7 +79,6 @@ private struct StabilizerPluginState {
     var strideWobbleYStrength: Double
     var strideWobbleRotationStrength: Double
     var panStabilizationStrength: Double
-    var walkingBobStrength: Double
     var farFieldWarpStrength: Double
     var panSmoothSeconds: Double
     var edgeDisplayMode: Int32
@@ -478,17 +475,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Walking Bob Removal",
-            parameterID: ParameterID.walkingBobStrength.rawValue,
-            defaultValue: 0.75,
-            parameterMin: 0.0,
-            parameterMax: 4.0,
-            sliderMin: 0.0,
-            sliderMax: 4.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
             withName: "Far-field Warp Strength",
             parameterID: ParameterID.farFieldWarpStrength.rawValue,
             defaultValue: 1.0,
@@ -618,7 +604,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             strideWobbleYStrength: 0.70,
             strideWobbleRotationStrength: 0.2,
             panStabilizationStrength: 1.0,
-            walkingBobStrength: 0.75,
             farFieldWarpStrength: 1.0,
             panSmoothSeconds: 6.0,
             edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
@@ -639,7 +624,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         paramAPI.getFloatValue(&state.strideWobbleYStrength, fromParameter: ParameterID.strideWobbleYStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.strideWobbleRotationStrength, fromParameter: ParameterID.strideWobbleRotationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panStabilizationStrength, fromParameter: ParameterID.panStabilizationStrength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.walkingBobStrength, fromParameter: ParameterID.walkingBobStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.farFieldWarpStrength, fromParameter: ParameterID.farFieldWarpStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
         paramAPI.getIntValue(&state.edgeDisplayMode, fromParameter: ParameterID.edgeDisplayMode.rawValue, at: renderTime)
@@ -1046,7 +1030,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
         var lines = ["FxPlug \(stabilizerFxPlugVersion)"]
         if let state {
-            let bobWindowSeconds = stabilizerFixedWalkingBobWindowSeconds
             let turnWindowSeconds = max(stabilizerMinimumTurnDetectionWindowSeconds, state.panSmoothSeconds)
             let turnStartSeconds = stabilizerMinimumTurnDetectionWindowSeconds
             lines.append(String(
@@ -1060,11 +1043,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                 state.strideWobbleXStrength,
                 state.strideWobbleYStrength,
                 state.strideWobbleRotationStrength
-            ))
-            lines.append(String(
-                format: "Walking Bob <= %.2fs | removal %.2f",
-                bobWindowSeconds,
-                state.walkingBobStrength
             ))
             lines.append(String(
                 format: "Far-field Warp <= 1s | strength %.2f",
@@ -2267,7 +2245,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
         appliedRotationRadians: Float
     ) {
         let status = String(
-            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | bob q %.2f blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f bob %.1f",
+            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f",
             frameCount,
             stabilizerFxPlugVersion,
             autoTransform.warpConfidence,
@@ -2306,7 +2284,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.effectiveStrideWobbleStrength.x,
             autoTransform.effectiveStrideWobbleStrength.y,
             autoTransform.effectiveStrideWobbleStrength.z,
-            autoTransform.bobConfidence,
             autoTransform.acceptedBlockCount,
             autoTransform.totalBlockCount,
             autoTransform.searchRadiusHitCount,
@@ -2314,8 +2291,7 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             autoTransform.macroPixelOffset.x,
             autoTransform.strideWobblePixelOffset.x,
             autoTransform.microPixelOffset.y,
-            autoTransform.strideWobblePixelOffset.y,
-            autoTransform.walkingBobPixelOffset.y
+            autoTransform.strideWobblePixelOffset.y
         )
         publishHostAnalysisStatus(statusOverride: status)
     }
@@ -2419,7 +2395,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
                     strideWobbleY: state.strideWobbleYStrength,
                     strideWobbleRotation: state.strideWobbleRotationStrength,
                     panStabilizationStrength: state.panStabilizationStrength,
-                    walkingBob: state.walkingBobStrength,
                     farFieldWarp: state.farFieldWarpStrength
                 )
             )
@@ -2488,24 +2463,24 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
             min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
             footstepJitterActivity,
             strideWobbleActivity,
-            min(1.0, abs(autoTransform.walkingBobPixelOffset.y) / diagnosticScaleY)
+            farFieldWarpActivity
         )
         let diagnostic3 = vector_float4(
             min(1.0, simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale),
             min(1.0, autoTransform.microConfidence),
             min(1.0, autoTransform.strideConfidence),
-            min(1.0, autoTransform.bobConfidence)
+            min(1.0, autoTransform.warpConfidence)
         )
         let diagnostic4 = vector_float4(
-            min(1.0, autoTransform.warpConfidence),
+            min(1.0, autoTransform.turnConfidence),
             min(1.0, autoTransform.trackingConfidence),
             min(1.0, 1.0 - autoTransform.blurAmount),
             residualQuality
         )
         let diagnostic5 = vector_float4(
-            min(1.0, autoTransform.turnConfidence),
-            farFieldWarpActivity,
             min(1.0, autoTransform.walkingTrackingConfidence),
+            0.0,
+            0.0,
             0.0
         )
 
