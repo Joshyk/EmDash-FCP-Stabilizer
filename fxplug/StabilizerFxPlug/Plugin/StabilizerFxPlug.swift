@@ -28,7 +28,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.31"
+private let stabilizerFxPlugVersion = "0.3.32"
 private let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerFixedWalkingBobWindowSeconds = 2.5
@@ -337,7 +337,6 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
     private static let serialAnalysisQueueLock = NSLock()
     private static var serialAnalysisQueue: [StabilizerFxPlugPlugIn] = []
     private static var serialAnalysisQueueDrainScheduled = false
-    private static var serialAnalysisQueueDrainThreadRunning = false
     private static var serialAnalysisCallbackDrainInProgress = false
     private static var serialAnalysisNextCallbackDrainAt = Date.distantPast
     private static let activeAnalysisStoreLock = NSLock()
@@ -857,47 +856,37 @@ final class StabilizerFxPlugPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCu
 
     private static func scheduleSerialAnalysisQueueDrain(after delay: TimeInterval = 1.0) {
         serialAnalysisQueueLock.lock()
-        serialAnalysisQueueDrainScheduled = true
-        guard !serialAnalysisQueueDrainThreadRunning else {
+        guard !serialAnalysisQueueDrainScheduled else {
             serialAnalysisQueueLock.unlock()
             return
         }
-        serialAnalysisQueueDrainThreadRunning = true
+        serialAnalysisQueueDrainScheduled = true
         serialAnalysisQueueLock.unlock()
 
-        Thread.detachNewThread {
-            Self.runSerialAnalysisQueueDrainLoop(initialDelay: delay)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + max(0.0, delay)) {
+            Self.runSerialAnalysisQueueDrainPass()
         }
     }
 
-    private static func runSerialAnalysisQueueDrainLoop(initialDelay: TimeInterval) {
-        var nextDelay = max(0.0, initialDelay)
-        while true {
-            if nextDelay > 0.0 {
-                Thread.sleep(forTimeInterval: nextDelay)
-            }
-            serialAnalysisQueueLock.lock()
-            serialAnalysisQueueDrainScheduled = false
-            let hasQueuedRequest = !serialAnalysisQueue.isEmpty
-            if !hasQueuedRequest {
-                serialAnalysisQueueDrainThreadRunning = false
-                serialAnalysisQueueLock.unlock()
-                return
-            }
-            serialAnalysisQueueLock.unlock()
+    private static func runSerialAnalysisQueueDrainPass() {
+        serialAnalysisQueueLock.lock()
+        serialAnalysisQueueDrainScheduled = false
+        let queuedCount = serialAnalysisQueue.count
+        serialAnalysisQueueLock.unlock()
 
-            startNextQueuedHostAnalysis()
+        guard queuedCount > 0 else {
+            os_log("Serial Host Analysis queue drain skipped because the queue is empty.", log: stabilizerHostAnalysisLog, type: .debug)
+            return
+        }
 
-            serialAnalysisQueueLock.lock()
-            let shouldKeepRunning = !serialAnalysisQueue.isEmpty
-            if !shouldKeepRunning {
-                serialAnalysisQueueDrainThreadRunning = false
-                serialAnalysisQueueLock.unlock()
-                return
-            }
-            serialAnalysisQueueDrainScheduled = true
-            serialAnalysisQueueLock.unlock()
-            nextDelay = 1.0
+        os_log("Serial Host Analysis queue drain pass starting with %{public}d queued request(s).", log: stabilizerHostAnalysisLog, type: .default, queuedCount)
+        startNextQueuedHostAnalysis()
+
+        serialAnalysisQueueLock.lock()
+        let shouldScheduleAnotherPass = !serialAnalysisQueue.isEmpty
+        serialAnalysisQueueLock.unlock()
+        if shouldScheduleAnotherPass {
+            scheduleSerialAnalysisQueueDrain(after: 1.0)
         }
     }
 

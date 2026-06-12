@@ -140,8 +140,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R331` means FxPlug `0.3.31`
-is rendering original/optimized frames, and `P331` means proxy playback is using
+active render runtime and current source mode: `R332` means FxPlug `0.3.32`
+is rendering original/optimized frames, and `P332` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -185,7 +185,9 @@ has an active/reserved Host Analysis session for another clip, the effect enters
 process-wide queue starts queued clips one at a time as the host becomes
 available. Queued start requests are retained until they either start or are
 explicitly cleared, and a completed analysis from an earlier clip does not
-satisfy a later queued clip.
+satisfy a later queued clip. Queue drain runs as one-shot retry passes after
+analysis callbacks complete; if Final Cut Pro is still busy, the request stays
+queued and another pass is scheduled.
 Analysis callback instances clear process-wide analysis bookkeeping, because
 Final Cut Pro may deliver setup/analyze/cleanup to a different FxPlug instance
 than the Inspector button instance that requested the run. The Inspector start

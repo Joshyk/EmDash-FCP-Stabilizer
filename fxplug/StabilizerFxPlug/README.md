@@ -255,7 +255,9 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   preview/render consumers from rechecking the persistent cache signature and loading a newly
   written compatible cache. If another clip has an active or reserved Host Analysis session
   in the same plug-in process, the request is kept in `Queued Host Analysis` until that
-  session finishes.
+  session finishes. Queue drain runs as one-shot retry passes after analysis callbacks
+  complete; if Final Cut Pro is still busy, the queued request remains visible and another
+  pass is scheduled.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
@@ -277,8 +279,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `B Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R331` means
-  FxPlug `0.3.31` is rendering original/optimized frames, and `P331` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R332` means
+  FxPlug `0.3.32` is rendering original/optimized frames, and `P332` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic
