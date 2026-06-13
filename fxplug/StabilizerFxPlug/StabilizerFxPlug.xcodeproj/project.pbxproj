@@ -25,6 +25,7 @@
 		00000000000000000000011A /* FxPlug.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 00000000000000000000021A /* FxPlug.framework */; };
 		00000000000000000000011B /* PluginManager.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 00000000000000000000021B /* PluginManager.framework */; };
 		00000000000000000000011C /* AutoStabilizationEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000021F /* AutoStabilizationEstimator.swift */; };
+		00000000000000000000011D /* StabilizerHostAnalysisStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000220 /* StabilizerHostAnalysisStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -76,6 +77,7 @@
 		00000000000000000000021D /* XPC Service-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "XPC Service-Bridging-Header.h"; sourceTree = "<group>"; };
 		00000000000000000000021E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		00000000000000000000021F /* AutoStabilizationEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoStabilizationEstimator.swift; sourceTree = "<group>"; };
+		000000000000000000000220 /* StabilizerHostAnalysisStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilizerHostAnalysisStore.swift; sourceTree = "<group>"; };
 		000000000000000000000300 /* StabilizerFxPlug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StabilizerFxPlug.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000301 /* StabilizerFxPlug XPC Service.pluginkit */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "StabilizerFxPlug XPC Service.pluginkit"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -118,6 +120,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000211 /* StabilizerFxPlug.swift */,
+				000000000000000000000220 /* StabilizerHostAnalysisStore.swift */,
 				00000000000000000000021F /* AutoStabilizationEstimator.swift */,
 				000000000000000000000212 /* MetalDeviceCache.swift */,
 				000000000000000000000213 /* main.swift */,
@@ -317,6 +320,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000111 /* StabilizerFxPlug.swift in Sources */,
+				00000000000000000000011D /* StabilizerHostAnalysisStore.swift in Sources */,
 				00000000000000000000011C /* AutoStabilizationEstimator.swift in Sources */,
 				000000000000000000000112 /* MetalDeviceCache.swift in Sources */,
 				000000000000000000000113 /* main.swift in Sources */,
