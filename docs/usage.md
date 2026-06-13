@@ -425,11 +425,13 @@ Host Analysis range against Final Cut Pro `Analysis Files/Stabilization` range f
 and only selects a unique match. It starts access to the host-provided media folder before
 inspecting the library bundle, then verifies the selected Event by creating the
 `TokyoWalkingStabilizerHostAnalysis` cache root. If the host media folder is unavailable because
-the library was saved without Collect Media, the resolver reads Final Cut Pro's single active
-library bookmark from `FFActiveLibraries`, resolves it without forcing security-scoped
-bookmark options, starts security-scoped access when the resolved URL grants it, and then
-applies the same Event selection rules.
-Multiple active libraries, unreadable active-library state, or an unwritable Event cache root
+the library was saved without Collect Media, the resolver reads Final Cut Pro's active
+library bookmarks from `FFActiveLibraries`, resolves them without forcing security-scoped
+bookmark options, starts security-scoped access when a resolved URL grants it, and then
+applies the same Event selection rules. If multiple libraries are active, Final Cut Pro's
+current sidebar or import-target UUIDs may disambiguate the bundle only when those identifiers
+match exactly one active library.
+Multiple active libraries with no unique selected bundle, unreadable active-library state, or an unwritable Event cache root
 remain visible failures; ambiguous active libraries surface as
 `Project Bundle Cache Unavailable - Ambiguous Active Libraries`. Resolver logs include the media folder URL, `documentID`,
 active-library bookmark candidates when used, bundle root, Event candidates, selected Event,

@@ -1830,6 +1830,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let securityScopedURL: URL?
     }
 
+    private struct FCPActiveLibrarySelectionHint {
+        let identifier: String
+        let sourceDescription: String
+    }
+
+    private struct FCPActiveLibraryBundleSelection {
+        let candidate: FCPActiveLibraryBundleCandidate
+        let sourceDescription: String
+    }
+
     private static func activeFinalCutLibraryEventRoot(
         expectedRange: HostAnalysisExpectedRange?,
         projectDocumentID: UInt?
@@ -1850,12 +1860,33 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard !bundleCandidates.isEmpty else {
             return (nil, "Final Cut Pro active library list is empty.")
         }
-        guard bundleCandidates.count == 1, let bundleCandidate = bundleCandidates.first else {
-            for candidate in bundleCandidates {
+
+        let selectedBundle: FCPActiveLibraryBundleSelection
+        if bundleCandidates.count == 1, let bundleCandidate = bundleCandidates.first {
+            selectedBundle = FCPActiveLibraryBundleSelection(
+                candidate: bundleCandidate,
+                sourceDescription: "single Final Cut Pro active library bookmark"
+            )
+        } else {
+            let hintedSelection = activeFinalCutLibraryBundleSelection(
+                from: bundleCandidates,
+                selectionHints: activeLibraries.selectionHints
+            )
+            guard let selection = hintedSelection.selection else {
+                for candidate in bundleCandidates {
+                    candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+                }
+                return (
+                    nil,
+                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(hintedSelection.rejectReason)"
+                )
+            }
+            for candidate in bundleCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
                 candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
             }
-            return (nil, "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | "))")
+            selectedBundle = selection
         }
+        let bundleCandidate = selectedBundle.candidate
         let bundleRoot = bundleCandidate.bundleRoot
         let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
         guard FileManager.default.fileExists(atPath: libraryMarkerURL.path) else {
@@ -1875,7 +1906,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 bundleRoot: bundleRoot,
                 eventResolution: FCPEventRootResolution(
                     eventRoot: eventResolution.eventRoot,
-                    sourceDescription: "Final Cut Pro active library bookmark / \(eventResolution.sourceDescription)"
+                    sourceDescription: "\(selectedBundle.sourceDescription) / \(eventResolution.sourceDescription)"
                 ),
                 securityScopedURL: bundleCandidate.securityScopedURL
             ),
@@ -1883,7 +1914,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
     }
 
-    private static func activeFinalCutLibraryBundleURLs() -> (bundleURLs: [FCPActiveLibraryBundleCandidate], rejectReason: String?) {
+    private static func activeFinalCutLibraryBundleURLs() -> (bundleURLs: [FCPActiveLibraryBundleCandidate], selectionHints: [FCPActiveLibrarySelectionHint], rejectReason: String?) {
         var rejectionReasons: [String] = []
         for preferenceURL in finalCutPreferenceURLs() {
             var isDirectory = ObjCBool(false)
@@ -1904,6 +1935,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     rejectionReasons.append("preferences plist is not a dictionary at \(preferenceURL.path)")
                     continue
                 }
+                let selectionHints = activeFinalCutLibrarySelectionHints(from: plist)
                 guard let bookmarks = plist["FFActiveLibraries"] as? [Data] else {
                     rejectionReasons.append("FFActiveLibraries missing at \(preferenceURL.path)")
                     continue
@@ -1967,14 +1999,118 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     bookmarkRejections.joined(separator: " | ")
                 )
                 if !uniqueCandidates.isEmpty {
-                    return (uniqueCandidates, nil)
+                    return (uniqueCandidates, selectionHints, nil)
                 }
                 rejectionReasons.append("no usable FFActiveLibraries .fcpbundle bookmark in \(preferenceURL.path): \(bookmarkRejections.joined(separator: " | "))")
             } catch {
                 rejectionReasons.append("preferences unreadable at \(preferenceURL.path): \(error.localizedDescription)")
             }
         }
-        return ([], rejectionReasons.joined(separator: " ; "))
+        return ([], [], rejectionReasons.joined(separator: " ; "))
+    }
+
+    private static func activeFinalCutLibraryBundleSelection(
+        from candidates: [FCPActiveLibraryBundleCandidate],
+        selectionHints: [FCPActiveLibrarySelectionHint]
+    ) -> (selection: FCPActiveLibraryBundleSelection?, rejectReason: String) {
+        guard !selectionHints.isEmpty else {
+            return (nil, "No Final Cut Pro sidebar or import-target selection identifiers were available.")
+        }
+
+        var rejectDetails: [String] = []
+        for hint in selectionHints {
+            let matches = candidates.filter { candidate in
+                activeLibraryBundle(candidate, containsIdentifier: hint.identifier)
+            }
+            if matches.count == 1, let match = matches.first {
+                os_log(
+                    "Active library resolver selected bundle %{public}@ from %{public}@ identifier %{public}@.",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    match.bundleRoot.path,
+                    hint.sourceDescription,
+                    hint.identifier
+                )
+                return (
+                    FCPActiveLibraryBundleSelection(
+                        candidate: match,
+                        sourceDescription: "Final Cut Pro \(hint.sourceDescription) \(hint.identifier)"
+                    ),
+                    ""
+                )
+            }
+            if matches.isEmpty {
+                rejectDetails.append("\(hint.sourceDescription) \(hint.identifier) matched no active library")
+            } else {
+                rejectDetails.append("\(hint.sourceDescription) \(hint.identifier) matched multiple active libraries: \(matches.map(\.bundleRoot.path).joined(separator: " | "))")
+            }
+        }
+
+        return (nil, "Selection identifiers could not disambiguate active libraries: \(rejectDetails.joined(separator: " ; "))")
+    }
+
+    private static func activeLibraryBundle(
+        _ candidate: FCPActiveLibraryBundleCandidate,
+        containsIdentifier identifier: String
+    ) -> Bool {
+        let libraryDatabaseURL = candidate.bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
+        guard let data = try? Data(contentsOf: libraryDatabaseURL, options: [.mappedIfSafe]) else {
+            return false
+        }
+        let normalizedIdentifier = identifier.uppercased()
+        if data.range(of: Data(normalizedIdentifier.utf8)) != nil {
+            return true
+        }
+        return data.range(of: Data(identifier.lowercased().utf8)) != nil
+    }
+
+    private static func activeFinalCutLibrarySelectionHints(from plist: [String: Any]) -> [FCPActiveLibrarySelectionHint] {
+        var hints: [FCPActiveLibrarySelectionHint] = []
+
+        if let sidebar = plist["FFSidebarModuleLibrary"] as? [String: Any],
+           let selections = sidebar["media sidebar selection"] as? [String] {
+            for selection in selections {
+                appendSelectionHints(from: selection, sourceDescription: "sidebar selection", to: &hints)
+            }
+        }
+        if let importTargetEvent = plist["FFImportTargetEvent"] as? String {
+            appendSelectionHints(from: importTargetEvent, sourceDescription: "import target Event", to: &hints)
+        }
+        if let importTargetLibrary = plist["FFImportTargetLibrary"] as? String {
+            appendSelectionHints(from: importTargetLibrary, sourceDescription: "import target library", to: &hints)
+        }
+
+        var seen = Set<String>()
+        return hints.filter { hint in
+            seen.insert("\(hint.sourceDescription):\(hint.identifier)").inserted
+        }
+    }
+
+    private static func appendSelectionHints(
+        from value: String,
+        sourceDescription: String,
+        to hints: inout [FCPActiveLibrarySelectionHint]
+    ) {
+        for identifier in finalCutIdentifierStrings(in: value) {
+            hints.append(FCPActiveLibrarySelectionHint(
+                identifier: identifier,
+                sourceDescription: sourceDescription
+            ))
+        }
+    }
+
+    private static func finalCutIdentifierStrings(in value: String) -> [String] {
+        let pattern = #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return []
+        }
+        let nsRange = NSRange(value.startIndex..<value.endIndex, in: value)
+        return expression.matches(in: value, range: nsRange).compactMap { match in
+            guard let range = Range(match.range, in: value) else {
+                return nil
+            }
+            return String(value[range]).uppercased()
+        }
     }
 
     private static func finalCutPreferenceURLs() -> [URL] {

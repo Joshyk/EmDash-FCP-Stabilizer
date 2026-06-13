@@ -32,11 +32,13 @@ resolver, such as the single Event that already has Final Cut Pro `Analysis File
 start access to the host-provided media folder before inspecting the library bundle and verify
 the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` cache root. If
 `mediaFolderURL()` reports `kFxError_NoMediaFolder` for a Final Cut Pro library saved without
-Collect Media, the runtime may resolve the single active Final Cut Pro `.fcpbundle` from
+Collect Media, the runtime may resolve the active Final Cut Pro `.fcpbundle` from
 FCP's `FFActiveLibraries` bookmark list and then run the same Event resolver. Final Cut Pro's
 active-library bookmark may be a regular bookmark rather than a security-scoped bookmark, so
 resolve it without forcing `.withSecurityScope` and then start security-scoped access when the
-resolved URL grants it. Multiple active
+resolved URL grants it. If multiple libraries are active, the resolver may use Final Cut Pro's
+current sidebar or import-target UUIDs only when those identifiers match exactly one active
+library bundle; otherwise multiple active
 libraries, unreadable active-library state, or an unwritable selected Event cache root must
 fail visibly as `Project Bundle Cache Unavailable - Ambiguous Active Libraries` instead of
 falling back to a shared location. When multiple

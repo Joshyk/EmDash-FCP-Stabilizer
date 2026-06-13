@@ -74,11 +74,13 @@ estimators, or Transform-keyframe writers back into this target.
   is only persisted later if the Event cache root becomes available. If Final Cut Pro reports
   a library temp folder instead of an Event folder, the runtime uses an unambiguous top-level
   Event resolver. If Final Cut Pro reports no media folder for a library saved without
-  Collect Media, the runtime can use the single active Final Cut Pro library bookmark, resolve
-  it without forcing security-scoped bookmark options, start security-scoped access when the
-  resolved URL grants it, and then run that same Event resolver. Multiple active libraries, unreadable active-library
-  state, unwritable Event roots, and ambiguous Events fail visibly instead of writing to a
-  shared fallback, including
+  Collect Media, the runtime can use Final Cut Pro's active library bookmarks, resolve them
+  without forcing security-scoped bookmark options, start security-scoped access when the
+  resolved URL grants it, and then run that same Event resolver. When multiple libraries are
+  active, Final Cut Pro's current sidebar or import-target UUIDs may disambiguate the bundle
+  only when they match exactly one active library. Multiple active libraries with no unique
+  selected bundle, unreadable active-library state, unwritable Event roots, and ambiguous
+  Events fail visibly instead of writing to a shared fallback, including
   `Project Bundle Cache Unavailable - Ambiguous Event`.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
