@@ -6,7 +6,7 @@ Always reply to the user in Japanese unless the user explicitly asks for another
 
 ## Project
 
-This directory hosts the native `Stabilizer Transform` FxPlug project for Final Cut Pro and
+This directory hosts the native `Tokyo Walking Stabilizer` FxPlug project for Final Cut Pro and
 Motion. The project is FxPlug-only. Do not add non-FxPlug runtime files, standalone
 estimators, timeline automation actions, legacy cache models, or app reload workflows back
 into this repo.
@@ -30,7 +30,7 @@ when the host-provided folder is inside an Event. If the host-provided folder is
 temp folder instead of an Event folder, the runtime may use an unambiguous top-level Event
 resolver, such as the single Event that already has Final Cut Pro `Analysis Files`; it should
 start access to the host-provided media folder before inspecting the library bundle and verify
-the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root. If
+the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` cache root. If
 `mediaFolderURL()` reports `kFxError_NoMediaFolder` for a Final Cut Pro library saved without
 Collect Media, the runtime may resolve the single active Final Cut Pro `.fcpbundle` from
 FCP's `FFActiveLibraries` bookmark list and then run the same Event resolver. Final Cut Pro's
@@ -43,10 +43,10 @@ Events have `Analysis Files`, the resolver should use the active Host Analysis r
 existing Final Cut Pro `Analysis Files/Stabilization` range names to choose a single Event.
 Ambiguous Event candidates must fail visibly as `Project Bundle Cache Unavailable -
 Ambiguous Event` instead of writing to the wrong Event. Store the cache under the
-Event's `Analysis Files/StabilizerFxPlugHostAnalysis/` directory so analysis files are unique
+Event's `Analysis Files/TokyoWalkingStabilizerHostAnalysis/` directory so analysis files are unique
 to that Event and do not appear as top-level library content. The runtime
-may move older top-level `StabilizerFxPlugHostAnalysis/`, media-folder-local
-`StabilizerFxPlugHostAnalysis/`, or `__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/`
+may move older top-level `TokyoWalkingStabilizerHostAnalysis/`, media-folder-local
+`TokyoWalkingStabilizerHostAnalysis/`, or `__.fcpdata.apple.com/TokyoWalkingStabilizerHostAnalysis/`
 caches into the Event `Analysis Files` cache root, but it must not silently fall back to an
 out-of-bundle or library-wide shared cache. The Event cache contains
 `host-analysis-v2.json`, `host-analysis-index-v2.json`, `host-analysis-render-offset-v2.json`,
@@ -126,7 +126,7 @@ retain candidates independently per actual `sampleWidth`/`sampleHeight`.
 Cache persistence should treat the prepared analysis frame set as authoritative. The
 retained source-frame map may be reduced after Metal preparation and must not prevent a
 completed prepared path from being saved.
-The feedback CLI under `fxplug/StabilizerFxPlug/scripts/` reads saved Host Analysis cache
+The feedback CLI under `fxplug/TokyoWalkingStabilizer/scripts/` reads saved Host Analysis cache
 files for diagnostics only. It must not become a second stabilization runtime or silently
 repair malformed cache data; mismatched frame/path arrays should fail visibly and require a
 new Host Analysis run. Its cache inventory mode should list saved cache readiness without
@@ -385,11 +385,11 @@ Stabilizer/
 ```
 
 The Xcode project lives at
-`fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj`. Keep FxPlug source under
-`fxplug/StabilizerFxPlug/Plugin`, wrapper app source under
-`fxplug/StabilizerFxPlug/WrapperApp`, installer scripts under
-`fxplug/StabilizerFxPlug/scripts`, and Motion Template resources under
-`fxplug/StabilizerFxPlug/MotionTemplates`.
+`fxplug/TokyoWalkingStabilizer/TokyoWalkingStabilizer.xcodeproj`. Keep FxPlug source under
+`fxplug/TokyoWalkingStabilizer/Plugin`, wrapper app source under
+`fxplug/TokyoWalkingStabilizer/WrapperApp`, installer scripts under
+`fxplug/TokyoWalkingStabilizer/scripts`, and Motion Template resources under
+`fxplug/TokyoWalkingStabilizer/MotionTemplates`.
 
 ## Test Project
 
@@ -448,7 +448,7 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
 ```
 
 Use it from Keyboard Maestro, Automator Quick Actions, or Terminal when manual FCP
-validation needs faster access to XML export/import dialogs, `Stabilizer Transform`,
+validation needs faster access to XML export/import dialogs, `Tokyo Walking Stabilizer`,
 `Start Host Analysis`, `Debug Overlay`, selected Browser projects, or the Inspector. Grant
 Accessibility permission to the app that runs the script.
 For project opening, prefer `open-project PROJECT_NAME` when the target Browser project
@@ -464,8 +464,8 @@ repo unless the user explicitly asks for repo-local divergence.
 
 ## Version Visibility
 
-Keep `stabilizerFxPlugVersion` in
-`fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift` aligned with
+Keep `tokyoWalkingStabilizerVersion` in
+`fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizer.swift` aligned with
 `CFBundleShortVersionString` in the wrapper app and plug-in plist files. User-visible
 FxPlug behavior changes should bump the version value used by `Stabilizer Info`,
 `Host Analysis Status`, and the compact Debug Overlay runtime row.
@@ -475,17 +475,17 @@ FxPlug behavior changes should bump the version value used by `Stabilizer Info`,
 After FxPlug edits, run:
 
 ```sh
-xcodebuild -project fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj -scheme StabilizerFxPlug -configuration Debug -derivedDataPath /tmp/StabilizerFxPlugDerived build
-pluginkit -m -A -p FxPlug -i com.justadev.StabilizerFxPlug.Plugin
-codesign --verify --deep --strict /Applications/StabilizerFxPlug.app
-git diff --check -- AGENTS.md README.md docs/usage.md fxplug/StabilizerFxPlug
+xcodebuild -project fxplug/TokyoWalkingStabilizer/TokyoWalkingStabilizer.xcodeproj -scheme TokyoWalkingStabilizer -configuration Debug -derivedDataPath /tmp/TokyoWalkingStabilizerDerived build
+pluginkit -m -A -p FxPlug -i com.justadev.TokyoWalkingStabilizer.Plugin
+codesign --verify --deep --strict /Applications/TokyoWalkingStabilizer.app
+git diff --check -- AGENTS.md README.md docs/usage.md fxplug/TokyoWalkingStabilizer
 ```
 
-The `StabilizerFxPlug` shared scheme has a pre-build action that fails when Final Cut Pro is
+The `TokyoWalkingStabilizer` shared scheme has a pre-build action that fails when Final Cut Pro is
 running and a post-build action that runs
-`fxplug/StabilizerFxPlug/scripts/install_debug_app.sh`. Final Cut Pro must be quit before
+`fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh`. Final Cut Pro must be quit before
 building or installing; touching a loaded FxPlug bundle can leave Final Cut Pro holding a
 stale PlugInKit object and produce `P1000307` helper communication errors. A successful
-build should install `/Applications/StabilizerFxPlug.app`, copy the Motion Template into
+build should install `/Applications/TokyoWalkingStabilizer.app`, copy the Motion Template into
 the user's Movies Motion Templates folder, and register its embedded pluginkit for Final
 Cut Pro.

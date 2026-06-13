@@ -1,4 +1,4 @@
 .DS_Store
 *.log
 scripts/__pycache__
-fxplug/StabilizerFxPlug/build/
+fxplug/TokyoWalkingStabilizer/build/

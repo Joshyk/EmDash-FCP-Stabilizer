@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PARENT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 FCP_HELPER="${PARENT_DIR}/scripts/fcp_stabilizer_shortcuts.applescript"
 TEST_LIBRARY="${PARENT_DIR}/test_fcp_project/test.fcpbundle"
-CACHE_ROOT="${TEST_LIBRARY}/test/Analysis Files/StabilizerFxPlugHostAnalysis"
-FEEDBACK_TOOL="${ROOT_DIR}/fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh"
+CACHE_ROOT="${TEST_LIBRARY}/test/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
+FEEDBACK_TOOL="${ROOT_DIR}/fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh"
 
 usage() {
 	cat <<'USAGE'
@@ -21,7 +21,7 @@ Commands:
   open-test-library         Open the shared Final Cut Pro test library.
   focus-inspector           Reveal or focus the Final Cut Pro Inspector.
   dump-front-window         Print the accessible tree for the front FCP window.
-  apply-selected            Apply Stabilizer Transform to the selected clip.
+  apply-selected            Apply Tokyo Walking Stabilizer to the selected clip.
   enable-debug              Turn Debug Overlay on for the selected effect.
   disable-debug             Turn Debug Overlay off for the selected effect.
   start-analysis            Press Start Host Analysis for the selected effect.

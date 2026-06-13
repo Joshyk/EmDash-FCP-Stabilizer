@@ -8,7 +8,7 @@ standalone estimator, cache generator, or Transform-keyframe writer.
 
 ## What It Does
 
-`Stabilizer Transform` renders the source clip through Metal and applies
+`Tokyo Walking Stabilizer` renders the source clip through Metal and applies
 automatic stabilization inside the FxPlug render path. It avoids Final Cut Pro's
 built-in Stabilization effect because that effect applies its own internal crop
 and scale.
@@ -31,7 +31,7 @@ outside-source pixels.
 
 ## Basic Workflow
 
-1. Apply `Stabilizer Transform` to a clip.
+1. Apply `Tokyo Walking Stabilizer` to a clip.
 2. Keep the default `100%` `Sample Size` for full source detail, or choose a
    smaller sample before starting analysis when you want a quicker debug pass.
 3. Click `Start Host Analysis`.
@@ -61,7 +61,7 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript select-playhead-clip
 These actions use Final Cut Pro Accessibility UI scripting. Grant Accessibility
 permission to the app that runs the script. `start-analysis` and
 `toggle-debug-overlay` fail visibly if the selected clip does not have
-`Stabilizer Transform` applied or the Inspector control is not accessible.
+`Tokyo Walking Stabilizer` applied or the Inspector control is not accessible.
 `open-project PROJECT_NAME` opens a named Browser project, `open-selected-project`
 opens the selected Browser project, and `select-playhead-clip` reselects the
 timeline clip under the playhead before analysis. Project open commands select
@@ -128,8 +128,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R356` means FxPlug `0.3.56`
-is rendering original/optimized frames, and `P356` means proxy playback is using
+active render runtime and current source mode: `R357` means FxPlug `0.3.57`
+is rendering original/optimized frames, and `P357` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -275,7 +275,7 @@ such as the single Event that already has Final Cut Pro `Analysis Files`. If mul
 have `Analysis Files`, the resolver compares the active Host Analysis range against Final Cut
 Pro `Analysis Files/Stabilization` range folder names and only selects a unique match. The
 resolver starts access to the host-provided media folder before inspecting the library bundle,
-then verifies the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root.
+then verifies the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` cache root.
 If `FxProjectAPI.mediaFolderURL()` reports that the library has no media folder because it
 was saved without Collect Media, the resolver reads Final Cut Pro's single active library
 bookmark from `FFActiveLibraries`, resolves that bookmark without forcing security-scoped
@@ -291,14 +291,14 @@ under that Event's `Analysis Files` directory so analysis files stay unique to t
 do not appear as top-level library content:
 
 ```text
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/caches/
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-index-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/caches/
 ```
 
-Older top-level bundle caches at `<active library>.fcpbundle/StabilizerFxPlugHostAnalysis/`
+Older top-level bundle caches at `<active library>.fcpbundle/TokyoWalkingStabilizerHostAnalysis/`
 and older internal bundle caches at
-`<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` are moved into
+`<active library>.fcpbundle/__.fcpdata.apple.com/TokyoWalkingStabilizerHostAnalysis/` are moved into
 the Event `Analysis Files` cache root when the effect configures the active Event cache.
 
 If the runtime cannot resolve a writable Event cache root, the effect shows
@@ -420,8 +420,8 @@ Use the local feedback CLI when reviewing notes like `at 5 sec there is a
 notable unremoved shake` against a saved Host Analysis cache:
 
 ```sh
-fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
-  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json" \
+fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh \
+  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-v2.json" \
   --time 5.0 \
   --note "notable unremoved shake"
 ```
@@ -430,12 +430,12 @@ fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
 in the cache. With `--time`, the CLI reports the highest-score frame inside the
 requested `--window` and prints the selected clip time separately from the
 requested note time. For bundle-local caches, pass
-`--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"` or
+`--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache /path/to/host-analysis-v2.json`. Use `--json` for machine-readable output,
 `--turn-window` to match a non-default Inspector `Turn Detection Window`, and
 `--output-size 1920x1080` when you want pixel estimates scaled to a target preview size.
 
-Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"`
+Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"`
 to list the latest bundle cache and range-specific cache files. It reports each file as
 `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing or deleting
 anything.
@@ -460,22 +460,22 @@ Build the wrapper app and embedded FxPlug:
 
 ```sh
 xcodebuild \
-  -project fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj \
-  -scheme StabilizerFxPlug \
+  -project fxplug/TokyoWalkingStabilizer/TokyoWalkingStabilizer.xcodeproj \
+  -scheme TokyoWalkingStabilizer \
   -configuration Debug \
-  -derivedDataPath /tmp/StabilizerFxPlugDerived \
+  -derivedDataPath /tmp/TokyoWalkingStabilizerDerived \
   build
 ```
 
 The shared scheme installs each successful Debug build to:
 
 ```text
-/Applications/StabilizerFxPlug.app
+/Applications/TokyoWalkingStabilizer.app
 ```
 
 It also installs the Motion Template under the user's Movies Motion Templates
 folder and registers the embedded FxPlug with PluginKit. Debug installs remove
-stale `Stabilizer Transform copy...` Motion Template folders from the
+stale `Tokyo Walking Stabilizer copy...` Motion Template folders from the
 `Emdash Studios` group so Finder-created duplicates do not appear as extra
 effects in Final Cut Pro.
 
@@ -487,8 +487,8 @@ object and cause `P1000307` helper communication errors.
 Verify registration:
 
 ```sh
-pluginkit -m -A -p FxPlug -i com.justadev.StabilizerFxPlug.Plugin
-codesign --verify --deep --strict /Applications/StabilizerFxPlug.app
+pluginkit -m -A -p FxPlug -i com.justadev.TokyoWalkingStabilizer.Plugin
+codesign --verify --deep --strict /Applications/TokyoWalkingStabilizer.app
 ```
 
 Open Final Cut Pro after the build/install step completes.

@@ -27,7 +27,7 @@ Repository context:
 
 Current implementation to review:
 
-- `fxplug/StabilizerFxPlug/Plugin/AutoStabilizationEstimator.swift`
+- `fxplug/TokyoWalkingStabilizer/Plugin/AutoStabilizationEstimator.swift`
   - `estimate(preparedAnalysis:renderTime:...)` calls `temporallySmoothedEstimate`.
   - `temporallySmoothedEstimate` skips out-of-range neighboring samples at clip edges
     instead of clamping them to the first or last analysis frame.
@@ -50,10 +50,10 @@ Current implementation to review:
     - effective Footstep Jitter X/Y/R strength
     - `warpConfidence`, `shear`, `yawPitchProxy`, and `perspective`
     - sample count and smoothing window seconds
-- `fxplug/StabilizerFxPlug/Plugin/StabilizerFxPlug.swift`
+- `fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizer.swift`
   - `Debug Overlay` diagnostic bars now represent final X/Y/roll, Footstep Jitter, Stride Wobble, Far-field Warp, Turn Smoothing, temporal smoothing delta, Footstep/Stride/Warp/Turn confidence, tracking quality, sharpness, residual quality, and search-radius headroom.
   - While `Debug Overlay` is enabled, `Host Analysis Status` reports raw transform, smoothed delta, tracking/motion confidence, blur, residual, raw `foot q`, effective Footstep Jitter X/Y/R strength, `stride q`, `warp q`, shear, yaw/pitch proxy, perspective, block counts, edge-hit counts, X turn correction, and Y footstep/stride component split.
-- `fxplug/StabilizerFxPlug/Plugin/StabilizerTransform.metal`
+- `fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizerTransform.metal`
   - The overlay draws eighteen labeled rows of diagnostic bars.
 
 Please review this implementation for walking-gimbal smoothing quality. Focus on:

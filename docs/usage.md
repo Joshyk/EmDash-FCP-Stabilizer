@@ -4,7 +4,7 @@
 
 1. Build the FxPlug wrapper app.
 2. Open Final Cut Pro after the install step completes.
-3. Apply `Stabilizer Transform` from the `Emdash Studios` effects group.
+3. Apply `Tokyo Walking Stabilizer` from the `Emdash Studios` effects group.
 4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis`,
    `Cache Rejected - Run Host Analysis`, `Cache Unsupported - Run Host Analysis`, or
    `Cache Incomplete - Run Host Analysis`.
@@ -15,7 +15,7 @@ Stabilizer Host Analysis run is active or reserved in the plug-in process, the s
 enters `Queued Host Analysis` instead of being handed to Final Cut Pro immediately. The next
 queued clip starts after the active run's cleanup callback finishes. Another clip's completed
 analysis is not treated as completion for the queued clip.
-Debug installs clean stale `Stabilizer Transform copy...` Motion Template folders in the
+Debug installs clean stale `Tokyo Walking Stabilizer copy...` Motion Template folders in the
 `Emdash Studios` group so Final Cut Pro does not list duplicate Stabilizer effects.
 The Debug scheme and install step fail if Final Cut Pro is running, because building or
 replacing a loaded FxPlug can leave Final Cut Pro holding a stale PlugInKit object and
@@ -37,7 +37,7 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-project "stab tes
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript select-playhead-clip
 ```
 
-- `apply`: reveals the Effects Browser, searches `Stabilizer Transform`, and
+- `apply`: reveals the Effects Browser, searches `Tokyo Walking Stabilizer`, and
   presses the matching result for the selected clip.
 - `start-analysis`: reveals the Inspector and presses `Start Host Analysis`.
 - `toggle-debug-overlay`: reveals the Inspector and toggles `Debug Overlay`.
@@ -238,8 +238,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `WARP`, `TURN`, live `F Q`/`S Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R356` means FxPlug `0.3.56` is rendering original/optimized
-  frames, while `P356` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R357` means FxPlug `0.3.57` is rendering original/optimized
+  frames, while `P357` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -260,15 +260,15 @@ fallbacks.
 To turn a review note into diagnostics, run the cache-backed feedback tool:
 
 ```sh
-fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
-  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json" \
+fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh \
+  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-v2.json" \
   --time 5.0 \
   --note "notable unremoved shake"
 ```
 
 `--time` is clip-relative, so `5.0` means five seconds after the saved Host
 Analysis range starts. For bundle-local caches, pass
-`--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"` or
+`--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache` for a range-specific file under that root's `caches/` directory. Add
 `--json` for structured output, `--window 0.5` to inspect the strongest frame near
 the note, `--turn-window` to match a non-default Inspector `Turn Detection Window`, and
@@ -278,8 +278,8 @@ Use `--list-caches` with the bundle cache root to inspect saved cache readiness 
 diagnosing a note:
 
 ```sh
-fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh --list-caches \
-  --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"
+fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh --list-caches \
+  --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
 ```
 
 The listing checks the latest bundle cache and range-specific cache files, reporting
@@ -424,7 +424,7 @@ unambiguous top-level Event resolver, such as the single Event that already has 
 Host Analysis range against Final Cut Pro `Analysis Files/Stabilization` range folder names
 and only selects a unique match. It starts access to the host-provided media folder before
 inspecting the library bundle, then verifies the selected Event by creating the
-`StabilizerFxPlugHostAnalysis` cache root. If the host media folder is unavailable because
+`TokyoWalkingStabilizerHostAnalysis` cache root. If the host media folder is unavailable because
 the library was saved without Collect Media, the resolver reads Final Cut Pro's single active
 library bookmark from `FFActiveLibraries`, resolves it without forcing security-scoped
 bookmark options, starts security-scoped access when the resolved URL grants it, and then
@@ -438,7 +438,7 @@ cache root lives under that Event's `Analysis Files` directory so analysis files
 to the Event and do not appear as top-level library content:
 
 ```text
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-v2.json
 ```
 
 Completed analysis is written to this bundle-local path so Final Cut Pro's analyzer and
@@ -450,21 +450,21 @@ in memory as `Ready Memory Only - Project Bundle Cache Unavailable`; that result
 the current viewer/render session, but it is not persisted to any shared or out-of-bundle
 location. If the Event cache root becomes available later, the completed in-memory analysis
 is saved into that Event cache and the Inspector returns to ordinary `Ready (...)` status.
-Older top-level bundle caches at `<active library>.fcpbundle/StabilizerFxPlugHostAnalysis/`
+Older top-level bundle caches at `<active library>.fcpbundle/TokyoWalkingStabilizerHostAnalysis/`
 and older internal bundle caches at
-`<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` are moved into
+`<active library>.fcpbundle/__.fcpdata.apple.com/TokyoWalkingStabilizerHostAnalysis/` are moved into
 the Event `Analysis Files` cache root when the effect configures the active Event cache.
 
 The cache index is written to:
 
 ```text
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-index-v2.json
 ```
 
 Range-specific, sample-size-scoped cache files are stored under:
 
 ```text
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/caches/
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/caches/
 ```
 
 Those filenames include a readable clip label when available, analyzed start/end, actual
@@ -496,10 +496,10 @@ Build and install with:
 
 ```sh
 xcodebuild \
-  -project fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj \
-  -scheme StabilizerFxPlug \
+  -project fxplug/TokyoWalkingStabilizer/TokyoWalkingStabilizer.xcodeproj \
+  -scheme TokyoWalkingStabilizer \
   -configuration Debug \
-  -derivedDataPath /tmp/StabilizerFxPlugDerived \
+  -derivedDataPath /tmp/TokyoWalkingStabilizerDerived \
   build
 ```
 
@@ -510,6 +510,6 @@ bundle.
 Verify with:
 
 ```sh
-pluginkit -m -A -p FxPlug -i com.justadev.StabilizerFxPlug.Plugin
-codesign --verify --deep --strict /Applications/StabilizerFxPlug.app
+pluginkit -m -A -p FxPlug -i com.justadev.TokyoWalkingStabilizer.Plugin
+codesign --verify --deep --strict /Applications/TokyoWalkingStabilizer.app
 ```

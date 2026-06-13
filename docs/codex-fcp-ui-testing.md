@@ -38,7 +38,7 @@ Pro is currently running.
    ```
 
 Use `apply-and-analyze-selected` only for a fresh selected clip. If the clip
-already has `Stabilizer Transform`, run:
+already has `Tokyo Walking Stabilizer`, run:
 
 ```sh
 scripts/fcp_ui_test.sh analyze-selected
