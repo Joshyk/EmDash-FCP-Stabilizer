@@ -129,6 +129,7 @@ final class StabilizerHostAnalysisStore {
         validationState: HostAnalysisValidationState,
         status: HostAnalysisStatus,
         projectCacheUnavailableStatusText: String,
+        projectCacheUnavailableReason: String?,
         latestSourceFrameInfo: StabilizerSourceFrameInfo?,
         latestSampleSize: (width: Int, height: Int)?,
         analysisInfoText: String,
@@ -182,6 +183,7 @@ final class StabilizerHostAnalysisStore {
     private var validationState: HostAnalysisValidationState = .notRequired
     private var status: HostAnalysisStatus = .needsAnalysis
     private var projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+    private var projectCacheUnavailableReason: String?
     private var analysisRevision: UInt64 = 0
     private var renderRevisionToken: Double = 0.0
     private var observedPersistentCacheGeneration: UInt64 = 0
@@ -218,6 +220,12 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         defer { lock.unlock() }
         return activePersistentCacheIdentity
+    }
+
+    var projectCacheUnavailableReasonText: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return projectCacheUnavailableReason
     }
 
     static func configureProjectBundleCacheDirectory(_ directoryURL: URL, securityScopedURL: URL?, eventName: String) {
@@ -335,6 +343,7 @@ final class StabilizerHostAnalysisStore {
         validationState = .validated
         status = .analyzing
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+        projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Analyzing..."
@@ -384,9 +393,8 @@ final class StabilizerHostAnalysisStore {
 
     func markProjectCacheUnavailable(reason: String) {
         lock.lock()
-        let statusText = reason.localizedCaseInsensitiveContains("Ambiguous Event")
-            ? stabilizerAmbiguousEventCacheUnavailableMessage
-            : stabilizerProjectCacheUnavailableMessage
+        let statusText = Self.projectCacheUnavailableStatusText(for: reason)
+        projectCacheUnavailableReason = reason
         if preparedAnalysis == nil {
             status = .projectCacheUnavailable
             projectCacheUnavailableStatusText = statusText
@@ -397,6 +405,24 @@ final class StabilizerHostAnalysisStore {
         }
         lock.unlock()
         NSLog("TokyoWalkingStabilizer: project bundle Host Analysis cache unavailable: \(reason)")
+    }
+
+    func noteProjectCacheUnavailable(reason: String) {
+        lock.lock()
+        projectCacheUnavailableStatusText = Self.projectCacheUnavailableStatusText(for: reason)
+        projectCacheUnavailableReason = reason
+        lock.unlock()
+        NSLog("TokyoWalkingStabilizer: noted project bundle Host Analysis cache unavailable for active session: \(reason)")
+    }
+
+    private static func projectCacheUnavailableStatusText(for reason: String) -> String {
+        if reason.localizedCaseInsensitiveContains("Ambiguous Event") {
+            return stabilizerAmbiguousEventCacheUnavailableMessage
+        }
+        if reason.localizedCaseInsensitiveContains("Ambiguous active Final Cut libraries") {
+            return stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage
+        }
+        return stabilizerProjectCacheUnavailableMessage
     }
 
     func reset(removePersistentCache shouldRemovePersistentCache: Bool = false) {
@@ -418,6 +444,7 @@ final class StabilizerHostAnalysisStore {
         validationState = .notRequired
         status = .needsAnalysis
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+        projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "No Analysis"
@@ -453,6 +480,7 @@ final class StabilizerHostAnalysisStore {
         validationState = .notRequired
         status = .cacheCleared
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+        projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Cache Cleared"
@@ -482,6 +510,7 @@ final class StabilizerHostAnalysisStore {
         validationState = .notRequired
         status = .proxyRejected
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+        projectCacheUnavailableReason = nil
         analysisInfoText = "Rejected proxy media. Use original media and rerun Host Analysis."
         bumpRevisionLocked()
         lock.unlock()
@@ -578,6 +607,7 @@ final class StabilizerHostAnalysisStore {
         validationState = validationStateOverride ?? snapshot.validationState
         status = snapshot.status
         projectCacheUnavailableStatusText = snapshot.projectCacheUnavailableStatusText
+        projectCacheUnavailableReason = snapshot.projectCacheUnavailableReason
         latestSourceFrameInfo = snapshot.latestSourceFrameInfo
         latestSampleSize = snapshot.latestSampleSize
         analysisInfoText = snapshot.analysisInfoText
@@ -1079,8 +1109,9 @@ final class StabilizerHostAnalysisStore {
         else {
             lock.lock()
             status = .projectCacheUnavailable
-            projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
-            analysisInfoText = "\(stabilizerProjectCacheUnavailableMessage). Host did not provide a writable Event Analysis Files cache root."
+            let statusText = projectCacheUnavailableStatusText
+            let reason = projectCacheUnavailableReason ?? "Host did not provide a writable Event Analysis Files cache root."
+            analysisInfoText = "\(statusText). \(reason)"
             bumpRevisionLocked()
             lock.unlock()
             NSLog("TokyoWalkingStabilizer: failed to save Host Analysis cache because no FCP bundle cache root is configured.")
@@ -1168,6 +1199,7 @@ final class StabilizerHostAnalysisStore {
             activeCompletedMemoryAnalysisIdentity = nil
             status = .ready
             projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+            projectCacheUnavailableReason = nil
             analysisInfoText = Self.infoText(
                 completedAt: Date(timeIntervalSince1970: cache.createdAt),
                 frameCount: framesToPersist.count,
@@ -1284,6 +1316,7 @@ final class StabilizerHostAnalysisStore {
             validationState: validationState,
             status: status,
             projectCacheUnavailableStatusText: projectCacheUnavailableStatusText,
+            projectCacheUnavailableReason: projectCacheUnavailableReason,
             latestSourceFrameInfo: latestSourceFrameInfo,
             latestSampleSize: latestSampleSize,
             analysisInfoText: analysisInfoText,
@@ -1398,6 +1431,8 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .rejected
         status = .cacheRejected
+        projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+        projectCacheUnavailableReason = nil
         bumpRevisionLocked()
         lock.unlock()
         NSLog("TokyoWalkingStabilizer: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(reason).")
@@ -1420,6 +1455,8 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .rejected
         status = .cacheRejected
+        projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+        projectCacheUnavailableReason = nil
         analysisInfoText = "In-memory Host Analysis did not match the current clip. Run Host Analysis again."
         bumpRevisionLocked()
         lock.unlock()
@@ -1726,6 +1763,7 @@ final class StabilizerHostAnalysisStore {
         validationState = .pending
         status = .cacheLoaded
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
+        projectCacheUnavailableReason = nil
         analysisInfoText = Self.infoText(
             completedAt: Date(timeIntervalSince1970: loadedCache.cache.createdAt),
             frameCount: loadedCache.frames.count,

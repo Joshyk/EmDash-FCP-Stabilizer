@@ -34,6 +34,7 @@ private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
+let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -115,7 +116,7 @@ private struct ActiveHostAnalysisRoute {
 }
 
 private enum ActiveHostAnalysisCleanupRoute {
-    case resolved(sessionID: UUID, store: StabilizerHostAnalysisStore)
+    case resolved(sessionID: UUID, store: StabilizerHostAnalysisStore, expectedRange: HostAnalysisExpectedRange?)
     case failed(reason: String)
 }
 
@@ -1296,7 +1297,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 Self.hostAnalysisStartReserved = false
             }
             activeAnalyzerSessionID = nil
-            return .resolved(sessionID: session.id, store: session.store)
+            return .resolved(sessionID: session.id, store: session.store, expectedRange: Self.expectedRange(for: session))
         }
 
         let ownerSessions = Self.activeAnalysisSessions.values.filter { $0.ownerObjectID == ownerObjectID }
@@ -1307,7 +1308,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 Self.hostAnalysisStartReserved = false
             }
             activeAnalyzerSessionID = nil
-            return .resolved(sessionID: session.id, store: session.store)
+            return .resolved(sessionID: session.id, store: session.store, expectedRange: Self.expectedRange(for: session))
         }
 
         if Self.activeAnalysisSessions.count == 1,
@@ -1317,7 +1318,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 Self.hostAnalysisStartReserved = false
             }
             activeAnalyzerSessionID = nil
-            return .resolved(sessionID: session.id, store: session.store)
+            return .resolved(sessionID: session.id, store: session.store, expectedRange: Self.expectedRange(for: session))
         }
 
         if Self.activeAnalysisSessions.isEmpty {
@@ -1331,6 +1332,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             .map(\.debugDescription)
             .joined(separator: " | ")
         return .failed(reason: "Stabilizer Host Analysis cleanup could not identify which per-clip session to finish. Active sessions: \(descriptions)")
+    }
+
+    private static func expectedRange(for session: ActiveHostAnalysisSession) -> HostAnalysisExpectedRange? {
+        let expectedRange = HostAnalysisExpectedRange(
+            startSeconds: CMTimeGetSeconds(session.range.start),
+            durationSeconds: CMTimeGetSeconds(session.range.duration),
+            frameDurationSeconds: CMTimeGetSeconds(session.frameDuration)
+        )
+        return expectedRange.isValid ? expectedRange : nil
     }
 
     private func removeActiveAnalysisSession(_ sessionID: UUID?) {
@@ -2563,7 +2573,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             durationSeconds: CMTimeGetSeconds(analysisRange.duration),
             frameDurationSeconds: CMTimeGetSeconds(frameDuration)
         )
-        if !configureProjectBundleCacheDirectory(expectedRange: expectedRange.isValid ? expectedRange : nil) {
+        let configuredProjectCache = configureProjectBundleCacheDirectory(expectedRange: expectedRange.isValid ? expectedRange : nil)
+        let projectCacheUnavailableReason = configuredProjectCache ? nil : hostAnalysisStore.projectCacheUnavailableReasonText
+        if !configuredProjectCache {
             NSLog("TokyoWalkingStabilizer: setup Host Analysis will continue in memory because the Event cache root is unavailable.")
             os_log("setupAnalysis continuing in memory because the Event cache root is unavailable; completed analysis will persist later if the Event cache root becomes available.", log: stabilizerHostAnalysisLog, type: .error)
         }
@@ -2574,6 +2586,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             frameDuration: frameDuration,
             requestedSampleScalePercent: requestedSampleScalePercent
         )
+        if let projectCacheUnavailableReason {
+            analysisStore.noteProjectCacheUnavailable(reason: projectCacheUnavailableReason)
+        }
         lastPublishedActiveAnalysisFrameCount = 0
         let sessionID = registerActiveAnalysisSession(
             store: analysisStore,
@@ -2679,10 +2694,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let cleanupRoute = takeActiveAnalysisSessionForCleanup()
         let sessionID: UUID
         let analysisStore: StabilizerHostAnalysisStore
+        let cleanupExpectedRange: HostAnalysisExpectedRange?
         switch cleanupRoute {
-        case .resolved(let resolvedSessionID, let resolvedStore):
+        case .resolved(let resolvedSessionID, let resolvedStore, let expectedRange):
             sessionID = resolvedSessionID
             analysisStore = resolvedStore
+            cleanupExpectedRange = expectedRange
         case .failed(let reason):
             NSLog("TokyoWalkingStabilizer: \(reason)")
             os_log("cleanupAnalysis failed: %{public}@", log: stabilizerHostAnalysisLog, type: .error, reason)
@@ -2694,6 +2711,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         do {
+            if !configureProjectBundleCacheDirectory(markUnavailable: true, expectedRange: cleanupExpectedRange),
+               let projectCacheUnavailableReason = hostAnalysisStore.projectCacheUnavailableReasonText {
+                analysisStore.noteProjectCacheUnavailable(reason: projectCacheUnavailableReason)
+            }
             try analysisStore.finish()
         } catch {
             publishAnalysisCallbackStatus(analysisStore)

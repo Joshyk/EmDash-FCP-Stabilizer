@@ -38,7 +38,8 @@ active-library bookmark may be a regular bookmark rather than a security-scoped 
 resolve it without forcing `.withSecurityScope` and then start security-scoped access when the
 resolved URL grants it. Multiple active
 libraries, unreadable active-library state, or an unwritable selected Event cache root must
-fail visibly instead of falling back to a shared location. When multiple
+fail visibly as `Project Bundle Cache Unavailable - Ambiguous Active Libraries` instead of
+falling back to a shared location. When multiple
 Events have `Analysis Files`, the resolver should use the active Host Analysis range and
 existing Final Cut Pro `Analysis Files/Stabilization` range names to choose a single Event.
 Ambiguous Event candidates must fail visibly as `Project Bundle Cache Unavailable -

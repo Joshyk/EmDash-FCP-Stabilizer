@@ -430,7 +430,8 @@ library bookmark from `FFActiveLibraries`, resolves it without forcing security-
 bookmark options, starts security-scoped access when the resolved URL grants it, and then
 applies the same Event selection rules.
 Multiple active libraries, unreadable active-library state, or an unwritable Event cache root
-remain visible failures. Resolver logs include the media folder URL, `documentID`,
+remain visible failures; ambiguous active libraries surface as
+`Project Bundle Cache Unavailable - Ambiguous Active Libraries`. Resolver logs include the media folder URL, `documentID`,
 active-library bookmark candidates when used, bundle root, Event candidates, selected Event,
 and rejection reason. It fails visibly as
 `Project Bundle Cache Unavailable - Ambiguous Event` when the Event remains ambiguous. The

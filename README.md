@@ -282,7 +282,8 @@ bookmark from `FFActiveLibraries`, resolves that bookmark without forcing securi
 bookmark options, starts security-scoped access when the resolved URL grants it, and then
 applies the same Event selection rules. Multiple
 active libraries, unreadable active-library state, or an unwritable Event cache root remain
-visible failures; the runtime does not write to a shared fallback. It logs the media folder
+visible failures; ambiguous active libraries surface as
+`Project Bundle Cache Unavailable - Ambiguous Active Libraries`, and the runtime does not write to a shared fallback. It logs the media folder
 URL, `documentID`, active-library bookmark candidates when used, bundle root, Event
 candidates, selected Event, and rejection reason with public `os_log` fields. It fails
 visibly as `Project Bundle Cache Unavailable - Ambiguous Event` when the Event remains
