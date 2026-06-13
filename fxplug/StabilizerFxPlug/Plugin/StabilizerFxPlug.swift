@@ -28,7 +28,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let stabilizerFxPlugVersion = "0.3.55"
+private let stabilizerFxPlugVersion = "0.3.56"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.StabilizerFxPlug", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -48,7 +48,7 @@ enum StabilizerSampleScale: Int32 {
     case scale10 = 4
 
     static let menuEntries = ["100%", "75%", "50%", "25%", "10%"]
-    static let defaultScale: StabilizerSampleScale = .scale10
+    static let defaultScale: StabilizerSampleScale = .original
 
     var percent: Double {
         switch self {

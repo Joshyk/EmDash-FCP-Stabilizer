@@ -32,8 +32,8 @@ outside-source pixels.
 ## Basic Workflow
 
 1. Apply `Stabilizer Transform` to a clip.
-2. Keep the default `10%` `Sample Size` for a quick debug pass, or choose a
-   larger sample before starting analysis.
+2. Keep the default `100%` `Sample Size` for full source detail, or choose a
+   smaller sample before starting analysis when you want a quicker debug pass.
 3. Click `Start Host Analysis`.
 4. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 5. Tune the strength controls while watching the preview.
@@ -72,7 +72,7 @@ repeated AppleScript clicks in Final Cut Pro.
 
 `Sample Size` is read once when analysis starts. It is always derived from the
 original clip dimensions, with `100%`, `75%`, `50%`, `25%`, and `10%` options.
-The default is `10%` so Debug Overlay tuning can start quickly. Long clips keep
+The default is `100%`; choose a smaller value only when you want a faster debug pass. Long clips keep
 the requested percentage instead of silently lowering it.
 
 `Overall Strength` controls the full automatic transform. Setting it to `0`
@@ -128,8 +128,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R355` means FxPlug `0.3.55`
-is rendering original/optimized frames, and `P355` means proxy playback is using
+active render runtime and current source mode: `R356` means FxPlug `0.3.56`
+is rendering original/optimized frames, and `P356` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so

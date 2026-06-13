@@ -141,8 +141,9 @@ fallbacks.
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
-  options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `10%` so a debug pass
-  can analyze quickly. The actual pixel size is shown in `Stabilizer Info`.
+  options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%` for full source
+  detail; choose a smaller value only when you want a faster debug pass. The actual pixel
+  size is shown in `Stabilizer Info`.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image.
@@ -237,8 +238,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `WARP`, `TURN`, live `F Q`/`S Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R355` means FxPlug `0.3.55` is rendering original/optimized
-  frames, while `P355` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R356` means FxPlug `0.3.56` is rendering original/optimized
+  frames, while `P356` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker

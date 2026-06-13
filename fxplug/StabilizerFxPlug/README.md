@@ -202,9 +202,10 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
   motion paths. The UI value is used as the TURN window, and the UI minimum is the fixed
   `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions.
-  Options are `100%`, `75%`, `50%`, `25%`, and `10%`; the default is `10%` so a debug pass
-  can analyze quickly. Host Analysis reads this value once when the analysis pass starts. The
-  actual pixel size is shown in `Stabilizer Info`.
+  Options are `100%`, `75%`, `50%`, `25%`, and `10%`; the default is `100%` for full source
+  detail. Choose a smaller value only when you want a faster debug pass. Host Analysis reads
+  this value once when the analysis pass starts. The actual pixel size is shown in
+  `Stabilizer Info`.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available. The render
@@ -298,8 +299,8 @@ fxplug/StabilizerFxPlug/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R355` means
-  FxPlug `0.3.55` is rendering original/optimized frames, and `P355` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R356` means
+  FxPlug `0.3.56` is rendering original/optimized frames, and `P356` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic

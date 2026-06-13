@@ -111,8 +111,9 @@ analysis range should surface `Cache Incomplete - Run Host Analysis`, remain on 
 require a new Host Analysis run.
 
 Host Analysis should read user-controlled `Sample Size` once when analysis starts. The
-Inspector default should be `10%` so quick Debug Overlay tuning can start without a full
-source-size pass, while still offering `100%`, `75%`, `50%`, `25%`, and `10%` options. The
+Inspector default should be `100%` so Host Analysis uses full source detail unless the user
+explicitly selects a smaller debug sample, while still offering `75%`, `50%`, `25%`, and
+`10%` options. The
 sample image must always be derived from the original clip dimensions using the selected
 percentage option. Long clips should keep that requested percentage. In-progress analysis
 should stream frame-to-frame motion in memory and keep only the previous luma buffer needed
