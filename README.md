@@ -139,15 +139,15 @@ media, while staying larger than the old compact panel.
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep
 stale saved Inspector strings, `Debug Overlay` is the live render-runtime
-indicator. `Stabilizer Info` is a compact read-only status box for the selected
-`Sample Size`, current clip start/end time, and current analysis/cache summary;
-older saved timeline instances may still display a stale saved info string until
-the effect is reapplied.
+indicator. `Requested Sample`, `Clip Range`, and `Analysis Sample` split the
+selected `Sample Size`, current clip start/end time, and actual analysis sample
+size into separate read-only Inspector rows; older saved timeline instances may
+still display stale saved info strings until the effect is reapplied.
 During a real Host Analysis pass the status advances as `Analyzing Host Frames
 (N)`. If Final Cut Pro restores an in-progress analysis state while a compatible
 saved cache exists, the plug-in prefers the saved cache and keeps the shared
 Ready/cache status visible. When an analyzer callback is still the active state,
-`Host Analysis Status` and `Stabilizer Info` are published from that same
+`Host Analysis Status` and the split read-only info rows are published from that same
 in-progress analysis store, so the Inspector does not combine `Analyzing Host
 Frames (N)` with stale cache metadata from another clip.
 
@@ -247,7 +247,7 @@ range-matched cache identity even if Final Cut Pro has not yet returned the
 hidden cache identity parameter. If a stale saved identity points at a different
 range, the same render callback drops it and reloads a compatible saved cache
 before giving up, then keeps the hidden preview revision, `Host Analysis Status`,
-and `Stabilizer Info` current so Final Cut Pro shows the stabilized proxy preview
+and split read-only info rows current so Final Cut Pro shows the stabilized proxy preview
 and reports `Original Analysis - Proxy Preview`.
 If Final Cut Pro reports a render/timeline range that differs from the saved
 source analysis range, the render path accepts that active cache only after the

@@ -15,7 +15,7 @@ private enum ParameterID: UInt32 {
     case debugOverlay = 10
     case startHostAnalysis = 14
     case hostAnalysisStatus = 15
-    case stabilizerInfo = 32
+    case requestedSampleInfo = 32
     case clearHostAnalysisCache = 17
     case yStrength = 18
     case sampleScale = 19
@@ -27,6 +27,14 @@ private enum ParameterID: UInt32 {
     case strideWobbleYStrength = 30
     case strideWobbleRotationStrength = 31
     case hostAnalysisCacheIdentity = 33
+    case clipRangeInfo = 34
+    case analysisSampleInfo = 35
+}
+
+private struct StabilizerInfoFields {
+    let requestedSample: String
+    let clipRange: String
+    let analysisSample: String
 }
 
 private let tokyoWalkingStabilizerVersion = "0.3.60"
@@ -377,7 +385,7 @@ enum StabilizerOriginalMediaPolicy {
 }
 
 @objc(TokyoWalkingStabilizerPlugIn)
-final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer, FxCustomParameterViewHost_v2 {
+final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer {
     private static let sharedHostAnalysisStore: StabilizerHostAnalysisStore = {
         let store = StabilizerHostAnalysisStore()
         return store
@@ -401,16 +409,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
     private let cacheIdentityLock = NSLock()
-    private let stabilizerInfoViewLock = NSLock()
-    private let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.TokyoWalkingStabilizer.PersistentCacheMonitor")
     private var lastPublishedStatus = ""
-    private var lastPublishedInfo = ""
+    private var lastPublishedRequestedSampleInfo = ""
+    private var lastPublishedClipRangeInfo = ""
+    private var lastPublishedAnalysisSampleInfo = ""
     private var lastPublishedRenderRevision: Double?
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
-    private var latestStabilizerInfo = "FxPlug \(tokyoWalkingStabilizerVersion)\nNo Analysis"
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
@@ -585,10 +592,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
-            withName: "Stabilizer Info",
-            parameterID: ParameterID.stabilizerInfo.rawValue,
-            defaultValue: "No Analysis",
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DONT_SAVE | kFxParameterFlag_CUSTOM_UI | kFxParameterFlag_USE_FULL_VIEW_WIDTH)
+            withName: "Requested Sample",
+            parameterID: ParameterID.requestedSampleInfo.rawValue,
+            defaultValue: "Sample: 100%",
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
+        )
+        paramAPI.addStringParameter(
+            withName: "Clip Range",
+            parameterID: ParameterID.clipRangeInfo.rawValue,
+            defaultValue: "Clip: -",
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
+        )
+        paramAPI.addStringParameter(
+            withName: "Analysis Sample",
+            parameterID: ParameterID.analysisSampleInfo.rawValue,
+            defaultValue: "Analysis: -",
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addFloatSlider(
             withName: "Render Revision",
@@ -625,16 +644,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             kFxPropertyKey_PixelTransformSupport: NSNumber(value: kFxPixelTransform_Full),
             kFxPropertyKey_VariesWhenParamsAreStatic: true
         ] as NSDictionary
-    }
-
-    func createView(forParameterID parameterID: UInt32) -> NSView {
-        guard parameterID == ParameterID.stabilizerInfo.rawValue else {
-            return NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 1))
-        }
-        let view = StabilizerInfoScrollView()
-        registerStabilizerInfoView(view)
-        publishStabilizerInfo(force: true)
-        return view
     }
 
     func pluginState(_ pluginState: AutoreleasingUnsafeMutablePointer<NSData>?, at renderTime: CMTime, quality qualityLevel: UInt) throws {
@@ -1035,61 +1044,52 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisInfoOverride: String? = nil
     ) {
         let analysisInfo = analysisInfoOverride ?? hostAnalysisStore.infoText
-        let info = Self.stabilizerInfoText(analysisInfo: analysisInfo, state: state)
+        let info = Self.stabilizerInfoFields(analysisInfo: analysisInfo, state: state)
         statusLock.lock()
-        let shouldPublish = force || info != lastPublishedInfo
+        let shouldPublish = force
+            || info.requestedSample != lastPublishedRequestedSampleInfo
+            || info.clipRange != lastPublishedClipRangeInfo
+            || info.analysisSample != lastPublishedAnalysisSampleInfo
         statusLock.unlock()
         guard shouldPublish else {
             return
         }
-        updateStabilizerInfoViews(info)
         guard let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
         }
-        if settingAPI.setStringParameterValue(info, toParameter: ParameterID.stabilizerInfo.rawValue) {
+        let didSetRequestedSample = settingAPI.setStringParameterValue(info.requestedSample, toParameter: ParameterID.requestedSampleInfo.rawValue)
+        let didSetClipRange = settingAPI.setStringParameterValue(info.clipRange, toParameter: ParameterID.clipRangeInfo.rawValue)
+        let didSetAnalysisSample = settingAPI.setStringParameterValue(info.analysisSample, toParameter: ParameterID.analysisSampleInfo.rawValue)
+        if didSetRequestedSample && didSetClipRange && didSetAnalysisSample {
             statusLock.lock()
-            lastPublishedInfo = info
+            lastPublishedRequestedSampleInfo = info.requestedSample
+            lastPublishedClipRangeInfo = info.clipRange
+            lastPublishedAnalysisSampleInfo = info.analysisSample
             statusLock.unlock()
         } else {
-            NSLog("TokyoWalkingStabilizer: failed to update Stabilizer Info parameter.")
+            NSLog("TokyoWalkingStabilizer: failed to update one or more Stabilizer Info split parameters.")
         }
     }
 
-    private func registerStabilizerInfoView(_ view: StabilizerInfoScrollView) {
-        stabilizerInfoViewLock.lock()
-        stabilizerInfoViews.add(view)
-        let info = latestStabilizerInfo
-        stabilizerInfoViewLock.unlock()
-        view.infoText = info
-    }
-
-    private func updateStabilizerInfoViews(_ info: String) {
-        stabilizerInfoViewLock.lock()
-        latestStabilizerInfo = info
-        let views = stabilizerInfoViews.allObjects
-        stabilizerInfoViewLock.unlock()
-        DispatchQueue.main.async {
-            views.forEach { $0.infoText = info }
-        }
-    }
-
-    private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
-        var parts: [String] = []
-        if let state {
-            parts.append("S\(StabilizerSampleScale.scale(for: state.sampleScale).displayName)")
-            if let clipRange = clipRangeDescription(from: state) {
-                parts.append("C\(clipRange)")
+    private static func stabilizerInfoFields(analysisInfo: String, state: StabilizerPluginState?) -> StabilizerInfoFields {
+        let requestedSample = state.map { "Sample: \(StabilizerSampleScale.scale(for: $0.sampleScale).displayName)" } ?? "Sample: -"
+        let clipRange = state.flatMap { clipRangeDescription(from: $0) }.map { "Clip: \($0)" } ?? "Clip: -"
+        let analysisSample: String
+        if let sample = analysisSampleDescription(from: analysisInfo) {
+            if let frames = analysisFrameCountDescription(from: analysisInfo) {
+                analysisSample = "Analysis: \(sample) \(frames)"
+            } else {
+                analysisSample = "Analysis: \(sample)"
             }
         } else {
-            parts.append("Fx\(tokyoWalkingStabilizerVersion)")
+            analysisSample = "Analysis: -"
         }
-        if let analysisSample = analysisSampleDescription(from: analysisInfo) {
-            parts.append("A\(analysisSample)")
-        } else if analysisInfo != "No Analysis" {
-            parts.append(compactAnalysisInfo(analysisInfo))
-        }
-        return parts.joined(separator: " ")
+        return StabilizerInfoFields(
+            requestedSample: requestedSample,
+            clipRange: clipRange,
+            analysisSample: analysisSample
+        )
     }
 
     private static func analysisSampleDescription(from analysisInfo: String) -> String? {
@@ -1102,21 +1102,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }.map(String.init)
     }
 
-    private static func compactAnalysisInfo(_ analysisInfo: String) -> String {
-        switch analysisInfo {
-        case "Analyzing...":
-            return "Analyzing"
-        case "Cache Cleared":
-            return "Cleared"
-        case "Proxy rejected. Use original media.":
-            return "Proxy rejected"
-        case "Original analysis; proxy preview.":
-            return "Proxy preview"
-        case "Original analysis; validation deferred.":
-            return "Unvalidated"
-        default:
-            return analysisInfo
-        }
+    private static func analysisFrameCountDescription(from analysisInfo: String) -> String? {
+        analysisInfo.split(separator: " ").first { token in
+            token.hasSuffix("f") && token.dropLast().allSatisfy(\.isNumber)
+        }.map(String.init)
     }
 
     private static func clipRangeDescription(from state: StabilizerPluginState) -> String? {
@@ -3415,100 +3404,5 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 type: .debug
             )
         }
-    }
-}
-
-private final class StabilizerInfoScrollView: NSScrollView {
-    private static let preferredHeight: CGFloat = 120
-    private let textView = NSTextView()
-
-    var infoText: String {
-        get {
-            textView.string
-        }
-        set {
-            if Thread.isMainThread {
-                setInfoText(newValue)
-            } else {
-                DispatchQueue.main.async { [weak self] in
-                    self?.setInfoText(newValue)
-                }
-            }
-        }
-    }
-
-    init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: Self.preferredHeight))
-        drawsBackground = false
-        borderType = .bezelBorder
-        hasVerticalScroller = true
-        hasHorizontalScroller = false
-        autohidesScrollers = false
-        scrollerStyle = .legacy
-        verticalScrollElasticity = .allowed
-        translatesAutoresizingMaskIntoConstraints = true
-
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isRichText = false
-        textView.drawsBackground = true
-        textView.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.08)
-        textView.textColor = NSColor.labelColor
-        textView.font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        textView.textContainerInset = NSSize(width: 6, height: 6)
-        textView.minSize = NSSize(width: 0, height: contentSize.height)
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.frame = NSRect(origin: .zero, size: contentSize)
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
-        documentView = textView
-        setFrameSize(NSSize(width: frame.width, height: Self.preferredHeight))
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: Self.preferredHeight)
-    }
-
-    override var fittingSize: NSSize {
-        NSSize(width: frame.width, height: Self.preferredHeight)
-    }
-
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    private func setInfoText(_ text: String) {
-        guard textView.string != text else {
-            return
-        }
-        textView.string = text
-        updateTextDocumentFrame()
-    }
-
-    override func layout() {
-        super.layout()
-        updateTextDocumentFrame()
-    }
-
-    private func updateTextDocumentFrame() {
-        guard let textContainer = textView.textContainer,
-              let layoutManager = textView.layoutManager
-        else {
-            return
-        }
-        let visibleSize = contentSize
-        let documentWidth = max(1, visibleSize.width)
-        textView.minSize = NSSize(width: 0, height: visibleSize.height)
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textContainer.widthTracksTextView = true
-        textContainer.containerSize = NSSize(width: documentWidth, height: CGFloat.greatestFiniteMagnitude)
-        layoutManager.ensureLayout(for: textContainer)
-        let usedRect = layoutManager.usedRect(for: textContainer)
-        let insetHeight = textView.textContainerInset.height * 2
-        let documentHeight = max(visibleSize.height, ceil(usedRect.height + insetHeight + 2))
-        textView.frame = NSRect(x: 0, y: 0, width: documentWidth, height: documentHeight)
     }
 }

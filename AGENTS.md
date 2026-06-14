@@ -103,10 +103,11 @@ not collapse completed cache buckets across clips or sample sizes.
 If Final Cut Pro restores or reports an in-progress Host Analysis while a compatible saved
 cache is already present, the render/cache consumer should still reload and prefer the saved
 cache; transient analyzer callback status must not mask the shared ready cache in the
-Inspector. When analyzer callback status is the only active state, `Host Analysis Status`
-and `Stabilizer Info` should both be published from that same in-progress analysis store;
-do not combine `Analyzing Host Frames (N)` with stale shared-cache metadata from a previous
-clip. Stale `Cache Unsupported` or `Cache Incomplete` status must not stop later
+Inspector. When analyzer callback status is the only active state, `Host Analysis Status`,
+`Requested Sample`, `Clip Range`, and `Analysis Sample` should all be published from that
+same in-progress analysis store; do not combine `Analyzing Host Frames (N)` with stale
+shared-cache metadata from a previous clip. Stale `Cache Unsupported` or `Cache Incomplete`
+status must not stop later
 preview/render consumers from noticing a changed persistent cache signature and loading a
 new compatible saved cache.
 Persistent cache compatibility is based on cache schema, exact analyzed source range, sample
@@ -255,9 +256,9 @@ visible as `Original Analysis - Proxy Preview` instead of silently promoting the
 ordinary `Ready`. If the current frame lacks pixel-transform metadata but is not known to be
 scaled/proxy media, status should make deferred validation visible as `Original Analysis - Preview Unvalidated` instead of labeling the preview as proxy.
 Render-time transitions between original/optimized and proxy preview should publish
-`Host Analysis Status`, `Stabilizer Info`, and the hidden render revision when the shared
-store revision changes, even if the render callback already holds a locally matching hidden
-revision value.
+`Host Analysis Status`, `Requested Sample`, `Clip Range`, `Analysis Sample`, and the hidden
+render revision when the shared store revision changes, even if the render callback already
+holds a locally matching hidden revision value.
 When original-media validation maps a trimmed timeline render time back to the analyzed
 source time, render instances should persist that offset with the Host Analysis cache
 identity so proxy-only render instances and processes can sample the same prepared motion
@@ -480,8 +481,8 @@ repo unless the user explicitly asks for repo-local divergence.
 Keep `tokyoWalkingStabilizerVersion` in
 `fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizer.swift` aligned with
 `CFBundleShortVersionString` in the wrapper app and plug-in plist files. User-visible
-FxPlug behavior changes should bump the version value used by `Stabilizer Info`,
-`Host Analysis Status`, and the compact Debug Overlay runtime row.
+FxPlug behavior changes should bump the version value used by `Host Analysis Status` and
+the compact Debug Overlay runtime row.
 
 ## Verification
 

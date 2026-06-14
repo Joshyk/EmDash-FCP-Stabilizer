@@ -143,7 +143,7 @@ fallbacks.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%` for full source
   detail; choose a smaller value only when you want a faster debug pass. The actual pixel
-  size is shown in `Stabilizer Info`.
+  size is shown in `Analysis Sample`.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image.
@@ -230,13 +230,13 @@ fallbacks.
   If Final Cut Pro restores an in-progress analysis state while a compatible saved cache is
   already present, the plug-in prefers the saved cache and keeps the shared Ready/cache
   status visible instead of letting transient analyzer callback status mask it. When the
-  analyzer callback is the active state, `Host Analysis Status` and `Stabilizer Info` come
-  from that same in-progress analysis store instead of mixing `Analyzing Host Frames (N)`
-  with stale cache metadata from another clip.
-- `Stabilizer Info`: compact read-only runtime and analysis metadata. It shows the loaded
-  FxPlug version, selected `Sample Size`, current clip start/end time, and a short
-  analysis/cache summary with frame count, analyzed clip range, sample size, source size,
-  and pixel transform scale when analysis is available.
+  analyzer callback is the active state, `Host Analysis Status`, `Requested Sample`,
+  `Clip Range`, and `Analysis Sample` come from that same in-progress analysis store
+  instead of mixing `Analyzing Host Frames (N)` with stale cache metadata from another clip.
+- `Requested Sample`: read-only Inspector row showing the selected `Sample Size`.
+- `Clip Range`: read-only Inspector row showing the current clip start/end time.
+- `Analysis Sample`: read-only Inspector row showing the actual analyzed pixel sample size
+  and frame count when analysis is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
   compact runtime/source row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,

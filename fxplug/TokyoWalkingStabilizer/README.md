@@ -210,7 +210,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   Options are `100%`, `75%`, `50%`, `25%`, and `10%`; the default is `100%` for full source
   detail. Choose a smaller value only when you want a faster debug pass. Host Analysis reads
   this value once when the analysis pass starts. The actual pixel size is shown in
-  `Stabilizer Info`.
+  `Analysis Sample`.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available. The render
@@ -296,13 +296,13 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   in-progress analysis state while a compatible saved cache is already present, the plug-in
   prefers the saved cache and keeps the shared Ready/cache status visible instead of letting
   transient analyzer callback status mask it. When the analyzer callback is the active
-  state, `Host Analysis Status` and `Stabilizer Info` come from that same in-progress
-  analysis store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata
-  from another clip.
-- `Stabilizer Info`: compact read-only Inspector value showing the loaded FxPlug version,
-  selected `Sample Size`, current clip start/end time, and a short analysis/cache summary
-  with frame count, analyzed clip range, sample size, source size, and pixel transform scale
-  when analysis is available. Older saved timeline instances may keep
+  state, `Host Analysis Status`, `Requested Sample`, `Clip Range`, and `Analysis Sample`
+  come from that same in-progress analysis store instead of mixing `Analyzing Host
+  Frames (N)` with stale cache metadata from another clip.
+- `Requested Sample`: read-only Inspector row showing the selected `Sample Size`.
+- `Clip Range`: read-only Inspector row showing the current clip start/end time.
+- `Analysis Sample`: read-only Inspector row showing the actual analyzed pixel sample size
+  and frame count when analysis is available. Older saved timeline instances may keep
   stale saved Inspector strings, so use the compact runtime/source row in `Debug Overlay`
   to confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
