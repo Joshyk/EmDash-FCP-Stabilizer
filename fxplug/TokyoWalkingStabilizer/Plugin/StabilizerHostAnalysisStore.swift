@@ -963,6 +963,15 @@ final class StabilizerHostAnalysisStore {
         markSourceUnavailableForRender(reason: reason)
     }
 
+    func mappedSourceRequestTime(for renderTime: CMTime) -> CMTime? {
+        guard hasCompletedAnalysis,
+              let analysis = preparedAnalysisSnapshot()
+        else {
+            return nil
+        }
+        return analysisRenderTime(for: renderTime, preparedAnalysis: analysis)
+    }
+
     func analysisRenderTime(for renderTime: CMTime, preparedAnalysis analysis: StabilizerPreparedAnalysis) -> CMTime {
         let renderSeconds = CMTimeGetSeconds(renderTime)
         guard renderSeconds.isFinite else {

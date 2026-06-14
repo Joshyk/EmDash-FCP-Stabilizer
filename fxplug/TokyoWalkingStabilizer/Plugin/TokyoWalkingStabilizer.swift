@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.61"
+private let tokyoWalkingStabilizerVersion = "0.3.62"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -3559,7 +3559,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
         var requests: [FxImageTileRequest] = []
-        let sourceRequest = Self.sourceRequestTime(for: renderTime, pluginState: pluginState)
+        let sourceRequest = sourceRequestTime(for: renderTime, pluginState: pluginState)
         if sourceRequest.clamped {
             NSLog(
                 "TokyoWalkingStabilizer: clamped source request time from %.6f to %.6f to keep clip-edge render inside the input range.",
@@ -3577,6 +3577,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         inputImageRequests?.pointee = requests as NSArray
+    }
+
+    private func sourceRequestTime(for renderTime: CMTime, pluginState data: Data?) -> (time: CMTime, clamped: Bool) {
+        let rangeRequest = Self.sourceRequestTime(for: renderTime, pluginState: data)
+        if rangeRequest.clamped {
+            return rangeRequest
+        }
+        guard let mappedTime = hostAnalysisStore.mappedSourceRequestTime(for: renderTime),
+              abs(CMTimeGetSeconds(mappedTime) - CMTimeGetSeconds(renderTime)) > 1e-9
+        else {
+            return rangeRequest
+        }
+        NSLog(
+            "TokyoWalkingStabilizer: mapped source request time from %.6f to %.6f using completed Host Analysis.",
+            CMTimeGetSeconds(renderTime),
+            CMTimeGetSeconds(mappedTime)
+        )
+        return (mappedTime, true)
     }
 
     func destinationImageRect(_ destinationImageRect: UnsafeMutablePointer<FxRect>, sourceImages: [FxImageTile], destinationImage: FxImageTile, pluginState: Data?, at renderTime: CMTime) throws {

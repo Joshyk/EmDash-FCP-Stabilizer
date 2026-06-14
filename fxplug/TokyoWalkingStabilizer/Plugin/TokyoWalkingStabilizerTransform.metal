@@ -286,9 +286,9 @@ fragment float4 fragmentShader(
     float4 outputColor = (transform->edgeMode > 0.5 && outsideSource)
         ? float4(0.0, 0.0, 0.0, 1.0)
         : float4(colorSample);
+    outputColor.a = 1.0;
 
     if (transform->debugOverlay > 0.5) {
-        outputColor.a = 1.0;
         float2 pixel = uv * transform->outputSize;
         float overlayScale = clamp(transform->debugOverlayScale, 0.25, 2.25);
         float panelX = pixel.x - (16.0 * overlayScale);
