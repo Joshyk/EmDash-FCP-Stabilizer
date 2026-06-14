@@ -3389,7 +3389,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 }
 
 private final class StabilizerInfoScrollView: NSScrollView {
-    private static let preferredHeight: CGFloat = 96
+    private static let preferredHeight: CGFloat = 120
     private let textView = NSTextView()
 
     var infoText: String {
@@ -3414,7 +3414,7 @@ private final class StabilizerInfoScrollView: NSScrollView {
         hasVerticalScroller = true
         hasHorizontalScroller = false
         autohidesScrollers = false
-        translatesAutoresizingMaskIntoConstraints = false
+        translatesAutoresizingMaskIntoConstraints = true
 
         textView.isEditable = false
         textView.isSelectable = true
@@ -3433,8 +3433,15 @@ private final class StabilizerInfoScrollView: NSScrollView {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         documentView = textView
+        setFrameSize(NSSize(width: frame.width, height: Self.preferredHeight))
+    }
 
-        heightAnchor.constraint(equalToConstant: Self.preferredHeight).isActive = true
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: Self.preferredHeight)
+    }
+
+    override var fittingSize: NSSize {
+        NSSize(width: frame.width, height: Self.preferredHeight)
     }
 
     required init?(coder: NSCoder) {
