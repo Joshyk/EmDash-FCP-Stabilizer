@@ -4,6 +4,7 @@ import Darwin
 import Foundation
 import IOSurface
 import Metal
+import os.log
 import simd
 
 struct StabilizerAutoTransform {
@@ -228,6 +229,11 @@ fileprivate final class MetalAnalysisContext {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let shiftPipelineState: MTLComputePipelineState
+    let batchShiftPipelineState: MTLComputePipelineState
+    private var reusableShiftScoreBuffer: MTLBuffer?
+    private var reusableShiftScoreBufferLength = 0
+    private var reusableShiftBatchUniformBuffer: MTLBuffer?
+    private var reusableShiftBatchUniformBufferLength = 0
 
     init(preferredDevice: MTLDevice? = nil) throws {
         guard let device = preferredDevice ?? MTLCreateSystemDefaultDevice() else {
@@ -236,13 +242,15 @@ fileprivate final class MetalAnalysisContext {
         guard
             let commandQueue = device.makeCommandQueue(),
             let library = device.makeDefaultLibrary(),
-            let shiftFunction = library.makeFunction(name: "stabilizerShiftScores")
+            let shiftFunction = library.makeFunction(name: "stabilizerShiftScores"),
+            let batchShiftFunction = library.makeFunction(name: "stabilizerBatchShiftScores")
         else {
             throw AutoStabilizationEstimator.metalError("Stabilizer Metal analysis resources were unavailable.")
         }
         self.device = device
         self.commandQueue = commandQueue
         self.shiftPipelineState = try device.makeComputePipelineState(function: shiftFunction)
+        self.batchShiftPipelineState = try device.makeComputePipelineState(function: batchShiftFunction)
     }
 
     func frameBuffer(for frame: StabilizerAnalysisFrame) throws -> MTLBuffer {
@@ -255,6 +263,39 @@ fileprivate final class MetalAnalysisContext {
             options: .storageModeShared
         ) else {
             throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer Metal analysis frame buffer.")
+        }
+        return buffer
+    }
+
+    func shiftScoreBuffer(length: Int) throws -> MTLBuffer {
+        if let buffer = reusableShiftScoreBuffer,
+           reusableShiftScoreBufferLength >= length {
+            return buffer
+        }
+        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer Metal shift score buffer.")
+        }
+        reusableShiftScoreBuffer = buffer
+        reusableShiftScoreBufferLength = length
+        return buffer
+    }
+
+    func shiftBatchUniformBuffer(uniforms: [StabilizerShiftBatchUniforms]) throws -> MTLBuffer {
+        let length = MemoryLayout<StabilizerShiftBatchUniforms>.stride * uniforms.count
+        if reusableShiftBatchUniformBuffer == nil || reusableShiftBatchUniformBufferLength < length {
+            guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+                throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer Metal shift batch uniform buffer.")
+            }
+            reusableShiftBatchUniformBuffer = buffer
+            reusableShiftBatchUniformBufferLength = length
+        }
+        guard let buffer = reusableShiftBatchUniformBuffer else {
+            throw AutoStabilizationEstimator.metalError("Stabilizer Metal shift batch uniform buffer was unavailable.")
+        }
+        uniforms.withUnsafeBytes { bytes in
+            if let baseAddress = bytes.baseAddress {
+                memcpy(buffer.contents(), baseAddress, bytes.count)
+            }
         }
         return buffer
     }
@@ -1039,6 +1080,7 @@ enum AutoStabilizationEstimator {
     }
 
     static func analysisFrame(from tile: FxImageTile, at frameTime: CMTime? = nil, sampleWidth: Int, sampleHeight: Int) throws -> StabilizerAnalysisFrame {
+        let startedAt = CFAbsoluteTimeGetCurrent()
         let time = CMTimeGetSeconds(frameTime ?? tile.mediaTime)
         guard time.isFinite else {
             throw metalError("Stabilizer host analysis supplied a non-finite frame time.")
@@ -1081,6 +1123,15 @@ enum AutoStabilizationEstimator {
 
         let pointer = outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
         let pixels = Array(UnsafeBufferPointer(start: pointer, count: sampleWidth * sampleHeight))
+        os_log(
+            "Host Analysis downsample frame %{public}.3f sample %{public}dx%{public}d took %{public}.3f ms.",
+            log: stabilizerHostAnalysisLog,
+            type: .debug,
+            time,
+            sampleWidth,
+            sampleHeight,
+            (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
+        )
         return StabilizerAnalysisFrame(
             time: time,
             pixels: pixels,
@@ -1130,6 +1181,8 @@ enum AutoStabilizationEstimator {
     }
 
     fileprivate static func pairMotion(context: MetalAnalysisContext, previous: MTLBuffer, current: MTLBuffer, sampleWidth: Int, sampleHeight: Int) throws -> PairMotion {
+        let pairStartedAt = CFAbsoluteTimeGetCurrent()
+        let globalStartedAt = CFAbsoluteTimeGetCurrent()
         let global = try estimateShift(
             context: context,
             previous: previous,
@@ -1145,32 +1198,34 @@ enum AutoStabilizationEstimator {
             sampleWidth: sampleWidth,
             sampleHeight: sampleHeight
         )
+        let globalDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - globalStartedAt) * 1000.0
         let center = (round(global.dx), round(global.dy))
         let blocks = motionBlocks(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
-        let blockShifts = try blocks.map { block -> StabilizerBlockShift in
-            let shift = try estimateShift(
-                context: context,
-                previous: previous,
-                current: current,
-                x0: block.x0,
-                y0: block.y0,
-                width: block.width,
-                height: block.height,
-                radius: localSearchRadius,
-                center: center,
-                refine: true,
-                stride: 1,
-                sampleWidth: sampleWidth,
-                sampleHeight: sampleHeight
-            )
-            return StabilizerBlockShift(
-                block: block,
-                dx: shift.dx,
-                dy: shift.dy,
-                score: shift.score,
-                searchRadiusHit: shift.searchRadiusHit
-            )
-        }
+        let localStartedAt = CFAbsoluteTimeGetCurrent()
+        let blockShifts = try estimateShifts(
+            context: context,
+            previous: previous,
+            current: current,
+            blocks: blocks,
+            radius: localSearchRadius,
+            center: center,
+            refine: true,
+            stride: 1,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight
+        )
+        let localDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - localStartedAt) * 1000.0
+        os_log(
+            "Host Analysis shift scoring pair sample %{public}dx%{public}d blocks %{public}d global %{public}.3f ms local batch %{public}.3f ms total %{public}.3f ms.",
+            log: stabilizerHostAnalysisLog,
+            type: .debug,
+            sampleWidth,
+            sampleHeight,
+            blocks.count,
+            globalDurationMilliseconds,
+            localDurationMilliseconds,
+            (CFAbsoluteTimeGetCurrent() - pairStartedAt) * 1000.0
+        )
         let acceptedBlocks = acceptedMotionBlocks(blockShifts, global: (global.dx, global.dy, global.score))
         let motionBlocksForModel = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks : blockShifts
         let robustDx = weightedMedian(motionBlocksForModel.map { ($0.dx, $0.block.farFieldWeight) }) ?? global.dx
@@ -1432,15 +1487,12 @@ enum AutoStabilizationEstimator {
         let side = (radius * 2) + 1
         let scoreCount = side * side
         guard
-            let scoreBuffer = context.device.makeBuffer(
-                length: MemoryLayout<Float>.stride * scoreCount,
-                options: .storageModeShared
-            ),
             let commandBuffer = context.commandQueue.makeCommandBuffer(),
             let encoder = commandBuffer.makeComputeCommandEncoder()
         else {
             throw metalError("Could not allocate Stabilizer Metal shift resources.")
         }
+        let scoreBuffer = try context.shiftScoreBuffer(length: MemoryLayout<Float>.stride * scoreCount)
 
         var uniforms = StabilizerShiftUniforms(
             width: UInt32(sampleWidth),
@@ -1472,6 +1524,105 @@ enum AutoStabilizationEstimator {
         }
 
         let scores = scoreBuffer.contents().assumingMemoryBound(to: Float.self)
+        return resolvedShift(
+            scores: scores,
+            scoreCount: scoreCount,
+            side: side,
+            radius: radius,
+            centerX: centerX,
+            centerY: centerY,
+            refine: refine
+        )
+    }
+
+    private static func estimateShifts(
+        context: MetalAnalysisContext,
+        previous: MTLBuffer,
+        current: MTLBuffer,
+        blocks: [StabilizerMotionBlock],
+        radius: Int,
+        center: (Float, Float),
+        refine: Bool,
+        stride: UInt32,
+        sampleWidth: Int,
+        sampleHeight: Int
+    ) throws -> [StabilizerBlockShift] {
+        guard !blocks.isEmpty else {
+            return []
+        }
+        let centerX = Int(center.0.rounded())
+        let centerY = Int(center.1.rounded())
+        let side = (radius * 2) + 1
+        let scoreCount = side * side
+        let scoreBuffer = try context.shiftScoreBuffer(length: MemoryLayout<Float>.stride * scoreCount * blocks.count)
+        let uniforms = blocks.map { block in
+            StabilizerShiftBatchUniforms(
+                width: UInt32(sampleWidth),
+                height: UInt32(sampleHeight),
+                x0: UInt32(block.x0),
+                y0: UInt32(block.y0),
+                regionWidth: UInt32(block.width),
+                regionHeight: UInt32(block.height),
+                centerX: Int32(centerX),
+                centerY: Int32(centerY),
+                radius: UInt32(radius),
+                stride: max(1, stride)
+            )
+        }
+        let uniformBuffer = try context.shiftBatchUniformBuffer(uniforms: uniforms)
+        guard
+            let commandBuffer = context.commandQueue.makeCommandBuffer(),
+            let encoder = commandBuffer.makeComputeCommandEncoder()
+        else {
+            throw metalError("Could not allocate Stabilizer Metal batch shift resources.")
+        }
+
+        encoder.setComputePipelineState(context.batchShiftPipelineState)
+        encoder.setBuffer(previous, offset: 0, index: Int(SCBI_PreviousFrame.rawValue))
+        encoder.setBuffer(current, offset: 0, index: Int(SCBI_CurrentFrame.rawValue))
+        encoder.setBuffer(scoreBuffer, offset: 0, index: Int(SCBI_ShiftScores.rawValue))
+        encoder.setBuffer(uniformBuffer, offset: 0, index: Int(SCBI_ShiftBatchUniforms.rawValue))
+        encoder.dispatchThreads(
+            MTLSize(width: scoreCount, height: blocks.count, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(256, scoreCount), height: 1, depth: 1)
+        )
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw error
+        }
+
+        let scores = scoreBuffer.contents().assumingMemoryBound(to: Float.self)
+        return blocks.enumerated().map { index, block in
+            let shift = resolvedShift(
+                scores: scores.advanced(by: index * scoreCount),
+                scoreCount: scoreCount,
+                side: side,
+                radius: radius,
+                centerX: centerX,
+                centerY: centerY,
+                refine: refine
+            )
+            return StabilizerBlockShift(
+                block: block,
+                dx: shift.dx,
+                dy: shift.dy,
+                score: shift.score,
+                searchRadiusHit: shift.searchRadiusHit
+            )
+        }
+    }
+
+    private static func resolvedShift(
+        scores: UnsafePointer<Float>,
+        scoreCount: Int,
+        side: Int,
+        radius: Int,
+        centerX: Int,
+        centerY: Int,
+        refine: Bool
+    ) -> (dx: Float, dy: Float, score: Float, searchRadiusHit: Bool) {
         var bestIndex = 0
         var bestScore = Float.greatestFiniteMagnitude
         for index in 0..<scoreCount {

@@ -25,6 +25,7 @@ typedef enum StabilizerComputeBufferIndex {
     SCBI_CurrentFrame = 1,
     SCBI_ShiftScores = 2,
     SCBI_ShiftUniforms = 3,
+    SCBI_ShiftBatchUniforms = 3,
     SCBI_DownsampleOutput = 0,
     SCBI_DownsampleUniforms = 1
 } StabilizerComputeBufferIndex;
@@ -46,6 +47,19 @@ typedef struct StabilizerShiftUniforms {
     uint radius;
     uint stride;
 } StabilizerShiftUniforms;
+
+typedef struct StabilizerShiftBatchUniforms {
+    uint width;
+    uint height;
+    uint x0;
+    uint y0;
+    uint regionWidth;
+    uint regionHeight;
+    int centerX;
+    int centerY;
+    uint radius;
+    uint stride;
+} StabilizerShiftBatchUniforms;
 
 typedef struct StabilizerDownsampleUniforms {
     uint width;

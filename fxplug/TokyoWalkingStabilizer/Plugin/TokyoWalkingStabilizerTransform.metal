@@ -437,3 +437,43 @@ kernel void stabilizerShiftScores(
     }
     scores[gid] = samples == 0 ? INFINITY : total / float(samples) / 255.0;
 }
+
+kernel void stabilizerBatchShiftScores(
+    device const uchar *previous [[buffer(SCBI_PreviousFrame)]],
+    device const uchar *current [[buffer(SCBI_CurrentFrame)]],
+    device float *scores [[buffer(SCBI_ShiftScores)]],
+    device const StabilizerShiftBatchUniforms *uniformsList [[buffer(SCBI_ShiftBatchUniforms)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    StabilizerShiftBatchUniforms uniforms = uniformsList[gid.y];
+    uint side = (uniforms.radius * 2) + 1;
+    uint count = side * side;
+    if (gid.x >= count) {
+        return;
+    }
+
+    int dx = int(gid.x % side) + uniforms.centerX - int(uniforms.radius);
+    int dy = int(gid.x / side) + uniforms.centerY - int(uniforms.radius);
+    int xStart = max(max(int(uniforms.x0), -dx), 0);
+    int yStart = max(max(int(uniforms.y0), -dy), 0);
+    int xEnd = min(min(int(uniforms.x0 + uniforms.regionWidth), int(uniforms.width) - dx), int(uniforms.width));
+    int yEnd = min(min(int(uniforms.y0 + uniforms.regionHeight), int(uniforms.height) - dy), int(uniforms.height));
+    uint scoreIndex = (gid.y * count) + gid.x;
+
+    if ((xEnd - xStart) < 18 || (yEnd - yStart) < 12) {
+        scores[scoreIndex] = INFINITY;
+        return;
+    }
+
+    float total = 0.0;
+    uint samples = 0;
+    for (int y = yStart; y < yEnd; y += int(uniforms.stride)) {
+        int previousRow = y * int(uniforms.width);
+        int currentRow = (y + dy) * int(uniforms.width);
+        for (int x = xStart; x < xEnd; x += int(uniforms.stride)) {
+            total += abs(float(previous[previousRow + x]) - float(current[currentRow + x + dx]));
+            samples += 1;
+        }
+    }
+    scores[scoreIndex] = samples == 0 ? INFINITY : total / float(samples) / 255.0;
+}
