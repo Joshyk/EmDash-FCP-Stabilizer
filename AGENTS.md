@@ -183,7 +183,9 @@ silently. Also queue the request when this plug-in process already has an active
 reserved Host Analysis session for another clip, because Final Cut Pro may otherwise run
 multiple Stabilizer Host Analysis jobs at the same time. Queue drain should run as
 retryable one-shot passes after analysis callbacks complete; when the active clip finishes,
-the next queued clip should be the only request handed to `startForwardAnalysis`.
+the latest queued Start request should be the only request handed to `startForwardAnalysis`.
+If `Start Host Analysis` is pressed repeatedly while a request is already queued, replace
+older queued requests and keep only the most recent button press.
 In-progress Host Analysis state must be per clip/session so requested clips, including clips
 with different actual sample sizes, never share a streaming builder. The
 active runtime uses a process-wide shared Host Analysis render/cache store after completion
@@ -210,8 +212,8 @@ revision publication onto the FxPlug main queue before calling `FxParameterSetti
 Final Cut Pro treats the hidden revision as a real preview invalidation.
 Fingerprint mismatches must reject a
 candidate instead of accepting a different clip by time proximity alone. If Final Cut Pro keeps
-reporting a busy state when the serial queue tries to drain, keep the request queued visibly
-and retry later. A queued start request must remain a pending request for that effect
+reporting a busy state when the serial queue tries to drain, keep the latest request queued
+visibly and retry later. A queued start request must remain a pending request for that effect
 instance; do not let a completed shared render/cache store from another clip satisfy or
 skip the queued clip's own Host Analysis start. Because Final Cut Pro can call analysis
 setup/analyze/cleanup on a different FxPlug instance than the Inspector button instance,

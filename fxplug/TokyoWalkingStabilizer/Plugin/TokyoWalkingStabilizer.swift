@@ -67,6 +67,21 @@ enum StabilizerSampleScale: Int32 {
         }
     }
 
+    var displayName: String {
+        switch self {
+        case .original:
+            return "100%"
+        case .scale75:
+            return "75%"
+        case .scale50:
+            return "50%"
+        case .scale25:
+            return "25%"
+        case .scale10:
+            return "10%"
+        }
+    }
+
     static func scale(for rawValue: Int32) -> StabilizerSampleScale {
         StabilizerSampleScale(rawValue: rawValue) ?? defaultScale
     }
@@ -834,15 +849,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     @discardableResult
     private static func enqueueSerialAnalysis(_ plugin: TokyoWalkingStabilizerPlugIn, analysisAPI: FxAnalysisAPI) -> Int {
         serialAnalysisQueueLock.lock()
-        serialAnalysisQueue.removeAll { queuedRequest in queuedRequest.plugin === plugin }
+        let replacedCount = serialAnalysisQueue.count
+        serialAnalysisQueue.removeAll(keepingCapacity: true)
         serialAnalysisQueue.append(SerialHostAnalysisRequest(plugin: plugin, analysisAPI: analysisAPI))
         let position = serialAnalysisQueue.count
         serialAnalysisQueueLock.unlock()
         os_log(
-            "Serial Host Analysis queue enqueued request at position %{public}d.",
+            "Serial Host Analysis queue kept latest request at position %{public}d after replacing %{public}d queued request(s).",
             log: stabilizerHostAnalysisLog,
             type: .default,
-            position
+            position,
+            replacedCount
         )
         return position
     }
@@ -1044,6 +1061,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if let state {
             let turnWindowSeconds = max(stabilizerMinimumTurnDetectionWindowSeconds, state.panSmoothSeconds)
             let turnStartSeconds = stabilizerMinimumTurnDetectionWindowSeconds
+            lines.append("Sample Size \(StabilizerSampleScale.scale(for: state.sampleScale).displayName)")
+            if let clipRange = clipRangeDescription(from: state) {
+                lines.append("Clip \(clipRange)")
+            }
             lines.append(String(
                 format: "Footstep jitter <= 1s | X %.2f Y %.2f R %.2f",
                 state.microJitterXStrength,
@@ -1071,6 +1092,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             lines.append(analysisInfo)
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func clipRangeDescription(from state: StabilizerPluginState) -> String? {
+        let startSeconds = state.inputRangeStartSeconds
+        let durationSeconds = state.inputRangeDurationSeconds
+        guard startSeconds.isFinite,
+              durationSeconds.isFinite,
+              durationSeconds > 0.0
+        else {
+            return nil
+        }
+        return "\(secondsDescription(startSeconds))-\(secondsDescription(startSeconds + durationSeconds))"
+    }
+
+    private static func secondsDescription(_ seconds: Double) -> String {
+        String(format: "%.3fs", seconds)
     }
 
     private func publishRenderRevision(_ revision: Double, currentParameterValue: Double? = nil, force: Bool = false) {

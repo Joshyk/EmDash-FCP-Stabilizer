@@ -935,6 +935,9 @@ final class StabilizerHostAnalysisStore {
                 frameCount: activeCandidate.frames.count,
                 sampleWidth: activeCandidate.cache.sampleWidth,
                 sampleHeight: activeCandidate.cache.sampleHeight,
+                requestedSampleScalePercent: nil,
+                rangeStartSeconds: activeCandidate.cache.rangeStartSeconds,
+                rangeEndSeconds: Self.rangeEndSeconds(for: activeCandidate.cache),
                 sourceInfo: nil,
                 prefix: "Loaded Cache",
                 eventName: activeCandidate.cache.eventName ?? Self.currentProjectBundleCacheEventName,
@@ -1032,17 +1035,35 @@ final class StabilizerHostAnalysisStore {
 
     private func markAnalysisCompleted() {
         let completedAt = Date()
-        let snapshot: (frameCount: Int, sampleSize: (width: Int, height: Int)?, sourceInfo: StabilizerSourceFrameInfo?) = {
+        let snapshot: (
+            frameCount: Int,
+            sampleSize: (width: Int, height: Int)?,
+            requestedSampleScalePercent: Double,
+            range: CMTimeRange,
+            sourceInfo: StabilizerSourceFrameInfo?
+        ) = {
             lock.lock()
-            let value = (framesByTimeKey.count, latestSampleSize, latestSourceFrameInfo)
+            let value = (
+                framesByTimeKey.count,
+                latestSampleSize,
+                activeRequestedSampleScalePercent,
+                activeRange,
+                latestSourceFrameInfo
+            )
             lock.unlock()
             return value
         }()
+        let rangeStartSeconds = CMTimeGetSeconds(snapshot.range.start)
+        let rangeDurationSeconds = CMTimeGetSeconds(snapshot.range.duration)
+        let rangeEndSeconds = rangeStartSeconds + rangeDurationSeconds
         let info = Self.infoText(
             completedAt: completedAt,
             frameCount: snapshot.frameCount,
             sampleWidth: snapshot.sampleSize?.width,
             sampleHeight: snapshot.sampleSize?.height,
+            requestedSampleScalePercent: snapshot.requestedSampleScalePercent,
+            rangeStartSeconds: rangeStartSeconds,
+            rangeEndSeconds: rangeEndSeconds,
             sourceInfo: snapshot.sourceInfo,
             prefix: "Analyzed"
         )
@@ -1057,6 +1078,9 @@ final class StabilizerHostAnalysisStore {
         frameCount: Int,
         sampleWidth: Int?,
         sampleHeight: Int?,
+        requestedSampleScalePercent: Double? = nil,
+        rangeStartSeconds: Double? = nil,
+        rangeEndSeconds: Double? = nil,
         sourceInfo: StabilizerSourceFrameInfo?,
         prefix: String,
         eventName: String? = nil,
@@ -1074,7 +1098,15 @@ final class StabilizerHostAnalysisStore {
         } else {
             sampleText = "unknown"
         }
-        var text = "\(prefix) \(dateText) | frames \(frameCount) | sample \(sampleText) | source \(sourceText) | pixel scale \(scaleText)"
+        var text = "\(prefix) \(dateText) | frames \(frameCount) | sample \(sampleText)"
+        if let requestedSampleScalePercent,
+           requestedSampleScalePercent.isFinite {
+            text += " | requested \(Self.sampleScaleDescription(requestedSampleScalePercent))"
+        }
+        if let rangeText = Self.clipRangeDescription(startSeconds: rangeStartSeconds, endSeconds: rangeEndSeconds) {
+            text += " | clip \(rangeText)"
+        }
+        text += " | source \(sourceText) | pixel scale \(scaleText)"
         if let eventName, !eventName.isEmpty {
             text += " | Event \(eventName)"
         }
@@ -1082,6 +1114,29 @@ final class StabilizerHostAnalysisStore {
             text += " | cache \(shortCacheIdentity(cacheIdentity))"
         }
         return text
+    }
+
+    private static func sampleScaleDescription(_ percent: Double) -> String {
+        if percent.rounded() == percent {
+            return String(format: "%.0f%%", percent)
+        }
+        return String(format: "%.2f%%", percent)
+    }
+
+    private static func clipRangeDescription(startSeconds: Double?, endSeconds: Double?) -> String? {
+        guard let startSeconds,
+              let endSeconds,
+              startSeconds.isFinite,
+              endSeconds.isFinite,
+              endSeconds >= startSeconds
+        else {
+            return nil
+        }
+        return "\(secondsDescription(startSeconds))-\(secondsDescription(endSeconds))"
+    }
+
+    private static func secondsDescription(_ seconds: Double) -> String {
+        String(format: "%.3fs", seconds)
     }
 
     @discardableResult
@@ -1105,6 +1160,7 @@ final class StabilizerHostAnalysisStore {
             prepared: StabilizerPreparedAnalysis?,
             range: CMTimeRange,
             frameDuration: CMTime,
+            requestedSampleScalePercent: Double,
             sourceInfo: StabilizerSourceFrameInfo?
         ) = {
             lock.lock()
@@ -1112,9 +1168,10 @@ final class StabilizerHostAnalysisStore {
             let prepared = preparedAnalysis
             let range = activeRange
             let frameDuration = activeFrameDuration
+            let requestedSampleScalePercent = activeRequestedSampleScalePercent
             let sourceInfo = latestSourceFrameInfo
             lock.unlock()
-            return (frames, prepared, range, frameDuration, sourceInfo)
+            return (frames, prepared, range, frameDuration, requestedSampleScalePercent, sourceInfo)
         }()
 
         guard let prepared = snapshot.prepared, prepared.frames.count >= 3 else {
@@ -1222,6 +1279,9 @@ final class StabilizerHostAnalysisStore {
                 frameCount: framesToPersist.count,
                 sampleWidth: sampleWidth,
                 sampleHeight: sampleHeight,
+                requestedSampleScalePercent: snapshot.requestedSampleScalePercent,
+                rangeStartSeconds: cache.rangeStartSeconds,
+                rangeEndSeconds: Self.rangeEndSeconds(for: cache),
                 sourceInfo: snapshot.sourceInfo,
                 prefix: "Saved Cache",
                 eventName: eventName,
@@ -1786,6 +1846,9 @@ final class StabilizerHostAnalysisStore {
             frameCount: loadedCache.frames.count,
             sampleWidth: loadedCache.cache.sampleWidth,
             sampleHeight: loadedCache.cache.sampleHeight,
+            requestedSampleScalePercent: nil,
+            rangeStartSeconds: loadedCache.cache.rangeStartSeconds,
+            rangeEndSeconds: Self.rangeEndSeconds(for: loadedCache.cache),
             sourceInfo: nil,
             prefix: "Loaded Cache",
             eventName: loadedCache.cache.eventName ?? Self.currentProjectBundleCacheEventName,

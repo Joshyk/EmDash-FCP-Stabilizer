@@ -188,11 +188,13 @@ fallbacks.
   whose selected `Sample Size` resolves to different actual pixel dimensions do not share a
   streaming builder. If another Stabilizer Host Analysis is already active, or Final Cut Pro
   is already running Host Analysis when another clip is requested, that effect instance is
-  queued and started after the host becomes available. The queued request is retained until
-  start or explicit clear, and completed analysis from the previous clip does not make the
-  queued clip skip its own Host Analysis. Final Cut Pro may run the analysis callbacks on a
-  different FxPlug instance than the Inspector button instance, so completion clears
-  process-wide analysis bookkeeping before draining the next queued request. The Inspector
+  queued and started after the host becomes available. The queue keeps only the latest Start
+  request, so pressing `Start Host Analysis` again while a request is queued replaces older
+  queued requests. The queued request is retained until start or explicit clear, and
+  completed analysis from the previous clip does not make the queued clip skip its own Host
+  Analysis. Final Cut Pro may run the analysis callbacks on a different FxPlug instance than
+  the Inspector button instance, so completion clears process-wide analysis bookkeeping
+  before draining the latest queued request. The Inspector
   start path does not use plug-in-local active markers as the blocking authority; it asks
   Final Cut Pro's current analysis state and queues only when the host reports a
   busy/requested state. Queued starts still check Final Cut Pro's actual analysis state
@@ -223,7 +225,7 @@ fallbacks.
   updates. `Queued Host Analysis` means this clip is waiting for the plug-in's serial Host
   Analysis queue to hand it to Final Cut Pro after the currently active or reserved run
   finishes. Queue drain runs in retryable passes after analysis callbacks complete; if the
-  host is still busy, the request remains queued and another pass is scheduled.
+  host is still busy, the latest request remains queued and another pass is scheduled.
   During a real analysis run, the status advances as `Analyzing Host Frames (N)`.
   If Final Cut Pro restores an in-progress analysis state while a compatible saved cache is
   already present, the plug-in prefers the saved cache and keeps the shared Ready/cache
@@ -232,10 +234,10 @@ fallbacks.
   from that same in-progress analysis store instead of mixing `Analyzing Host Frames (N)`
   with stale cache metadata from another clip.
 - `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
-  loaded FxPlug version, active correction bands (`Footstep jitter`, `Stride wobble`,
-  `Far-field Warp`, `Turn Smoothing`), plus completed analysis time, frame
-  count, actual sample image size, source frame size, and pixel transform scale when analysis
-  is available.
+  loaded FxPlug version, selected `Sample Size`, current clip start/end time, active
+  correction bands (`Footstep jitter`, `Stride wobble`, `Far-field Warp`, `Turn Smoothing`),
+  plus completed analysis time, frame count, analyzed clip range, actual sample image size,
+  source frame size, and pixel transform scale when analysis is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
   compact runtime/source row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,

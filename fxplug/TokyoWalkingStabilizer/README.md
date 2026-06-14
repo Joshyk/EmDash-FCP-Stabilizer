@@ -279,9 +279,11 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   preview/render consumers from rechecking the persistent cache signature and loading a newly
   written compatible cache. If another Stabilizer Host Analysis run is active or reserved in
   the plug-in process, the request is kept in `Queued Host Analysis` until that run's cleanup
-  callback finishes and a retry pass can hand this clip to Final Cut Pro. The queue keeps
-  the `FxAnalysisAPI` obtained when Start was pressed, so retry drain does not need to
-  reacquire it from a later callback context. If the Event cache root is unavailable and
+  callback finishes and a retry pass can hand the latest queued Start request to Final Cut
+  Pro. Pressing `Start Host Analysis` again while a request is queued replaces older queued
+  requests, so only the most recent button press remains pending. The queue keeps the
+  `FxAnalysisAPI` obtained when Start was pressed, so retry drain does not need to reacquire
+  it from a later callback context. If the Event cache root is unavailable and
   analysis completes memory-only, completed memory-only analyses are retained by analyzed
   timeline range plus sample/fingerprint identity for the current process so another queued
   clip does not discard the earlier clip's viewer result or collide with another clip that
@@ -298,10 +300,11 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   analysis store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata
   from another clip.
 - `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
-  version, active correction bands (`Footstep jitter <= 1s`, `Stride wobble <= 2s`,
-  `Far-field Warp <= 1s`, and `Turn Smoothing`), plus latest
-  analysis time, frame count, actual sample image size, source frame size, and pixel
-  transform scale when analysis is available. Older saved timeline instances may keep
+  version, selected `Sample Size`, current clip start/end time, active correction bands
+  (`Footstep jitter <= 1s`, `Stride wobble <= 2s`, `Far-field Warp <= 1s`, and
+  `Turn Smoothing`), plus latest analysis time, frame count, analyzed clip range, actual
+  sample image size, source frame size, and pixel transform scale when analysis is
+  available. Older saved timeline instances may keep
   stale saved Inspector strings, so use the compact runtime/source row in `Debug Overlay`
   to confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,

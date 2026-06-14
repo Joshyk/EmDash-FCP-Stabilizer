@@ -139,9 +139,10 @@ media, while staying larger than the old compact panel.
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep
 stale saved Inspector strings, `Debug Overlay` is the live render-runtime
-indicator. `Stabilizer Info` is a scrollable read-only status box for active
-correction bands and analysis metadata; older saved timeline instances may still
-display a stale saved info string until the effect is reapplied.
+indicator. `Stabilizer Info` is a scrollable read-only status box for the
+selected `Sample Size`, current clip start/end time, active correction bands,
+and analysis metadata; older saved timeline instances may still display a stale
+saved info string until the effect is reapplied.
 During a real Host Analysis pass the status advances as `Analyzing Host Frames
 (N)`. If Final Cut Pro restores an in-progress analysis state while a compatible
 saved cache exists, the plug-in prefers the saved cache and keeps the shared
@@ -167,11 +168,12 @@ Cut Pro delivers a callback that matches multiple active sessions, the plug-in
 fails that callback visibly instead of appending the frame to an arbitrary clip.
 
 When `Start Host Analysis` is pressed on more than one clip, only one clip is
-handed to Final Cut Pro at a time. Additional clips enter the plug-in's serial
+handed to Final Cut Pro at a time. Additional presses enter the plug-in's serial
 `Queued Host Analysis` state while another Stabilizer Host Analysis run is active
-or reserved, then the next queued clip starts after the active run's cleanup
-callback finishes. A completed analysis from an earlier clip does not satisfy a
-later queued clip.
+or reserved, but the queue keeps only the latest Start request. Pressing
+`Start Host Analysis` again while a request is queued replaces the older queued
+request. A completed analysis from an earlier clip does not satisfy a later
+queued clip.
 Analysis callback instances clear process-wide analysis bookkeeping, because
 Final Cut Pro may deliver setup/analyze/cleanup to a different FxPlug instance
 than the Inspector button instance that requested the run. The Inspector start
