@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.62"
+private let tokyoWalkingStabilizerVersion = "0.3.63"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -3583,6 +3583,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let rangeRequest = Self.sourceRequestTime(for: renderTime, pluginState: data)
         if rangeRequest.clamped {
             return rangeRequest
+        }
+        if let state = Self.pluginState(from: data) {
+            let expectedRange = currentRenderExpectedRange(from: state)
+            if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
+                if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
+                   !preferredIdentity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    _ = hostAnalysisStore.activatePersistentCache(
+                        identity: preferredIdentity,
+                        expectedRange: expectedRange,
+                        allowRangeMismatch: true
+                    )
+                } else {
+                    _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(
+                        expectedRange: expectedRange,
+                        allowRangeMismatch: true
+                    )
+                }
+            }
         }
         guard let mappedTime = hostAnalysisStore.mappedSourceRequestTime(for: renderTime),
               abs(CMTimeGetSeconds(mappedTime) - CMTimeGetSeconds(renderTime)) > 1e-9

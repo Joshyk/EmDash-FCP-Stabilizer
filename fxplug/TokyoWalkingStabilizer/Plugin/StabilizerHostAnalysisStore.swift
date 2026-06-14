@@ -822,8 +822,9 @@ final class StabilizerHostAnalysisStore {
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                         if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
+                            let analysisTime = analysisRenderTime(for: renderTime, preparedAnalysis: analysis)
                             if Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange),
-                               Self.renderSeconds(CMTimeGetSeconds(renderTime), isInside: analysis.frames) {
+                               Self.renderSeconds(CMTimeGetSeconds(analysisTime), isInside: analysis.frames) {
                                 os_log(
                                     "Using start-matched range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
                                     log: stabilizerHostAnalysisLog,
