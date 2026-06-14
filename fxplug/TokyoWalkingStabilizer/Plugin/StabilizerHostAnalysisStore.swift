@@ -398,7 +398,7 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         if preparedAnalysis == nil {
             status = .queued
-            analysisInfoText = "Queued Host Analysis #\(position) | waiting for \(reason)"
+            analysisInfoText = "Queued #\(position): \(Self.compactReason(reason))"
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -408,7 +408,7 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         if preparedAnalysis == nil {
             status = .needsAnalysis
-            analysisInfoText = "Host Analysis start failed: \(reason)"
+            analysisInfoText = "Start failed: \(Self.compactReason(reason))"
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -534,7 +534,7 @@ final class StabilizerHostAnalysisStore {
         status = .proxyRejected
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
-        analysisInfoText = "Rejected proxy media. Use original media and rerun Host Analysis."
+        analysisInfoText = "Proxy rejected. Use original media."
         bumpRevisionLocked()
         lock.unlock()
         NSLog("TokyoWalkingStabilizer: rejected Host Analysis proxy media: \(reason)")
@@ -590,7 +590,7 @@ final class StabilizerHostAnalysisStore {
             streamingAnalysisBuilder = nil
             finished = false
             status = error.localizedDescription.contains("incomplete frame coverage") ? .cacheIncomplete : .needsAnalysis
-            analysisInfoText = "Analysis failed: \(error.localizedDescription)"
+            analysisInfoText = "Analysis failed: \(Self.compactReason(error.localizedDescription))"
             bumpRevisionLocked()
             lock.unlock()
             removeLegacyAnalysisScratchDirectory()
@@ -1106,7 +1106,7 @@ final class StabilizerHostAnalysisStore {
     ) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss ZZZZ"
+        formatter.dateFormat = "MM-dd HH:mm"
         let dateText = formatter.string(from: completedAt)
         let sourceText = sourceInfo?.sourceSizeDescription ?? "unknown"
         let scaleText = sourceInfo?.pixelScaleDescription ?? "unknown"
@@ -1116,22 +1116,31 @@ final class StabilizerHostAnalysisStore {
         } else {
             sampleText = "unknown"
         }
-        var text = "\(prefix) \(dateText) | frames \(frameCount) | sample \(sampleText)"
+        var parts = ["\(Self.compactPrefix(prefix)) \(dateText)", "\(frameCount)f", "sample \(sampleText)"]
         if let requestedSampleScalePercent,
            requestedSampleScalePercent.isFinite {
-            text += " | requested \(Self.sampleScaleDescription(requestedSampleScalePercent))"
+            parts.append("req \(Self.sampleScaleDescription(requestedSampleScalePercent))")
         }
         if let rangeText = Self.clipRangeDescription(startSeconds: rangeStartSeconds, endSeconds: rangeEndSeconds) {
-            text += " | clip \(rangeText)"
+            parts.append("clip \(rangeText)")
         }
-        text += " | source \(sourceText) | pixel scale \(scaleText)"
+        parts.append("src \(sourceText)")
+        parts.append("scale \(scaleText)")
         if let eventName, !eventName.isEmpty {
-            text += " | Event \(eventName)"
+            parts.append("Event \(eventName)")
         }
-        if let cacheIdentity, !cacheIdentity.isEmpty {
-            text += " | cache \(shortCacheIdentity(cacheIdentity))"
+        return parts.joined(separator: " | ")
+    }
+
+    private static func compactPrefix(_ prefix: String) -> String {
+        switch prefix {
+        case "Loaded Cache":
+            return "Loaded"
+        case "Saved Cache":
+            return "Saved"
+        default:
+            return prefix
         }
-        return text
     }
 
     private static func sampleScaleDescription(_ percent: Double) -> String {
@@ -1150,11 +1159,27 @@ final class StabilizerHostAnalysisStore {
         else {
             return nil
         }
-        return "\(secondsDescription(startSeconds))-\(secondsDescription(endSeconds))"
+        return "\(compactSecondsDescription(startSeconds))-\(compactSecondsDescription(endSeconds))"
     }
 
-    private static func secondsDescription(_ seconds: Double) -> String {
-        String(format: "%.3fs", seconds)
+    private static func compactSecondsDescription(_ seconds: Double) -> String {
+        var text = String(format: "%.3f", seconds)
+        while text.contains(".") && text.hasSuffix("0") {
+            text.removeLast()
+        }
+        if text.hasSuffix(".") {
+            text.removeLast()
+        }
+        return "\(text)s"
+    }
+
+    private static func compactReason(_ reason: String, maxLength: Int = 48) -> String {
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxLength else {
+            return trimmed
+        }
+        let index = trimmed.index(trimmed.startIndex, offsetBy: maxLength)
+        return String(trimmed[..<index]) + "..."
     }
 
     @discardableResult
@@ -1203,7 +1228,7 @@ final class StabilizerHostAnalysisStore {
             status = .projectCacheUnavailable
             let statusText = projectCacheUnavailableStatusText
             let reason = projectCacheUnavailableReason ?? "Host did not provide a writable Event Analysis Files cache root."
-            analysisInfoText = "\(statusText). \(reason)"
+            analysisInfoText = "\(statusText): \(Self.compactReason(reason))"
             bumpRevisionLocked()
             lock.unlock()
             NSLog("TokyoWalkingStabilizer: failed to save Host Analysis cache because no FCP bundle cache root is configured.")
@@ -1449,7 +1474,7 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         if status != .proxyRejected {
             status = .proxyRejected
-            analysisInfoText = "Rejected proxy media. Use original media and rerun Host Analysis."
+            analysisInfoText = "Proxy rejected. Use original media."
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1472,7 +1497,7 @@ final class StabilizerHostAnalysisStore {
             && status != .proxyPreview
         if shouldMarkProxyPreview {
             status = .proxyPreview
-            analysisInfoText = "Using saved original-media Host Analysis for proxy playback. If Final Cut Pro shows Missing Proxy, switch Viewer playback to Original/Optimized or create proxy media."
+            analysisInfoText = "Original analysis; proxy preview."
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1487,7 +1512,7 @@ final class StabilizerHostAnalysisStore {
             && status != .sourceMetadataUnconfirmedPreview
         if shouldMark {
             status = .sourceMetadataUnconfirmedPreview
-            analysisInfoText = "Using saved original-media Host Analysis; current source-frame metadata could not confirm original media, so validation is deferred."
+            analysisInfoText = "Original analysis; validation deferred."
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1501,7 +1526,7 @@ final class StabilizerHostAnalysisStore {
         let shouldMark = status != .proxyNeedsOriginalValidation
         if shouldMark {
             status = .proxyNeedsOriginalValidation
-            analysisInfoText = "Proxy playback cannot select a different clip's latest cache. Switch Viewer playback to Original/Optimized once so this clip can validate its saved Host Analysis cache."
+            analysisInfoText = "Needs original validation."
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1515,7 +1540,7 @@ final class StabilizerHostAnalysisStore {
         let shouldMarkSourceUnavailable = status != .sourceUnavailable
         if shouldMarkSourceUnavailable {
             status = .sourceUnavailable
-            analysisInfoText = "Render source unavailable. \(reason) Switch Viewer playback to Original/Optimized or create proxy media."
+            analysisInfoText = "Source unavailable. Check FCP proxy."
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1567,7 +1592,7 @@ final class StabilizerHostAnalysisStore {
         status = .cacheRejected
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
-        analysisInfoText = "In-memory Host Analysis did not match the current clip. Run Host Analysis again."
+        analysisInfoText = "Memory analysis mismatch. Run again."
         bumpRevisionLocked()
         lock.unlock()
         NSLog("TokyoWalkingStabilizer: rejected in-memory Host Analysis \(rejectedIdentity ?? "<unknown>"): \(reason).")
@@ -1703,7 +1728,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
-        analysisInfoText = "No matching Host Analysis cache for the active clip range."
+        analysisInfoText = "No matching cache for clip range."
         bumpRevisionLocked()
         lock.unlock()
         if let oldFileName {
@@ -1740,7 +1765,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
-        analysisInfoText = "No matching in-memory Host Analysis for the active clip range."
+        analysisInfoText = "No matching memory analysis."
         bumpRevisionLocked()
         lock.unlock()
         if let oldIdentity {

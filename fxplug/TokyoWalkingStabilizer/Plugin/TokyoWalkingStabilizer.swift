@@ -1075,40 +1075,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
-        var lines = ["FxPlug \(tokyoWalkingStabilizerVersion)"]
+        var lines: [String] = []
         if let state {
-            let turnWindowSeconds = max(stabilizerMinimumTurnDetectionWindowSeconds, state.panSmoothSeconds)
-            let turnStartSeconds = stabilizerMinimumTurnDetectionWindowSeconds
-            lines.append("Sample Size \(StabilizerSampleScale.scale(for: state.sampleScale).displayName)")
+            var summary = "Fx \(tokyoWalkingStabilizerVersion) | Sample \(StabilizerSampleScale.scale(for: state.sampleScale).displayName)"
             if let clipRange = clipRangeDescription(from: state) {
-                lines.append("Clip \(clipRange)")
+                summary += " | Clip \(clipRange)"
             }
-            lines.append(String(
-                format: "Footstep jitter <= 1s | X %.2f Y %.2f R %.2f",
-                state.microJitterXStrength,
-                state.microJitterYStrength,
-                state.microJitterRotationStrength
-            ))
-            lines.append(String(
-                format: "Stride wobble <= 2s | X %.2f Y %.2f R %.2f",
-                state.strideWobbleXStrength,
-                state.strideWobbleYStrength,
-                state.strideWobbleRotationStrength
-            ))
-            lines.append(String(
-                format: "Far-field Warp <= 1s | strength %.2f",
-                state.farFieldWarpStrength
-            ))
-            lines.append(String(
-                format: "Turn Smoothing %.2f-%.2fs | strength %.2f",
-                turnStartSeconds,
-                turnWindowSeconds,
-                state.panStabilizationStrength
-            ))
+            lines.append(summary)
+        } else {
+            lines.append("Fx \(tokyoWalkingStabilizerVersion)")
         }
-        if analysisInfo != "No Analysis" {
-            lines.append(analysisInfo)
-        }
+        lines.append(analysisInfo)
         return lines.joined(separator: "\n")
     }
 
@@ -1121,11 +1098,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return nil
         }
-        return "\(secondsDescription(startSeconds))-\(secondsDescription(startSeconds + durationSeconds))"
+        return "\(compactSecondsDescription(startSeconds))-\(compactSecondsDescription(startSeconds + durationSeconds))"
     }
 
-    private static func secondsDescription(_ seconds: Double) -> String {
-        String(format: "%.3fs", seconds)
+    private static func compactSecondsDescription(_ seconds: Double) -> String {
+        var text = String(format: "%.3f", seconds)
+        while text.contains(".") && text.hasSuffix("0") {
+            text.removeLast()
+        }
+        if text.hasSuffix(".") {
+            text.removeLast()
+        }
+        return "\(text)s"
     }
 
     private func publishRenderRevision(_ revision: Double, currentParameterValue: Double? = nil, force: Bool = false) {

@@ -299,12 +299,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   state, `Host Analysis Status` and `Stabilizer Info` come from that same in-progress
   analysis store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata
   from another clip.
-- `Stabilizer Info`: scrollable read-only Inspector value showing the loaded FxPlug
-  version, selected `Sample Size`, current clip start/end time, active correction bands
-  (`Footstep jitter <= 1s`, `Stride wobble <= 2s`, `Far-field Warp <= 1s`, and
-  `Turn Smoothing`), plus latest analysis time, frame count, analyzed clip range, actual
-  sample image size, source frame size, and pixel transform scale when analysis is
-  available. Older saved timeline instances may keep
+- `Stabilizer Info`: compact read-only Inspector value showing the loaded FxPlug version,
+  selected `Sample Size`, current clip start/end time, and a short analysis/cache summary
+  with frame count, analyzed clip range, sample size, source size, and pixel transform scale
+  when analysis is available. Older saved timeline instances may keep
   stale saved Inspector strings, so use the compact runtime/source row in `Debug Overlay`
   to confirm the active render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,

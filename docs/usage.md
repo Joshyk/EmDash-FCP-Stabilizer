@@ -233,11 +233,10 @@ fallbacks.
   analyzer callback is the active state, `Host Analysis Status` and `Stabilizer Info` come
   from that same in-progress analysis store instead of mixing `Analyzing Host Frames (N)`
   with stale cache metadata from another clip.
-- `Stabilizer Info`: scrollable read-only runtime and analysis metadata. It shows the
-  loaded FxPlug version, selected `Sample Size`, current clip start/end time, active
-  correction bands (`Footstep jitter`, `Stride wobble`, `Far-field Warp`, `Turn Smoothing`),
-  plus completed analysis time, frame count, analyzed clip range, actual sample image size,
-  source frame size, and pixel transform scale when analysis is available.
+- `Stabilizer Info`: compact read-only runtime and analysis metadata. It shows the loaded
+  FxPlug version, selected `Sample Size`, current clip start/end time, and a short
+  analysis/cache summary with frame count, analyzed clip range, sample size, source size,
+  and pixel transform scale when analysis is available.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
   compact runtime/source row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
