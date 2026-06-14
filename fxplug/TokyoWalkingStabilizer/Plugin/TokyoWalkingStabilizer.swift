@@ -3414,6 +3414,8 @@ private final class StabilizerInfoScrollView: NSScrollView {
         hasVerticalScroller = true
         hasHorizontalScroller = false
         autohidesScrollers = false
+        scrollerStyle = .legacy
+        verticalScrollElasticity = .allowed
         translatesAutoresizingMaskIntoConstraints = true
 
         textView.isEditable = false
