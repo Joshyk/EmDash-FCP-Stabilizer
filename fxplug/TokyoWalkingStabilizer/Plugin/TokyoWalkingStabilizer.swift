@@ -29,7 +29,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.59"
+private let tokyoWalkingStabilizerVersion = "0.3.60"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -114,10 +114,16 @@ private struct ActiveHostAnalysisRoute {
     let sessionID: UUID
     let store: StabilizerHostAnalysisStore
     let sampleSize: (width: Int, height: Int)?
+    let canPublishCallbackStatus: Bool
 }
 
 private enum ActiveHostAnalysisCleanupRoute {
-    case resolved(sessionID: UUID, store: StabilizerHostAnalysisStore, expectedRange: HostAnalysisExpectedRange?)
+    case resolved(
+        sessionID: UUID,
+        store: StabilizerHostAnalysisStore,
+        expectedRange: HostAnalysisExpectedRange?,
+        canPublishCallbackStatus: Bool
+    )
     case failed(reason: String)
 }
 
@@ -249,6 +255,10 @@ private final class ActiveHostAnalysisSession {
         )
     }
 
+    func canPublishCallbackStatus(ownerObjectID: ObjectIdentifier, preferredSessionID: UUID?) -> Bool {
+        preferredSessionID == id || ownerObjectID == self.ownerObjectID
+    }
+
     var debugDescription: String {
         String(
             format: "%@ %.3f+%.3fs sample %.0f%% frames %d",
@@ -354,13 +364,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static let activeAnalysisStoreLock = NSLock()
     private static var activeAnalysisSessions: [UUID: ActiveHostAnalysisSession] = [:]
     private static var hostAnalysisStartReserved = false
-    private static let stabilizerInfoViewLock = NSLock()
-    private static let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
-    private static var latestStabilizerInfo = "FxPlug \(tokyoWalkingStabilizerVersion)\nNo Analysis"
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
     private let cacheIdentityLock = NSLock()
+    private let stabilizerInfoViewLock = NSLock()
+    private let stabilizerInfoViews = NSHashTable<StabilizerInfoScrollView>.weakObjects()
     private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.TokyoWalkingStabilizer.PersistentCacheMonitor")
     private var lastPublishedStatus = ""
     private var lastPublishedInfo = ""
@@ -368,6 +377,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
+    private var latestStabilizerInfo = "FxPlug \(tokyoWalkingStabilizerVersion)\nNo Analysis"
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
@@ -589,7 +599,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 1))
         }
         let view = StabilizerInfoScrollView()
-        Self.registerStabilizerInfoView(view)
+        registerStabilizerInfoView(view)
         publishStabilizerInfo(force: true)
         return view
     }
@@ -997,7 +1007,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard shouldPublish else {
             return
         }
-        Self.updateStabilizerInfoViews(info)
+        updateStabilizerInfoViews(info)
         guard let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
@@ -1011,7 +1021,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func registerStabilizerInfoView(_ view: StabilizerInfoScrollView) {
+    private func registerStabilizerInfoView(_ view: StabilizerInfoScrollView) {
         stabilizerInfoViewLock.lock()
         stabilizerInfoViews.add(view)
         let info = latestStabilizerInfo
@@ -1019,7 +1029,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         view.infoText = info
     }
 
-    private static func updateStabilizerInfoViews(_ info: String) {
+    private func updateStabilizerInfoViews(_ info: String) {
         stabilizerInfoViewLock.lock()
         latestStabilizerInfo = info
         let views = stabilizerInfoViews.allObjects
@@ -1104,7 +1114,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private func publishAnalysisCallbackStatus(_ analysisStore: StabilizerHostAnalysisStore) {
+    private func publishAnalysisCallbackStatus(
+        _ analysisStore: StabilizerHostAnalysisStore,
+        canPublishCallbackStatus: Bool = true
+    ) {
+        guard canPublishCallbackStatus else {
+            os_log(
+                "Skipped in-progress Host Analysis status publish from a non-owner callback instance.",
+                log: stabilizerHostAnalysisLog,
+                type: .debug
+            )
+            return
+        }
         if hostAnalysisStore.hasCompletedAnalysis {
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
@@ -1116,7 +1137,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private func publishActiveAnalysisProgressIfNeeded(_ analysisStore: StabilizerHostAnalysisStore) {
+    private func publishActiveAnalysisProgressIfNeeded(
+        _ analysisStore: StabilizerHostAnalysisStore,
+        canPublishCallbackStatus: Bool
+    ) {
+        guard canPublishCallbackStatus else {
+            os_log(
+                "Skipped in-progress Host Analysis progress publish from a non-owner callback instance.",
+                log: stabilizerHostAnalysisLog,
+                type: .debug
+            )
+            return
+        }
         let frameCount = analysisStore.frameCount
         statusLock.lock()
         let shouldPublish = frameCount == 1
@@ -1128,7 +1160,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard shouldPublish else {
             return
         }
-        publishAnalysisCallbackStatus(analysisStore)
+        publishAnalysisCallbackStatus(analysisStore, canPublishCallbackStatus: true)
     }
 
     private func startPersistentCacheMonitor() {
@@ -1265,7 +1297,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return ActiveHostAnalysisRoute(
             sessionID: bestCandidate.session.id,
             store: bestCandidate.session.store,
-            sampleSize: bestCandidate.sampleSize
+            sampleSize: bestCandidate.sampleSize,
+            canPublishCallbackStatus: bestCandidate.session.canPublishCallbackStatus(
+                ownerObjectID: ownerObjectID,
+                preferredSessionID: preferredSessionID
+            )
         )
     }
 
@@ -1298,7 +1334,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 Self.hostAnalysisStartReserved = false
             }
             activeAnalyzerSessionID = nil
-            return .resolved(sessionID: session.id, store: session.store, expectedRange: Self.expectedRange(for: session))
+            return .resolved(
+                sessionID: session.id,
+                store: session.store,
+                expectedRange: Self.expectedRange(for: session),
+                canPublishCallbackStatus: true
+            )
         }
 
         let ownerSessions = Self.activeAnalysisSessions.values.filter { $0.ownerObjectID == ownerObjectID }
@@ -1309,17 +1350,31 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 Self.hostAnalysisStartReserved = false
             }
             activeAnalyzerSessionID = nil
-            return .resolved(sessionID: session.id, store: session.store, expectedRange: Self.expectedRange(for: session))
+            return .resolved(
+                sessionID: session.id,
+                store: session.store,
+                expectedRange: Self.expectedRange(for: session),
+                canPublishCallbackStatus: true
+            )
         }
 
         if Self.activeAnalysisSessions.count == 1,
            let session = Self.activeAnalysisSessions.values.first {
+            let canPublishCallbackStatus = session.canPublishCallbackStatus(
+                ownerObjectID: ownerObjectID,
+                preferredSessionID: preferredSessionID
+            )
             Self.activeAnalysisSessions.removeValue(forKey: session.id)
             if Self.activeAnalysisSessions.isEmpty {
                 Self.hostAnalysisStartReserved = false
             }
             activeAnalyzerSessionID = nil
-            return .resolved(sessionID: session.id, store: session.store, expectedRange: Self.expectedRange(for: session))
+            return .resolved(
+                sessionID: session.id,
+                store: session.store,
+                expectedRange: Self.expectedRange(for: session),
+                canPublishCallbackStatus: canPublishCallbackStatus
+            )
         }
 
         if Self.activeAnalysisSessions.isEmpty {
@@ -3167,7 +3222,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: frame) {
             let route = try resolveActiveAnalysisSession(frameTime: frameTime, sourceInfo: frameInfo)
             route.store.rejectProxyAnalysis(reason: rejectionReason)
-            publishAnalysisCallbackStatus(route.store)
+            publishAnalysisCallbackStatus(route.store, canPublishCallbackStatus: route.canPublishCallbackStatus)
             abandonActiveAnalysisAfterFailure(sessionID: route.sessionID)
             throw NSError(
                 domain: "com.justadev.TokyoWalkingStabilizer",
@@ -3179,7 +3234,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let reason = "Host Analysis could not read the original clip size for Sample Size."
             let route = try resolveActiveAnalysisSession(frameTime: frameTime, sourceInfo: nil)
             route.store.rejectProxyAnalysis(reason: reason)
-            publishAnalysisCallbackStatus(route.store)
+            publishAnalysisCallbackStatus(route.store, canPublishCallbackStatus: route.canPublishCallbackStatus)
             abandonActiveAnalysisAfterFailure(sessionID: route.sessionID)
             throw NSError(
                 domain: "com.justadev.TokyoWalkingStabilizer",
@@ -3223,7 +3278,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     analysisFrame.sampleHeight
                 )
             }
-            publishActiveAnalysisProgressIfNeeded(route.store)
+            publishActiveAnalysisProgressIfNeeded(
+                route.store,
+                canPublishCallbackStatus: route.canPublishCallbackStatus
+            )
         } catch {
             abandonActiveAnalysisAfterFailure(sessionID: route.sessionID)
             throw error
@@ -3235,11 +3293,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let sessionID: UUID
         let analysisStore: StabilizerHostAnalysisStore
         let cleanupExpectedRange: HostAnalysisExpectedRange?
+        let canPublishCallbackStatus: Bool
         switch cleanupRoute {
-        case .resolved(let resolvedSessionID, let resolvedStore, let expectedRange):
+        case .resolved(let resolvedSessionID, let resolvedStore, let expectedRange, let resolvedCanPublishCallbackStatus):
             sessionID = resolvedSessionID
             analysisStore = resolvedStore
             cleanupExpectedRange = expectedRange
+            canPublishCallbackStatus = resolvedCanPublishCallbackStatus
         case .failed(let reason):
             NSLog("TokyoWalkingStabilizer: \(reason)")
             os_log("cleanupAnalysis failed: %{public}@", log: stabilizerHostAnalysisLog, type: .error, reason)
@@ -3257,7 +3317,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             }
             try analysisStore.finish()
         } catch {
-            publishAnalysisCallbackStatus(analysisStore)
+            publishAnalysisCallbackStatus(analysisStore, canPublishCallbackStatus: canPublishCallbackStatus)
             abandonActiveAnalysisAfterFailure(sessionID: sessionID)
             throw error
         }
@@ -3274,10 +3334,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         DispatchQueue.main.async {
             Self.runSerialAnalysisQueueDrainPass()
         }
-        schedulePostAnalysisPreviewInvalidationRetries(
-            revision: completedRenderRevision,
-            cacheIdentity: completedCacheIdentity
-        )
+        if canPublishCallbackStatus {
+            schedulePostAnalysisPreviewInvalidationRetries(
+                revision: completedRenderRevision,
+                cacheIdentity: completedCacheIdentity
+            )
+        } else {
+            os_log(
+                "Skipped completed Host Analysis status publish from a non-owner callback instance.",
+                log: stabilizerHostAnalysisLog,
+                type: .debug
+            )
+        }
     }
 }
 
