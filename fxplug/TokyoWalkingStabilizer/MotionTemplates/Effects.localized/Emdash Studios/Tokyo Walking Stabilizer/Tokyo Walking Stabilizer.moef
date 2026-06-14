@@ -173,6 +173,10 @@
 		<target object="10036" channel="./28" name="Far-field Warp Strength"/>
 		<target object="10036" channel="./23" name="Turn Smoothing Strength"/>
 		<target object="10036" channel="./9" name="Turn Detection Window"/>
+		<target object="10036" channel="./37" name="Auto Crop Zoom Speed"/>
+		<target object="10036" channel="./38" name="Auto Crop Zoom Smoothness"/>
+		<target object="10036" channel="./39" name="Auto Crop Position Speed"/>
+		<target object="10036" channel="./40" name="Auto Crop Position Smoothness"/>
 		<target object="10036" channel="./19" name="Sample Size"/>
 		<target object="10036" channel="./27" name="Edge Display Mode"/>
 		<target object="10036" channel="./14" name="Start Host Analysis"/>
@@ -282,12 +286,16 @@
 				<parameter name="Far-field Warp Strength" id="28" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Smoothing Strength" id="23" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Detection Window" id="9" flags="12884901904" default="6" value="6"/>
+				<parameter name="Auto Crop Zoom Speed" id="37" flags="12884901904" default="1" value="1"/>
+				<parameter name="Auto Crop Zoom Smoothness" id="38" flags="12884901904" default="0.35" value="0.35"/>
+				<parameter name="Auto Crop Position Speed" id="39" flags="12884901904" default="1" value="1"/>
+				<parameter name="Auto Crop Position Smoothness" id="40" flags="12884901904" default="0.80" value="0.80"/>
 				<parameter name="Sample Size" id="19" flags="12884901904" default="0" value="0"/>
 				<parameter name="Edge Display Mode" id="27" flags="12884901904" default="0" value="0"/>
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
-					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.60" value="Needs Analysis | FxPlug 0.3.60"/>
+					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.61" value="Needs Analysis | FxPlug 0.3.61"/>
 					<parameter name="Sample Info" id="32" flags="12884901909" default="Sample: 100% | Analysis: -" value="Sample: 100% | Analysis: -"/>
 					<parameter name="Queue" id="36" flags="12884901909" default="Queue: -" value="Queue: -"/>
 				<parameter name="Host Analysis Cache Identity" id="33" flags="12884901906" default="" value=""/>
