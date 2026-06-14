@@ -88,10 +88,11 @@ Keep the plug-in target signed with sandbox and security-scoped file entitlement
 Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped URL. The
 target may also carry a read-only home-relative exception for Final Cut Pro's preference
 plist so the no-media-folder resolver can read `FFActiveLibraries`; this exception must not
-be used to add a shared or out-of-bundle cache path. The debug-signed local build may carry a
-read-write exception for the shared `test_fcp_project/test.fcpbundle` fixture so Codex-driven
-FCP tests can persist Event-scoped caches when Final Cut Pro's active-library bookmark is not
-security-scoped. It may also carry a local read-write exception for the user's external Final
+be used to add a shared or out-of-bundle cache path. The debug-signed local build may carry
+read-write exceptions for shared `test_fcp_project/test.fcpbundle` and
+`test_fcp_project/test-gh6.fcpbundle` fixtures so Codex-driven FCP tests can persist
+Event-scoped caches when Final Cut Pro's active-library bookmark is not security-scoped. It
+may also carry a local read-write exception for the user's external Final
 Cut Pro editing volume when Final Cut Pro stores active-library bookmarks as regular
 bookmarks; this is only to let the sandboxed FxPlug inspect and write Event-scoped cache
 roots inside the active `.fcpbundle`, not to add shared or out-of-bundle cache paths.

@@ -119,6 +119,16 @@ private struct LoadedPersistentHostAnalysisCache {
     let preparedAnalysis: StabilizerPreparedAnalysis
 }
 
+struct StabilizerHostAnalysisInspectorSnapshot {
+    let analysisInfoText: String
+    let requestedSampleScalePercent: Double?
+    let rangeStartSeconds: Double?
+    let rangeEndSeconds: Double?
+    let sampleWidth: Int?
+    let sampleHeight: Int?
+    let frameCount: Int?
+}
+
 final class StabilizerHostAnalysisStore {
     private typealias CompletedHostAnalysisSnapshot = (
         frames: [StabilizerAnalysisFrame],
@@ -215,6 +225,61 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         defer { lock.unlock() }
         return analysisInfoText
+    }
+
+    var inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let preparedFrames = preparedAnalysis?.frames ?? []
+        let frameCount: Int?
+        if !preparedFrames.isEmpty {
+            frameCount = preparedFrames.count
+        } else if !framesByTimeKey.isEmpty {
+            frameCount = framesByTimeKey.count
+        } else {
+            frameCount = nil
+        }
+
+        let preparedSample = preparedFrames.first.map { frame in
+            (width: frame.sampleWidth, height: frame.sampleHeight)
+        }
+        let sourceDerivedSample: (width: Int, height: Int)?
+        if let latestSourceFrameInfo {
+            sourceDerivedSample = AutoStabilizationEstimator.sampleSize(
+                sourceWidth: latestSourceFrameInfo.sourceWidth,
+                sourceHeight: latestSourceFrameInfo.sourceHeight,
+                scalePercent: activeRequestedSampleScalePercent
+            )
+        } else {
+            sourceDerivedSample = nil
+        }
+        let sampleSize = latestSampleSize ?? preparedSample ?? sourceDerivedSample
+
+        let rangeSeconds: (start: Double?, end: Double?)
+        if activeRange.isValid {
+            let startSeconds = CMTimeGetSeconds(activeRange.start)
+            let durationSeconds = CMTimeGetSeconds(activeRange.duration)
+            if startSeconds.isFinite,
+               durationSeconds.isFinite,
+               durationSeconds >= 0.0 {
+                rangeSeconds = (startSeconds, startSeconds + durationSeconds)
+            } else {
+                rangeSeconds = (nil, nil)
+            }
+        } else {
+            rangeSeconds = (nil, nil)
+        }
+
+        return StabilizerHostAnalysisInspectorSnapshot(
+            analysisInfoText: analysisInfoText,
+            requestedSampleScalePercent: activeRequestedSampleScalePercent.isFinite ? activeRequestedSampleScalePercent : nil,
+            rangeStartSeconds: rangeSeconds.start,
+            rangeEndSeconds: rangeSeconds.end,
+            sampleWidth: sampleSize?.width,
+            sampleHeight: sampleSize?.height,
+            frameCount: frameCount
+        )
     }
 
     var activeCacheIdentity: String? {

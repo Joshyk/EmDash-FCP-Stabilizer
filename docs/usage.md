@@ -167,9 +167,9 @@ fallbacks.
   entitlements, and a read-only home-relative exception for Final Cut Pro's preference plist
   so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped
   URL when Final Cut Pro provides one, or read the active library bookmark when Final Cut Pro
-  reports no media folder. The debug-signed bundle also carries an explicit read-write
-  entitlement for the shared local test fixture library so Codex-driven FCP tests can persist
-  Event-scoped caches when Final Cut Pro exposes only a regular active-library bookmark. For
+  reports no media folder. The debug-signed bundle also carries explicit read-write
+  entitlements for the shared local test fixture libraries so Codex-driven FCP tests can
+  persist Event-scoped caches when Final Cut Pro exposes only a regular active-library bookmark. For
   this local editing setup, it also carries a read-write exception for `/Volumes/WDBLUE1TB/`
   so regular active-library bookmarks for external libraries can still be inspected and saved
   inside their Event-scoped `.fcpbundle` cache roots. The

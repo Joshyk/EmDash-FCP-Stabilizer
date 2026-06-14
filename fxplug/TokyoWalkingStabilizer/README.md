@@ -262,8 +262,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   read the active library bookmark when Final Cut Pro reports no media folder. Active library
   bookmarks are resolved with security scope first, then resolved as regular bookmarks with
   visible logs when Final Cut Pro stored a regular bookmark; access is retained only when the
-  resolved URL grants a security-scoped lease. The debug-signed bundle also carries an explicit
-  read-write entitlement for the shared local test fixture library so Codex-driven FCP tests
+  resolved URL grants a security-scoped lease. The debug-signed bundle also carries explicit
+  read-write entitlements for the shared local test fixture libraries so Codex-driven FCP tests
   can persist Event-scoped caches when Final Cut Pro exposes only a regular active-library
   bookmark. For this local editing setup, it also carries a read-write exception for
   `/Volumes/WDBLUE1TB/` so regular active-library bookmarks for external libraries can still

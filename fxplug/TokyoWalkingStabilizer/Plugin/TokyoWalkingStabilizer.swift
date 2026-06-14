@@ -1172,10 +1172,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private func publishStabilizerInfo(
         force: Bool = false,
         state: StabilizerPluginState? = nil,
-        analysisInfoOverride: String? = nil
+        inspectorSnapshotOverride: StabilizerHostAnalysisInspectorSnapshot? = nil
     ) {
-        let analysisInfo = analysisInfoOverride ?? hostAnalysisStore.infoText
-        let info = Self.stabilizerInfoFields(analysisInfo: analysisInfo, state: state)
+        let inspectorSnapshot = inspectorSnapshotOverride ?? hostAnalysisStore.inspectorSnapshot
+        let info = Self.stabilizerInfoFields(inspectorSnapshot: inspectorSnapshot, state: state)
         statusLock.lock()
         let shouldPublish = force
             || info.acceptedSample != lastPublishedAcceptedSampleInfo
@@ -1206,13 +1206,25 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func stabilizerInfoFields(analysisInfo: String, state: StabilizerPluginState?) -> StabilizerInfoFields {
-        let acceptedSample = acceptedSampleDescription(from: analysisInfo)
+    private static func stabilizerInfoFields(inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot, state: StabilizerPluginState?) -> StabilizerInfoFields {
+        let analysisInfo = inspectorSnapshot.analysisInfoText
+        let acceptedSample = inspectorSnapshot.requestedSampleScalePercent.map { "Sample: \(samplePercentDescription($0))" }
+            ?? acceptedSampleDescription(from: analysisInfo)
             ?? state.map { "Sample: \(StabilizerSampleScale.scale(for: $0.sampleScale).displayName)" }
             ?? "Sample: -"
-        let clipRange = state.flatMap { clipRangeDescription(from: $0) }.map { "Clip: \($0)" } ?? "Clip: -"
+        let clipRange = state.flatMap { clipRangeDescription(from: $0) }
+            ?? clipRangeDescription(startSeconds: inspectorSnapshot.rangeStartSeconds, endSeconds: inspectorSnapshot.rangeEndSeconds)
+        let clipRangeInfo = clipRange.map { "Clip: \($0)" } ?? "Clip: -"
         let analysisSample: String
-        if let sample = analysisSampleDescription(from: analysisInfo) {
+        if let sampleWidth = inspectorSnapshot.sampleWidth,
+           let sampleHeight = inspectorSnapshot.sampleHeight {
+            let sample = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
+            if let frameCount = inspectorSnapshot.frameCount {
+                analysisSample = "Analysis: \(sample) \(frameCount)f"
+            } else {
+                analysisSample = "Analysis: \(sample)"
+            }
+        } else if let sample = analysisSampleDescription(from: analysisInfo) {
             if let frames = analysisFrameCountDescription(from: analysisInfo) {
                 analysisSample = "Analysis: \(sample) \(frames)"
             } else {
@@ -1223,10 +1235,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         return StabilizerInfoFields(
             acceptedSample: acceptedSample,
-            clipRange: clipRange,
+            clipRange: clipRangeInfo,
             analysisSample: analysisSample,
             queue: queueDescription(from: analysisInfo)
         )
+    }
+
+    private static func samplePercentDescription(_ percent: Double) -> String {
+        if percent.rounded() == percent {
+            return String(format: "%.0f%%", percent)
+        }
+        return String(format: "%.2f%%", percent)
     }
 
     private static func acceptedSampleDescription(from analysisInfo: String) -> String? {
@@ -1291,6 +1310,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return nil
         }
         return "\(compactSecondsDescription(startSeconds))-\(compactSecondsDescription(startSeconds + durationSeconds))"
+    }
+
+    private static func clipRangeDescription(startSeconds: Double?, endSeconds: Double?) -> String? {
+        guard let startSeconds,
+              let endSeconds,
+              startSeconds.isFinite,
+              endSeconds.isFinite,
+              endSeconds >= startSeconds
+        else {
+            return nil
+        }
+        return "\(compactSecondsDescription(startSeconds))-\(compactSecondsDescription(endSeconds))"
     }
 
     private static func compactSecondsDescription(_ seconds: Double) -> String {
@@ -1363,7 +1394,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
         } else {
             publishHostAnalysisStatus(force: true, statusOverride: analysisStore.statusText)
-            publishStabilizerInfo(force: true, analysisInfoOverride: analysisStore.infoText)
+            publishStabilizerInfo(force: true, inspectorSnapshotOverride: analysisStore.inspectorSnapshot)
             publishRenderRevision(analysisStore.renderInvalidationToken, force: true)
         }
     }
