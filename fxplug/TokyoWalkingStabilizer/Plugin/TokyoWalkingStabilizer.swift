@@ -15,7 +15,7 @@ private enum ParameterID: UInt32 {
     case debugOverlay = 10
     case startHostAnalysis = 14
     case hostAnalysisStatus = 15
-    case acceptedSampleInfo = 32
+    case sampleInfo = 32
     case clearHostAnalysisCache = 17
     case yStrength = 18
     case sampleScale = 19
@@ -27,15 +27,14 @@ private enum ParameterID: UInt32 {
     case strideWobbleYStrength = 30
     case strideWobbleRotationStrength = 31
     case hostAnalysisCacheIdentity = 33
+    // Reserved for deprecated Clip Range and Analysis Sample rows.
     case clipRangeInfo = 34
     case analysisSampleInfo = 35
     case queueInfo = 36
 }
 
 private struct StabilizerInfoFields {
-    let acceptedSample: String
-    let clipRange: String
-    let analysisSample: String
+    let sample: String
     let queue: String
 }
 
@@ -435,9 +434,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private let cacheIdentityLock = NSLock()
     private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.TokyoWalkingStabilizer.PersistentCacheMonitor")
     private var lastPublishedStatus = ""
-    private var lastPublishedAcceptedSampleInfo = ""
-    private var lastPublishedClipRangeInfo = ""
-    private var lastPublishedAnalysisSampleInfo = ""
+    private var lastPublishedSampleInfo = ""
     private var lastPublishedQueueInfo = ""
     private var lastPublishedRenderRevision: Double?
     private var lastPublishedHostAnalysisCacheIdentity: String?
@@ -617,21 +614,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
-            withName: "Accepted Sample",
-            parameterID: ParameterID.acceptedSampleInfo.rawValue,
-            defaultValue: "Sample: 100%",
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
-        )
-        paramAPI.addStringParameter(
-            withName: "Clip Range",
-            parameterID: ParameterID.clipRangeInfo.rawValue,
-            defaultValue: "Clip: -",
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
-        )
-        paramAPI.addStringParameter(
-            withName: "Analysis Sample",
-            parameterID: ParameterID.analysisSampleInfo.rawValue,
-            defaultValue: "Analysis: -",
+            withName: "Sample Info",
+            parameterID: ParameterID.sampleInfo.rawValue,
+            defaultValue: "Sample: 100% | Analysis: -",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
@@ -1178,9 +1163,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let info = Self.stabilizerInfoFields(inspectorSnapshot: inspectorSnapshot, state: state)
         statusLock.lock()
         let shouldPublish = force
-            || info.acceptedSample != lastPublishedAcceptedSampleInfo
-            || info.clipRange != lastPublishedClipRangeInfo
-            || info.analysisSample != lastPublishedAnalysisSampleInfo
+            || info.sample != lastPublishedSampleInfo
             || info.queue != lastPublishedQueueInfo
         statusLock.unlock()
         guard shouldPublish else {
@@ -1190,31 +1173,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return
         }
-        let didSetAcceptedSample = settingAPI.setStringParameterValue(info.acceptedSample, toParameter: ParameterID.acceptedSampleInfo.rawValue)
-        let didSetClipRange = settingAPI.setStringParameterValue(info.clipRange, toParameter: ParameterID.clipRangeInfo.rawValue)
-        let didSetAnalysisSample = settingAPI.setStringParameterValue(info.analysisSample, toParameter: ParameterID.analysisSampleInfo.rawValue)
+        let didSetSample = settingAPI.setStringParameterValue(info.sample, toParameter: ParameterID.sampleInfo.rawValue)
         let didSetQueue = settingAPI.setStringParameterValue(info.queue, toParameter: ParameterID.queueInfo.rawValue)
-        if didSetAcceptedSample && didSetClipRange && didSetAnalysisSample && didSetQueue {
+        if didSetSample && didSetQueue {
             statusLock.lock()
-            lastPublishedAcceptedSampleInfo = info.acceptedSample
-            lastPublishedClipRangeInfo = info.clipRange
-            lastPublishedAnalysisSampleInfo = info.analysisSample
+            lastPublishedSampleInfo = info.sample
             lastPublishedQueueInfo = info.queue
             statusLock.unlock()
         } else {
-            NSLog("TokyoWalkingStabilizer: failed to update one or more Stabilizer Info split parameters.")
+            NSLog("TokyoWalkingStabilizer: failed to update one or more Stabilizer Info parameters.")
         }
     }
 
     private static func stabilizerInfoFields(inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot, state: StabilizerPluginState?) -> StabilizerInfoFields {
         let analysisInfo = inspectorSnapshot.analysisInfoText
-        let acceptedSample = inspectorSnapshot.requestedSampleScalePercent.map { "Sample: \(samplePercentDescription($0))" }
+        let acceptedSample = inspectorSnapshot.requestedSampleScalePercent.map(samplePercentDescription)
             ?? acceptedSampleDescription(from: analysisInfo)
-            ?? state.map { "Sample: \(StabilizerSampleScale.scale(for: $0.sampleScale).displayName)" }
-            ?? "Sample: -"
-        let clipRange = state.flatMap { clipRangeDescription(from: $0) }
-            ?? clipRangeDescription(startSeconds: inspectorSnapshot.rangeStartSeconds, endSeconds: inspectorSnapshot.rangeEndSeconds)
-        let clipRangeInfo = clipRange.map { "Clip: \($0)" } ?? "Clip: -"
+            ?? state.map { StabilizerSampleScale.scale(for: $0.sampleScale).displayName }
+            ?? "-"
         let analysisSample: String
         if let sampleWidth = inspectorSnapshot.sampleWidth,
            let sampleHeight = inspectorSnapshot.sampleHeight {
@@ -1234,9 +1210,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             analysisSample = "Analysis: -"
         }
         return StabilizerInfoFields(
-            acceptedSample: acceptedSample,
-            clipRange: clipRangeInfo,
-            analysisSample: analysisSample,
+            sample: "Sample: \(acceptedSample) | \(analysisSample)",
             queue: queueDescription(from: analysisInfo)
         )
     }
@@ -1252,7 +1226,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisInfo.split(separator: " ").first { token in
             token.hasPrefix("S") && token.hasSuffix("%")
         }.map { token in
-            "Sample: \(token.dropFirst())"
+            String(token.dropFirst())
         }
     }
 
@@ -1298,41 +1272,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return "Queue: Active"
         }
         return "Queue: -"
-    }
-
-    private static func clipRangeDescription(from state: StabilizerPluginState) -> String? {
-        let startSeconds = state.inputRangeStartSeconds
-        let durationSeconds = state.inputRangeDurationSeconds
-        guard startSeconds.isFinite,
-              durationSeconds.isFinite,
-              durationSeconds > 0.0
-        else {
-            return nil
-        }
-        return "\(compactSecondsDescription(startSeconds))-\(compactSecondsDescription(startSeconds + durationSeconds))"
-    }
-
-    private static func clipRangeDescription(startSeconds: Double?, endSeconds: Double?) -> String? {
-        guard let startSeconds,
-              let endSeconds,
-              startSeconds.isFinite,
-              endSeconds.isFinite,
-              endSeconds >= startSeconds
-        else {
-            return nil
-        }
-        return "\(compactSecondsDescription(startSeconds))-\(compactSecondsDescription(endSeconds))"
-    }
-
-    private static func compactSecondsDescription(_ seconds: Double) -> String {
-        var text = String(format: "%.3f", seconds)
-        while text.contains(".") && text.hasSuffix("0") {
-            text.removeLast()
-        }
-        if text.hasSuffix(".") {
-            text.removeLast()
-        }
-        return "\(text)s"
     }
 
     private func publishRenderRevision(_ revision: Double, currentParameterValue: Double? = nil, force: Bool = false) {

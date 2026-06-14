@@ -209,8 +209,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions.
   Options are `100%`, `75%`, `50%`, `25%`, and `10%`; the default is `100%` for full source
   detail. Choose a smaller value only when you want a faster debug pass. Host Analysis reads
-  this value once when the analysis pass starts. The actual pixel size is shown in
-  `Analysis Sample`.
+  this value once when the analysis pass starts. The actual pixel size and frame count are
+  shown in `Sample Info`.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available. The render
@@ -297,16 +297,15 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   in-progress analysis state while a compatible saved cache is already present, the plug-in
   prefers the saved cache and keeps the shared Ready/cache status visible instead of letting
   transient analyzer callback status mask it. When the analyzer callback is the active
-  state, `Host Analysis Status`, `Accepted Sample`, `Clip Range`, `Analysis Sample`, and
-  `Queue` come from that same in-progress analysis store instead of mixing `Analyzing Host
-  Frames (N)` with stale cache metadata from another clip.
-- `Accepted Sample`: read-only Inspector row showing the `Sample Size` accepted when Host
-  Analysis was requested, queued, or started.
-- `Clip Range`: read-only Inspector row showing the current clip start/end time.
-- `Analysis Sample`: read-only Inspector row showing the actual analyzed pixel sample size
-  and frame count when analysis is available. Older saved timeline instances may keep
-  stale saved Inspector strings, so use the compact runtime/source row in `Debug Overlay`
-  to confirm the active render runtime.
+  state, `Host Analysis Status`, `Sample Info`, and `Queue` come from that same in-progress
+  analysis store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata
+  from another clip.
+- `Sample Info`: read-only Inspector row combining the `Sample Size` accepted when Host
+  Analysis was requested, queued, or started with the actual analyzed pixel sample size and
+  frame count when analysis is available. `Clip Range` is deprecated from the visible
+  Inspector metadata. Older saved timeline instances may keep stale saved Inspector strings,
+  so use the compact runtime/source row in `Debug Overlay` to confirm the active render
+  runtime.
 - `Queue`: read-only Inspector row showing the serial queue position as `#N of M` and
   compact queue reason while this clip is waiting. Repeated starts on the same effect
   instance keep only that instance's latest pending request.

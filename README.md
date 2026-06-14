@@ -139,9 +139,9 @@ media, while staying larger than the old compact panel.
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep
 stale saved Inspector strings, `Debug Overlay` is the live render-runtime
-indicator. `Accepted Sample`, `Clip Range`, `Analysis Sample`, and `Queue` split
-the accepted `Sample Size`, current clip start/end time, actual analysis sample
-size, and serial queue position into separate read-only Inspector rows. `Queue`
+indicator. `Sample Info` combines the accepted `Sample Size`, actual analysis
+sample size, and frame count into one read-only Inspector row. `Clip Range` is
+deprecated from the visible Inspector metadata. `Queue`
 uses `#N of M`; repeated Start presses on the same effect instance keep only that
 instance's latest pending request, while other queued clips remain queued. Older
 saved timeline instances may still display stale saved info strings until the

@@ -143,7 +143,7 @@ fallbacks.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%` for full source
   detail; choose a smaller value only when you want a faster debug pass. The actual pixel
-  size is shown in `Analysis Sample`.
+  size and frame count are shown in `Sample Info`.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image.
@@ -231,14 +231,13 @@ fallbacks.
   If Final Cut Pro restores an in-progress analysis state while a compatible saved cache is
   already present, the plug-in prefers the saved cache and keeps the shared Ready/cache
   status visible instead of letting transient analyzer callback status mask it. When the
-  analyzer callback is the active state, `Host Analysis Status`, `Accepted Sample`,
-  `Clip Range`, `Analysis Sample`, and `Queue` come from that same in-progress analysis
-  store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata from another clip.
-- `Accepted Sample`: read-only Inspector row showing the `Sample Size` accepted when Host
-  Analysis was requested, queued, or started.
-- `Clip Range`: read-only Inspector row showing the current clip start/end time.
-- `Analysis Sample`: read-only Inspector row showing the actual analyzed pixel sample size
-  and frame count when analysis is available.
+  analyzer callback is the active state, `Host Analysis Status`, `Sample Info`, and
+  `Queue` come from that same in-progress analysis store instead of mixing
+  `Analyzing Host Frames (N)` with stale cache metadata from another clip.
+- `Sample Info`: read-only Inspector row combining the `Sample Size` accepted when Host
+  Analysis was requested, queued, or started with the actual analyzed pixel sample size and
+  frame count when analysis is available. `Clip Range` is deprecated from the visible
+  Inspector metadata.
 - `Queue`: read-only Inspector row showing the serial queue position as `#N of M` and
   compact queue reason while this clip is waiting. Repeated starts on the same effect
   instance keep only that instance's latest pending request.
