@@ -73,6 +73,17 @@ bookmark candidates when used, bundle root, Event candidates, selected Event, an
 reason with public `os_log` fields. Cache candidates must be validated
 against the current source frame before reuse. Rejected candidates should be visible in
 logs/status and should not be deleted just because they do not match the current clip.
+If `Ready Memory Only - Project Bundle Cache Unavailable` recurs while logs show
+`FxProjectAPI unavailable`, `Active library resolver read 3 active library bookmark(s)`,
+and `Ambiguous active Final Cut libraries`, check Final Cut Pro's `FFActiveLibraries` and
+`FFSidebarModuleLibrary` state before changing cache code. A known recurrence is FCP keeping
+multiple regular/stale active-library bookmarks, such as `test-gh6.fcpbundle`,
+`template.fcpbundle`, and an external editing library, while the sidebar selection contains
+an Event UUID that does not resolve through `CurrentVersion.flexolibrary`. That is an
+environment/active-library ambiguity, not a missing entitlement or a reason to add a shared
+cache fallback. Close the extra libraries or make FCP expose a single unambiguous active
+library/Event, then rerun Host Analysis and verify the Event-scoped
+`Analysis Files/TokyoWalkingStabilizerHostAnalysis/` cache appears.
 `Start Host Analysis` should first reload and use a saved persistent cache when one exists;
 only start a new host analysis when no saved cache can be loaded. If the button callback
 cannot see `FxProjectAPI`, it should still request Host Analysis and let analyzer
