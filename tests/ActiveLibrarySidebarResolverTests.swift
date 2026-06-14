@@ -178,7 +178,8 @@ struct ActiveLibrarySidebarResolver {
         do {
             let markerData = try Data(contentsOf: markerURL)
             for identifier in identifiers {
-                guard markerData.range(of: Data(identifier.utf8)) != nil else {
+                let variants = Set([identifier, identifier.uppercased(), identifier.lowercased()])
+                guard variants.contains(where: { markerData.range(of: Data($0.utf8)) != nil }) else {
                     return (false, "missing \(identifier)")
                 }
             }
@@ -247,7 +248,7 @@ struct ActiveLibrarySidebarResolver {
         SELECT md.ZDICTIONARYDATA
         FROM ZCOLLECTION c
         JOIN ZCOLLECTIONMD md ON c.ZMETADATA = md.Z_PK
-        WHERE c.ZIDENTIFIER = ? AND c.ZTYPE = 'FFEventRecord'
+        WHERE c.ZIDENTIFIER = ? COLLATE NOCASE AND c.ZTYPE = 'FFEventRecord'
         LIMIT 2
         """
         var statement: OpaquePointer?
@@ -616,6 +617,28 @@ func testRangeMatchAbsentUsesSidebarSelectionForUniqueEvent() throws {
     try expectEqual(result.eventRoot.lastPathComponent, "Sidebar Event", "Sidebar Event should be selected when range disambiguation has no match")
 }
 
+func testLowercaseFlexolibraryIdentifiersStillMatchSidebarSelection() throws {
+    let lowercasedLibrary = try fixtures.makeLibrary(
+        name: "LowercaseIdentifiers",
+        libraryIdentifier: selectedLibraryID.lowercased(),
+        events: [
+            FakeEvent(identifier: selectedEventID.lowercased(), relativePath: "Lowercase Event")
+        ]
+    )
+    let sidebarSelection = ActiveLibrarySidebarResolver.SidebarSelection(
+        rawSelection: sidebarRawSelection(libraryID: selectedLibraryID, eventID: selectedEventID),
+        identifiers: [selectedLibraryID, selectedEventID]
+    )
+    let result = try resolver.resolveActiveLibraryEvent(
+        candidates: [lowercasedLibrary],
+        rangeMatchedSelections: [],
+        sidebarSelection: sidebarSelection
+    )
+
+    try expectEqual(result.bundleRoot.path, lowercasedLibrary.path, "Sidebar selection should tolerate lowercased UUID storage in CurrentVersion.flexolibrary")
+    try expectEqual(result.eventRoot.lastPathComponent, "Lowercase Event", "Case-insensitive Event lookup should still read the selected Event relativePath")
+}
+
 func testIgnoresStaleFFImportTargetValuesAndUsesFFSidebarModuleLibrarySelection() throws {
     let currentLibrary = try fixtures.makeLibrary(
         name: "CurrentSidebarLibrary",
@@ -725,6 +748,7 @@ func testProductionSourceDoesNotReintroduceFFImportTargetSelectionHints() throws
 let tests: [(String, () throws -> Void)] = [
     ("sidebar selection matches only the correct flexolibrary and Event relativePath", testSidebarSelectionMatchesOnlyCorrectFlexolibraryAndEventRelativePath),
     ("range match absent uses sidebar selection for a unique Event", testRangeMatchAbsentUsesSidebarSelectionForUniqueEvent),
+    ("lowercase flexolibrary identifiers still match sidebar selection", testLowercaseFlexolibraryIdentifiersStillMatchSidebarSelection),
     ("ignores stale FFImportTarget values and uses FFSidebarModuleLibrary selection", testIgnoresStaleFFImportTargetValuesAndUsesFFSidebarModuleLibrarySelection),
     ("multiple sidebar matches fail visibly", testMultipleSidebarMatchesFailVisibly),
     ("missing Event folder fails visibly", testSidebarSelectionWithMissingEventFolderFailsVisibly),

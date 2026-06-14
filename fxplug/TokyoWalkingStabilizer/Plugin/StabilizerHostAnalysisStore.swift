@@ -246,6 +246,23 @@ final class StabilizerHostAnalysisStore {
         }
     }
 
+    static func clearProjectBundleCacheDirectory(reason: String) {
+        projectCacheDirectoryLock.lock()
+        let hadConfiguredDirectory = projectBundleCacheDirectoryURL != nil
+        let retainedURLs = retainedSecurityScopedProjectURLs
+        projectBundleCacheDirectoryURL = nil
+        projectBundleCacheEventName = nil
+        retainedSecurityScopedProjectURLs = []
+        projectCacheDirectoryLock.unlock()
+        for retainedURL in retainedURLs {
+            retainedURL.stopAccessingSecurityScopedResource()
+        }
+        if hadConfiguredDirectory {
+            NSLog("TokyoWalkingStabilizer: cleared configured Event Host Analysis cache root because \(reason)")
+            bumpPersistentCacheGeneration()
+        }
+    }
+
     private static var currentProjectBundleCacheEventName: String? {
         projectCacheDirectoryLock.lock()
         let eventName = projectBundleCacheEventName

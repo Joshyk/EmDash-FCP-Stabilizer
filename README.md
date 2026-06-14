@@ -278,11 +278,16 @@ resolver starts access to the host-provided media folder before inspecting the l
 then verifies the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` cache root.
 If `FxProjectAPI.mediaFolderURL()` reports that the library has no media folder because it
 was saved without Collect Media, the resolver reads Final Cut Pro's active library bookmarks
-from `FFActiveLibraries`, resolves them without forcing security-scoped bookmark options,
-starts security-scoped access when a resolved URL grants it, and then applies the same Event
-selection rules. If multiple libraries are active, Final Cut Pro's current sidebar or
-import-target UUIDs may disambiguate the bundle only when those identifiers match exactly one
-active library. Multiple active libraries with no unique selected bundle, unreadable
+from `FFActiveLibraries`, tries security-scoped bookmark resolution first, logs when regular
+resolution is used, starts security-scoped access when a resolved URL grants it, and then
+applies the same Event selection rules. If multiple libraries are active, existing Final Cut
+Pro `Analysis Files/Stabilization` range names may disambiguate the Event only when the
+active Host Analysis range matches exactly one Event across active libraries. If no range
+match exists, the resolver may use Final Cut Pro's `FFSidebarModuleLibrary` media sidebar
+selection only when the selection UUIDs match exactly one active library and the selected
+Event UUID resolves through `CurrentVersion.flexolibrary` metadata to an existing top-level
+Event folder. Stale import-target UUIDs are not used. Multiple active libraries with no
+unique selected Event, unreadable
 active-library state, or an unwritable Event cache root remain visible failures; ambiguous active libraries surface as
 `Project Bundle Cache Unavailable - Ambiguous Active Libraries`, and the runtime does not write to a shared fallback. It logs the media folder
 URL, `documentID`, active-library bookmark candidates when used, bundle root, Event
@@ -327,7 +332,8 @@ not prevent a completed prepared path from being saved.
 analysis only when no compatible saved cache can be loaded. If the button
 callback cannot see `FxProjectAPI`, it still asks Final Cut Pro to start Host
 Analysis and lets the analyzer `setupAnalysis` callback resolve the Event cache
-root through either the host media folder or the single active library bookmark. If setup
+root through either the host media folder or Final Cut Pro's active library bookmarks and
+the same Event resolver. If setup
 still cannot resolve a writable Event cache root, the effect
 finishes the active analyzer pass in memory only and shows `Ready Memory Only -
 Project Bundle Cache Unavailable` after completion until a later callback can resolve the
@@ -336,11 +342,15 @@ The installed plug-in bundle is signed with sandbox, security-scoped file
 entitlements, and a read-only home-relative exception for Final Cut Pro's preference plist
 so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped
 URL when Final Cut Pro provides one, or read the active library bookmark when Final Cut Pro
-reports no media folder. Active library bookmarks are resolved as regular bookmarks first,
-then retained with security-scoped access only when the resolved URL grants it.
+reports no media folder. Active library bookmarks are resolved with security scope first,
+then resolved as regular bookmarks with visible logs when Final Cut Pro stored a regular
+bookmark; access is retained only when the resolved URL grants a security-scoped lease.
 The debug-signed bundle also carries an explicit read-write entitlement for the shared
 local test fixture library so the no-media-folder active-library resolver can inspect that
 fixture and persist Event-scoped caches during Codex-driven FCP tests.
+For this local editing setup it also carries a read-write exception for `/Volumes/WDBLUE1TB/`
+so regular active-library bookmarks for external libraries can still be inspected and saved
+inside their Event-scoped `.fcpbundle` cache roots.
 The in-progress Host Analysis session registry is process-wide and contains
 per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
 through different FxPlug instances without losing or mixing the active analysis

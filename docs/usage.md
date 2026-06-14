@@ -156,9 +156,9 @@ fallbacks.
   If the button callback cannot see `FxProjectAPI`, the button still requests Host Analysis
   and lets the analyzer `setupAnalysis` callback resolve the Event cache root. When
   `FxProjectAPI.mediaFolderURL()` reports no media folder for a library saved without Collect
-  Media, the resolver can use Final Cut Pro's single active library bookmark, resolve it
-  without forcing security-scoped bookmark options, start security-scoped access when the
-  resolved URL grants it, and then apply the same Event selection rules. If
+  Media, the resolver can use Final Cut Pro's active library bookmarks, try security-scoped
+  resolution first, log regular-bookmark resolution when needed, start security-scoped access
+  when the resolved URL grants it, and then apply the same Event selection rules. If
   setup still cannot resolve a writable Event cache root,
   the analyzer finishes the active pass in memory
   only and the Inspector shows `Ready Memory Only - Project Bundle Cache Unavailable` after
@@ -169,7 +169,10 @@ fallbacks.
   URL when Final Cut Pro provides one, or read the active library bookmark when Final Cut Pro
   reports no media folder. The debug-signed bundle also carries an explicit read-write
   entitlement for the shared local test fixture library so Codex-driven FCP tests can persist
-  Event-scoped caches when Final Cut Pro exposes only a regular active-library bookmark. The
+  Event-scoped caches when Final Cut Pro exposes only a regular active-library bookmark. For
+  this local editing setup, it also carries a read-write exception for `/Volumes/WDBLUE1TB/`
+  so regular active-library bookmarks for external libraries can still be inspected and saved
+  inside their Event-scoped `.fcpbundle` cache roots. The
   in-progress Host Analysis session registry is process-wide and
   contains per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
   through different FxPlug instances without losing or mixing the active analysis session.
@@ -426,12 +429,16 @@ and only selects a unique match. It starts access to the host-provided media fol
 inspecting the library bundle, then verifies the selected Event by creating the
 `TokyoWalkingStabilizerHostAnalysis` cache root. If the host media folder is unavailable because
 the library was saved without Collect Media, the resolver reads Final Cut Pro's active
-library bookmarks from `FFActiveLibraries`, resolves them without forcing security-scoped
-bookmark options, starts security-scoped access when a resolved URL grants it, and then
-applies the same Event selection rules. If multiple libraries are active, Final Cut Pro's
-current sidebar or import-target UUIDs may disambiguate the bundle only when those identifiers
-match exactly one active library.
-Multiple active libraries with no unique selected bundle, unreadable active-library state, or an unwritable Event cache root
+library bookmarks from `FFActiveLibraries`, tries security-scoped bookmark resolution first,
+logs when regular resolution is used, starts security-scoped access when a resolved URL grants
+it, and then applies the same Event selection rules. If multiple libraries are active,
+existing Final Cut Pro `Analysis Files/Stabilization` range names may disambiguate the Event
+only when the active Host Analysis range matches exactly one Event across active libraries.
+If no range match exists, the resolver may use Final Cut Pro's `FFSidebarModuleLibrary` media
+sidebar selection only when the selection UUIDs match exactly one active library and the
+selected Event UUID resolves through `CurrentVersion.flexolibrary` metadata to an existing
+top-level Event folder. Stale import-target UUIDs are not used.
+Multiple active libraries with no unique selected Event, unreadable active-library state, or an unwritable Event cache root
 remain visible failures; ambiguous active libraries surface as
 `Project Bundle Cache Unavailable - Ambiguous Active Libraries`. Resolver logs include the media folder URL, `documentID`,
 active-library bookmark candidates when used, bundle root, Event candidates, selected Event,

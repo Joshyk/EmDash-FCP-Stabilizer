@@ -16,5 +16,9 @@
 	<array>
 		<string>/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/test.fcpbundle/</string>
 	</array>
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+	<array>
+		<string>/Volumes/WDBLUE1TB/</string>
+	</array>
 </dict>
 </plist>

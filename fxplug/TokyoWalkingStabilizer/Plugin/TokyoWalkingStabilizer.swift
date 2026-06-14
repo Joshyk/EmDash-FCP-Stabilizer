@@ -4,6 +4,7 @@ import Darwin
 import Foundation
 import Metal
 import os.log
+import SQLite3
 import simd
 
 private enum ParameterID: UInt32 {
@@ -676,7 +677,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let expectedRange = currentInputRange()
         hostAnalysisStore.reset()
         let loadedPersistentCache: Bool
-        if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
+        if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
                hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 loadedPersistentCache = true
@@ -702,7 +703,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     @objc(clearHostAnalysisCache)
     func clearHostAnalysisCache() {
         Self.removeQueuedSerialAnalysis(self)
-        guard configureProjectBundleCacheDirectory(expectedRange: currentInputRange()) else {
+        guard configureProjectBundleCacheDirectory(expectedRange: currentInputRange(), forceRefresh: true) else {
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -1478,11 +1479,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     @discardableResult
     private func configureProjectBundleCacheDirectory(
         markUnavailable: Bool = true,
-        expectedRange: HostAnalysisExpectedRange? = nil
+        expectedRange: HostAnalysisExpectedRange? = nil,
+        forceRefresh: Bool = false
     ) -> Bool {
-        if StabilizerHostAnalysisStore.hasConfiguredProjectBundleCacheDirectory {
+        if !forceRefresh,
+           StabilizerHostAnalysisStore.hasConfiguredProjectBundleCacheDirectory {
             _ = hostAnalysisStore.persistCompletedAnalysisIfPossible()
             return true
+        }
+        func clearStaleProjectCacheIfNeeded(reason: String) {
+            if forceRefresh {
+                StabilizerHostAnalysisStore.clearProjectBundleCacheDirectory(reason: reason)
+            }
         }
         if let projectAPI = apiManager.api(for: FxProjectAPI.self) as? FxProjectAPI {
             let projectDocumentID = Self.projectDocumentID(from: projectAPI)
@@ -1502,6 +1510,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         let reason = "FxProjectAPI media folder is not inside a .fcpbundle: \(projectMediaURL.path)"
                         NSLog("TokyoWalkingStabilizer: \(reason)")
                         os_log("Event cache resolver rejected mediaFolderURL %{public}@ because it is not inside a .fcpbundle.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path)
+                        clearStaleProjectCacheIfNeeded(reason: reason)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                         }
@@ -1519,6 +1528,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         let reason = "Ambiguous Event for Host Analysis cache. FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
                         NSLog("TokyoWalkingStabilizer: \(reason)")
                         os_log("Event cache resolver rejected mediaFolderURL %{public}@ in bundle %{public}@ because no unambiguous Event candidate was selected.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path, bundleRoot.path)
+                        clearStaleProjectCacheIfNeeded(reason: reason)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                         }
@@ -1537,6 +1547,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     )
                     if configured {
                         shouldRetainSecurityScopedAccess = didStartAccess
+                    } else {
+                        clearStaleProjectCacheIfNeeded(reason: "Event cache root configuration failed for \(eventResolution.eventRoot.path)")
                     }
                     return configured
                 }
@@ -1547,10 +1559,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     markUnavailable: markUnavailable,
                     expectedRange: expectedRange,
                     triggerReason: reason,
-                    projectDocumentID: projectDocumentID
+                    projectDocumentID: projectDocumentID,
+                    forceRefresh: forceRefresh
                 ) {
                     return true
                 }
+                clearStaleProjectCacheIfNeeded(reason: reason)
                 if markUnavailable {
                     hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                 }
@@ -1564,10 +1578,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         markUnavailable: markUnavailable,
                         expectedRange: expectedRange,
                         triggerReason: reason,
-                        projectDocumentID: projectDocumentID
+                        projectDocumentID: projectDocumentID,
+                        forceRefresh: forceRefresh
                    ) {
                     return true
                 }
+                clearStaleProjectCacheIfNeeded(reason: reason)
                 if markUnavailable {
                     hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                 }
@@ -1581,10 +1597,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 markUnavailable: markUnavailable,
                 expectedRange: expectedRange,
                 triggerReason: reason,
-                projectDocumentID: nil
+                projectDocumentID: nil,
+                forceRefresh: forceRefresh
             ) {
                 return true
             }
+            clearStaleProjectCacheIfNeeded(reason: reason)
             if markUnavailable {
                 hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
             }
@@ -1648,7 +1666,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         markUnavailable: Bool,
         expectedRange: HostAnalysisExpectedRange?,
         triggerReason: String,
-        projectDocumentID: UInt?
+        projectDocumentID: UInt?,
+        forceRefresh: Bool
     ) -> Bool {
         let lookup = Self.activeFinalCutLibraryEventRoot(expectedRange: expectedRange, projectDocumentID: projectDocumentID)
         guard let resolution = lookup.resolution else {
@@ -1661,6 +1680,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 Self.projectDocumentIDDescription(projectDocumentID),
                 lookup.rejectReason
             )
+            if forceRefresh {
+                StabilizerHostAnalysisStore.clearProjectBundleCacheDirectory(reason: reason)
+            }
             if markUnavailable {
                 hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
             }
@@ -1688,6 +1710,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         if !configured {
             resolution.securityScopedURL?.stopAccessingSecurityScopedResource()
+            if forceRefresh {
+                StabilizerHostAnalysisStore.clearProjectBundleCacheDirectory(
+                    reason: "Event cache root configuration failed for \(resolution.eventResolution.eventRoot.path)"
+                )
+            }
         }
         return configured
     }
@@ -1830,14 +1857,23 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let securityScopedURL: URL?
     }
 
-    private struct FCPActiveLibrarySelectionHint {
-        let identifier: String
-        let sourceDescription: String
-    }
-
     private struct FCPActiveLibraryBundleSelection {
         let candidate: FCPActiveLibraryBundleCandidate
         let sourceDescription: String
+    }
+
+    private struct FCPActiveLibraryEventSelection {
+        let candidate: FCPActiveLibraryBundleCandidate
+        let eventResolution: FCPEventRootResolution
+    }
+
+    private struct FCPFinalCutLibrarySidebarSelection {
+        let rawSelection: String
+        let identifiers: [String]
+
+        var eventIdentifier: String? {
+            identifiers.last
+        }
     }
 
     private static func activeFinalCutLibraryEventRoot(
@@ -1868,23 +1904,45 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 sourceDescription: "single Final Cut Pro active library bookmark"
             )
         } else {
-            let hintedSelection = activeFinalCutLibraryBundleSelection(
+            let rangedSelection = activeFinalCutLibraryEventSelection(
                 from: bundleCandidates,
-                selectionHints: activeLibraries.selectionHints
+                expectedRange: expectedRange
             )
-            guard let selection = hintedSelection.selection else {
+            if let selection = rangedSelection.selection {
+                for candidate in bundleCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
+                    candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+                }
+                return (
+                    FCPActiveLibraryEventResolution(
+                        bundleRoot: selection.candidate.bundleRoot,
+                        eventResolution: selection.eventResolution,
+                        securityScopedURL: selection.candidate.securityScopedURL
+                    ),
+                    ""
+                )
+            } else {
+                let sidebarSelection = activeFinalCutLibrarySidebarEventSelection(from: bundleCandidates)
+                if let selection = sidebarSelection.selection {
+                    for candidate in bundleCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
+                        candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+                    }
+                    return (
+                        FCPActiveLibraryEventResolution(
+                            bundleRoot: selection.candidate.bundleRoot,
+                            eventResolution: selection.eventResolution,
+                            securityScopedURL: selection.candidate.securityScopedURL
+                        ),
+                        ""
+                    )
+                }
                 for candidate in bundleCandidates {
                     candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
                 }
                 return (
                     nil,
-                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(hintedSelection.rejectReason)"
+                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(rangedSelection.rejectReason) \(sidebarSelection.rejectReason)"
                 )
             }
-            for candidate in bundleCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
-                candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
-            }
-            selectedBundle = selection
         }
         let bundleCandidate = selectedBundle.candidate
         let bundleRoot = bundleCandidate.bundleRoot
@@ -1898,8 +1956,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             in: bundleRoot,
             expectedRange: expectedRange
         ) else {
+            let sidebarSelection = activeFinalCutLibrarySidebarEventSelection(from: [bundleCandidate])
+            if let selection = sidebarSelection.selection {
+                return (
+                    FCPActiveLibraryEventResolution(
+                        bundleRoot: selection.candidate.bundleRoot,
+                        eventResolution: selection.eventResolution,
+                        securityScopedURL: selection.candidate.securityScopedURL
+                    ),
+                    ""
+                )
+            }
             bundleCandidate.securityScopedURL?.stopAccessingSecurityScopedResource()
-            return (nil, "Ambiguous Event for active Final Cut library \(bundleRoot.path)")
+            return (nil, "Ambiguous Event for active Final Cut library \(bundleRoot.path). \(sidebarSelection.rejectReason)")
         }
         return (
             FCPActiveLibraryEventResolution(
@@ -1914,7 +1983,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
     }
 
-    private static func activeFinalCutLibraryBundleURLs() -> (bundleURLs: [FCPActiveLibraryBundleCandidate], selectionHints: [FCPActiveLibrarySelectionHint], rejectReason: String?) {
+    private static func activeFinalCutLibraryBundleURLs() -> (bundleURLs: [FCPActiveLibraryBundleCandidate], rejectReason: String?) {
         var rejectionReasons: [String] = []
         for preferenceURL in finalCutPreferenceURLs() {
             var isDirectory = ObjCBool(false)
@@ -1935,7 +2004,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     rejectionReasons.append("preferences plist is not a dictionary at \(preferenceURL.path)")
                     continue
                 }
-                let selectionHints = activeFinalCutLibrarySelectionHints(from: plist)
                 guard let bookmarks = plist["FFActiveLibraries"] as? [Data] else {
                     rejectionReasons.append("FFActiveLibraries missing at \(preferenceURL.path)")
                     continue
@@ -1943,49 +2011,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 var resolvedCandidates: [FCPActiveLibraryBundleCandidate] = []
                 var bookmarkRejections: [String] = []
                 for (index, bookmarkData) in bookmarks.enumerated() {
-                    do {
-                        var isStale = false
-                        let url = try URL(
-                            resolvingBookmarkData: bookmarkData,
-                            options: [.withoutUI],
-                            relativeTo: nil,
-                            bookmarkDataIsStale: &isStale
-                        ).standardizedFileURL
-                        guard url.pathExtension == "fcpbundle" else {
-                            bookmarkRejections.append("bookmark \(index) resolved outside .fcpbundle: \(url.path)")
-                            continue
-                        }
-                        if isStale {
-                            os_log(
-                                "Active library resolver accepted stale bookmark %{public}@ from %{public}@; filesystem validation will decide writability.",
-                                log: stabilizerHostAnalysisLog,
-                                type: .default,
-                                url.path,
-                                preferenceURL.path
-                            )
-                        }
-                        let didStartAccess = url.startAccessingSecurityScopedResource()
-                        if didStartAccess {
-                            os_log(
-                                "Active library resolver started security-scoped access for %{public}@.",
-                                log: stabilizerHostAnalysisLog,
-                                type: .default,
-                                url.path
-                            )
-                        } else {
-                            os_log(
-                                "Active library resolver resolved regular active library bookmark %{public}@ without a security-scoped lease; filesystem validation will decide writability.",
-                                log: stabilizerHostAnalysisLog,
-                                type: .default,
-                                url.path
-                            )
-                        }
-                        resolvedCandidates.append(FCPActiveLibraryBundleCandidate(
-                            bundleRoot: url,
-                            securityScopedURL: didStartAccess ? url : nil
-                        ))
-                    } catch {
-                        bookmarkRejections.append("bookmark \(index) could not be resolved: \(error.localizedDescription)")
+                    let resolvedBookmark = resolveActiveFinalCutLibraryBookmark(
+                        bookmarkData,
+                        index: index,
+                        preferenceURL: preferenceURL
+                    )
+                    if let candidate = resolvedBookmark.candidate {
+                        resolvedCandidates.append(candidate)
+                    }
+                    if let rejectReason = resolvedBookmark.rejectReason {
+                        bookmarkRejections.append(rejectReason)
                     }
                 }
                 let uniqueCandidates = uniqueStandardizedBundleCandidates(resolvedCandidates)
@@ -1999,117 +2034,473 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     bookmarkRejections.joined(separator: " | ")
                 )
                 if !uniqueCandidates.isEmpty {
-                    return (uniqueCandidates, selectionHints, nil)
+                    return (uniqueCandidates, nil)
                 }
                 rejectionReasons.append("no usable FFActiveLibraries .fcpbundle bookmark in \(preferenceURL.path): \(bookmarkRejections.joined(separator: " | "))")
             } catch {
                 rejectionReasons.append("preferences unreadable at \(preferenceURL.path): \(error.localizedDescription)")
             }
         }
-        return ([], [], rejectionReasons.joined(separator: " ; "))
+        return ([], rejectionReasons.joined(separator: " ; "))
     }
 
-    private static func activeFinalCutLibraryBundleSelection(
-        from candidates: [FCPActiveLibraryBundleCandidate],
-        selectionHints: [FCPActiveLibrarySelectionHint]
-    ) -> (selection: FCPActiveLibraryBundleSelection?, rejectReason: String) {
-        guard !selectionHints.isEmpty else {
-            return (nil, "No Final Cut Pro sidebar or import-target selection identifiers were available.")
+    private static func resolveActiveFinalCutLibraryBookmark(
+        _ bookmarkData: Data,
+        index: Int,
+        preferenceURL: URL
+    ) -> (candidate: FCPActiveLibraryBundleCandidate?, rejectReason: String?) {
+        let scopedResolution: (url: URL, isStale: Bool)?
+        let scopedErrorDescription: String?
+        do {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ).standardizedFileURL
+            scopedResolution = (url, isStale)
+            scopedErrorDescription = nil
+        } catch {
+            scopedResolution = nil
+            scopedErrorDescription = error.localizedDescription
+            os_log(
+                "Active library resolver could not resolve bookmark %{public}d from %{public}@ with security scope: %{public}@; trying regular resolution because Final Cut Pro may store regular active-library bookmarks.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                index,
+                preferenceURL.path,
+                error.localizedDescription
+            )
         }
 
-        var rejectDetails: [String] = []
-        for hint in selectionHints {
-            let matches = candidates.filter { candidate in
-                activeLibraryBundle(candidate, containsIdentifier: hint.identifier)
+        let resolvedURL: URL
+        let isStale: Bool
+        let resolvedWithSecurityScopeOption: Bool
+        if let scopedResolution {
+            resolvedURL = scopedResolution.url
+            isStale = scopedResolution.isStale
+            resolvedWithSecurityScopeOption = true
+        } else {
+            do {
+                var regularIsStale = false
+                resolvedURL = try URL(
+                    resolvingBookmarkData: bookmarkData,
+                    options: [.withoutUI],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &regularIsStale
+                ).standardizedFileURL
+                isStale = regularIsStale
+                resolvedWithSecurityScopeOption = false
+            } catch {
+                let scopedMessage = scopedErrorDescription.map { " security-scoped error: \($0);" } ?? ""
+                return (
+                    nil,
+                    "bookmark \(index) could not be resolved:\(scopedMessage) regular error: \(error.localizedDescription)"
+                )
             }
-            if matches.count == 1, let match = matches.first {
+        }
+
+        guard resolvedURL.pathExtension == "fcpbundle" else {
+            return (nil, "bookmark \(index) resolved outside .fcpbundle: \(resolvedURL.path)")
+        }
+        if isStale {
+            os_log(
+                "Active library resolver accepted stale bookmark %{public}@ from %{public}@; filesystem validation will decide writability.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                resolvedURL.path,
+                preferenceURL.path
+            )
+        }
+        let didStartAccess = resolvedURL.startAccessingSecurityScopedResource()
+        if didStartAccess {
+            os_log(
+                "Active library resolver started security-scoped access for %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                resolvedURL.path
+            )
+        } else if resolvedWithSecurityScopeOption {
+            os_log(
+                "Active library resolver resolved %{public}@ with security-scope option but did not receive a security-scoped lease; filesystem validation will decide writability.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                resolvedURL.path
+            )
+        } else {
+            os_log(
+                "Active library resolver resolved regular active library bookmark %{public}@ without a security-scoped lease; filesystem validation will decide writability.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                resolvedURL.path
+            )
+        }
+        return (
+            FCPActiveLibraryBundleCandidate(
+                bundleRoot: resolvedURL,
+                securityScopedURL: didStartAccess ? resolvedURL : nil
+            ),
+            nil
+        )
+    }
+
+    private static func activeFinalCutLibraryEventSelection(
+        from candidates: [FCPActiveLibraryBundleCandidate],
+        expectedRange: HostAnalysisExpectedRange?
+    ) -> (selection: FCPActiveLibraryEventSelection?, rejectReason: String) {
+        guard let expectedRange, expectedRange.isValid else {
+            return (nil, "No active Host Analysis range was available to disambiguate active libraries.")
+        }
+
+        var rangeMatches: [FCPActiveLibraryEventSelection] = []
+        var inspectedBundles: [String] = []
+        for candidate in candidates {
+            let bundleRoot = candidate.bundleRoot
+            let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
+            guard FileManager.default.fileExists(atPath: libraryMarkerURL.path) else {
+                inspectedBundles.append("\(bundleRoot.path)(missing CurrentVersion.flexolibrary)")
+                continue
+            }
+
+            let eventRoots = topLevelEventRoots(in: bundleRoot)
+            let analysisFilesEventRoots = eventRootsWithExistingAnalysisFiles(from: eventRoots)
+            let matchedEventRoots = eventRootsMatchingExistingStabilizationAnalysis(
+                expectedRange: expectedRange,
+                in: analysisFilesEventRoots
+            )
+            inspectedBundles.append(
+                "\(bundleRoot.path)(events:\(eventRoots.count), analysisFiles:\(analysisFilesEventRoots.count), stabilizationRangeMatches:\(matchedEventRoots.count))"
+            )
+            for matchedEventRoot in matchedEventRoots {
+                rangeMatches.append(FCPActiveLibraryEventSelection(
+                    candidate: candidate,
+                    eventResolution: FCPEventRootResolution(
+                        eventRoot: matchedEventRoot,
+                        sourceDescription: "active Final Cut libraries FCP Stabilization range match"
+                    )
+                ))
+            }
+        }
+
+        if rangeMatches.count == 1, let match = rangeMatches.first {
+            os_log(
+                "Active library resolver selected bundle %{public}@ Event %{public}@ by cross-library FCP Stabilization range match for %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                match.candidate.bundleRoot.path,
+                match.eventResolution.eventRoot.path,
+                expectedRangeDescription(expectedRange)
+            )
+            return (match, "")
+        }
+        if rangeMatches.isEmpty {
+            return (
+                nil,
+                "No active library Event matched the Host Analysis range. inspected=\(inspectedBundles.joined(separator: " | "))"
+            )
+        }
+        return (
+            nil,
+            "Multiple active library Events matched the Host Analysis range: \(rangeMatches.map { "\($0.candidate.bundleRoot.path) -> \($0.eventResolution.eventRoot.path)" }.joined(separator: " | "))"
+        )
+    }
+
+    private static func activeFinalCutLibrarySidebarEventSelection(
+        from candidates: [FCPActiveLibraryBundleCandidate]
+    ) -> (selection: FCPActiveLibraryEventSelection?, rejectReason: String) {
+        let sidebarLookup = finalCutLibrarySidebarSelection()
+        guard let sidebarSelection = sidebarLookup.selection else {
+            return (nil, "Final Cut Pro library sidebar selection unavailable: \(sidebarLookup.rejectReason)")
+        }
+        guard let eventIdentifier = sidebarSelection.eventIdentifier else {
+            return (nil, "Final Cut Pro library sidebar selection has no Event identifier: \(sidebarSelection.rawSelection)")
+        }
+
+        var matches: [FCPActiveLibraryEventSelection] = []
+        var inspectedBundles: [String] = []
+        for candidate in candidates {
+            let bundleRoot = candidate.bundleRoot
+            let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
+            guard FileManager.default.fileExists(atPath: libraryMarkerURL.path) else {
+                inspectedBundles.append("\(bundleRoot.path)(missing CurrentVersion.flexolibrary)")
+                continue
+            }
+            let markerMatch = libraryMarkerContainsIdentifiers(sidebarSelection.identifiers, markerURL: libraryMarkerURL)
+            guard markerMatch.containsAllIdentifiers else {
+                inspectedBundles.append("\(bundleRoot.path)(sidebarIDs:no: \(markerMatch.rejectReason))")
+                continue
+            }
+
+            let eventLookup = eventRootForEventIdentifier(eventIdentifier, in: bundleRoot)
+            guard let eventRoot = eventLookup.eventRoot else {
+                inspectedBundles.append("\(bundleRoot.path)(sidebarIDs:yes,event:no: \(eventLookup.rejectReason))")
+                continue
+            }
+            inspectedBundles.append("\(bundleRoot.path)(sidebarIDs:yes,event:\(eventRoot.lastPathComponent))")
+            matches.append(FCPActiveLibraryEventSelection(
+                candidate: candidate,
+                eventResolution: FCPEventRootResolution(
+                    eventRoot: eventRoot,
+                    sourceDescription: "Final Cut Pro library sidebar selection"
+                )
+            ))
+        }
+
+        if matches.count == 1, let match = matches.first {
+            os_log(
+                "Active library resolver selected bundle %{public}@ Event %{public}@ by Final Cut Pro library sidebar selection %{public}@ identifiers=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                match.candidate.bundleRoot.path,
+                match.eventResolution.eventRoot.path,
+                sidebarSelection.rawSelection,
+                sidebarSelection.identifiers.joined(separator: ",")
+            )
+            return (match, "")
+        }
+        if matches.isEmpty {
+            return (
+                nil,
+                "No active library matched Final Cut Pro library sidebar selection \(sidebarSelection.rawSelection). inspected=\(inspectedBundles.joined(separator: " | "))"
+            )
+        }
+        return (
+            nil,
+            "Multiple active libraries matched Final Cut Pro library sidebar selection \(sidebarSelection.rawSelection): \(matches.map { "\($0.candidate.bundleRoot.path) -> \($0.eventResolution.eventRoot.path)" }.joined(separator: " | "))"
+        )
+    }
+
+    private static func finalCutLibrarySidebarSelection() -> (selection: FCPFinalCutLibrarySidebarSelection?, rejectReason: String) {
+        var rejectionReasons: [String] = []
+        for preferenceURL in finalCutPreferenceURLs() {
+            var isDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: preferenceURL.path, isDirectory: &isDirectory),
+                  !isDirectory.boolValue
+            else {
+                rejectionReasons.append("preferences missing at \(preferenceURL.path)")
+                continue
+            }
+            do {
+                let data = try Data(contentsOf: preferenceURL)
+                var plistFormat = PropertyListSerialization.PropertyListFormat.binary
+                guard let plist = try PropertyListSerialization.propertyList(
+                    from: data,
+                    options: [],
+                    format: &plistFormat
+                ) as? [String: Any] else {
+                    rejectionReasons.append("preferences plist is not a dictionary at \(preferenceURL.path)")
+                    continue
+                }
+                guard let librarySidebar = plist["FFSidebarModuleLibrary"] as? [String: Any],
+                      let rawSelections = librarySidebar["media sidebar selection"] as? [String],
+                      let rawSelection = rawSelections.first(where: { !$0.isEmpty })
+                else {
+                    rejectionReasons.append("FFSidebarModuleLibrary media sidebar selection missing at \(preferenceURL.path)")
+                    continue
+                }
+                let identifiers = uuidStrings(in: rawSelection)
+                guard identifiers.count >= 2 else {
+                    rejectionReasons.append("FFSidebarModuleLibrary media sidebar selection has fewer than two UUIDs at \(preferenceURL.path): \(rawSelection)")
+                    continue
+                }
                 os_log(
-                    "Active library resolver selected bundle %{public}@ from %{public}@ identifier %{public}@.",
+                    "Active library resolver read Final Cut Pro library sidebar selection %{public}@ from %{public}@.",
                     log: stabilizerHostAnalysisLog,
                     type: .default,
-                    match.bundleRoot.path,
-                    hint.sourceDescription,
-                    hint.identifier
+                    rawSelection,
+                    preferenceURL.path
                 )
                 return (
-                    FCPActiveLibraryBundleSelection(
-                        candidate: match,
-                        sourceDescription: "Final Cut Pro \(hint.sourceDescription) \(hint.identifier)"
+                    FCPFinalCutLibrarySidebarSelection(
+                        rawSelection: rawSelection,
+                        identifiers: identifiers
                     ),
                     ""
                 )
-            }
-            if matches.isEmpty {
-                rejectDetails.append("\(hint.sourceDescription) \(hint.identifier) matched no active library")
-            } else {
-                rejectDetails.append("\(hint.sourceDescription) \(hint.identifier) matched multiple active libraries: \(matches.map(\.bundleRoot.path).joined(separator: " | "))")
+            } catch {
+                rejectionReasons.append("preferences unreadable at \(preferenceURL.path): \(error.localizedDescription)")
             }
         }
-
-        return (nil, "Selection identifiers could not disambiguate active libraries: \(rejectDetails.joined(separator: " ; "))")
+        return (nil, rejectionReasons.joined(separator: " ; "))
     }
 
-    private static func activeLibraryBundle(
-        _ candidate: FCPActiveLibraryBundleCandidate,
-        containsIdentifier identifier: String
-    ) -> Bool {
-        let libraryDatabaseURL = candidate.bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
-        guard let data = try? Data(contentsOf: libraryDatabaseURL, options: [.mappedIfSafe]) else {
-            return false
-        }
-        let normalizedIdentifier = identifier.uppercased()
-        if data.range(of: Data(normalizedIdentifier.utf8)) != nil {
-            return true
-        }
-        return data.range(of: Data(identifier.lowercased().utf8)) != nil
-    }
-
-    private static func activeFinalCutLibrarySelectionHints(from plist: [String: Any]) -> [FCPActiveLibrarySelectionHint] {
-        var hints: [FCPActiveLibrarySelectionHint] = []
-
-        if let sidebar = plist["FFSidebarModuleLibrary"] as? [String: Any],
-           let selections = sidebar["media sidebar selection"] as? [String] {
-            for selection in selections {
-                appendSelectionHints(from: selection, sourceDescription: "sidebar selection", to: &hints)
-            }
-        }
-        if let importTargetEvent = plist["FFImportTargetEvent"] as? String {
-            appendSelectionHints(from: importTargetEvent, sourceDescription: "import target Event", to: &hints)
-        }
-        if let importTargetLibrary = plist["FFImportTargetLibrary"] as? String {
-            appendSelectionHints(from: importTargetLibrary, sourceDescription: "import target library", to: &hints)
-        }
-
-        var seen = Set<String>()
-        return hints.filter { hint in
-            seen.insert("\(hint.sourceDescription):\(hint.identifier)").inserted
-        }
-    }
-
-    private static func appendSelectionHints(
-        from value: String,
-        sourceDescription: String,
-        to hints: inout [FCPActiveLibrarySelectionHint]
-    ) {
-        for identifier in finalCutIdentifierStrings(in: value) {
-            hints.append(FCPActiveLibrarySelectionHint(
-                identifier: identifier,
-                sourceDescription: sourceDescription
-            ))
-        }
-    }
-
-    private static func finalCutIdentifierStrings(in value: String) -> [String] {
+    private static func uuidStrings(in string: String) -> [String] {
         let pattern = #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"#
         guard let expression = try? NSRegularExpression(pattern: pattern) else {
             return []
         }
-        let nsRange = NSRange(value.startIndex..<value.endIndex, in: value)
-        return expression.matches(in: value, range: nsRange).compactMap { match in
-            guard let range = Range(match.range, in: value) else {
+        let range = NSRange(string.startIndex..<string.endIndex, in: string)
+        return expression.matches(in: string, range: range).compactMap { match in
+            guard let matchRange = Range(match.range, in: string) else {
                 return nil
             }
-            return String(value[range]).uppercased()
+            return String(string[matchRange]).uppercased()
+        }
+    }
+
+    private static func libraryMarkerContainsIdentifiers(
+        _ identifiers: [String],
+        markerURL: URL
+    ) -> (containsAllIdentifiers: Bool, rejectReason: String) {
+        do {
+            let markerData = try Data(contentsOf: markerURL)
+            for identifier in identifiers {
+                let variants = Set([identifier, identifier.uppercased(), identifier.lowercased()])
+                guard variants.contains(where: { markerData.range(of: Data($0.utf8)) != nil }) else {
+                    return (false, "missing \(identifier)")
+                }
+            }
+            return (true, "")
+        } catch {
+            return (false, "unreadable CurrentVersion.flexolibrary: \(error.localizedDescription)")
+        }
+    }
+
+    private static func eventRootForEventIdentifier(
+        _ eventIdentifier: String,
+        in bundleRoot: URL
+    ) -> (eventRoot: URL?, rejectReason: String) {
+        let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
+        let metadataLookup = eventMetadataBlobForEventIdentifier(eventIdentifier, libraryMarkerURL: libraryMarkerURL)
+        guard let metadataData = metadataLookup.metadataData else {
+            return (nil, metadataLookup.rejectReason)
+        }
+        let relativePathLookup = eventRelativePath(from: metadataData, eventIdentifier: eventIdentifier)
+        guard let relativePath = relativePathLookup.relativePath else {
+            return (nil, relativePathLookup.rejectReason)
+        }
+        let eventRoot = bundleRoot.appendingPathComponent(relativePath, isDirectory: true).standardizedFileURL
+        let bundleRoot = bundleRoot.standardizedFileURL
+        guard eventRoot.deletingLastPathComponent().standardizedFileURL.path == bundleRoot.path else {
+            return (nil, "selected Event relativePath is not top-level in the active library: \(relativePath)")
+        }
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: eventRoot.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            return (nil, "selected Event root does not exist at \(eventRoot.path)")
+        }
+        let eventMarkerURL = eventRoot.appendingPathComponent("CurrentVersion.fcpevent", isDirectory: false)
+        guard FileManager.default.fileExists(atPath: eventMarkerURL.path) else {
+            return (nil, "selected Event marker is missing at \(eventMarkerURL.path)")
+        }
+        return (eventRoot, "")
+    }
+
+    private static func eventMetadataBlobForEventIdentifier(
+        _ eventIdentifier: String,
+        libraryMarkerURL: URL
+    ) -> (metadataData: Data?, rejectReason: String) {
+        var database: OpaquePointer?
+        let openResult = libraryMarkerURL.path.withCString { path in
+            sqlite3_open_v2(
+                path,
+                &database,
+                SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX,
+                nil
+            )
+        }
+        guard openResult == SQLITE_OK, let database else {
+            let message = sqliteErrorMessage(database)
+            if let database {
+                sqlite3_close(database)
+            }
+            return (nil, "could not open CurrentVersion.flexolibrary read-only at \(libraryMarkerURL.path): \(message)")
+        }
+        defer {
+            sqlite3_close(database)
+        }
+
+        let sql = """
+        SELECT md.ZDICTIONARYDATA
+        FROM ZCOLLECTION c
+        JOIN ZCOLLECTIONMD md ON c.ZMETADATA = md.Z_PK
+        WHERE c.ZIDENTIFIER = ? COLLATE NOCASE AND c.ZTYPE = 'FFEventRecord'
+        LIMIT 2
+        """
+        var statement: OpaquePointer?
+        let prepareResult = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
+        guard prepareResult == SQLITE_OK, let statement else {
+            return (nil, "could not prepare Event metadata lookup: \(sqliteErrorMessage(database))")
+        }
+        defer {
+            sqlite3_finalize(statement)
+        }
+
+        let bindResult = eventIdentifier.withCString { eventIdentifierCString in
+            sqlite3_bind_text(statement, 1, eventIdentifierCString, -1, sqliteTransientDestructor)
+        }
+        guard bindResult == SQLITE_OK else {
+            return (nil, "could not bind Event identifier \(eventIdentifier): \(sqliteErrorMessage(database))")
+        }
+
+        var blobs: [Data] = []
+        while true {
+            let stepResult = sqlite3_step(statement)
+            if stepResult == SQLITE_ROW {
+                let byteCount = Int(sqlite3_column_bytes(statement, 0))
+                guard byteCount > 0,
+                      let bytes = sqlite3_column_blob(statement, 0)
+                else {
+                    return (nil, "Event metadata blob is empty for \(eventIdentifier)")
+                }
+                blobs.append(Data(bytes: bytes, count: byteCount))
+            } else if stepResult == SQLITE_DONE {
+                break
+            } else {
+                return (nil, "could not step Event metadata lookup: \(sqliteErrorMessage(database))")
+            }
+        }
+
+        if blobs.count == 1, let blob = blobs.first {
+            return (blob, "")
+        }
+        if blobs.isEmpty {
+            return (nil, "Event identifier \(eventIdentifier) not found in \(libraryMarkerURL.path)")
+        }
+        return (nil, "Event identifier \(eventIdentifier) matched multiple Event metadata rows in \(libraryMarkerURL.path)")
+    }
+
+    private static var sqliteTransientDestructor: sqlite3_destructor_type {
+        unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    }
+
+    private static func sqliteErrorMessage(_ database: OpaquePointer?) -> String {
+        guard let database,
+              let message = sqlite3_errmsg(database)
+        else {
+            return "unknown SQLite error"
+        }
+        return String(cString: message)
+    }
+
+    private static func eventRelativePath(
+        from metadataData: Data,
+        eventIdentifier: String
+    ) -> (relativePath: String?, rejectReason: String) {
+        do {
+            let allowedClasses: [AnyClass] = [
+                NSDictionary.self,
+                NSMutableDictionary.self,
+                NSString.self,
+                NSNumber.self,
+                NSNull.self
+            ]
+            guard let dictionary = try NSKeyedUnarchiver.unarchivedObject(
+                ofClasses: allowedClasses,
+                from: metadataData
+            ) as? NSDictionary else {
+                return (nil, "Event metadata archive is not a dictionary for \(eventIdentifier)")
+            }
+            guard let relativePath = dictionary["relativePath"] as? String,
+                  !relativePath.isEmpty
+            else {
+                return (nil, "Event metadata archive has no relativePath for \(eventIdentifier)")
+            }
+            return (relativePath, "")
+        } catch {
+            return (nil, "could not unarchive Event metadata for \(eventIdentifier): \(error.localizedDescription)")
         }
     }
 
@@ -2265,17 +2656,27 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         expectedRange: HostAnalysisExpectedRange?,
         in eventRoots: [URL]
     ) -> URL? {
+        let matchedRoots = eventRootsMatchingExistingStabilizationAnalysis(
+            expectedRange: expectedRange,
+            in: eventRoots
+        )
+        return matchedRoots.count == 1 ? matchedRoots[0] : nil
+    }
+
+    private static func eventRootsMatchingExistingStabilizationAnalysis(
+        expectedRange: HostAnalysisExpectedRange?,
+        in eventRoots: [URL]
+    ) -> [URL] {
         guard let expectedRange, expectedRange.isValid else {
-            return nil
+            return []
         }
         let startKey = StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds)
         let endKey = StabilizerHostAnalysisStore.timeKey(expectedRange.endSeconds)
-        let matchedRoots = eventRoots.filter { eventRoot in
+        return eventRoots.filter { eventRoot in
             stabilizationAnalysisDirectoryNames(in: eventRoot).contains { name in
                 stabilizationAnalysisName(name, matchesStartKey: startKey, endKey: endKey)
             }
         }
-        return matchedRoots.count == 1 ? matchedRoots[0] : nil
     }
 
     private static func stabilizationAnalysisDirectoryNames(in eventRoot: URL) -> [String] {
@@ -2709,7 +3110,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             durationSeconds: CMTimeGetSeconds(analysisRange.duration),
             frameDurationSeconds: CMTimeGetSeconds(frameDuration)
         )
-        let configuredProjectCache = configureProjectBundleCacheDirectory(expectedRange: expectedRange.isValid ? expectedRange : nil)
+        let configuredProjectCache = configureProjectBundleCacheDirectory(
+            expectedRange: expectedRange.isValid ? expectedRange : nil,
+            forceRefresh: true
+        )
         let projectCacheUnavailableReason = configuredProjectCache ? nil : hostAnalysisStore.projectCacheUnavailableReasonText
         if !configuredProjectCache {
             NSLog("TokyoWalkingStabilizer: setup Host Analysis will continue in memory because the Event cache root is unavailable.")
@@ -2847,7 +3251,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         do {
-            if !configureProjectBundleCacheDirectory(markUnavailable: true, expectedRange: cleanupExpectedRange),
+            if !configureProjectBundleCacheDirectory(markUnavailable: true, expectedRange: cleanupExpectedRange, forceRefresh: true),
                let projectCacheUnavailableReason = hostAnalysisStore.projectCacheUnavailableReasonText {
                 analysisStore.noteProjectCacheUnavailable(reason: projectCacheUnavailableReason)
             }

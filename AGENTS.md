@@ -34,11 +34,14 @@ the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` cache ro
 `mediaFolderURL()` reports `kFxError_NoMediaFolder` for a Final Cut Pro library saved without
 Collect Media, the runtime may resolve the active Final Cut Pro `.fcpbundle` from
 FCP's `FFActiveLibraries` bookmark list and then run the same Event resolver. Final Cut Pro's
-active-library bookmark may be a regular bookmark rather than a security-scoped bookmark, so
-resolve it without forcing `.withSecurityScope` and then start security-scoped access when the
-resolved URL grants it. If multiple libraries are active, the resolver may use Final Cut Pro's
-current sidebar or import-target UUIDs only when those identifiers match exactly one active
-library bundle; otherwise multiple active
+active-library bookmark may be security-scoped or regular, so try security-scoped resolution
+first, log when regular resolution is used, and start security-scoped access when the resolved
+URL grants it. If multiple libraries are active, the resolver should first use the active
+Host Analysis range and existing Final Cut Pro `Analysis Files/Stabilization` range names to
+select one Event across active libraries. If no range match exists, it may use Final Cut Pro's
+`FFSidebarModuleLibrary` media sidebar selection only when the selection UUIDs match exactly
+one active library and the selected Event UUID resolves through `CurrentVersion.flexolibrary`
+metadata to an existing top-level Event folder; do not use stale import-target UUIDs. Otherwise multiple active
 libraries, unreadable active-library state, or an unwritable selected Event cache root must
 fail visibly as `Project Bundle Cache Unavailable - Ambiguous Active Libraries` instead of
 falling back to a shared location. When multiple
@@ -88,7 +91,10 @@ plist so the no-media-folder resolver can read `FFActiveLibraries`; this excepti
 be used to add a shared or out-of-bundle cache path. The debug-signed local build may carry a
 read-write exception for the shared `test_fcp_project/test.fcpbundle` fixture so Codex-driven
 FCP tests can persist Event-scoped caches when Final Cut Pro's active-library bookmark is not
-security-scoped.
+security-scoped. It may also carry a local read-write exception for the user's external Final
+Cut Pro editing volume when Final Cut Pro stores active-library bookmarks as regular
+bookmarks; this is only to let the sandboxed FxPlug inspect and write Event-scoped cache
+roots inside the active `.fcpbundle`, not to add shared or out-of-bundle cache paths.
 Keep in-progress Host Analysis session state process-wide because Final Cut Pro may call
 setup, frame analysis, and cleanup through different FxPlug instances in the same plug-in
 process. That process-wide state must isolate per-clip in-progress stores; ambiguous
