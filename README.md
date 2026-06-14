@@ -8,21 +8,19 @@ standalone estimator, cache generator, or Transform-keyframe writer.
 
 ## What It Does
 
-`Stabilizer Transform` renders the source clip through Metal and applies
+`Tokyo Walking Stabilizer` renders the source clip through Metal and applies
 automatic stabilization inside the FxPlug render path. It avoids Final Cut Pro's
 built-in Stabilization effect because that effect applies its own internal crop
 and scale.
 
 The effect is designed for outdoor walking shots where the camera is already on
-a gimbal but still has step shock, short wobble, vertical bob, segmented turns,
-and distant ridge-line shake.
+a gimbal but still has step shock, short wobble, segmented turns, and distant
+ridge-line shake.
 
 The main correction stages are:
 
 - `Footstep Jitter`: frame-local X/Y/roll impulse removal for landing shock.
-- `Stride Wobble`: medium-period X/Y/roll cleanup between footstep shock and
-  broad bob.
-- `Walking Bob`: Y-only correction for longer vertical walking bounce.
+- `Stride Wobble`: medium-period X/Y/roll cleanup after footstep shock.
 - `Far-field Warp Strength`: small-clamp deskew, yaw/pitch proxy, and
   perspective trim for distant background shake.
 - `Turn Smoothing`: X-only smoothing for stop-and-go walking turns.
@@ -33,9 +31,9 @@ outside-source pixels.
 
 ## Basic Workflow
 
-1. Apply `Stabilizer Transform` to a clip.
-2. Keep the default `10%` `Sample Size` for a quick debug pass, or choose a
-   larger sample before starting analysis.
+1. Apply `Tokyo Walking Stabilizer` to a clip.
+2. Keep the default `100%` `Sample Size` for full source detail, or choose a
+   smaller sample before starting analysis when you want a quicker debug pass.
 3. Click `Start Host Analysis`.
 4. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 5. Tune the strength controls while watching the preview.
@@ -63,7 +61,7 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript select-playhead-clip
 These actions use Final Cut Pro Accessibility UI scripting. Grant Accessibility
 permission to the app that runs the script. `start-analysis` and
 `toggle-debug-overlay` fail visibly if the selected clip does not have
-`Stabilizer Transform` applied or the Inspector control is not accessible.
+`Tokyo Walking Stabilizer` applied or the Inspector control is not accessible.
 `open-project PROJECT_NAME` opens a named Browser project, `open-selected-project`
 opens the selected Browser project, and `select-playhead-clip` reselects the
 timeline clip under the playhead before analysis. Project open commands select
@@ -74,7 +72,7 @@ repeated AppleScript clicks in Final Cut Pro.
 
 `Sample Size` is read once when analysis starts. It is always derived from the
 original clip dimensions, with `100%`, `75%`, `50%`, `25%`, and `10%` options.
-The default is `10%` so Debug Overlay tuning can start quickly. Long clips keep
+The default is `100%`; choose a smaller value only when you want a faster debug pass. Long clips keep
 the requested percentage instead of silently lowering it.
 
 `Overall Strength` controls the full automatic transform. Setting it to `0`
@@ -93,20 +91,19 @@ frame's impulse relative to surrounding footstep noise. Moderate landing impulse
 useful confidence a little sooner, while zero evidence and noisy unsupported frames still
 produce zero correction. The surrounding-noise floor is capped below the full-response point
 so repeated walking motion does not bury a real center-frame landing shock.
-FJIT, SWOB, and BOB use a walking-band tracking gate that slightly eases block coverage only
+FJIT and SWOB use a walking-band tracking gate that slightly eases block coverage only
 when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
 avoid swimming or false turn smoothing.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
 strengths. It is measured from the footstep-cleaned path, then longer Turn
-Smoothing and Walking Bob bands are measured from the stride-smoothed path so
-the same motion is not removed twice. It does not use the raw or jerk-limited
+Smoothing is measured from the stride-smoothed path so the same motion is not
+removed twice. It does not use the raw or jerk-limited
 broad path as its band input. Its residual gate uses robust window percentiles
 instead of letting a single bad frame suppress the whole band. Medium stride
 bands reach full confidence earlier than the broad UI scale so real walking
-follow-through is not left entirely to the longer Walking Bob pass; the Y default
-is `0.70`, high enough to remove medium vertical step wobble before the broader BOB pass.
+follow-through is corrected by the stride stage; the Y default is `0.70`.
 The rotation default is `0.2` to protect the horizon.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
@@ -116,15 +113,6 @@ Y or roll, and is soft-limited to a small output-edge budget during render.
 fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
-
-`Walking Bob` uses a fixed internal `2.5` second Y-only baseline for the remaining
-vertical walking bounce after Footstep Jitter and Stride Wobble. The shorter window keeps
-BOB from turning weak vertical evidence into a slow image wave. The Inspector
-exposes only `Walking Bob Removal`; it does not gate or weaken Footstep Jitter Y.
-Its confidence uses current tracking quality, symmetric window support, robust
-residuals, and actual Y-band magnitude so weak tracking, one-sided clip-edge
-windows, or tiny vertical bands do not create large vertical waves. The default
-removal is `0.75`.
 
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
@@ -140,8 +128,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R339` means FxPlug `0.3.39`
-is rendering original/optimized frames, and `P339` means proxy playback is using
+active render runtime and current source mode: `R358` means FxPlug `0.3.58`
+is rendering original/optimized frames, and `P358` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
@@ -193,6 +181,11 @@ busy/requested state. Final Cut Pro's own analysis state remains the authority
 before any queued request can start. The queue stores the `FxAnalysisAPI` obtained
 when Start was pressed, so retry passes do not drop the request just because the
 API cannot be reacquired from a later callback context.
+When Final Cut Pro cannot provide a writable Event cache root, completed
+memory-only analyses are retained by analyzed timeline range plus sample/fingerprint
+identity in the plug-in process, so a later queued clip does not discard stabilization
+for an earlier clip or collide with another clip that has the same source-time range
+in the same viewer session.
 Preview/render and plug-in state callbacks check the persistent cache signature,
 so a queued clip that completes in a different FxPlug process can replace an
 older prepared path and update the hidden render revision without requiring
@@ -234,8 +227,8 @@ render time.
 Render-time smoothing samples neighboring render times symmetrically across a
 `1.20` second zero-phase window and blends the automatic transform. At clip
 edges it averages only in-range neighboring samples instead of duplicating the
-first or last analysis frame. It smooths Stride Wobble, Walking Bob, and Turn
-Smoothing bands without averaging away the current frame's Footstep Jitter
+first or last analysis frame. It smooths Stride Wobble and Turn Smoothing bands
+without averaging away the current frame's Footstep Jitter
 impulse. Far-field Warp uses a separate short `0.36` second in-range smoothing
 window so distant ridge-line correction stays responsive without amplifying
 single-frame gate flicker. Render-time frame lookup uses the sorted Host Analysis
@@ -254,6 +247,12 @@ range, the same render callback drops it and reloads a compatible saved cache
 before giving up, then keeps the hidden preview revision, `Host Analysis Status`,
 and `Stabilizer Info` current so Final Cut Pro shows the stabilized proxy preview
 and reports `Proxy Preview`.
+If Final Cut Pro reports a render/timeline range that differs from the saved
+source analysis range, the render path accepts that active cache only after the
+current source-frame fingerprint validates against the saved frame set. During
+scaled/proxy playback, where that original-frame validation is not available, a
+range-mismatched cache is used for preview only when its saved start matches the
+current clip and the current render time is inside the saved analysis range.
 When original-media validation has mapped a trimmed timeline render time back to
 the analyzed source time, that offset is saved with the Host Analysis cache identity
 so a separate proxy render instance can sample the same prepared motion path.
@@ -272,22 +271,41 @@ media to see the stabilized source frame.
 Completed Host Analysis is written inside the active Final Cut Pro library bundle, scoped to
 the Event that owns the current project/media folder. If Final Cut Pro reports a library temp
 folder instead of an Event folder, the runtime uses an unambiguous top-level Event resolver,
-such as the single Event that already has Final Cut Pro `Analysis Files`. The resolver starts
-access to the host-provided media folder before inspecting the library bundle, then verifies
-the selected Event by creating the `StabilizerFxPlugHostAnalysis` cache root. It fails visibly
-when the Event remains ambiguous or that directory cannot be created. The cache root lives
+such as the single Event that already has Final Cut Pro `Analysis Files`. If multiple Events
+have `Analysis Files`, the resolver compares the active Host Analysis range against Final Cut
+Pro `Analysis Files/Stabilization` range folder names and only selects a unique match. The
+resolver starts access to the host-provided media folder before inspecting the library bundle,
+then verifies the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` cache root.
+If `FxProjectAPI.mediaFolderURL()` reports that the library has no media folder because it
+was saved without Collect Media, the resolver reads Final Cut Pro's active library bookmarks
+from `FFActiveLibraries`, tries security-scoped bookmark resolution first, logs when regular
+resolution is used, starts security-scoped access when a resolved URL grants it, and then
+applies the same Event selection rules. If multiple libraries are active, existing Final Cut
+Pro `Analysis Files/Stabilization` range names may disambiguate the Event only when the
+active Host Analysis range matches exactly one Event across active libraries. If no range
+match exists, the resolver may use Final Cut Pro's `FFSidebarModuleLibrary` media sidebar
+selection only when the selection UUIDs match exactly one active library and the selected
+Event UUID resolves through `CurrentVersion.flexolibrary` metadata to an existing top-level
+Event folder. Stale import-target UUIDs are not used. Multiple active libraries with no
+unique selected Event, unreadable
+active-library state, or an unwritable Event cache root remain visible failures; ambiguous active libraries surface as
+`Project Bundle Cache Unavailable - Ambiguous Active Libraries`, and the runtime does not write to a shared fallback. It logs the media folder
+URL, `documentID`, active-library bookmark candidates when used, bundle root, Event
+candidates, selected Event, and rejection reason with public `os_log` fields. It fails
+visibly as `Project Bundle Cache Unavailable - Ambiguous Event` when the Event remains
+ambiguous. The cache root lives
 under that Event's `Analysis Files` directory so analysis files stay unique to the Event and
 do not appear as top-level library content:
 
 ```text
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-index-v2.json
-<active library>.fcpbundle/<event>/Analysis Files/StabilizerFxPlugHostAnalysis/caches/
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-index-v2.json
+<active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/caches/
 ```
 
-Older top-level bundle caches at `<active library>.fcpbundle/StabilizerFxPlugHostAnalysis/`
+Older top-level bundle caches at `<active library>.fcpbundle/TokyoWalkingStabilizerHostAnalysis/`
 and older internal bundle caches at
-`<active library>.fcpbundle/__.fcpdata.apple.com/StabilizerFxPlugHostAnalysis/` are moved into
+`<active library>.fcpbundle/__.fcpdata.apple.com/TokyoWalkingStabilizerHostAnalysis/` are moved into
 the Event `Analysis Files` cache root when the effect configures the active Event cache.
 
 If the runtime cannot resolve a writable Event cache root, the effect shows
@@ -295,9 +313,12 @@ If the runtime cannot resolve a writable Event cache root, the effect shows
 library-wide cache. During a live Final Cut Pro Host Analysis callback, the analyzer can
 still finish the current session in memory and show
 `Ready Memory Only - Project Bundle Cache Unavailable`; that result is usable for the current
-viewer/render session but is not persisted for future reuse.
-Range-specific files under `caches/` include the analyzed range, actual
-`sampleWidth`/`sampleHeight`, frame count, and frame fingerprints in the filename.
+viewer/render session but is not persisted to any shared or out-of-bundle location. If the
+Event cache root becomes available later, the completed in-memory analysis is saved into that
+Event cache and the Inspector returns to ordinary `Ready (...)` status.
+Range-specific files under `caches/` include a readable clip label when available, analyzed
+start/end, actual `sampleWidth`/`sampleHeight`, frame count, and representative frame
+fingerprints in the filename.
 `host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
 cache.
 
@@ -311,12 +332,25 @@ not prevent a completed prepared path from being saved.
 analysis only when no compatible saved cache can be loaded. If the button
 callback cannot see `FxProjectAPI`, it still asks Final Cut Pro to start Host
 Analysis and lets the analyzer `setupAnalysis` callback resolve the Event cache
-root. If setup still cannot resolve a writable Event cache root, the effect
+root through either the host media folder or Final Cut Pro's active library bookmarks and
+the same Event resolver. If setup
+still cannot resolve a writable Event cache root, the effect
 finishes the active analyzer pass in memory only and shows `Ready Memory Only -
-Project Bundle Cache Unavailable` after completion. It must not delete saved cache files.
-The installed plug-in bundle is signed with sandbox and security-scoped file
-entitlements so the Host Analysis runtime can open the
-`FxProjectAPI.mediaFolderURL()` security-scoped URL.
+Project Bundle Cache Unavailable` after completion until a later callback can resolve the
+Event cache root and save the completed result. It must not delete saved cache files.
+The installed plug-in bundle is signed with sandbox, security-scoped file
+entitlements, and a read-only home-relative exception for Final Cut Pro's preference plist
+so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped
+URL when Final Cut Pro provides one, or read the active library bookmark when Final Cut Pro
+reports no media folder. Active library bookmarks are resolved with security scope first,
+then resolved as regular bookmarks with visible logs when Final Cut Pro stored a regular
+bookmark; access is retained only when the resolved URL grants a security-scoped lease.
+The debug-signed bundle also carries an explicit read-write entitlement for the shared
+local test fixture library so the no-media-folder active-library resolver can inspect that
+fixture and persist Event-scoped caches during Codex-driven FCP tests.
+For this local editing setup it also carries a read-write exception for `/Volumes/WDBLUE1TB/`
+so regular active-library bookmarks for external libraries can still be inspected and saved
+inside their Event-scoped `.fcpbundle` cache roots.
 The in-progress Host Analysis session registry is process-wide and contains
 per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
 through different FxPlug instances without losing or mixing the active analysis
@@ -347,8 +381,8 @@ cache file changes and reload validated candidates on demand.
 
 ## Diagnostics
 
-`Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `BOB`, `WARP`, `TURN`,
-live `F Q`/`S Q`/`B Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `SHRP`, `RES`, and
+`Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`,
+live `F Q`/`S Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `SHRP`, `RES`, and
 search-radius `HIT`, `WLK`, and compact runtime/source bars. Labels use raw English control/diagnostic abbreviations;
 do not translate them in the preview.
 
@@ -359,20 +393,18 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `ROLL`: final automatic roll/rotation correction.
 - `FJIT`: Footstep Jitter correction activity from the fixed second-based impulse range.
 - `SWOB`: Stride Wobble correction activity from the fixed internal stride-wobble window.
-- `BOB`: Y-only Walking Bob correction.
 - `WARP`: Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim.
 - `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
 - `SMTH`: render-time temporal smoothing delta.
 - `F Q`: Footstep Jitter confidence.
 - `S Q`: Stride Wobble confidence.
-- `B Q`: Walking Bob confidence.
 - `W Q`: applied Far-field Warp confidence after tracking and search-radius safety gates.
 - `T Q`: Turn Smoothing confidence.
 - `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
 - `SHRP`: frame sharpness/clarity quality; higher means less blur.
 - `RES`: residual quality; higher means lower block-matching residual/error.
 - `HIT`: search-radius headroom quality; higher means fewer searches hit the radius edge.
-- `WLK`: count-aware walking-band tracking quality used by FJIT, SWOB, and BOB.
+- `WLK`: count-aware walking-band tracking quality used by FJIT and SWOB.
 
 `TRK`, `SHRP`, `RES`, and `HIT` are all aligned as quality signals: high is good, low is bad.
 
@@ -382,7 +414,6 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `track q` and `walk q`.
 - `footstep q` and effective Footstep Jitter X/Y/R strength.
 - `stride q` and effective Stride Wobble X/Y/R strength.
-- `bob q`.
 - `turn q`.
 - `warp q`.
 - Tracking and motion confidence.
@@ -390,7 +421,7 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - Search-radius edge-hit counts.
 - Current warp shape values.
 
-Values above `1.0` on Footstep, Stride, and Bob controls boost low-confidence
+Values above `1.0` on Footstep and Stride controls boost low-confidence
 corrections with a curved confidence response. Those walking-band controls use a
 more assertive medium-confidence response than TURN and WARP, but still have no
 hidden minimum confidence floor: zero confidence produces zero correction.
@@ -401,8 +432,8 @@ Use the local feedback CLI when reviewing notes like `at 5 sec there is a
 notable unremoved shake` against a saved Host Analysis cache:
 
 ```sh
-fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
-  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis/host-analysis-v2.json" \
+fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh \
+  --cache "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis/host-analysis-v2.json" \
   --time 5.0 \
   --note "notable unremoved shake"
 ```
@@ -411,25 +442,25 @@ fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh \
 in the cache. With `--time`, the CLI reports the highest-score frame inside the
 requested `--window` and prints the selected clip time separately from the
 requested note time. For bundle-local caches, pass
-`--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"` or
+`--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache /path/to/host-analysis-v2.json`. Use `--json` for machine-readable output,
 `--turn-window` to match a non-default Inspector `Turn Detection Window`, and
 `--output-size 1920x1080` when you want pixel estimates scaled to a target preview size.
 
-Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/StabilizerFxPlugHostAnalysis"`
+Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"`
 to list the latest bundle cache and range-specific cache files. It reports each file as
 `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing or deleting
 anything.
 
-The report prints `FJIT`, `SWOB`, `BOB`, `WARP`, and `TURN` in render-stage order
+The report prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order
 bands using the saved prepared paths, tracking confidence, residuals, blur,
 block coverage, and search-radius edge-hit counts, while the summary line names
 the highest remaining band. The band split mirrors the render path: `FJIT` is
-measured first against the outer-frame baseline, then `SWOB`, `BOB`, and `TURN`
+measured first against the outer-frame baseline, then `SWOB` and `TURN`
 are measured from the footstep-cleaned path. `WARP`
 uses the same local baseline/gate inputs that are then short-smoothed in render,
 and the report includes strict tracking, walking-band tracking, FJIT and SWOB
-per-axis confidence, BOB tracking/window support, residual, blur, block
+per-axis confidence, residual, blur, block
 coverage, edge quality, stable WARP tracking support, and WARP tracking/edge
 gate values so over- or under-gating is visible. If a cache has mismatched
 frame/path array counts, the CLI fails explicitly and asks for a new Host
@@ -441,22 +472,22 @@ Build the wrapper app and embedded FxPlug:
 
 ```sh
 xcodebuild \
-  -project fxplug/StabilizerFxPlug/StabilizerFxPlug.xcodeproj \
-  -scheme StabilizerFxPlug \
+  -project fxplug/TokyoWalkingStabilizer/TokyoWalkingStabilizer.xcodeproj \
+  -scheme TokyoWalkingStabilizer \
   -configuration Debug \
-  -derivedDataPath /tmp/StabilizerFxPlugDerived \
+  -derivedDataPath /tmp/TokyoWalkingStabilizerDerived \
   build
 ```
 
 The shared scheme installs each successful Debug build to:
 
 ```text
-/Applications/StabilizerFxPlug.app
+/Applications/TokyoWalkingStabilizer.app
 ```
 
 It also installs the Motion Template under the user's Movies Motion Templates
 folder and registers the embedded FxPlug with PluginKit. Debug installs remove
-stale `Stabilizer Transform copy...` Motion Template folders from the
+stale `Tokyo Walking Stabilizer copy...` Motion Template folders from the
 `Emdash Studios` group so Finder-created duplicates do not appear as extra
 effects in Final Cut Pro.
 
@@ -468,8 +499,8 @@ object and cause `P1000307` helper communication errors.
 Verify registration:
 
 ```sh
-pluginkit -m -A -p FxPlug -i com.justadev.StabilizerFxPlug.Plugin
-codesign --verify --deep --strict /Applications/StabilizerFxPlug.app
+pluginkit -m -A -p FxPlug -i com.justadev.TokyoWalkingStabilizer.Plugin
+codesign --verify --deep --strict /Applications/TokyoWalkingStabilizer.app
 ```
 
 Open Final Cut Pro after the build/install step completes.

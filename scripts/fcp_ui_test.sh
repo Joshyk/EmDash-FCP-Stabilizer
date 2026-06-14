@@ -4,9 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PARENT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 FCP_HELPER="${PARENT_DIR}/scripts/fcp_stabilizer_shortcuts.applescript"
+FCP_BATCH_HELPER="${ROOT_DIR}/scripts/fcp_batch_stabilizer.applescript"
 TEST_LIBRARY="${PARENT_DIR}/test_fcp_project/test.fcpbundle"
-CACHE_ROOT="${TEST_LIBRARY}/test/Analysis Files/StabilizerFxPlugHostAnalysis"
-FEEDBACK_TOOL="${ROOT_DIR}/fxplug/StabilizerFxPlug/scripts/stabilizer_feedback.sh"
+CACHE_ROOT="${TEST_LIBRARY}/test/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
+FEEDBACK_TOOL="${ROOT_DIR}/fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh"
 
 usage() {
 	cat <<'USAGE'
@@ -21,14 +22,23 @@ Commands:
   open-test-library         Open the shared Final Cut Pro test library.
   focus-inspector           Reveal or focus the Final Cut Pro Inspector.
   dump-front-window         Print the accessible tree for the front FCP window.
-  apply-selected            Apply Stabilizer Transform to the selected clip.
+  apply-selected            Apply Tokyo Walking Stabilizer to the selected clip.
   enable-debug              Turn Debug Overlay on for the selected effect.
   disable-debug             Turn Debug Overlay off for the selected effect.
   start-analysis            Press Start Host Analysis for the selected effect.
+  set-sample-size PERCENT   Set selected clip's Stabilizer Sample Size.
+  start-analysis-at-sample PERCENT
+                            Set Sample Size, then press Start Host Analysis.
   analyze-selected          Enable Debug Overlay, then press Start Host Analysis.
   apply-and-analyze-selected
                             Apply the effect, enable Debug Overlay, then start analysis.
                             Use only on a fresh selected clip to avoid duplicate effects.
+  queue-open-timeline-clips PERCENT [MAX_CLIPS]
+                            Walk the open timeline from the beginning and start/queue
+                            Stabilizer Host Analysis on clips with accessible controls.
+  queue-current-event-compounds PERCENT [MAX_ITEMS] [MAX_CLIPS_PER_ITEM]
+                            Open visible Browser items in the current Event and queue
+                            their timeline clips. Select the first visible compound first.
   clear-browser-search      Clear the visible FCP Browser search field.
   open-selected-project     Open the selected FCP Browser project row/thumbnail.
   open-project NAME         Open the named FCP Browser project in the selected Event.
@@ -65,10 +75,13 @@ run_helper() {
 
 env_check() {
 	require_file "$FCP_HELPER"
+	require_file "$FCP_BATCH_HELPER"
 	require_dir "$TEST_LIBRARY"
 	require_file "$FEEDBACK_TOOL"
 	/usr/bin/osacompile -o /tmp/fcp_stabilizer_shortcuts.codex.scpt "$FCP_HELPER"
+	/usr/bin/osacompile -o /tmp/fcp_batch_stabilizer.codex.scpt "$FCP_BATCH_HELPER"
 	printf 'shared helper: %s\n' "$FCP_HELPER"
+	printf 'batch helper: %s\n' "$FCP_BATCH_HELPER"
 	printf 'test library: %s\n' "$TEST_LIBRARY"
 	printf 'cache root: %s\n' "$CACHE_ROOT"
 	printf 'feedback tool: %s\n' "$FEEDBACK_TOOL"
@@ -108,6 +121,37 @@ disable_debug() {
 
 start_analysis() {
 	run_helper start-analysis
+}
+
+run_batch_helper() {
+	require_file "$FCP_BATCH_HELPER"
+	/usr/bin/osascript "$FCP_BATCH_HELPER" "$@"
+}
+
+set_sample_size() {
+	local sample_percent="${1:-}"
+	[[ -n "$sample_percent" ]] || fail "set-sample-size requires a percentage, for example: scripts/fcp_ui_test.sh set-sample-size 50"
+	run_batch_helper set-sample-size "$sample_percent"
+}
+
+start_analysis_at_sample() {
+	local sample_percent="${1:-}"
+	[[ -n "$sample_percent" ]] || fail "start-analysis-at-sample requires a percentage, for example: scripts/fcp_ui_test.sh start-analysis-at-sample 50"
+	run_batch_helper start-analysis-at-sample "$sample_percent"
+}
+
+queue_open_timeline_clips() {
+	local sample_percent="${1:-}"
+	[[ -n "$sample_percent" ]] || fail "queue-open-timeline-clips requires a percentage, for example: scripts/fcp_ui_test.sh queue-open-timeline-clips 50"
+	shift || true
+	run_batch_helper queue-open-timeline-clips "$sample_percent" "$@"
+}
+
+queue_current_event_compounds() {
+	local sample_percent="${1:-}"
+	[[ -n "$sample_percent" ]] || fail "queue-current-event-compounds requires a percentage, for example: scripts/fcp_ui_test.sh queue-current-event-compounds 50"
+	shift || true
+	run_batch_helper queue-current-event-compounds "$sample_percent" "$@"
 }
 
 analyze_selected() {
@@ -172,6 +216,18 @@ case "$command_name" in
 		;;
 	start-analysis)
 		start_analysis
+		;;
+	set-sample-size)
+		set_sample_size "$@"
+		;;
+	start-analysis-at-sample)
+		start_analysis_at_sample "$@"
+		;;
+	queue-open-timeline-clips)
+		queue_open_timeline_clips "$@"
+		;;
+	queue-current-event-compounds)
+		queue_current_event_compounds "$@"
 		;;
 	analyze-selected)
 		analyze_selected
