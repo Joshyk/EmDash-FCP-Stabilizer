@@ -128,8 +128,8 @@ suppressed instead of producing a wavy image.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R357` means FxPlug `0.3.57`
-is rendering original/optimized frames, and `P357` means proxy playback is using
+active render runtime and current source mode: `R358` means FxPlug `0.3.58`
+is rendering original/optimized frames, and `P358` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
 The overlay scales from the current render output with a lower proxy minimum so
