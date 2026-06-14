@@ -3192,13 +3192,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             throw hostAnalysisRoutingError("Stabilizer Host Analysis session could not derive a sample size for the current clip frame.")
         }
         do {
-            let analysisFrame = try AutoStabilizationEstimator.analysisFrame(
-                from: frame,
+            guard let analysisFrame = try route.store.append(
+                frame,
                 at: frameTime,
-                sampleWidth: sampleSize.width,
-                sampleHeight: sampleSize.height
-            )
-            try route.store.append(analysisFrame, sourceInfo: frameInfo)
+                sampleSize: sampleSize,
+                sourceInfo: frameInfo
+            ) else {
+                return
+            }
             recordActiveAnalysisFrameAccepted(
                 sessionID: route.sessionID,
                 frameTime: frameTime,

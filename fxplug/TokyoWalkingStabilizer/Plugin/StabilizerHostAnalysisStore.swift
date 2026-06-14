@@ -570,6 +570,51 @@ final class StabilizerHostAnalysisStore {
         lock.unlock()
     }
 
+    func append(_ tile: FxImageTile, at frameTime: CMTime, sampleSize: (width: Int, height: Int), sourceInfo: StabilizerSourceFrameInfo?) throws -> StabilizerAnalysisFrame? {
+        let seconds = CMTimeGetSeconds(frameTime)
+        guard seconds.isFinite else {
+            throw NSError(
+                domain: "com.justadev.TokyoWalkingStabilizer",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "Stabilizer Host Analysis supplied a non-finite frame time."]
+            )
+        }
+        let key = Self.timeKey(seconds)
+        lock.lock()
+        if framesByTimeKey[key] != nil {
+            lock.unlock()
+            return nil
+        }
+        if streamingAnalysisBuilder == nil {
+            do {
+                streamingAnalysisBuilder = try StreamingStabilizationAnalysisBuilder()
+            } catch {
+                lock.unlock()
+                throw error
+            }
+        }
+        let builder = streamingAnalysisBuilder
+        lock.unlock()
+
+        guard let builder else {
+            throw NSError(
+                domain: "com.justadev.TokyoWalkingStabilizer",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "Stabilizer streaming analysis builder was unavailable."]
+            )
+        }
+        let frame = try builder.append(tile, at: frameTime, sampleWidth: sampleSize.width, sampleHeight: sampleSize.height)
+
+        lock.lock()
+        framesByTimeKey[key] = frame.withoutRetainedPixels()
+        latestSampleSize = (frame.sampleWidth, frame.sampleHeight)
+        if let sourceInfo {
+            latestSourceFrameInfo = sourceInfo
+        }
+        lock.unlock()
+        return frame
+    }
+
     func finish() throws {
         do {
             try rebuildPreparedAnalysis(markFinished: true)

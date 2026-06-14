@@ -228,8 +228,11 @@ private struct StabilizerBlockShift {
 fileprivate final class MetalAnalysisContext {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
+    let downsamplePipelineState: MTLComputePipelineState
     let shiftPipelineState: MTLComputePipelineState
     let batchShiftPipelineState: MTLComputePipelineState
+    private var reusableAnalysisFrameBuffers: [MTLBuffer?] = [nil, nil]
+    private var reusableAnalysisFrameBufferLengths: [Int] = [0, 0]
     private var reusableShiftScoreBuffer: MTLBuffer?
     private var reusableShiftScoreBufferLength = 0
     private var reusableShiftBatchUniformBuffer: MTLBuffer?
@@ -242,6 +245,7 @@ fileprivate final class MetalAnalysisContext {
         guard
             let commandQueue = device.makeCommandQueue(),
             let library = device.makeDefaultLibrary(),
+            let downsampleFunction = library.makeFunction(name: "stabilizerDownsampleLuma"),
             let shiftFunction = library.makeFunction(name: "stabilizerShiftScores"),
             let batchShiftFunction = library.makeFunction(name: "stabilizerBatchShiftScores")
         else {
@@ -249,6 +253,7 @@ fileprivate final class MetalAnalysisContext {
         }
         self.device = device
         self.commandQueue = commandQueue
+        self.downsamplePipelineState = try device.makeComputePipelineState(function: downsampleFunction)
         self.shiftPipelineState = try device.makeComputePipelineState(function: shiftFunction)
         self.batchShiftPipelineState = try device.makeComputePipelineState(function: batchShiftFunction)
     }
@@ -264,6 +269,20 @@ fileprivate final class MetalAnalysisContext {
         ) else {
             throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer Metal analysis frame buffer.")
         }
+        return buffer
+    }
+
+    func reusableAnalysisFrameBuffer(slot: Int, length: Int) throws -> MTLBuffer {
+        let slot = max(0, min(reusableAnalysisFrameBuffers.count - 1, slot))
+        if let buffer = reusableAnalysisFrameBuffers[slot],
+           reusableAnalysisFrameBufferLengths[slot] >= length {
+            return buffer
+        }
+        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer Metal analysis frame buffer.")
+        }
+        reusableAnalysisFrameBuffers[slot] = buffer
+        reusableAnalysisFrameBufferLengths[slot] = length
         return buffer
     }
 
@@ -1141,6 +1160,156 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    fileprivate static func analysisFrameAndMotion(
+        from tile: FxImageTile,
+        at frameTime: CMTime,
+        sampleWidth requestedSampleWidth: Int,
+        sampleHeight requestedSampleHeight: Int,
+        context: MetalAnalysisContext,
+        outputBuffer: MTLBuffer,
+        previousFrameBuffer: MTLBuffer?
+    ) throws -> (frame: StabilizerAnalysisFrame, motion: PairMotion?) {
+        let frameStartedAt = CFAbsoluteTimeGetCurrent()
+        let time = CMTimeGetSeconds(frameTime)
+        guard time.isFinite else {
+            throw metalError("Stabilizer host analysis supplied a non-finite frame time.")
+        }
+        let sampleWidth = max(minimumSampleWidth, requestedSampleWidth)
+        let sampleHeight = max(minimumSampleHeight, requestedSampleHeight)
+        guard
+            tile.deviceRegistryID == context.device.registryID,
+            let inputTexture = tile.metalTexture(for: context.device),
+            let commandBuffer = context.commandQueue.makeCommandBuffer()
+        else {
+            throw metalError("Stabilizer Metal downsample resources were unavailable for Host Analysis.")
+        }
+
+        let downsampleStartedAt = CFAbsoluteTimeGetCurrent()
+        guard let downsampleEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw metalError("Could not allocate Stabilizer Metal downsample encoder.")
+        }
+        downsampleEncoder.setComputePipelineState(context.downsamplePipelineState)
+        downsampleEncoder.setTexture(inputTexture, index: Int(SCTI_InputImage.rawValue))
+        downsampleEncoder.setBuffer(outputBuffer, offset: 0, index: Int(SCBI_DownsampleOutput.rawValue))
+        var downsampleUniforms = StabilizerDownsampleUniforms(width: UInt32(sampleWidth), height: UInt32(sampleHeight))
+        downsampleEncoder.setBytes(&downsampleUniforms, length: MemoryLayout<StabilizerDownsampleUniforms>.stride, index: Int(SCBI_DownsampleUniforms.rawValue))
+        downsampleEncoder.dispatchThreads(
+            MTLSize(width: sampleWidth, height: sampleHeight, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 16, height: 8, depth: 1)
+        )
+        downsampleEncoder.endEncoding()
+
+        let globalScoreBuffer: MTLBuffer?
+        let globalScoreCount: Int
+        let globalSide: Int
+        let globalStartedAt = CFAbsoluteTimeGetCurrent()
+        if let previousFrameBuffer {
+            let radius = globalSearchRadius
+            globalSide = (radius * 2) + 1
+            globalScoreCount = globalSide * globalSide
+            let scoreBuffer = try context.shiftScoreBuffer(length: MemoryLayout<Float>.stride * globalScoreCount)
+            globalScoreBuffer = scoreBuffer
+            guard let shiftEncoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw metalError("Could not allocate Stabilizer Metal shift encoder.")
+            }
+            var uniforms = StabilizerShiftUniforms(
+                width: UInt32(sampleWidth),
+                height: UInt32(sampleHeight),
+                x0: 8,
+                y0: 6,
+                regionWidth: UInt32(max(8, sampleWidth - 16)),
+                regionHeight: UInt32(max(8, sampleHeight - 12)),
+                centerX: 0,
+                centerY: 0,
+                radius: UInt32(radius),
+                stride: 2
+            )
+            shiftEncoder.setComputePipelineState(context.shiftPipelineState)
+            shiftEncoder.setBuffer(previousFrameBuffer, offset: 0, index: Int(SCBI_PreviousFrame.rawValue))
+            shiftEncoder.setBuffer(outputBuffer, offset: 0, index: Int(SCBI_CurrentFrame.rawValue))
+            shiftEncoder.setBuffer(scoreBuffer, offset: 0, index: Int(SCBI_ShiftScores.rawValue))
+            shiftEncoder.setBytes(&uniforms, length: MemoryLayout<StabilizerShiftUniforms>.stride, index: Int(SCBI_ShiftUniforms.rawValue))
+            shiftEncoder.dispatchThreads(
+                MTLSize(width: globalScoreCount, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: min(256, globalScoreCount), height: 1, depth: 1)
+            )
+            shiftEncoder.endEncoding()
+        } else {
+            globalScoreBuffer = nil
+            globalScoreCount = 0
+            globalSide = 0
+        }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw error
+        }
+        let downsampleAndGlobalDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - downsampleStartedAt) * 1000.0
+        let globalDurationMilliseconds = previousFrameBuffer == nil ? 0.0 : (CFAbsoluteTimeGetCurrent() - globalStartedAt) * 1000.0
+
+        let pointer = outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
+        let pixels = Array(UnsafeBufferPointer(start: pointer, count: sampleWidth * sampleHeight))
+        let frame = StabilizerAnalysisFrame(
+            time: time,
+            pixels: pixels,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
+            blurAmount: blurAmount(pixels, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        )
+        guard let previousFrameBuffer, let globalScoreBuffer else {
+            os_log(
+                "Host Analysis frame %{public}.3f sample %{public}dx%{public}d downsample %{public}.3f ms total %{public}.3f ms.",
+                log: stabilizerHostAnalysisLog,
+                type: .debug,
+                time,
+                sampleWidth,
+                sampleHeight,
+                downsampleAndGlobalDurationMilliseconds,
+                (CFAbsoluteTimeGetCurrent() - frameStartedAt) * 1000.0
+            )
+            return (frame, nil)
+        }
+
+        let globalScores = globalScoreBuffer.contents().assumingMemoryBound(to: Float.self)
+        let global = resolvedShift(
+            scores: globalScores,
+            scoreCount: globalScoreCount,
+            side: globalSide,
+            radius: globalSearchRadius,
+            centerX: 0,
+            centerY: 0,
+            refine: true
+        )
+        let center = (round(global.dx), round(global.dy))
+        let blocks = motionBlocks(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        let localStartedAt = CFAbsoluteTimeGetCurrent()
+        let blockShifts = try estimateShifts(
+            context: context,
+            previous: previousFrameBuffer,
+            current: outputBuffer,
+            blocks: blocks,
+            radius: localSearchRadius,
+            center: center,
+            refine: true,
+            stride: 1,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight
+        )
+        let localDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - localStartedAt) * 1000.0
+        let motion = pairMotion(
+            global: global,
+            blockShifts: blockShifts,
+            blocks: blocks,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
+            globalDurationMilliseconds: globalDurationMilliseconds,
+            localDurationMilliseconds: localDurationMilliseconds,
+            pairDurationMilliseconds: (CFAbsoluteTimeGetCurrent() - frameStartedAt) * 1000.0
+        )
+        return (frame, motion)
+    }
+
     fileprivate static func preparedAnalysis(sortedFrames: [StabilizerAnalysisFrame], motions: [PairMotion]) throws -> StabilizerPreparedAnalysis {
         guard sortedFrames.count == motions.count else {
             throw metalError("Stabilizer analysis motion count did not match frame count.")
@@ -1215,6 +1384,50 @@ enum AutoStabilizationEstimator {
             sampleHeight: sampleHeight
         )
         let localDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - localStartedAt) * 1000.0
+        return pairMotion(
+            global: global,
+            blockShifts: blockShifts,
+            blocks: blocks,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
+            globalDurationMilliseconds: globalDurationMilliseconds,
+            localDurationMilliseconds: localDurationMilliseconds,
+            pairDurationMilliseconds: (CFAbsoluteTimeGetCurrent() - pairStartedAt) * 1000.0
+        )
+    }
+
+    fileprivate static var zeroPairMotion: PairMotion {
+        PairMotion(
+            dx: 0.0,
+            dy: 0.0,
+            residual: 0.0,
+            signedRoll: 0.0,
+            rollMotion: 0.0,
+            yawProxy: 0.0,
+            pitchProxy: 0.0,
+            shearX: 0.0,
+            shearY: 0.0,
+            perspectiveX: 0.0,
+            perspectiveY: 0.0,
+            analysisConfidence: 1.0,
+            warpConfidence: 0.0,
+            acceptedBlockCount: 0,
+            totalBlockCount: 0,
+            searchRadiusHitCount: 0,
+            searchRadiusTotalCount: 0
+        )
+    }
+
+    private static func pairMotion(
+        global: (dx: Float, dy: Float, score: Float, searchRadiusHit: Bool),
+        blockShifts: [StabilizerBlockShift],
+        blocks: [StabilizerMotionBlock],
+        sampleWidth: Int,
+        sampleHeight: Int,
+        globalDurationMilliseconds: Double,
+        localDurationMilliseconds: Double,
+        pairDurationMilliseconds: Double
+    ) -> PairMotion {
         os_log(
             "Host Analysis shift scoring pair sample %{public}dx%{public}d blocks %{public}d global %{public}.3f ms local batch %{public}.3f ms total %{public}.3f ms.",
             log: stabilizerHostAnalysisLog,
@@ -1224,7 +1437,7 @@ enum AutoStabilizationEstimator {
             blocks.count,
             globalDurationMilliseconds,
             localDurationMilliseconds,
-            (CFAbsoluteTimeGetCurrent() - pairStartedAt) * 1000.0
+            pairDurationMilliseconds
         )
         let acceptedBlocks = acceptedMotionBlocks(blockShifts, global: (global.dx, global.dy, global.score))
         let motionBlocksForModel = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks : blockShifts
@@ -2540,16 +2753,14 @@ enum AutoStabilizationEstimator {
 }
 
 final class StreamingStabilizationAnalysisBuilder {
-    private let context: MetalAnalysisContext
+    private var context: MetalAnalysisContext?
     private var frames: [StabilizerAnalysisFrame] = []
     private var motions: [PairMotion] = []
     private var previousFrameBuffer: MTLBuffer?
     private var sampleWidth: Int?
     private var sampleHeight: Int?
 
-    init() throws {
-        context = try MetalAnalysisContext()
-    }
+    init() throws {}
 
     var frameCount: Int {
         frames.count
@@ -2559,18 +2770,9 @@ final class StreamingStabilizationAnalysisBuilder {
         guard frame.pixels.count == frame.sampleWidth * frame.sampleHeight else {
             throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis frame pixels were unavailable.")
         }
-        if let sampleWidth, let sampleHeight {
-            guard frame.sampleWidth == sampleWidth, frame.sampleHeight == sampleHeight else {
-                throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis frames used mixed sample sizes.")
-            }
-            if let previousFrameTime = frames.last?.time, frame.time <= previousFrameTime {
-                throw AutoStabilizationEstimator.metalError("Stabilizer Host Analysis frames were not delivered in increasing time order.")
-            }
-        } else {
-            sampleWidth = frame.sampleWidth
-            sampleHeight = frame.sampleHeight
-        }
+        try validateFrameOrderAndSampleSize(time: frame.time, sampleWidth: frame.sampleWidth, sampleHeight: frame.sampleHeight)
 
+        let context = try defaultContext()
         let currentFrameBuffer = try context.frameBuffer(for: frame)
         if let previousFrameBuffer {
             motions.append(try AutoStabilizationEstimator.pairMotion(
@@ -2581,28 +2783,36 @@ final class StreamingStabilizationAnalysisBuilder {
                 sampleHeight: frame.sampleHeight
             ))
         } else {
-            motions.append(PairMotion(
-                dx: 0.0,
-                dy: 0.0,
-                residual: 0.0,
-                signedRoll: 0.0,
-                rollMotion: 0.0,
-                yawProxy: 0.0,
-                pitchProxy: 0.0,
-                shearX: 0.0,
-                shearY: 0.0,
-                perspectiveX: 0.0,
-                perspectiveY: 0.0,
-                analysisConfidence: 1.0,
-                warpConfidence: 0.0,
-                acceptedBlockCount: 0,
-                totalBlockCount: 0,
-                searchRadiusHitCount: 0,
-                searchRadiusTotalCount: 0
-            ))
+            motions.append(AutoStabilizationEstimator.zeroPairMotion)
         }
         frames.append(frame.withoutRetainedPixels())
         previousFrameBuffer = currentFrameBuffer
+    }
+
+    func append(_ tile: FxImageTile, at frameTime: CMTime, sampleWidth: Int, sampleHeight: Int) throws -> StabilizerAnalysisFrame {
+        let seconds = CMTimeGetSeconds(frameTime)
+        guard seconds.isFinite else {
+            throw AutoStabilizationEstimator.metalError("Stabilizer host analysis supplied a non-finite frame time.")
+        }
+        let sampleWidth = max(AutoStabilizationEstimator.minimumSampleWidth, sampleWidth)
+        let sampleHeight = max(AutoStabilizationEstimator.minimumSampleHeight, sampleHeight)
+        try validateFrameOrderAndSampleSize(time: seconds, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+
+        let context = try context(for: tile)
+        let currentFrameBuffer = try context.reusableAnalysisFrameBuffer(slot: frames.count % 2, length: sampleWidth * sampleHeight)
+        let result = try AutoStabilizationEstimator.analysisFrameAndMotion(
+            from: tile,
+            at: frameTime,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
+            context: context,
+            outputBuffer: currentFrameBuffer,
+            previousFrameBuffer: previousFrameBuffer
+        )
+        motions.append(result.motion ?? AutoStabilizationEstimator.zeroPairMotion)
+        frames.append(result.frame.withoutRetainedPixels())
+        previousFrameBuffer = currentFrameBuffer
+        return result.frame
     }
 
     func preparedAnalysis() throws -> StabilizerPreparedAnalysis? {
@@ -2610,5 +2820,43 @@ final class StreamingStabilizationAnalysisBuilder {
             return nil
         }
         return try AutoStabilizationEstimator.preparedAnalysis(sortedFrames: frames, motions: motions)
+    }
+
+    private func defaultContext() throws -> MetalAnalysisContext {
+        if let context {
+            return context
+        }
+        let context = try MetalAnalysisContext()
+        self.context = context
+        return context
+    }
+
+    private func context(for tile: FxImageTile) throws -> MetalAnalysisContext {
+        if let context {
+            guard context.device.registryID == tile.deviceRegistryID else {
+                throw AutoStabilizationEstimator.metalError("Stabilizer Host Analysis frames changed Metal devices during streaming analysis.")
+            }
+            return context
+        }
+        guard let device = MetalDeviceCache.deviceCache.device(with: tile.deviceRegistryID) else {
+            throw AutoStabilizationEstimator.metalError("Metal device was not available for Stabilizer Host Analysis.")
+        }
+        let context = try MetalAnalysisContext(preferredDevice: device)
+        self.context = context
+        return context
+    }
+
+    private func validateFrameOrderAndSampleSize(time: Double, sampleWidth: Int, sampleHeight: Int) throws {
+        if let existingSampleWidth = self.sampleWidth, let existingSampleHeight = self.sampleHeight {
+            guard sampleWidth == existingSampleWidth && sampleHeight == existingSampleHeight else {
+                throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis frames used mixed sample sizes.")
+            }
+            if let previousFrameTime = frames.last?.time, time <= previousFrameTime {
+                throw AutoStabilizationEstimator.metalError("Stabilizer Host Analysis frames were not delivered in increasing time order.")
+            }
+        } else {
+            self.sampleWidth = sampleWidth
+            self.sampleHeight = sampleHeight
+        }
     }
 }
