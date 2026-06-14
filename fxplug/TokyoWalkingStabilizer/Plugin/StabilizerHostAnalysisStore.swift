@@ -959,6 +959,10 @@ final class StabilizerHostAnalysisStore {
         }
     }
 
+    func noteSourceUnavailableForRender(reason: String) {
+        markSourceUnavailableForRender(reason: reason)
+    }
+
     func analysisRenderTime(for renderTime: CMTime, preparedAnalysis analysis: StabilizerPreparedAnalysis) -> CMTime {
         let renderSeconds = CMTimeGetSeconds(renderTime)
         guard renderSeconds.isFinite else {

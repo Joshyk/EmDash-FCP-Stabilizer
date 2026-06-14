@@ -3032,6 +3032,52 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         currentInputRange() ?? Self.expectedInputRange(from: state)
     }
 
+    private static func pluginState(from data: Data?) -> StabilizerPluginState? {
+        data?.withUnsafeBytes { pointer in
+            pointer.bindMemory(to: StabilizerPluginState.self).baseAddress?.pointee
+        }
+    }
+
+    private static func sourceRequestTime(for renderTime: CMTime, pluginState data: Data?) -> (time: CMTime, clamped: Bool) {
+        guard let state = pluginState(from: data) else {
+            return (renderTime, false)
+        }
+        return sourceRequestTime(for: renderTime, state: state)
+    }
+
+    private static func sourceRequestTime(for renderTime: CMTime, state: StabilizerPluginState) -> (time: CMTime, clamped: Bool) {
+        guard let range = expectedInputRange(from: state) else {
+            return (renderTime, false)
+        }
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        let frameDurationSeconds = range.frameDurationSeconds
+        guard renderSeconds.isFinite,
+              frameDurationSeconds.isFinite,
+              frameDurationSeconds > 0.0
+        else {
+            return (renderTime, false)
+        }
+
+        let startSeconds = range.startSeconds
+        let endSeconds = range.endSeconds
+        let lastFrameSeconds = max(startSeconds, endSeconds - frameDurationSeconds)
+        let toleranceSeconds = max(1.0 / 600.0, frameDurationSeconds * 1.5)
+        let clampedSeconds: Double
+        if renderSeconds < startSeconds && renderSeconds >= startSeconds - toleranceSeconds {
+            clampedSeconds = startSeconds
+        } else if renderSeconds > lastFrameSeconds && renderSeconds <= endSeconds + toleranceSeconds {
+            clampedSeconds = lastFrameSeconds
+        } else {
+            clampedSeconds = renderSeconds
+        }
+        guard abs(clampedSeconds - renderSeconds) > 1e-9 else {
+            return (renderTime, false)
+        }
+
+        let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : 600
+        return (CMTime(seconds: clampedSeconds, preferredTimescale: preferredTimescale), true)
+    }
+
     private func requestedSampleScalePercent(at time: CMTime) -> Double {
         var sampleScale = StabilizerSampleScale.defaultScale.rawValue
         if let paramAPI = apiManager.api(for: FxParameterRetrievalAPI_v6.self) as? FxParameterRetrievalAPI_v6 {
@@ -3117,9 +3163,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
         var requests: [FxImageTileRequest] = []
+        let sourceRequest = Self.sourceRequestTime(for: renderTime, pluginState: pluginState)
+        if sourceRequest.clamped {
+            NSLog(
+                "TokyoWalkingStabilizer: clamped source request time from %.6f to %.6f to keep clip-edge render inside the input range.",
+                CMTimeGetSeconds(renderTime),
+                CMTimeGetSeconds(sourceRequest.time)
+            )
+        }
         if let current = FxImageTileRequest(
             source: kFxImageTileRequestSourceEffectClip,
-            time: renderTime,
+            time: sourceRequest.time,
             includeFilters: true,
             parameterID: 0
         ) {
@@ -3130,7 +3184,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     func destinationImageRect(_ destinationImageRect: UnsafeMutablePointer<FxRect>, sourceImages: [FxImageTile], destinationImage: FxImageTile, pluginState: Data?, at renderTime: CMTime) throws {
-        destinationImageRect.pointee = sourceImages[0].imagePixelBounds
+        destinationImageRect.pointee = destinationImage.imagePixelBounds
     }
 
     func sourceTileRect(_ sourceTileRect: UnsafeMutablePointer<FxRect>, sourceImageIndex: UInt, sourceImages: [FxImageTile], destinationTileRect: FxRect, destinationImage: FxImageTile, pluginState: Data?, at renderTime: CMTime) throws {
@@ -3143,22 +3197,46 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     func renderDestinationImage(_ destinationImage: FxImageTile, sourceImages: [FxImageTile], pluginState: Data?, at renderTime: CMTime) throws {
-        guard let state = pluginState?.withUnsafeBytes({ pointer in
-            pointer.bindMemory(to: StabilizerPluginState.self).baseAddress?.pointee
-        }) else {
+        guard let state = Self.pluginState(from: pluginState) else {
+            return
+        }
+        guard sourceImages.indices.contains(0) else {
+            hostAnalysisStore.noteSourceUnavailableForRender(
+                reason: "Final Cut Pro did not provide an effect clip source image for render."
+            )
+            publishPreviewInvalidationOnMain(
+                statusForce: true,
+                infoForce: true,
+                revision: hostAnalysisStore.renderInvalidationToken,
+                revisionForce: true,
+                currentRenderRevision: state.renderRevision
+            )
+            return
+        }
+        let sourceImage = sourceImages[0]
+        if let unavailableReason = StabilizerOriginalMediaPolicy.sourceUnavailableReason(for: sourceImage) {
+            hostAnalysisStore.noteSourceUnavailableForRender(reason: unavailableReason)
+            publishPreviewInvalidationOnMain(
+                statusForce: true,
+                infoForce: true,
+                revision: hostAnalysisStore.renderInvalidationToken,
+                revisionForce: true,
+                currentRenderRevision: state.renderRevision
+            )
             return
         }
 
         let deviceCache = MetalDeviceCache.deviceCache
         let pixelFormat = MetalDeviceCache.fxMTLPixelFormat(for: destinationImage)
         guard
-            let commandQueue = deviceCache.commandQueue(with: sourceImages[0].deviceRegistryID, pixelFormat: pixelFormat),
-            let device = deviceCache.device(with: sourceImages[0].deviceRegistryID),
-            let inputTexture = sourceImages[0].metalTexture(for: device),
+            let commandQueue = deviceCache.commandQueue(with: sourceImage.deviceRegistryID, pixelFormat: pixelFormat),
+            let device = deviceCache.device(with: sourceImage.deviceRegistryID),
+            let inputTexture = sourceImage.metalTexture(for: device),
             let outputTexture = destinationImage.metalTexture(for: device),
-            let pipelineState = deviceCache.pipelineState(with: sourceImages[0].deviceRegistryID, pixelFormat: pixelFormat),
+            let pipelineState = deviceCache.pipelineState(with: sourceImage.deviceRegistryID, pixelFormat: pixelFormat),
             let commandBuffer = commandQueue.makeCommandBuffer()
         else {
+            NSLog("TokyoWalkingStabilizer: render skipped because Metal input/output resources were unavailable.")
             return
         }
 
@@ -3186,7 +3264,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if transformEnabled,
            canUseHostAnalysisStoreForRender,
            let preparedAnalysis = hostAnalysisStore.preparedAnalysisForRender(
-               validating: sourceImages[0],
+               validating: sourceImage,
                at: renderTime,
                preferredCacheIdentity: preferredCacheIdentity,
                expectedRange: expectedRange
@@ -3229,7 +3307,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         let renderSourceIsProxy = renderUsesPreparedAnalysis
-            && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImages[0]) != nil
+            && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
         let debugOverlayScale = Self.debugOverlayScale(
             outputWidth: Int(outputWidth),
             outputHeight: Int(outputHeight),
