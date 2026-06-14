@@ -307,8 +307,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R358` means
-  FxPlug `0.3.58` is rendering original/optimized frames, and `P358` means proxy playback is
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R359` means
+  FxPlug `0.3.59` is rendering original/optimized frames, and `P359` means proxy playback is
   using the saved Host Analysis path. The overlay scales from the current render output with
   a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
   media, while staying larger than the old compact panel. These labels are raw English control/diagnostic

@@ -241,8 +241,8 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `WARP`, `TURN`, live `F Q`/`S Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R358` means FxPlug `0.3.58` is rendering original/optimized
-  frames, while `P358` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R359` means FxPlug `0.3.59` is rendering original/optimized
+  frames, while `P359` means proxy playback is using the saved Host Analysis path.
   The overlay scales from the current render output with a lower proxy minimum so proxy
   playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker

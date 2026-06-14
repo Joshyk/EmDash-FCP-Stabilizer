@@ -29,7 +29,7 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.58"
+private let tokyoWalkingStabilizerVersion = "0.3.59"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -545,7 +545,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             withName: "Stabilizer Info",
             parameterID: ParameterID.stabilizerInfo.rawValue,
             defaultValue: "No Analysis",
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE | kFxParameterFlag_CUSTOM_UI | kFxParameterFlag_USE_FULL_VIEW_WIDTH)
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DONT_SAVE | kFxParameterFlag_CUSTOM_UI | kFxParameterFlag_USE_FULL_VIEW_WIDTH)
         )
         paramAPI.addFloatSlider(
             withName: "Render Revision",
@@ -3282,6 +3282,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 }
 
 private final class StabilizerInfoScrollView: NSScrollView {
+    private static let preferredHeight: CGFloat = 96
     private let textView = NSTextView()
 
     var infoText: String {
@@ -3300,7 +3301,7 @@ private final class StabilizerInfoScrollView: NSScrollView {
     }
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 96))
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: Self.preferredHeight))
         drawsBackground = false
         borderType = .bezelBorder
         hasVerticalScroller = true
@@ -3310,11 +3311,15 @@ private final class StabilizerInfoScrollView: NSScrollView {
 
         textView.isEditable = false
         textView.isSelectable = true
+        textView.isRichText = false
         textView.drawsBackground = true
         textView.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.08)
         textView.textColor = NSColor.labelColor
         textView.font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.minSize = NSSize(width: 0, height: contentSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.frame = NSRect(origin: .zero, size: contentSize)
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
@@ -3322,7 +3327,7 @@ private final class StabilizerInfoScrollView: NSScrollView {
         textView.textContainer?.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         documentView = textView
 
-        heightAnchor.constraint(equalToConstant: 96).isActive = true
+        heightAnchor.constraint(equalToConstant: Self.preferredHeight).isActive = true
     }
 
     required init?(coder: NSCoder) {
@@ -3334,5 +3339,30 @@ private final class StabilizerInfoScrollView: NSScrollView {
             return
         }
         textView.string = text
+        updateTextDocumentFrame()
+    }
+
+    override func layout() {
+        super.layout()
+        updateTextDocumentFrame()
+    }
+
+    private func updateTextDocumentFrame() {
+        guard let textContainer = textView.textContainer,
+              let layoutManager = textView.layoutManager
+        else {
+            return
+        }
+        let visibleSize = contentSize
+        let documentWidth = max(1, visibleSize.width)
+        textView.minSize = NSSize(width: 0, height: visibleSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textContainer.widthTracksTextView = true
+        textContainer.containerSize = NSSize(width: documentWidth, height: CGFloat.greatestFiniteMagnitude)
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let insetHeight = textView.textContainerInset.height * 2
+        let documentHeight = max(visibleSize.height, ceil(usedRect.height + insetHeight + 2))
+        textView.frame = NSRect(x: 0, y: 0, width: documentWidth, height: documentHeight)
     }
 }
