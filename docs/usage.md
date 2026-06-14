@@ -188,9 +188,10 @@ fallbacks.
   whose selected `Sample Size` resolves to different actual pixel dimensions do not share a
   streaming builder. If another Stabilizer Host Analysis is already active, or Final Cut Pro
   is already running Host Analysis when another clip is requested, that effect instance is
-  queued and started after the host becomes available. The queue keeps only the latest Start
-  request, so pressing `Start Host Analysis` again while a request is queued replaces older
-  queued requests. The queued request is retained until start or explicit clear, and
+  queued and started after the host becomes available. The queue keeps queued requests for
+  different effect instances, while repeated `Start Host Analysis` presses on the same
+  queued effect instance replace that instance's older pending request. The queued request is
+  retained until start or explicit clear, and
   completed analysis from the previous clip does not make the queued clip skip its own Host
   Analysis. Final Cut Pro may run the analysis callbacks on a different FxPlug instance than
   the Inspector button instance, so completion clears process-wide analysis bookkeeping
@@ -238,9 +239,9 @@ fallbacks.
 - `Clip Range`: read-only Inspector row showing the current clip start/end time.
 - `Analysis Sample`: read-only Inspector row showing the actual analyzed pixel sample size
   and frame count when analysis is available.
-- `Queue`: read-only Inspector row showing the serial queue position as `#N of 1` and
-  compact queue reason while this clip is waiting. The queue intentionally keeps only the
-  latest Start request.
+- `Queue`: read-only Inspector row showing the serial queue position as `#N of M` and
+  compact queue reason while this clip is waiting. Repeated starts on the same effect
+  instance keep only that instance's latest pending request.
   Older saved timeline instances can keep stale saved Inspector strings, so check the
   compact runtime/source row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,

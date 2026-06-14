@@ -184,9 +184,10 @@ silently. Also queue the request when this plug-in process already has an active
 reserved Host Analysis session for another clip, because Final Cut Pro may otherwise run
 multiple Stabilizer Host Analysis jobs at the same time. Queue drain should run as
 retryable one-shot passes after analysis callbacks complete; when the active clip finishes,
-the latest queued Start request should be the only request handed to `startForwardAnalysis`.
-If `Start Host Analysis` is pressed repeatedly while a request is already queued, replace
-older queued requests and keep only the most recent button press.
+the next queued request should be the only request handed to `startForwardAnalysis`.
+If `Start Host Analysis` is pressed repeatedly while the same effect instance is already
+queued, replace that instance's older queued request and keep its most recent button press
+without discarding queued requests for other effect instances.
 In-progress Host Analysis state must be per clip/session so requested clips, including clips
 with different actual sample sizes, never share a streaming builder. The
 active runtime uses a process-wide shared Host Analysis render/cache store after completion

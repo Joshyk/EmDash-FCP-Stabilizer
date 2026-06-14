@@ -279,9 +279,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   preview/render consumers from rechecking the persistent cache signature and loading a newly
   written compatible cache. If another Stabilizer Host Analysis run is active or reserved in
   the plug-in process, the request is kept in `Queued Host Analysis` until that run's cleanup
-  callback finishes and a retry pass can hand the latest queued Start request to Final Cut
-  Pro. Pressing `Start Host Analysis` again while a request is queued replaces older queued
-  requests, so only the most recent button press remains pending. The queue keeps the
+  callback finishes and a retry pass can hand the next queued request to Final Cut Pro.
+  Pressing `Start Host Analysis` again on the same queued effect instance replaces that
+  instance's older queued request, while requests for other effect instances stay queued.
+  The queue keeps the
   `FxAnalysisAPI` obtained when Start was pressed, so retry drain does not need to reacquire
   it from a later callback context. If the Event cache root is unavailable and
   analysis completes memory-only, completed memory-only analyses are retained by analyzed
@@ -306,9 +307,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   and frame count when analysis is available. Older saved timeline instances may keep
   stale saved Inspector strings, so use the compact runtime/source row in `Debug Overlay`
   to confirm the active render runtime.
-- `Queue`: read-only Inspector row showing the serial queue position as `#N of 1` and
-  compact queue reason while this clip is waiting. The queue intentionally keeps only the
-  latest Start request.
+- `Queue`: read-only Inspector row showing the serial queue position as `#N of M` and
+  compact queue reason while this clip is waiting. Repeated starts on the same effect
+  instance keep only that instance's latest pending request.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact

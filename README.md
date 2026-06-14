@@ -142,7 +142,8 @@ stale saved Inspector strings, `Debug Overlay` is the live render-runtime
 indicator. `Accepted Sample`, `Clip Range`, `Analysis Sample`, and `Queue` split
 the accepted `Sample Size`, current clip start/end time, actual analysis sample
 size, and serial queue position into separate read-only Inspector rows. `Queue`
-uses `#N of 1` because repeated Start presses keep only the latest queued request; older
+uses `#N of M`; repeated Start presses on the same effect instance keep only that
+instance's latest pending request, while other queued clips remain queued. Older
 saved timeline instances may still display stale saved info strings until the
 effect is reapplied.
 During a real Host Analysis pass the status advances as `Analyzing Host Frames
@@ -172,9 +173,9 @@ fails that callback visibly instead of appending the frame to an arbitrary clip.
 When `Start Host Analysis` is pressed on more than one clip, only one clip is
 handed to Final Cut Pro at a time. Additional presses enter the plug-in's serial
 `Queued Host Analysis` state while another Stabilizer Host Analysis run is active
-or reserved, but the queue keeps only the latest Start request. Pressing
-`Start Host Analysis` again while a request is queued replaces the older queued
-request. A completed analysis from an earlier clip does not satisfy a later
+or reserved. Pressing `Start Host Analysis` again on the same queued effect instance
+replaces that instance's older queued request, but requests for other clips remain in
+queue order. A completed analysis from an earlier clip does not satisfy a later
 queued clip.
 Analysis callback instances clear process-wide analysis bookkeeping, because
 Final Cut Pro may deliver setup/analyze/cleanup to a different FxPlug instance

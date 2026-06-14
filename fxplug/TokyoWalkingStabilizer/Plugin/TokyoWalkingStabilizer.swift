@@ -396,12 +396,32 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let plugin: TokyoWalkingStabilizerPlugIn
         let analysisAPI: FxAnalysisAPI
         let requestedSampleScalePercent: Double
+        let reason: String
 
-        init(plugin: TokyoWalkingStabilizerPlugIn, analysisAPI: FxAnalysisAPI, requestedSampleScalePercent: Double) {
+        init(
+            plugin: TokyoWalkingStabilizerPlugIn,
+            analysisAPI: FxAnalysisAPI,
+            requestedSampleScalePercent: Double,
+            reason: String
+        ) {
             self.plugin = plugin
             self.analysisAPI = analysisAPI
             self.requestedSampleScalePercent = requestedSampleScalePercent
+            self.reason = reason
         }
+    }
+
+    private struct SerialHostAnalysisQueuePosition {
+        let position: Int
+        let totalCount: Int
+    }
+
+    private struct SerialHostAnalysisQueueStatus {
+        let plugin: TokyoWalkingStabilizerPlugIn
+        let position: Int
+        let totalCount: Int
+        let reason: String
+        let requestedSampleScalePercent: Double
     }
 
     private static let serialAnalysisQueueLock = NSLock()
@@ -813,14 +833,38 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             || (force && analysisState == kFxAnalysisState_AnalysisCompleted)
         guard canStart else {
             let reason = Self.analysisStateDescription(analysisState)
-            if allowSerialQueue && force {
-                let position = Self.enqueueSerialAnalysis(self, analysisAPI: analysisAPI, requestedSampleScalePercent: acceptedSampleScalePercent)
-                hostAnalysisStore.markQueued(position: position, reason: reason, requestedSampleScalePercent: acceptedSampleScalePercent)
+            if queuedStartRequest,
+               let queuePosition = Self.serialAnalysisQueuePosition(for: self) {
+                hostAnalysisStore.markQueued(
+                    position: queuePosition.position,
+                    totalCount: queuePosition.totalCount,
+                    reason: reason,
+                    requestedSampleScalePercent: acceptedSampleScalePercent
+                )
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-                NSLog("TokyoWalkingStabilizer: queued Host Analysis request at position \(position) because host state is \(reason).")
-                os_log("Queued Host Analysis because host state is %{public}@ at position %{public}d.", log: stabilizerHostAnalysisLog, type: .default, reason, position)
+                Self.scheduleSerialAnalysisQueueDrain()
+                return .queued
+            }
+            if allowSerialQueue && force {
+                let queuePosition = Self.enqueueSerialAnalysis(
+                    self,
+                    analysisAPI: analysisAPI,
+                    requestedSampleScalePercent: acceptedSampleScalePercent,
+                    reason: reason
+                )
+                hostAnalysisStore.markQueued(
+                    position: queuePosition.position,
+                    totalCount: queuePosition.totalCount,
+                    reason: reason,
+                    requestedSampleScalePercent: acceptedSampleScalePercent
+                )
+                publishHostAnalysisStatus(force: true)
+                publishStabilizerInfo(force: true)
+                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+                NSLog("TokyoWalkingStabilizer: queued Host Analysis request at position \(queuePosition.position) of \(queuePosition.totalCount) because host state is \(reason).")
+                os_log("Queued Host Analysis because host state is %{public}@ at position %{public}d of %{public}d.", log: stabilizerHostAnalysisLog, type: .default, reason, queuePosition.position, queuePosition.totalCount)
                 Self.scheduleSerialAnalysisQueueDrain()
                 return .queued
             } else if force {
@@ -837,14 +881,38 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         guard Self.reserveHostAnalysisStartIfAvailable() else {
             let reason = "ActiveHostAnalysisSession"
-            if allowSerialQueue && force {
-                let position = Self.enqueueSerialAnalysis(self, analysisAPI: analysisAPI, requestedSampleScalePercent: acceptedSampleScalePercent)
-                hostAnalysisStore.markQueued(position: position, reason: reason, requestedSampleScalePercent: acceptedSampleScalePercent)
+            if queuedStartRequest,
+               let queuePosition = Self.serialAnalysisQueuePosition(for: self) {
+                hostAnalysisStore.markQueued(
+                    position: queuePosition.position,
+                    totalCount: queuePosition.totalCount,
+                    reason: reason,
+                    requestedSampleScalePercent: acceptedSampleScalePercent
+                )
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-                NSLog("TokyoWalkingStabilizer: queued Host Analysis request at position \(position) because another clip has an active or reserved Host Analysis session.")
-                os_log("Queued Host Analysis because another clip has an active or reserved session at position %{public}d.", log: stabilizerHostAnalysisLog, type: .default, position)
+                Self.scheduleSerialAnalysisQueueDrain()
+                return .queued
+            }
+            if allowSerialQueue && force {
+                let queuePosition = Self.enqueueSerialAnalysis(
+                    self,
+                    analysisAPI: analysisAPI,
+                    requestedSampleScalePercent: acceptedSampleScalePercent,
+                    reason: reason
+                )
+                hostAnalysisStore.markQueued(
+                    position: queuePosition.position,
+                    totalCount: queuePosition.totalCount,
+                    reason: reason,
+                    requestedSampleScalePercent: acceptedSampleScalePercent
+                )
+                publishHostAnalysisStatus(force: true)
+                publishStabilizerInfo(force: true)
+                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+                NSLog("TokyoWalkingStabilizer: queued Host Analysis request at position \(queuePosition.position) of \(queuePosition.totalCount) because another clip has an active or reserved Host Analysis session.")
+                os_log("Queued Host Analysis because another clip has an active or reserved session at position %{public}d of %{public}d.", log: stabilizerHostAnalysisLog, type: .default, queuePosition.position, queuePosition.totalCount)
                 Self.scheduleSerialAnalysisQueueDrain()
                 return .queued
             }
@@ -891,32 +959,39 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static func enqueueSerialAnalysis(
         _ plugin: TokyoWalkingStabilizerPlugIn,
         analysisAPI: FxAnalysisAPI,
-        requestedSampleScalePercent: Double
-    ) -> Int {
+        requestedSampleScalePercent: Double,
+        reason: String
+    ) -> SerialHostAnalysisQueuePosition {
         serialAnalysisQueueLock.lock()
-        let replacedCount = serialAnalysisQueue.count
-        serialAnalysisQueue.removeAll(keepingCapacity: true)
+        let originalCount = serialAnalysisQueue.count
+        serialAnalysisQueue.removeAll { queuedRequest in queuedRequest.plugin === plugin }
+        let replacedCount = originalCount - serialAnalysisQueue.count
         serialAnalysisQueue.append(SerialHostAnalysisRequest(
             plugin: plugin,
             analysisAPI: analysisAPI,
-            requestedSampleScalePercent: requestedSampleScalePercent
+            requestedSampleScalePercent: requestedSampleScalePercent,
+            reason: reason
         ))
         let position = serialAnalysisQueue.count
+        let totalCount = serialAnalysisQueue.count
         serialAnalysisQueueLock.unlock()
+        publishSerialQueueStatuses()
         os_log(
-            "Serial Host Analysis queue kept latest request at position %{public}d after replacing %{public}d queued request(s).",
+            "Serial Host Analysis queue accepted request at position %{public}d of %{public}d after replacing %{public}d queued request(s) for the same effect instance.",
             log: stabilizerHostAnalysisLog,
             type: .default,
             position,
+            totalCount,
             replacedCount
         )
-        return position
+        return SerialHostAnalysisQueuePosition(position: position, totalCount: totalCount)
     }
 
     private static func removeQueuedSerialAnalysis(_ plugin: TokyoWalkingStabilizerPlugIn) {
         serialAnalysisQueueLock.lock()
         serialAnalysisQueue.removeAll { queuedRequest in queuedRequest.plugin === plugin }
         serialAnalysisQueueLock.unlock()
+        publishSerialQueueStatuses()
     }
 
     private static func isQueuedSerialAnalysis(_ plugin: TokyoWalkingStabilizerPlugIn) -> Bool {
@@ -925,13 +1000,46 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return serialAnalysisQueue.contains { queuedRequest in queuedRequest.plugin === plugin }
     }
 
-    private static func dequeueNextSerialAnalysis() -> SerialHostAnalysisRequest? {
+    private static func serialAnalysisQueuePosition(for plugin: TokyoWalkingStabilizerPlugIn) -> SerialHostAnalysisQueuePosition? {
         serialAnalysisQueueLock.lock()
         defer { serialAnalysisQueueLock.unlock() }
-        guard !serialAnalysisQueue.isEmpty else {
+        guard let index = serialAnalysisQueue.firstIndex(where: { queuedRequest in queuedRequest.plugin === plugin }) else {
             return nil
         }
-        return serialAnalysisQueue.removeFirst()
+        return SerialHostAnalysisQueuePosition(position: index + 1, totalCount: serialAnalysisQueue.count)
+    }
+
+    private static func nextQueuedSerialAnalysis() -> SerialHostAnalysisRequest? {
+        serialAnalysisQueueLock.lock()
+        defer { serialAnalysisQueueLock.unlock() }
+        return serialAnalysisQueue.first
+    }
+
+    private static func publishSerialQueueStatuses() {
+        serialAnalysisQueueLock.lock()
+        let totalCount = serialAnalysisQueue.count
+        let statuses = serialAnalysisQueue.enumerated().map { index, request in
+            SerialHostAnalysisQueueStatus(
+                plugin: request.plugin,
+                position: index + 1,
+                totalCount: totalCount,
+                reason: request.reason,
+                requestedSampleScalePercent: request.requestedSampleScalePercent
+            )
+        }
+        serialAnalysisQueueLock.unlock()
+
+        for status in statuses {
+            status.plugin.hostAnalysisStore.markQueued(
+                position: status.position,
+                totalCount: status.totalCount,
+                reason: status.reason,
+                requestedSampleScalePercent: status.requestedSampleScalePercent
+            )
+            status.plugin.publishHostAnalysisStatus(force: true)
+            status.plugin.publishStabilizerInfo(force: true)
+            status.plugin.publishRenderRevision(status.plugin.hostAnalysisStore.renderInvalidationToken, force: true)
+        }
     }
 
     private static func scheduleSerialAnalysisQueueDrain(after delay: TimeInterval = 1.0) {
@@ -970,7 +1078,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func startNextQueuedHostAnalysis() {
-        while let nextRequest = dequeueNextSerialAnalysis() {
+        while let nextRequest = nextQueuedSerialAnalysis() {
             let result = nextRequest.plugin.requestHostAnalysisIfNeeded(
                 force: true,
                 allowSerialQueue: true,
@@ -1149,9 +1257,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if analysisInfo.hasPrefix("Queued #") {
             let pieces = analysisInfo.split(separator: ":", maxSplits: 1).map(String.init)
             let head = pieces.first ?? analysisInfo
-            let queueNumber = head.split(separator: " ").first { $0.hasPrefix("#") }.map(String.init) ?? "#?"
+            let queueToken = head.split(separator: " ").first { $0.hasPrefix("#") }.map(String.init) ?? "#?"
             let reason = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
-            let order = "\(queueNumber) of 1"
+            let order: String
+            if queueToken.contains("/") {
+                let parts = queueToken.dropFirst().split(separator: "/", maxSplits: 1).map(String.init)
+                if parts.count == 2 {
+                    order = "#\(parts[0]) of \(parts[1])"
+                } else {
+                    order = queueToken
+                }
+            } else {
+                order = queueToken
+            }
             return reason.isEmpty ? "Queue: \(order)" : "Queue: \(order) \(reason)"
         }
         if analysisInfo.hasPrefix("Requested ") {

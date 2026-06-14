@@ -396,12 +396,13 @@ final class StabilizerHostAnalysisStore {
         lock.unlock()
     }
 
-    func markQueued(position: Int, reason: String, requestedSampleScalePercent: Double) {
+    func markQueued(position: Int, totalCount: Int, reason: String, requestedSampleScalePercent: Double) {
         lock.lock()
         if preparedAnalysis == nil {
             status = .queued
             activeRequestedSampleScalePercent = requestedSampleScalePercent
-            analysisInfoText = "Queued #\(position) S\(Self.sampleScaleDescription(requestedSampleScalePercent)): \(Self.compactReason(reason))"
+            let queueTotal = max(position, totalCount)
+            analysisInfoText = "Queued #\(position)/\(queueTotal) S\(Self.sampleScaleDescription(requestedSampleScalePercent)): \(Self.compactReason(reason))"
             bumpRevisionLocked()
         }
         lock.unlock()
