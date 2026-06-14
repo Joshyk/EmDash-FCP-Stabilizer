@@ -1075,18 +1075,48 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
-        var lines: [String] = []
+        var parts: [String] = []
         if let state {
-            var summary = "Fx\(tokyoWalkingStabilizerVersion) S\(StabilizerSampleScale.scale(for: state.sampleScale).displayName)"
+            parts.append("S\(StabilizerSampleScale.scale(for: state.sampleScale).displayName)")
             if let clipRange = clipRangeDescription(from: state) {
-                summary += " C\(clipRange)"
+                parts.append("C\(clipRange)")
             }
-            lines.append(summary)
         } else {
-            lines.append("Fx\(tokyoWalkingStabilizerVersion)")
+            parts.append("Fx\(tokyoWalkingStabilizerVersion)")
         }
-        lines.append(analysisInfo)
-        return lines.joined(separator: "\n")
+        if let analysisSample = analysisSampleDescription(from: analysisInfo) {
+            parts.append("A\(analysisSample)")
+        } else if analysisInfo != "No Analysis" {
+            parts.append(compactAnalysisInfo(analysisInfo))
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private static func analysisSampleDescription(from analysisInfo: String) -> String? {
+        analysisInfo.split(separator: " ").first { token in
+            let parts = token.split(separator: "x")
+            guard parts.count == 2 else {
+                return false
+            }
+            return parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+        }.map(String.init)
+    }
+
+    private static func compactAnalysisInfo(_ analysisInfo: String) -> String {
+        switch analysisInfo {
+        case "Analyzing...":
+            return "Analyzing"
+        case "Cache Cleared":
+            return "Cleared"
+        case "Proxy rejected. Use original media.":
+            return "Proxy rejected"
+        case "Original analysis; proxy preview.":
+            return "Proxy preview"
+        case "Original analysis; validation deferred.":
+            return "Unvalidated"
+        default:
+            return analysisInfo
+        }
     }
 
     private static func clipRangeDescription(from state: StabilizerPluginState) -> String? {
