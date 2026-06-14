@@ -23,6 +23,7 @@ private enum HostAnalysisStatus {
     case projectCacheUnavailable
     case proxyRejected
     case proxyPreview
+    case sourceMetadataUnconfirmedPreview
     case proxyNeedsOriginalValidation
     case sourceUnavailable
 }
@@ -318,7 +319,12 @@ final class StabilizerHostAnalysisStore {
             return "Proxy Media Rejected - Use Original Media"
         case .proxyPreview:
             if hasPreparedAnalysis {
-                return "Proxy Preview (\(frameCount) frames)"
+                return "Original Analysis - Proxy Preview (\(frameCount) frames)"
+            }
+            return "Needs Analysis"
+        case .sourceMetadataUnconfirmedPreview:
+            if hasPreparedAnalysis {
+                return "Original Analysis - Preview Unvalidated (\(frameCount) frames)"
             }
             return "Needs Analysis"
         case .proxyNeedsOriginalValidation:
@@ -746,31 +752,35 @@ final class StabilizerHostAnalysisStore {
                !Self.cacheIdentity(activeIdentity, matches: expectedRange) {
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
-                        if let proxyReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) {
+                        if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
                             if Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange),
                                Self.renderSeconds(CMTimeGetSeconds(renderTime), isInside: analysis.frames) {
                                 os_log(
-                                    "Using start-matched range-mismatched Host Analysis cache for scaled/proxy preview before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                    "Using start-matched range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
                                     log: stabilizerHostAnalysisLog,
                                     type: .default,
                                     activeIdentity,
                                     Self.expectedRangeDescription(expectedRange),
-                                    proxyReason,
+                                    validationIssue.reason,
                                     rejectionReason
                                 )
-                                markProxyPreviewForRender(reason: proxyReason)
+                                if validationIssue.isScaledProxy {
+                                    markProxyPreviewForRender(reason: validationIssue.reason)
+                                } else {
+                                    markSourceMetadataUnconfirmedPreviewForRender(reason: validationIssue.reason)
+                                }
                                 return analysis
                             }
                             os_log(
-                                "Range-mismatched Host Analysis cache could not be validated while source media is scaled or missing original transform. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                "Range-mismatched Host Analysis cache could not be validated against the current source frame. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
                                 log: stabilizerHostAnalysisLog,
                                 type: .error,
                                 activeIdentity,
                                 Self.expectedRangeDescription(expectedRange),
-                                proxyReason,
+                                validationIssue.reason,
                                 rejectionReason
                             )
-                            markProxyNeedsOriginalValidationForRender(reason: proxyReason)
+                            markProxyNeedsOriginalValidationForRender(reason: validationIssue.reason)
                             return nil
                         }
                         rejectPersistentCache(reason: rejectionReason)
@@ -813,26 +823,34 @@ final class StabilizerHostAnalysisStore {
                 return nil
             }
 
-            if let rejectionReason = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) {
+            if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
                 if let activeIdentity,
                    Self.cacheIdentity(activeIdentity, matches: expectedRange) {
-                    markProxyPreviewForRender(reason: rejectionReason)
+                    if validationIssue.isScaledProxy {
+                        markProxyPreviewForRender(reason: validationIssue.reason)
+                    } else {
+                        markSourceMetadataUnconfirmedPreviewForRender(reason: validationIssue.reason)
+                    }
                     updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
-                    NSLog("TokyoWalkingStabilizer: using range-matched Host Analysis cache for proxy render: \(rejectionReason)")
+                    NSLog("TokyoWalkingStabilizer: using range-matched Host Analysis cache before source-frame validation: \(validationIssue.reason)")
                     return analysis
                 }
                 if activeIdentity == nil,
                    hasCompletedInMemoryAnalysis {
-                    markProxyPreviewForRender(reason: rejectionReason)
+                    if validationIssue.isScaledProxy {
+                        markProxyPreviewForRender(reason: validationIssue.reason)
+                    } else {
+                        markSourceMetadataUnconfirmedPreviewForRender(reason: validationIssue.reason)
+                    }
                     updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
-                    os_log("Using in-memory Host Analysis for render despite scaled or incomplete source-frame metadata: %{public}@",
+                    os_log("Using in-memory Host Analysis for render before source-frame validation: %{public}@",
                            log: stabilizerHostAnalysisLog,
                            type: .default,
-                           rejectionReason)
+                           validationIssue.reason)
                     return analysis
                 }
 
-                markProxyNeedsOriginalValidationForRender(reason: rejectionReason)
+                markProxyNeedsOriginalValidationForRender(reason: validationIssue.reason)
                 return nil
             }
 
@@ -1440,7 +1458,7 @@ final class StabilizerHostAnalysisStore {
 
     private func markReadyAfterOriginalMediaReturnedIfNeeded() {
         lock.lock()
-        if (status == .proxyRejected || status == .proxyPreview || status == .proxyNeedsOriginalValidation || status == .sourceUnavailable),
+        if (status == .proxyRejected || status == .proxyPreview || status == .sourceMetadataUnconfirmedPreview || status == .proxyNeedsOriginalValidation || status == .sourceUnavailable),
            preparedAnalysis != nil {
             status = .ready
             bumpRevisionLocked()
@@ -1454,12 +1472,27 @@ final class StabilizerHostAnalysisStore {
             && status != .proxyPreview
         if shouldMarkProxyPreview {
             status = .proxyPreview
-            analysisInfoText = "Using saved Host Analysis for proxy playback. If Final Cut Pro shows Missing Proxy, switch Viewer playback to Original/Optimized or create proxy media."
+            analysisInfoText = "Using saved original-media Host Analysis for proxy playback. If Final Cut Pro shows Missing Proxy, switch Viewer playback to Original/Optimized or create proxy media."
             bumpRevisionLocked()
         }
         lock.unlock()
         if shouldMarkProxyPreview {
             NSLog("TokyoWalkingStabilizer: keeping prepared Host Analysis active for proxy preview before original-media validation: \(reason)")
+        }
+    }
+
+    private func markSourceMetadataUnconfirmedPreviewForRender(reason: String) {
+        lock.lock()
+        let shouldMark = preparedAnalysis != nil
+            && status != .sourceMetadataUnconfirmedPreview
+        if shouldMark {
+            status = .sourceMetadataUnconfirmedPreview
+            analysisInfoText = "Using saved original-media Host Analysis; current source-frame metadata could not confirm original media, so validation is deferred."
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+        if shouldMark {
+            NSLog("TokyoWalkingStabilizer: keeping prepared Host Analysis active with unconfirmed source-frame metadata: \(reason)")
         }
     }
 

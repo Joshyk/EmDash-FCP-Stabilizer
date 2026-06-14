@@ -310,6 +310,11 @@ private extension StabilizerSourceFrameInfo {
 enum StabilizerOriginalMediaPolicy {
     private static let proxyScaleTolerance = 0.05
 
+    struct ValidationIssue {
+        let reason: String
+        let isScaledProxy: Bool
+    }
+
     static func sourceUnavailableReason(for frame: FxImageTile) -> String? {
         guard let requestError = frame.requestError else {
             return nil
@@ -322,20 +327,33 @@ enum StabilizerOriginalMediaPolicy {
     }
 
     static func proxyRejectionReason(for frame: FxImageTile) -> String? {
+        originalMediaValidationIssue(for: frame)?.reason
+    }
+
+    static func originalMediaValidationIssue(for frame: FxImageTile) -> ValidationIssue? {
         guard let frameInfo = frameInfo(for: frame) else {
-            return "Host Analysis received a source frame without pixel transform; original media could not be confirmed."
+            return ValidationIssue(
+                reason: "Host Analysis received a source frame without pixel transform; original media could not be confirmed.",
+                isScaledProxy: false
+            )
         }
         let scaleX = frameInfo.pixelScaleX
         let scaleY = frameInfo.pixelScaleY
         guard scaleX.isFinite, scaleY.isFinite else {
-            return "Host Analysis received a source frame with invalid pixel transform; original media could not be confirmed."
+            return ValidationIssue(
+                reason: "Host Analysis received a source frame with invalid pixel transform; original media could not be confirmed.",
+                isScaledProxy: false
+            )
         }
         let scaleDelta = max(abs(scaleX - 1.0), abs(scaleY - 1.0))
         guard scaleDelta <= proxyScaleTolerance else {
-            return String(
-                format: "Host Analysis received scaled/proxy media (pixel transform %.2fx, %.2fx). Use original media and rerun Host Analysis.",
-                scaleX,
-                scaleY
+            return ValidationIssue(
+                reason: String(
+                    format: "Host Analysis received scaled/proxy media (pixel transform %.2fx, %.2fx). Use original media and rerun Host Analysis.",
+                    scaleX,
+                    scaleY
+                ),
+                isScaledProxy: true
             )
         }
         return nil

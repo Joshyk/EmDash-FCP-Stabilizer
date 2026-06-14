@@ -361,10 +361,10 @@ FxPlug.
   returns the hidden cache identity parameter. If a stale saved identity points at a different
   range, render drops it and reloads a compatible saved cache in the same callback before
   giving up, then keeps the hidden preview revision, `Host Analysis Status`, and `Stabilizer
-  Info` current so the stabilized proxy preview appears and reports `Proxy Preview` without
-  switching back to original media first. If Final Cut Pro still reports an older hidden
-  revision value, the runtime retries publishing the current token instead of assuming a
-  previous publish was accepted.
+  Info` current so the stabilized proxy preview appears and reports
+  `Original Analysis - Proxy Preview` without switching back to original media first. If
+  Final Cut Pro still reports an older hidden revision value, the runtime retries publishing
+  the current token instead of assuming a previous publish was accepted.
   When original-media validation maps a trimmed timeline render time back to the analyzed
   source time, the runtime saves that offset with the Host Analysis cache identity so
   proxy-only render instances can sample the same prepared motion path.

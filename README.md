@@ -248,7 +248,7 @@ hidden cache identity parameter. If a stale saved identity points at a different
 range, the same render callback drops it and reloads a compatible saved cache
 before giving up, then keeps the hidden preview revision, `Host Analysis Status`,
 and `Stabilizer Info` current so Final Cut Pro shows the stabilized proxy preview
-and reports `Proxy Preview`.
+and reports `Original Analysis - Proxy Preview`.
 If Final Cut Pro reports a render/timeline range that differs from the saved
 source analysis range, the render path accepts that active cache only after the
 current source-frame fingerprint validates against the saved frame set. During
