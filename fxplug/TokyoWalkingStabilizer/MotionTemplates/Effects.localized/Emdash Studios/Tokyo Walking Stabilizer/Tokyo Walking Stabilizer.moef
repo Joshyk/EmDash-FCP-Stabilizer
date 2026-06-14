@@ -273,7 +273,7 @@
 				<parameter name="Width" id="313" flags="8589934610" default="1" value="1920"/>
 				<parameter name="Height" id="314" flags="8589934610" default="1" value="1080"/>
 			</parameter>
-			<filter name="Tokyo Walking Stabilizer" id="10036" factoryID="6" pluginUUID="BEB2015D-70A9-43B0-8D5E-04CEE7ADC49D" pluginVersion="1" pluginName="Tokyo Walking Stabilizer" pluginDynamicParams="0">
+			<filter name="Tokyo Walking Stabilizer" id="10036" factoryID="6" pluginUUID="BEB2015D-70A9-43B0-8D5E-04CEE7ADC49D" pluginVersion="2" pluginName="Tokyo Walking Stabilizer" pluginDynamicParams="0">
 				<timing in="0 1 1 0" out="1529856 153600 1 0" offset="0 1 1 0"/>
 				<baseFlags>8589934609</baseFlags>
 				<parameter name="Footstep Jitter X Strength" id="7" flags="12884901904" default="1" value="1"/>

@@ -27,7 +27,7 @@
 			<key>com.apple.protocol</key>
 			<string>FxPlug</string>
 			<key>com.apple.version</key>
-			<string>1.6</string>
+			<string>1.7</string>
 		</dict>
 		<key>PrincipalClass</key>
 		<string>FxPrincipal</string>
@@ -61,7 +61,7 @@
 			<key>group</key>
 			<string>AF02FE29-857F-44AF-885C-CA7083B68584</string>
 			<key>infoString</key>
-			<string>Host-managed walking-gimbal stabilization with Metal Host Analysis, visible status, persisted prepared analysis, softened X/Y translation, and roll compensation without zoom.</string>
+			<string>Host-managed walking-gimbal stabilization with Metal Host Analysis, visible status, persisted prepared analysis, softened X/Y translation, roll compensation, and dynamic auto crop framing.</string>
 			<key>protocolNames</key>
 			<array>
 				<string>FxFilter</string>
@@ -69,7 +69,7 @@
 			<key>uuid</key>
 			<string>BEB2015D-70A9-43B0-8D5E-04CEE7ADC49D</string>
 			<key>version</key>
-			<string>1.6</string>
+			<string>1.7</string>
 		</dict>
 	</array>
 	<key>XPCService</key>
