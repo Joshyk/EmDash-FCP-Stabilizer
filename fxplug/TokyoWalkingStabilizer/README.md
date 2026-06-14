@@ -296,15 +296,19 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   in-progress analysis state while a compatible saved cache is already present, the plug-in
   prefers the saved cache and keeps the shared Ready/cache status visible instead of letting
   transient analyzer callback status mask it. When the analyzer callback is the active
-  state, `Host Analysis Status`, `Requested Sample`, `Clip Range`, and `Analysis Sample`
-  come from that same in-progress analysis store instead of mixing `Analyzing Host
+  state, `Host Analysis Status`, `Accepted Sample`, `Clip Range`, `Analysis Sample`, and
+  `Queue` come from that same in-progress analysis store instead of mixing `Analyzing Host
   Frames (N)` with stale cache metadata from another clip.
-- `Requested Sample`: read-only Inspector row showing the selected `Sample Size`.
+- `Accepted Sample`: read-only Inspector row showing the `Sample Size` accepted when Host
+  Analysis was requested, queued, or started.
 - `Clip Range`: read-only Inspector row showing the current clip start/end time.
 - `Analysis Sample`: read-only Inspector row showing the actual analyzed pixel sample size
   and frame count when analysis is available. Older saved timeline instances may keep
   stale saved Inspector strings, so use the compact runtime/source row in `Debug Overlay`
   to confirm the active render runtime.
+- `Queue`: read-only Inspector row showing the serial queue position as `#N of 1` and
+  compact queue reason while this clip is waiting. The queue intentionally keeps only the
+  latest Start request.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact

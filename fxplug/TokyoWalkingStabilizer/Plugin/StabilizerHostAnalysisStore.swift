@@ -369,7 +369,7 @@ final class StabilizerHostAnalysisStore {
         projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
         latestSampleSize = nil
-        analysisInfoText = "Analyzing..."
+        analysisInfoText = "Analyzing S\(Self.sampleScaleDescription(requestedSampleScalePercent))"
         bumpRevisionLocked()
         lock.unlock()
     }
@@ -385,20 +385,23 @@ final class StabilizerHostAnalysisStore {
         )
     }
 
-    func markRequested() {
+    func markRequested(requestedSampleScalePercent: Double) {
         lock.lock()
         if preparedAnalysis == nil && status != .analyzing {
             status = .requested
+            activeRequestedSampleScalePercent = requestedSampleScalePercent
+            analysisInfoText = "Requested S\(Self.sampleScaleDescription(requestedSampleScalePercent))"
             bumpRevisionLocked()
         }
         lock.unlock()
     }
 
-    func markQueued(position: Int, reason: String) {
+    func markQueued(position: Int, reason: String, requestedSampleScalePercent: Double) {
         lock.lock()
         if preparedAnalysis == nil {
             status = .queued
-            analysisInfoText = "Queued #\(position): \(Self.compactReason(reason))"
+            activeRequestedSampleScalePercent = requestedSampleScalePercent
+            analysisInfoText = "Queued #\(position) S\(Self.sampleScaleDescription(requestedSampleScalePercent)): \(Self.compactReason(reason))"
             bumpRevisionLocked()
         }
         lock.unlock()

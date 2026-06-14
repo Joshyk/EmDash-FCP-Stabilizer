@@ -139,10 +139,12 @@ media, while staying larger than the old compact panel.
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep
 stale saved Inspector strings, `Debug Overlay` is the live render-runtime
-indicator. `Requested Sample`, `Clip Range`, and `Analysis Sample` split the
-selected `Sample Size`, current clip start/end time, and actual analysis sample
-size into separate read-only Inspector rows; older saved timeline instances may
-still display stale saved info strings until the effect is reapplied.
+indicator. `Accepted Sample`, `Clip Range`, `Analysis Sample`, and `Queue` split
+the accepted `Sample Size`, current clip start/end time, actual analysis sample
+size, and serial queue position into separate read-only Inspector rows. `Queue`
+uses `#N of 1` because repeated Start presses keep only the latest queued request; older
+saved timeline instances may still display stale saved info strings until the
+effect is reapplied.
 During a real Host Analysis pass the status advances as `Analyzing Host Frames
 (N)`. If Final Cut Pro restores an in-progress analysis state while a compatible
 saved cache exists, the plug-in prefers the saved cache and keeps the shared

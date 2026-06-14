@@ -15,7 +15,7 @@ private enum ParameterID: UInt32 {
     case debugOverlay = 10
     case startHostAnalysis = 14
     case hostAnalysisStatus = 15
-    case requestedSampleInfo = 32
+    case acceptedSampleInfo = 32
     case clearHostAnalysisCache = 17
     case yStrength = 18
     case sampleScale = 19
@@ -29,12 +29,14 @@ private enum ParameterID: UInt32 {
     case hostAnalysisCacheIdentity = 33
     case clipRangeInfo = 34
     case analysisSampleInfo = 35
+    case queueInfo = 36
 }
 
 private struct StabilizerInfoFields {
-    let requestedSample: String
+    let acceptedSample: String
     let clipRange: String
     let analysisSample: String
+    let queue: String
 }
 
 private let tokyoWalkingStabilizerVersion = "0.3.60"
@@ -393,10 +395,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private final class SerialHostAnalysisRequest {
         let plugin: TokyoWalkingStabilizerPlugIn
         let analysisAPI: FxAnalysisAPI
+        let requestedSampleScalePercent: Double
 
-        init(plugin: TokyoWalkingStabilizerPlugIn, analysisAPI: FxAnalysisAPI) {
+        init(plugin: TokyoWalkingStabilizerPlugIn, analysisAPI: FxAnalysisAPI, requestedSampleScalePercent: Double) {
             self.plugin = plugin
             self.analysisAPI = analysisAPI
+            self.requestedSampleScalePercent = requestedSampleScalePercent
         }
     }
 
@@ -411,9 +415,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private let cacheIdentityLock = NSLock()
     private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.TokyoWalkingStabilizer.PersistentCacheMonitor")
     private var lastPublishedStatus = ""
-    private var lastPublishedRequestedSampleInfo = ""
+    private var lastPublishedAcceptedSampleInfo = ""
     private var lastPublishedClipRangeInfo = ""
     private var lastPublishedAnalysisSampleInfo = ""
+    private var lastPublishedQueueInfo = ""
     private var lastPublishedRenderRevision: Double?
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
@@ -592,8 +597,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
-            withName: "Requested Sample",
-            parameterID: ParameterID.requestedSampleInfo.rawValue,
+            withName: "Accepted Sample",
+            parameterID: ParameterID.acceptedSampleInfo.rawValue,
             defaultValue: "Sample: 100%",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
@@ -607,6 +612,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             withName: "Analysis Sample",
             parameterID: ParameterID.analysisSampleInfo.rawValue,
             defaultValue: "Analysis: -",
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
+        )
+        paramAPI.addStringParameter(
+            withName: "Queue",
+            parameterID: ParameterID.queueInfo.rawValue,
+            defaultValue: "Queue: -",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addFloatSlider(
@@ -727,6 +738,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
         let expectedRange = currentInputRange()
+        let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         hostAnalysisStore.reset()
         let loadedPersistentCache: Bool
         if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
@@ -748,7 +760,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
         if !loadedPersistentCache {
-            requestHostAnalysisIfNeeded(force: true)
+            requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
         }
     }
 
@@ -772,8 +784,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         force: Bool = false,
         allowSerialQueue: Bool = true,
         queuedStartRequest: Bool = false,
-        queuedAnalysisAPI: FxAnalysisAPI? = nil
+        queuedAnalysisAPI: FxAnalysisAPI? = nil,
+        acceptedSampleScalePercentOverride: Double? = nil
     ) -> HostAnalysisRequestResult {
+        let acceptedSampleScalePercent = acceptedSampleScalePercentOverride ?? requestedSampleScalePercent(for: currentInputRange())
         let isQueuedRequest = queuedStartRequest || Self.isQueuedSerialAnalysis(self)
         if hostAnalysisStore.hasCompletedAnalysis && !(force && isQueuedRequest) {
             Self.removeQueuedSerialAnalysis(self)
@@ -800,8 +814,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard canStart else {
             let reason = Self.analysisStateDescription(analysisState)
             if allowSerialQueue && force {
-                let position = Self.enqueueSerialAnalysis(self, analysisAPI: analysisAPI)
-                hostAnalysisStore.markQueued(position: position, reason: reason)
+                let position = Self.enqueueSerialAnalysis(self, analysisAPI: analysisAPI, requestedSampleScalePercent: acceptedSampleScalePercent)
+                hostAnalysisStore.markQueued(position: position, reason: reason, requestedSampleScalePercent: acceptedSampleScalePercent)
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -824,8 +838,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard Self.reserveHostAnalysisStartIfAvailable() else {
             let reason = "ActiveHostAnalysisSession"
             if allowSerialQueue && force {
-                let position = Self.enqueueSerialAnalysis(self, analysisAPI: analysisAPI)
-                hostAnalysisStore.markQueued(position: position, reason: reason)
+                let position = Self.enqueueSerialAnalysis(self, analysisAPI: analysisAPI, requestedSampleScalePercent: acceptedSampleScalePercent)
+                hostAnalysisStore.markQueued(position: position, reason: reason, requestedSampleScalePercent: acceptedSampleScalePercent)
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -855,7 +869,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             try analysisAPI.startForwardAnalysis(kFxAnalysisLocation_GPU)
             NSLog("TokyoWalkingStabilizer: requested GPU Host Analysis for the effect clip.")
             os_log("Requested GPU Host Analysis for the effect clip.", log: stabilizerHostAnalysisLog, type: .default)
-            hostAnalysisStore.markRequested()
+            hostAnalysisStore.markRequested(requestedSampleScalePercent: acceptedSampleScalePercent)
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -874,11 +888,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     @discardableResult
-    private static func enqueueSerialAnalysis(_ plugin: TokyoWalkingStabilizerPlugIn, analysisAPI: FxAnalysisAPI) -> Int {
+    private static func enqueueSerialAnalysis(
+        _ plugin: TokyoWalkingStabilizerPlugIn,
+        analysisAPI: FxAnalysisAPI,
+        requestedSampleScalePercent: Double
+    ) -> Int {
         serialAnalysisQueueLock.lock()
         let replacedCount = serialAnalysisQueue.count
         serialAnalysisQueue.removeAll(keepingCapacity: true)
-        serialAnalysisQueue.append(SerialHostAnalysisRequest(plugin: plugin, analysisAPI: analysisAPI))
+        serialAnalysisQueue.append(SerialHostAnalysisRequest(
+            plugin: plugin,
+            analysisAPI: analysisAPI,
+            requestedSampleScalePercent: requestedSampleScalePercent
+        ))
         let position = serialAnalysisQueue.count
         serialAnalysisQueueLock.unlock()
         os_log(
@@ -953,7 +975,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 force: true,
                 allowSerialQueue: true,
                 queuedStartRequest: true,
-                queuedAnalysisAPI: nextRequest.analysisAPI
+                queuedAnalysisAPI: nextRequest.analysisAPI,
+                acceptedSampleScalePercentOverride: nextRequest.requestedSampleScalePercent
             )
             switch result {
             case .started, .queued:
@@ -1047,9 +1070,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let info = Self.stabilizerInfoFields(analysisInfo: analysisInfo, state: state)
         statusLock.lock()
         let shouldPublish = force
-            || info.requestedSample != lastPublishedRequestedSampleInfo
+            || info.acceptedSample != lastPublishedAcceptedSampleInfo
             || info.clipRange != lastPublishedClipRangeInfo
             || info.analysisSample != lastPublishedAnalysisSampleInfo
+            || info.queue != lastPublishedQueueInfo
         statusLock.unlock()
         guard shouldPublish else {
             return
@@ -1058,14 +1082,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return
         }
-        let didSetRequestedSample = settingAPI.setStringParameterValue(info.requestedSample, toParameter: ParameterID.requestedSampleInfo.rawValue)
+        let didSetAcceptedSample = settingAPI.setStringParameterValue(info.acceptedSample, toParameter: ParameterID.acceptedSampleInfo.rawValue)
         let didSetClipRange = settingAPI.setStringParameterValue(info.clipRange, toParameter: ParameterID.clipRangeInfo.rawValue)
         let didSetAnalysisSample = settingAPI.setStringParameterValue(info.analysisSample, toParameter: ParameterID.analysisSampleInfo.rawValue)
-        if didSetRequestedSample && didSetClipRange && didSetAnalysisSample {
+        let didSetQueue = settingAPI.setStringParameterValue(info.queue, toParameter: ParameterID.queueInfo.rawValue)
+        if didSetAcceptedSample && didSetClipRange && didSetAnalysisSample && didSetQueue {
             statusLock.lock()
-            lastPublishedRequestedSampleInfo = info.requestedSample
+            lastPublishedAcceptedSampleInfo = info.acceptedSample
             lastPublishedClipRangeInfo = info.clipRange
             lastPublishedAnalysisSampleInfo = info.analysisSample
+            lastPublishedQueueInfo = info.queue
             statusLock.unlock()
         } else {
             NSLog("TokyoWalkingStabilizer: failed to update one or more Stabilizer Info split parameters.")
@@ -1073,7 +1099,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func stabilizerInfoFields(analysisInfo: String, state: StabilizerPluginState?) -> StabilizerInfoFields {
-        let requestedSample = state.map { "Sample: \(StabilizerSampleScale.scale(for: $0.sampleScale).displayName)" } ?? "Sample: -"
+        let acceptedSample = acceptedSampleDescription(from: analysisInfo)
+            ?? state.map { "Sample: \(StabilizerSampleScale.scale(for: $0.sampleScale).displayName)" }
+            ?? "Sample: -"
         let clipRange = state.flatMap { clipRangeDescription(from: $0) }.map { "Clip: \($0)" } ?? "Clip: -"
         let analysisSample: String
         if let sample = analysisSampleDescription(from: analysisInfo) {
@@ -1086,10 +1114,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             analysisSample = "Analysis: -"
         }
         return StabilizerInfoFields(
-            requestedSample: requestedSample,
+            acceptedSample: acceptedSample,
             clipRange: clipRange,
-            analysisSample: analysisSample
+            analysisSample: analysisSample,
+            queue: queueDescription(from: analysisInfo)
         )
+    }
+
+    private static func acceptedSampleDescription(from analysisInfo: String) -> String? {
+        analysisInfo.split(separator: " ").first { token in
+            token.hasPrefix("S") && token.hasSuffix("%")
+        }.map { token in
+            "Sample: \(token.dropFirst())"
+        }
     }
 
     private static func analysisSampleDescription(from analysisInfo: String) -> String? {
@@ -1106,6 +1143,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisInfo.split(separator: " ").first { token in
             token.hasSuffix("f") && token.dropLast().allSatisfy(\.isNumber)
         }.map(String.init)
+    }
+
+    private static func queueDescription(from analysisInfo: String) -> String {
+        if analysisInfo.hasPrefix("Queued #") {
+            let pieces = analysisInfo.split(separator: ":", maxSplits: 1).map(String.init)
+            let head = pieces.first ?? analysisInfo
+            let queueNumber = head.split(separator: " ").first { $0.hasPrefix("#") }.map(String.init) ?? "#?"
+            let reason = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
+            let order = "\(queueNumber) of 1"
+            return reason.isEmpty ? "Queue: \(order)" : "Queue: \(order) \(reason)"
+        }
+        if analysisInfo.hasPrefix("Requested ") {
+            return "Queue: Starting"
+        }
+        if analysisInfo.hasPrefix("Analyzing") {
+            return "Queue: Active"
+        }
+        return "Queue: -"
     }
 
     private static func clipRangeDescription(from state: StabilizerPluginState) -> String? {
@@ -2895,6 +2950,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             paramAPI.getIntValue(&sampleScale, fromParameter: ParameterID.sampleScale.rawValue, at: time)
         }
         return StabilizerSampleScale.scale(for: sampleScale).percent
+    }
+
+    private func requestedSampleScalePercent(for expectedRange: HostAnalysisExpectedRange?) -> Double {
+        guard let expectedRange,
+              expectedRange.startSeconds.isFinite
+        else {
+            return requestedSampleScalePercent(at: .zero)
+        }
+        return requestedSampleScalePercent(at: CMTime(seconds: expectedRange.startSeconds, preferredTimescale: 600))
     }
 
     private func publishHostAnalysisRenderDiagnostics(

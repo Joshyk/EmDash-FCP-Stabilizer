@@ -178,9 +178,10 @@
 		<target object="10036" channel="./14" name="Start Host Analysis"/>
 		<target object="10036" channel="./17" name="Clear Host Analysis Cache"/>
 		<target object="10036" channel="./15" name="Host Analysis Status"/>
-		<target object="10036" channel="./32" name="Requested Sample"/>
+		<target object="10036" channel="./32" name="Accepted Sample"/>
 		<target object="10036" channel="./34" name="Clip Range"/>
 		<target object="10036" channel="./35" name="Analysis Sample"/>
+		<target object="10036" channel="./36" name="Queue"/>
 		<target object="10036" channel="./10" name="Debug Overlay"/>
 	</publishSettings>
 	<currentFrame>215040 153600 1 0</currentFrame>
@@ -289,9 +290,10 @@
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
 					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.60" value="Needs Analysis | FxPlug 0.3.60"/>
-					<parameter name="Requested Sample" id="32" flags="12884901909" default="Sample: 100%" value="Sample: 100%"/>
+					<parameter name="Accepted Sample" id="32" flags="12884901909" default="Sample: 100%" value="Sample: 100%"/>
 					<parameter name="Clip Range" id="34" flags="12884901909" default="Clip: -" value="Clip: -"/>
 					<parameter name="Analysis Sample" id="35" flags="12884901909" default="Analysis: -" value="Analysis: -"/>
+					<parameter name="Queue" id="36" flags="12884901909" default="Queue: -" value="Queue: -"/>
 				<parameter name="Host Analysis Cache Identity" id="33" flags="12884901906" default="" value=""/>
 				<parameter name="Render Revision" id="20" flags="12884901906" default="0" value="0"/>
 				<parameter name="Mix" id="10001" flags="12884901888" default="1" value="1"/>
