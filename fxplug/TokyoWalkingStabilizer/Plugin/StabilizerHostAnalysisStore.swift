@@ -1104,32 +1104,18 @@ final class StabilizerHostAnalysisStore {
         eventName: String? = nil,
         cacheIdentity: String? = nil
     ) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MM-dd HH:mm"
-        let dateText = formatter.string(from: completedAt)
-        let sourceText = sourceInfo?.sourceSizeDescription ?? "unknown"
-        let scaleText = sourceInfo?.pixelScaleDescription ?? "unknown"
         let sampleText: String
         if let sampleWidth, let sampleHeight {
             sampleText = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
         } else {
             sampleText = "unknown"
         }
-        var parts = ["\(Self.compactPrefix(prefix)) \(dateText)", "\(frameCount)f", "sample \(sampleText)"]
+        var parts = [Self.compactPrefix(prefix), "\(frameCount)f", sampleText]
         if let requestedSampleScalePercent,
            requestedSampleScalePercent.isFinite {
-            parts.append("req \(Self.sampleScaleDescription(requestedSampleScalePercent))")
+            parts.append("S\(Self.sampleScaleDescription(requestedSampleScalePercent))")
         }
-        if let rangeText = Self.clipRangeDescription(startSeconds: rangeStartSeconds, endSeconds: rangeEndSeconds) {
-            parts.append("clip \(rangeText)")
-        }
-        parts.append("src \(sourceText)")
-        parts.append("scale \(scaleText)")
-        if let eventName, !eventName.isEmpty {
-            parts.append("Event \(eventName)")
-        }
-        return parts.joined(separator: " | ")
+        return parts.joined(separator: " ")
     }
 
     private static func compactPrefix(_ prefix: String) -> String {

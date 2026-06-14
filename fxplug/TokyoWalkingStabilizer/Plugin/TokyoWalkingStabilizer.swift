@@ -1077,13 +1077,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static func stabilizerInfoText(analysisInfo: String, state: StabilizerPluginState?) -> String {
         var lines: [String] = []
         if let state {
-            var summary = "Fx \(tokyoWalkingStabilizerVersion) | Sample \(StabilizerSampleScale.scale(for: state.sampleScale).displayName)"
+            var summary = "Fx\(tokyoWalkingStabilizerVersion) S\(StabilizerSampleScale.scale(for: state.sampleScale).displayName)"
             if let clipRange = clipRangeDescription(from: state) {
-                summary += " | Clip \(clipRange)"
+                summary += " C\(clipRange)"
             }
             lines.append(summary)
         } else {
-            lines.append("Fx \(tokyoWalkingStabilizerVersion)")
+            lines.append("Fx\(tokyoWalkingStabilizerVersion)")
         }
         lines.append(analysisInfo)
         return lines.joined(separator: "\n")
