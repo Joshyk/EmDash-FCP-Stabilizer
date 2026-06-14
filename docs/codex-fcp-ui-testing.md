@@ -44,6 +44,38 @@ already has `Tokyo Walking Stabilizer`, run:
 scripts/fcp_ui_test.sh analyze-selected
 ```
 
+To force the selected clip's Host Analysis sample before starting:
+
+```sh
+scripts/fcp_ui_test.sh start-analysis-at-sample 50
+```
+
+## Batch Queueing
+
+For compound-clip batches, select the target Event in Final Cut Pro's Browser,
+make the first visible compound clip the selected Browser item, and keep the
+Browser list scoped to the compounds you want to process. Then run:
+
+```sh
+scripts/fcp_ui_test.sh queue-current-event-compounds 50
+```
+
+The batch helper opens each visible Browser item, walks its open timeline from
+the beginning, sets `Sample Size` to the requested value, and presses `Start
+Host Analysis` for clips where the `Tokyo Walking Stabilizer` controls are
+accessible. Clips without accessible Stabilizer controls are logged as skipped.
+Pass explicit limits when the Browser status count is not the intended batch:
+
+```sh
+scripts/fcp_ui_test.sh queue-current-event-compounds 50 14 200
+```
+
+For only the currently open compound timeline:
+
+```sh
+scripts/fcp_ui_test.sh queue-open-timeline-clips 50
+```
+
 ## Diagnostics
 
 When the UI labels have drifted or a command cannot find the expected control,
