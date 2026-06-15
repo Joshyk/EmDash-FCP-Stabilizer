@@ -4189,15 +4189,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     type: .default,
                     route.sessionID.uuidString,
                     CMTimeGetSeconds(frameTime),
-                    analysisSample.frame.sampleWidth,
-                    analysisSample.frame.sampleHeight
+                    analysisSample.sampleWidth,
+                    analysisSample.sampleHeight
                 )
                 NSLog(
                     "TokyoWalkingStabilizer: received first Host Analysis frame for session %@ at %.3f seconds, sample %dx%d.",
                     route.sessionID.uuidString,
                     CMTimeGetSeconds(frameTime),
-                    analysisSample.frame.sampleWidth,
-                    analysisSample.frame.sampleHeight
+                    analysisSample.sampleWidth,
+                    analysisSample.sampleHeight
                 )
             }
             publishActiveAnalysisProgressIfNeeded(

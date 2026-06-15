@@ -121,17 +121,25 @@ struct StabilizerAnalysisFrame {
     }
 
     static func fingerprint(for pixels: [UInt8]) -> String {
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        func combine(_ byte: UInt8) {
-            hash ^= UInt64(byte)
-            hash = hash &* 1_099_511_628_211
-        }
+        var hash = fingerprintInitialHash
         for byte in pixels {
-            combine(byte)
+            combineFingerprintByte(byte, into: &hash)
         }
-        var count = UInt64(pixels.count)
+        return fingerprintString(hash: hash, byteCount: pixels.count)
+    }
+
+    static let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
+
+    static func combineFingerprintByte(_ byte: UInt8, into hash: inout UInt64) {
+        hash ^= UInt64(byte)
+        hash = hash &* 1_099_511_628_211
+    }
+
+    static func fingerprintString(hash initialHash: UInt64, byteCount: Int) -> String {
+        var hash = initialHash
+        var count = UInt64(byteCount)
         for _ in 0..<MemoryLayout<UInt64>.size {
-            combine(UInt8(count & 0xff))
+            combineFingerprintByte(UInt8(count & 0xff), into: &hash)
             count >>= 8
         }
         return String(format: "%016llx", hash)
@@ -163,11 +171,18 @@ extension StabilizerAnalysisFrame {
 }
 
 struct StabilizerAnalysisSample {
-    let frame: StabilizerAnalysisFrame
+    let time: Double
+    let pixels: [UInt8]
+    let sampleWidth: Int
+    let sampleHeight: Int
     let lumaBuffer: MTLBuffer
     let lumaBufferLease: StabilizerDownsampleBufferLease?
     let downsampleMilliseconds: Double
-    let blurMilliseconds: Double
+}
+
+fileprivate struct StabilizerFrameMetrics {
+    let blurAmount: Float
+    let fingerprint: String
 }
 
 final class StabilizerDownsampleBufferLease {
@@ -326,6 +341,29 @@ struct StabilizerPairMotionTiming {
 fileprivate struct PairMotionResult {
     let motion: PairMotion
     let timing: StabilizerPairMotionTiming
+    let overlappedFrameMetrics: StabilizerFrameMetrics?
+    let overlappedMetricsMilliseconds: Double
+}
+
+fileprivate struct StabilizerPendingShiftResult {
+    let commandBuffer: MTLCommandBuffer
+    let resultBuffer: MTLBuffer
+    let startedAt: CFAbsoluteTime
+
+    func waitForResult() throws -> (dx: Float, dy: Float, score: Float, searchRadiusHit: Bool, milliseconds: Double) {
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw error
+        }
+        let result = resultBuffer.contents().assumingMemoryBound(to: StabilizerShiftResult.self)[0]
+        return (
+            result.dx,
+            result.dy,
+            result.score,
+            result.searchRadiusHit != 0,
+            (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
+        )
+    }
 }
 
 private struct StabilizerMotionBlock {
@@ -1264,7 +1302,8 @@ enum AutoStabilizationEstimator {
     }
 
     static func analysisFrame(from tile: FxImageTile, at frameTime: CMTime? = nil, sampleWidth: Int, sampleHeight: Int) throws -> StabilizerAnalysisFrame {
-        try analysisSample(from: tile, at: frameTime, sampleWidth: sampleWidth, sampleHeight: sampleHeight).frame
+        let sample = try analysisSample(from: tile, at: frameTime, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        return analysisFrame(from: sample, metrics: frameMetrics(sample.pixels, sampleWidth: sample.sampleWidth, sampleHeight: sample.sampleHeight))
     }
 
     static func analysisSample(
@@ -1325,12 +1364,10 @@ enum AutoStabilizationEstimator {
             throw error
         }
 
+        let pixelCount = sampleWidth * sampleHeight
         let pointer = outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
-        let pixels = Array(UnsafeBufferPointer(start: pointer, count: sampleWidth * sampleHeight))
+        let pixels = Array(UnsafeBufferPointer(start: pointer, count: pixelCount))
         let downsampleMilliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
-        let blurStartedAt = CFAbsoluteTimeGetCurrent()
-        let blur = blurAmount(pixels, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
-        let blurMilliseconds = (CFAbsoluteTimeGetCurrent() - blurStartedAt) * 1000.0
         os_log(
             "Host Analysis downsample frame %{public}.3f sample %{public}dx%{public}d took %{public}.3f ms; reused output buffer %{public}@.",
             log: stabilizerHostAnalysisLog,
@@ -1342,17 +1379,24 @@ enum AutoStabilizationEstimator {
             outputLease?.reused == true ? "yes" : "no"
         )
         return StabilizerAnalysisSample(
-            frame: StabilizerAnalysisFrame(
-                time: time,
-                pixels: pixels,
-                sampleWidth: sampleWidth,
-                sampleHeight: sampleHeight,
-                blurAmount: blur
-            ),
+            time: time,
+            pixels: pixels,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
             lumaBuffer: outputBuffer,
             lumaBufferLease: outputLease,
-            downsampleMilliseconds: downsampleMilliseconds,
-            blurMilliseconds: blurMilliseconds
+            downsampleMilliseconds: downsampleMilliseconds
+        )
+    }
+
+    fileprivate static func analysisFrame(from sample: StabilizerAnalysisSample, metrics: StabilizerFrameMetrics) -> StabilizerAnalysisFrame {
+        StabilizerAnalysisFrame(
+            time: sample.time,
+            pixels: sample.pixels,
+            sampleWidth: sample.sampleWidth,
+            sampleHeight: sample.sampleHeight,
+            blurAmount: metrics.blurAmount,
+            fingerprint: metrics.fingerprint
         )
     }
 
@@ -1405,10 +1449,17 @@ enum AutoStabilizationEstimator {
         ).motion
     }
 
-    fileprivate static func pairMotionResult(context: MetalAnalysisContext, previous: MTLBuffer, current: MTLBuffer, sampleWidth: Int, sampleHeight: Int) throws -> PairMotionResult {
+    fileprivate static func pairMotionResult(
+        context: MetalAnalysisContext,
+        previous: MTLBuffer,
+        current: MTLBuffer,
+        sampleWidth: Int,
+        sampleHeight: Int,
+        overlappedMetricsWork: (() -> StabilizerFrameMetrics)? = nil
+    ) throws -> PairMotionResult {
         let pairStartedAt = CFAbsoluteTimeGetCurrent()
         let globalStartedAt = CFAbsoluteTimeGetCurrent()
-        let global = try estimateShift(
+        let pendingGlobal = try beginEstimateShift(
             context: context,
             previous: previous,
             current: current,
@@ -1423,6 +1474,10 @@ enum AutoStabilizationEstimator {
             sampleWidth: sampleWidth,
             sampleHeight: sampleHeight
         )
+        let metricsStartedAt = CFAbsoluteTimeGetCurrent()
+        let overlappedMetrics = overlappedMetricsWork?()
+        let overlappedMetricsMilliseconds = overlappedMetrics == nil ? 0.0 : (CFAbsoluteTimeGetCurrent() - metricsStartedAt) * 1000.0
+        let global = try pendingGlobal.waitForResult()
         let globalDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - globalStartedAt) * 1000.0
         let center = (round(global.dx), round(global.dy))
         let blocks = motionBlocks(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
@@ -1441,7 +1496,7 @@ enum AutoStabilizationEstimator {
         )
         let localDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - localStartedAt) * 1000.0
         os_log(
-            "Host Analysis shift scoring pair sample %{public}dx%{public}d blocks %{public}d global %{public}.3f ms local batch %{public}.3f ms total %{public}.3f ms.",
+            "Host Analysis shift scoring pair sample %{public}dx%{public}d blocks %{public}d global %{public}.3f ms local batch %{public}.3f ms overlapped metrics %{public}.3f ms total %{public}.3f ms.",
             log: stabilizerHostAnalysisLog,
             type: .debug,
             sampleWidth,
@@ -1449,6 +1504,7 @@ enum AutoStabilizationEstimator {
             blocks.count,
             globalDurationMilliseconds,
             localDurationMilliseconds,
+            overlappedMetricsMilliseconds,
             (CFAbsoluteTimeGetCurrent() - pairStartedAt) * 1000.0
         )
         let acceptedBlocks = acceptedMotionBlocks(blockShifts, global: (global.dx, global.dy, global.score))
@@ -1509,7 +1565,67 @@ enum AutoStabilizationEstimator {
                 globalMilliseconds: globalDurationMilliseconds,
                 localBatchMilliseconds: localDurationMilliseconds,
                 totalMilliseconds: (CFAbsoluteTimeGetCurrent() - pairStartedAt) * 1000.0
+            ),
+            overlappedFrameMetrics: overlappedMetrics,
+            overlappedMetricsMilliseconds: overlappedMetricsMilliseconds
+        )
+    }
+
+    fileprivate static func frameMetrics(_ pixels: [UInt8], sampleWidth: Int, sampleHeight: Int) -> StabilizerFrameMetrics {
+        pixels.withUnsafeBufferPointer { buffer in
+            frameMetrics(
+                buffer.baseAddress!,
+                byteCount: pixels.count,
+                sampleWidth: sampleWidth,
+                sampleHeight: sampleHeight
             )
+        }
+    }
+
+    private static func frameMetrics(
+        _ pixels: UnsafePointer<UInt8>,
+        byteCount: Int,
+        sampleWidth: Int,
+        sampleHeight: Int
+    ) -> StabilizerFrameMetrics {
+        var hash = StabilizerAnalysisFrame.fingerprintInitialHash
+        var totalGradient: Float = 0.0
+        var edgeSampleCount: Float = 0.0
+        var strongEdgeSampleCount: Float = 0.0
+        var count: Float = 0.0
+        for y in 0..<sampleHeight {
+            let row = y * sampleWidth
+            for x in 0..<sampleWidth {
+                let index = row + x
+                StabilizerAnalysisFrame.combineFingerprintByte(pixels[index], into: &hash)
+                if y > 0, y < sampleHeight - 1, x > 0, x < sampleWidth - 1 {
+                    let horizontal = abs(Int(pixels[row + x + 1]) - Int(pixels[row + x - 1]))
+                    let vertical = abs(Int(pixels[row + sampleWidth + x]) - Int(pixels[row - sampleWidth + x]))
+                    let gradient = Float(horizontal + vertical) / 510.0
+                    totalGradient += gradient
+                    if gradient >= 0.05 {
+                        edgeSampleCount += 1.0
+                    }
+                    if gradient >= 0.10 {
+                        strongEdgeSampleCount += 1.0
+                    }
+                    count += 1.0
+                }
+            }
+        }
+        let blur: Float
+        if count > 0.0 {
+            let meanGradient = totalGradient / count
+            let edgeCoverage = edgeSampleCount / count
+            let strongEdgeCoverage = strongEdgeSampleCount / count
+            let sharpnessEvidence = max(meanGradient, edgeCoverage * 0.45, strongEdgeCoverage * 0.9)
+            blur = 1.0 - clamp((sharpnessEvidence - 0.006) / 0.055, min: 0.0, max: 1.0)
+        } else {
+            blur = 1.0
+        }
+        return StabilizerFrameMetrics(
+            blurAmount: blur,
+            fingerprint: StabilizerAnalysisFrame.fingerprintString(hash: hash, byteCount: byteCount)
         )
     }
 
@@ -1721,6 +1837,41 @@ enum AutoStabilizationEstimator {
         sampleWidth: Int,
         sampleHeight: Int
     ) throws -> (dx: Float, dy: Float, score: Float, searchRadiusHit: Bool) {
+        let pending = try beginEstimateShift(
+            context: context,
+            previous: previous,
+            current: current,
+            x0: x0,
+            y0: y0,
+            width: width,
+            height: height,
+            radius: radius,
+            center: center,
+            refine: refine,
+            stride: stride,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight
+        )
+        let result = try pending.waitForResult()
+        return (result.dx, result.dy, result.score, result.searchRadiusHit)
+    }
+
+    private static func beginEstimateShift(
+        context: MetalAnalysisContext,
+        previous: MTLBuffer,
+        current: MTLBuffer,
+        x0: Int,
+        y0: Int,
+        width: Int,
+        height: Int,
+        radius: Int,
+        center: (Float, Float),
+        refine: Bool,
+        stride: UInt32,
+        sampleWidth: Int,
+        sampleHeight: Int
+    ) throws -> StabilizerPendingShiftResult {
+        let startedAt = CFAbsoluteTimeGetCurrent()
         let centerX = Int(center.0.rounded())
         let centerY = Int(center.1.rounded())
         let side = (radius * 2) + 1
@@ -1784,13 +1935,11 @@ enum AutoStabilizationEstimator {
         )
         resolveEncoder.endEncoding()
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw error
-        }
-
-        let result = resultBuffer.contents().assumingMemoryBound(to: StabilizerShiftResult.self)[0]
-        return (result.dx, result.dy, result.score, result.searchRadiusHit != 0)
+        return StabilizerPendingShiftResult(
+            commandBuffer: commandBuffer,
+            resultBuffer: resultBuffer,
+            startedAt: startedAt
+        )
     }
 
     private static func estimateShifts(
@@ -2817,6 +2966,12 @@ enum AutoStabilizationEstimator {
     }
 }
 
+struct StabilizerStreamingAnalysisAppendResult {
+    let frame: StabilizerAnalysisFrame
+    let pairTiming: StabilizerPairMotionTiming?
+    let metricsMilliseconds: Double
+}
+
 final class StreamingStabilizationAnalysisBuilder {
     private var context: MetalAnalysisContext?
     private var frames: [StabilizerAnalysisFrame] = []
@@ -2832,21 +2987,21 @@ final class StreamingStabilizationAnalysisBuilder {
         frames.count
     }
 
-    func append(_ sample: StabilizerAnalysisSample) throws -> StabilizerPairMotionTiming? {
-        let frame = sample.frame
-        guard frame.pixels.count == frame.sampleWidth * frame.sampleHeight else {
+    func append(_ sample: StabilizerAnalysisSample) throws -> StabilizerStreamingAnalysisAppendResult {
+        let expectedPixelCount = sample.sampleWidth * sample.sampleHeight
+        guard sample.pixels.count == expectedPixelCount else {
             throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis frame pixels were unavailable.")
         }
         if let sampleWidth, let sampleHeight {
-            guard frame.sampleWidth == sampleWidth, frame.sampleHeight == sampleHeight else {
+            guard sample.sampleWidth == sampleWidth, sample.sampleHeight == sampleHeight else {
                 throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis frames used mixed sample sizes.")
             }
-            if let previousFrameTime = frames.last?.time, frame.time <= previousFrameTime {
+            if let previousFrameTime = frames.last?.time, sample.time <= previousFrameTime {
                 throw AutoStabilizationEstimator.metalError("Stabilizer Host Analysis frames were not delivered in increasing time order.")
             }
         } else {
-            sampleWidth = frame.sampleWidth
-            sampleHeight = frame.sampleHeight
+            sampleWidth = sample.sampleWidth
+            sampleHeight = sample.sampleHeight
         }
 
         if context == nil {
@@ -2855,21 +3010,42 @@ final class StreamingStabilizationAnalysisBuilder {
         guard let context else {
             throw AutoStabilizationEstimator.metalError("Stabilizer Metal analysis context was unavailable.")
         }
-        try context.validateFrameBuffer(sample.lumaBuffer, sampleWidth: frame.sampleWidth, sampleHeight: frame.sampleHeight)
+        try context.validateFrameBuffer(sample.lumaBuffer, sampleWidth: sample.sampleWidth, sampleHeight: sample.sampleHeight)
 
         let currentFrameBuffer = sample.lumaBuffer
         let timing: StabilizerPairMotionTiming?
+        let metrics: StabilizerFrameMetrics
+        let metricsMilliseconds: Double
         if let previousFrameBuffer {
             let result = try AutoStabilizationEstimator.pairMotionResult(
                 context: context,
                 previous: previousFrameBuffer,
                 current: currentFrameBuffer,
-                sampleWidth: frame.sampleWidth,
-                sampleHeight: frame.sampleHeight
+                sampleWidth: sample.sampleWidth,
+                sampleHeight: sample.sampleHeight,
+                overlappedMetricsWork: {
+                    AutoStabilizationEstimator.frameMetrics(
+                        sample.pixels,
+                        sampleWidth: sample.sampleWidth,
+                        sampleHeight: sample.sampleHeight
+                    )
+                }
             )
             motions.append(result.motion)
             timing = result.timing
+            guard let overlappedMetrics = result.overlappedFrameMetrics else {
+                throw AutoStabilizationEstimator.metalError("Stabilizer frame metrics were unavailable after overlapped Host Analysis.")
+            }
+            metrics = overlappedMetrics
+            metricsMilliseconds = result.overlappedMetricsMilliseconds
         } else {
+            let metricsStartedAt = CFAbsoluteTimeGetCurrent()
+            metrics = AutoStabilizationEstimator.frameMetrics(
+                sample.pixels,
+                sampleWidth: sample.sampleWidth,
+                sampleHeight: sample.sampleHeight
+            )
+            metricsMilliseconds = (CFAbsoluteTimeGetCurrent() - metricsStartedAt) * 1000.0
             motions.append(PairMotion(
                 dx: 0.0,
                 dy: 0.0,
@@ -2891,10 +3067,15 @@ final class StreamingStabilizationAnalysisBuilder {
             ))
             timing = nil
         }
+        let frame = AutoStabilizationEstimator.analysisFrame(from: sample, metrics: metrics)
         frames.append(frame.withoutRetainedPixels())
         previousFrameBuffer = currentFrameBuffer
         previousFrameBufferLease = sample.lumaBufferLease
-        return timing
+        return StabilizerStreamingAnalysisAppendResult(
+            frame: frame,
+            pairTiming: timing,
+            metricsMilliseconds: metricsMilliseconds
+        )
     }
 
     func preparedAnalysis() throws -> StabilizerPreparedAnalysis? {

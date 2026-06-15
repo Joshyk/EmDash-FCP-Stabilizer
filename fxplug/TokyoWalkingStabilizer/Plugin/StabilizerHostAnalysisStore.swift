@@ -143,10 +143,10 @@ private struct HostAnalysisTimingAccumulator {
     var finishMilliseconds = 0.0
     var persistMilliseconds = 0.0
 
-    mutating func record(sample: StabilizerAnalysisSample) {
+    mutating func record(sample: StabilizerAnalysisSample, metricsMilliseconds: Double) {
         downsampleFrameCount += 1
         downsampleMilliseconds += sample.downsampleMilliseconds
-        blurMilliseconds += sample.blurMilliseconds
+        blurMilliseconds += metricsMilliseconds
     }
 
     mutating func record(pairTiming: StabilizerPairMotionTiming) {
@@ -676,8 +676,7 @@ final class StabilizerHostAnalysisStore {
     }
 
     func append(_ sample: StabilizerAnalysisSample, sourceInfo: StabilizerSourceFrameInfo?) throws {
-        let frame = sample.frame
-        let key = Self.timeKey(frame.time)
+        let key = Self.timeKey(sample.time)
         lock.lock()
         if framesByTimeKey[key] != nil {
             lock.unlock()
@@ -687,7 +686,6 @@ final class StabilizerHostAnalysisStore {
             streamingAnalysisBuilder = StreamingStabilizationAnalysisBuilder()
         }
         let builder = streamingAnalysisBuilder
-        analysisTiming.record(sample: sample)
         lock.unlock()
 
         guard let builder else {
@@ -697,15 +695,16 @@ final class StabilizerHostAnalysisStore {
                 userInfo: [NSLocalizedDescriptionKey: "Stabilizer streaming analysis builder was unavailable."]
             )
         }
-        if let pairTiming = try builder.append(sample) {
-            lock.lock()
-            analysisTiming.record(pairTiming: pairTiming)
-            lock.unlock()
-        }
+        let appendResult = try builder.append(sample)
 
         lock.lock()
-        framesByTimeKey[key] = frame.withoutRetainedPixels()
-        latestSampleSize = (frame.sampleWidth, frame.sampleHeight)
+        analysisTiming.record(sample: sample, metricsMilliseconds: appendResult.metricsMilliseconds)
+        if let pairTiming = appendResult.pairTiming {
+            analysisTiming.record(pairTiming: pairTiming)
+        }
+
+        framesByTimeKey[key] = appendResult.frame.withoutRetainedPixels()
+        latestSampleSize = (appendResult.frame.sampleWidth, appendResult.frame.sampleHeight)
         if let sourceInfo {
             latestSourceFrameInfo = sourceInfo
         }
@@ -765,7 +764,7 @@ final class StabilizerHostAnalysisStore {
         let timing = analysisTiming
         lock.unlock()
         os_log(
-            "Host Analysis timing summary %{public}@ frames=%{public}d downsample=%{public}.3f ms blur=%{public}.3f ms pairs=%{public}d global=%{public}.3f ms local=%{public}.3f ms pair=%{public}.3f ms cacheCandidates=%{public}d cacheDecode=%{public}.3f ms persist=%{public}.3f ms finish=%{public}.3f ms.",
+            "Host Analysis timing summary %{public}@ frames=%{public}d downsample=%{public}.3f ms blur+fingerprint=%{public}.3f ms pairs=%{public}d global=%{public}.3f ms local=%{public}.3f ms pair=%{public}.3f ms cacheCandidates=%{public}d cacheDecode=%{public}.3f ms persist=%{public}.3f ms finish=%{public}.3f ms.",
             log: stabilizerHostAnalysisLog,
             type: .default,
             label,
@@ -782,7 +781,7 @@ final class StabilizerHostAnalysisStore {
             timing.finishMilliseconds
         )
         NSLog(
-            "TokyoWalkingStabilizer: Host Analysis timing summary %@ frames=%d downsample=%.3f ms blur=%.3f ms pairs=%d global=%.3f ms local=%.3f ms pair=%.3f ms cacheCandidates=%d cacheDecode=%.3f ms persist=%.3f ms finish=%.3f ms.",
+            "TokyoWalkingStabilizer: Host Analysis timing summary %@ frames=%d downsample=%.3f ms blur+fingerprint=%.3f ms pairs=%d global=%.3f ms local=%.3f ms pair=%.3f ms cacheCandidates=%d cacheDecode=%.3f ms persist=%.3f ms finish=%.3f ms.",
             label,
             timing.downsampleFrameCount,
             timing.downsampleMilliseconds,
