@@ -332,6 +332,19 @@ final class StabilizerHostAnalysisStore {
         return activePersistentCacheIdentity
     }
 
+    var activeExpectedRange: HostAnalysisExpectedRange? {
+        lock.lock()
+        let range = activeRange
+        let frameDuration = activeFrameDuration
+        lock.unlock()
+        let expectedRange = HostAnalysisExpectedRange(
+            startSeconds: CMTimeGetSeconds(range.start),
+            durationSeconds: CMTimeGetSeconds(range.duration),
+            frameDurationSeconds: CMTimeGetSeconds(frameDuration)
+        )
+        return expectedRange.isValid ? expectedRange : nil
+    }
+
     var projectCacheUnavailableReasonText: String? {
         lock.lock()
         defer { lock.unlock() }

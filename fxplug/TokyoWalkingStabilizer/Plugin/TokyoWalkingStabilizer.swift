@@ -1933,7 +1933,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func pollPersistentCacheForPreviewInvalidation() {
-        let expectedRange = currentInputRange()
+        let expectedRange = currentCacheResolutionExpectedRange()
         guard configureProjectBundleCacheDirectory(expectedRange: expectedRange) else {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
@@ -2288,6 +2288,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             frameDurationSeconds: CMTimeGetSeconds(frameDuration)
         )
         return range.isValid ? range : nil
+    }
+
+    private func currentCacheResolutionExpectedRange() -> HostAnalysisExpectedRange? {
+        currentInputRange() ?? hostAnalysisStore.activeExpectedRange
     }
 
     @discardableResult
@@ -3587,7 +3591,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func currentRenderExpectedRange(from state: StabilizerPluginState) -> HostAnalysisExpectedRange? {
-        currentInputRange() ?? Self.expectedInputRange(from: state)
+        currentInputRange() ?? Self.expectedInputRange(from: state) ?? hostAnalysisStore.activeExpectedRange
     }
 
     private static func pluginState(from data: Data?) -> StabilizerPluginState? {
