@@ -558,6 +558,9 @@ enum AutoStabilizationEstimator {
     private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
+    private static let staggeredMotionBlockFarFieldThreshold: Float = 0.70
+    private static let staggeredMotionBlockMinimumWidth = 18
+    private static let staggeredMotionBlockMinimumHeight = 12
     private static let motionPathJerkLimitMultiplier: Float = 4.0
     private static let minimumTranslationAccelerationLimit: Float = 0.75
     private static let minimumTranslationJerkLimit: Float = 0.5
@@ -1508,6 +1511,11 @@ enum AutoStabilizationEstimator {
         )
         let global = shiftResult.global
         let blockShifts = shiftResult.blockShifts
+        let modelScoreReference = median(
+            blockShifts
+                .map(\.score)
+                .filter(\.isFinite)
+        ) ?? global.score
         os_log(
             "Host Analysis fused shift scoring pair sample %{public}dx%{public}d blocks %{public}d global(est) %{public}.3f ms local(est) %{public}.3f ms command %{public}.3f ms overlapped metrics %{public}.3f ms total %{public}.3f ms.",
             log: stabilizerHostAnalysisLog,
@@ -1523,8 +1531,12 @@ enum AutoStabilizationEstimator {
         )
         let acceptedBlocks = acceptedMotionBlocks(blockShifts, global: (global.dx, global.dy, global.score))
         let motionBlocksForModel = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks : blockShifts
-        let robustDx = weightedMedian(motionBlocksForModel.map { ($0.dx, $0.block.farFieldWeight) }) ?? global.dx
-        let robustDy = weightedMedian(motionBlocksForModel.map { ($0.dy, $0.block.farFieldWeight) }) ?? global.dy
+        let robustDx = weightedMedian(motionBlocksForModel.map {
+            ($0.dx, motionBlockWeight($0, scoreReference: modelScoreReference))
+        }) ?? global.dx
+        let robustDy = weightedMedian(motionBlocksForModel.map {
+            ($0.dy, motionBlockWeight($0, scoreReference: modelScoreReference))
+        }) ?? global.dy
         let rollCandidates = motionBlocksForModel.compactMap { shift -> Float? in
             let x = shift.block.centerX - (Float(sampleWidth) * 0.5)
             let y = shift.block.centerY - (Float(sampleHeight) * 0.5)
@@ -1685,28 +1697,71 @@ enum AutoStabilizationEstimator {
             return []
         }
 
-        var blocks: [StabilizerMotionBlock] = []
+        var rowEdges: [(y0: Int, y1: Int)] = []
+        var columnEdges: [(x0: Int, x1: Int)] = []
+        rowEdges.reserveCapacity(rows)
+        columnEdges.reserveCapacity(columns)
         for row in 0..<rows {
-            let y0 = verticalMargin + ((usableHeight * row) / rows)
-            let y1 = verticalMargin + ((usableHeight * (row + 1)) / rows)
+            rowEdges.append((
+                y0: verticalMargin + ((usableHeight * row) / rows),
+                y1: verticalMargin + ((usableHeight * (row + 1)) / rows)
+            ))
+        }
+        for column in 0..<columns {
+            columnEdges.append((
+                x0: horizontalMargin + ((usableWidth * column) / columns),
+                x1: horizontalMargin + ((usableWidth * (column + 1)) / columns)
+            ))
+        }
+
+        var blocks: [StabilizerMotionBlock] = []
+        func appendBlock(x0: Int, x1: Int, y0: Int, y1: Int) {
+            let width = x1 - x0
+            let height = y1 - y0
+            guard width >= staggeredMotionBlockMinimumWidth, height >= staggeredMotionBlockMinimumHeight else {
+                return
+            }
+            let centerY = Float(y0) + (Float(height) * 0.5)
+            blocks.append(StabilizerMotionBlock(
+                x0: x0,
+                y0: y0,
+                width: width,
+                height: height,
+                centerX: Float(x0) + (Float(width) * 0.5),
+                centerY: centerY,
+                farFieldWeight: farFieldWeight(centerY: centerY, sampleHeight: sampleHeight)
+            ))
+        }
+
+        for row in 0..<rows {
+            let y0 = rowEdges[row].y0
+            let y1 = rowEdges[row].y1
             for column in 0..<columns {
-                let x0 = horizontalMargin + ((usableWidth * column) / columns)
-                let x1 = horizontalMargin + ((usableWidth * (column + 1)) / columns)
-                let width = x1 - x0
-                let height = y1 - y0
-                guard width >= 18, height >= 12 else {
+                appendBlock(
+                    x0: columnEdges[column].x0,
+                    x1: columnEdges[column].x1,
+                    y0: y0,
+                    y1: y1
+                )
+            }
+        }
+
+        if columns >= 3 {
+            for row in 0..<rows {
+                let y0 = rowEdges[row].y0
+                let y1 = rowEdges[row].y1
+                let centerY = Float(y0) + (Float(y1 - y0) * 0.5)
+                guard farFieldWeight(centerY: centerY, sampleHeight: sampleHeight) >= staggeredMotionBlockFarFieldThreshold else {
                     continue
                 }
-                let centerY = Float(y0) + (Float(height) * 0.5)
-                blocks.append(StabilizerMotionBlock(
-                    x0: x0,
-                    y0: y0,
-                    width: width,
-                    height: height,
-                    centerX: Float(x0) + (Float(width) * 0.5),
-                    centerY: centerY,
-                    farFieldWeight: farFieldWeight(centerY: centerY, sampleHeight: sampleHeight)
-                ))
+                for column in 0..<(columns - 1) {
+                    appendBlock(
+                        x0: (columnEdges[column].x0 + columnEdges[column].x1) / 2,
+                        x1: (columnEdges[column + 1].x0 + columnEdges[column + 1].x1) / 2,
+                        y0: y0,
+                        y1: y1
+                    )
+                }
             }
         }
         return blocks
@@ -1753,7 +1808,7 @@ enum AutoStabilizationEstimator {
             return []
         }
         let scoreMedian = median(finiteShifts.map(\.score)) ?? global.score
-        let scoreLimit = max(scoreMedian * 1.8, scoreMedian + 0.025)
+        let scoreLimit = max(scoreMedian * 1.65, scoreMedian + 0.020)
         let scoreFiltered = finiteShifts.filter { $0.score <= scoreLimit }
         guard scoreFiltered.count >= minimumAcceptedMotionBlocks else {
             return []
@@ -1765,13 +1820,32 @@ enum AutoStabilizationEstimator {
         let distances = clusterCandidates.map { hypotf($0.dx - medianDx, $0.dy - medianDy) }
         let medianDistance = median(distances) ?? 0.0
         let distanceLimit = max(1.25, medianDistance * 3.0)
-        let accepted = clusterCandidates.filter {
+        let distanceAccepted = clusterCandidates.filter {
             hypotf($0.dx - medianDx, $0.dy - medianDy) <= distanceLimit
         }
-        guard accepted.count >= minimumAcceptedMotionBlocks else {
+        guard distanceAccepted.count >= minimumAcceptedMotionBlocks else {
             return []
         }
-        return accepted
+        let centerSafeAccepted = distanceAccepted.filter { !$0.searchRadiusHit }
+        if centerSafeAccepted.count >= minimumAcceptedMotionBlocks {
+            return centerSafeAccepted
+        }
+        return distanceAccepted
+    }
+
+    private static func motionBlockWeight(_ shift: StabilizerBlockShift, scoreReference: Float) -> Float {
+        let baseWeight = shift.block.farFieldWeight
+        guard shift.score.isFinite else {
+            return baseWeight * 0.05
+        }
+        let reference = max(0.001, scoreReference.isFinite ? scoreReference : shift.score)
+        let scoreQuality = clamp(
+            1.0 - ((shift.score - reference) / max(0.020, reference * 1.25)),
+            min: 0.15,
+            max: 1.0
+        )
+        let searchHeadroom: Float = shift.searchRadiusHit ? 0.55 : 1.0
+        return baseWeight * scoreQuality * searchHeadroom
     }
 
     private static func farFieldWarpMotion(

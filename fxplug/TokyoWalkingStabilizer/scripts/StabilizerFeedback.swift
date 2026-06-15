@@ -132,8 +132,8 @@ private struct Analysis {
     let searchRadiusTotalCounts: [Int32]
 
     init(cache: PersistedHostAnalysisCache, cachePath: String) throws {
-        guard cache.schemaVersion == supportedCacheSchemaVersion else {
-            throw FeedbackError(description: "unsupported Host Analysis cache schema \(cache.schemaVersion); run Host Analysis with the current FxPlug before using feedback diagnostics")
+        guard supportedCacheSchemaVersions.contains(cache.schemaVersion) else {
+            throw FeedbackError(description: "unsupported Host Analysis cache schema \(cache.schemaVersion); supported schemas: \(supportedCacheSchemaDescription)")
         }
         let frames = try cache.frames.map { persisted -> AnalysisFrame in
             guard let fingerprint = persisted.fingerprint, !fingerprint.isEmpty else {
@@ -412,7 +412,8 @@ private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
 private let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
-private let supportedCacheSchemaVersion = 14
+private let supportedCacheSchemaVersions: Set<Int> = [14, 15]
+private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func loadAnalysis(path: String) throws -> Analysis {
     let expandedPath = expandPath(path)
@@ -656,9 +657,9 @@ private func cacheInventoryEntry(at url: URL) -> CacheInventoryEntry {
         let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
         let status: String
         let reason: String
-        if cache.schemaVersion != supportedCacheSchemaVersion {
+        if !supportedCacheSchemaVersions.contains(cache.schemaVersion) {
             status = "unsupported"
-            reason = "schema \(cache.schemaVersion), need \(supportedCacheSchemaVersion)"
+            reason = "schema \(cache.schemaVersion), need \(supportedCacheSchemaDescription)"
         } else if cache.frames.count < 3 {
             status = "incomplete"
             reason = "only \(cache.frames.count) frames"

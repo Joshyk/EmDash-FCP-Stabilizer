@@ -142,9 +142,12 @@ new compatible saved cache.
 Persistent cache compatibility is based on cache schema, exact analyzed source range, sample
 size, frame fingerprints, and current source-frame validation, not the visible FxPlug runtime
 version. Render-only version bumps should reuse saved Host Analysis cache candidates from the
-active `.fcpbundle`. Unsupported schema candidates should surface `Cache Unsupported - Run
-Host Analysis` in the Inspector, remain on disk, and require an explicit new Host Analysis
-run instead of being silently ignored or deleted. Supported-schema
+active `.fcpbundle`. When a motion-path algorithm change needs a new write schema, keep
+backward read compatibility for still-valid recent schemas by listing them in
+`supportedCacheSchemaVersions` and the feedback CLI's supported schema list; do not reject old
+caches solely because a newer schema is now written. Unsupported schema candidates should
+surface `Cache Unsupported - Run Host Analysis` in the Inspector, remain on disk, and require
+an explicit new Host Analysis run instead of being silently ignored or deleted. Supported-schema
 caches with incomplete prepared path arrays or incomplete frame coverage for the saved
 analysis range should surface `Cache Incomplete - Run Host Analysis`, remain on disk, and
 require a new Host Analysis run.
@@ -181,8 +184,9 @@ reject outlier blocks, and expose low block-confidence states in status/debug ou
 of silently falling back to a coarse global shift. Walking landscape analysis should
 prioritize upper-frame far-field blocks so distant mountains/background motion is not
 dominated by close grass, water, or road parallax. Motion-path algorithm changes that alter
-prepared analysis output should bump the Host Analysis cache schema so stale caches are not
-reused.
+prepared analysis output should bump the Host Analysis write schema, but keep previous
+still-valid schemas in the explicit supported-schema list unless the stored fields are no
+longer safe to interpret.
 
 ## Diagnostics
 
@@ -377,7 +381,7 @@ preserving path endpoints so total analyzed turn amount is not lost and real pan
 delayed into a sliding path. Keep separate raw X/Y/roll impulse paths for Footstep Jitter so
 the jerk limiter does not erase frame-level shake before render-time footstep correction.
 Because this changes prepared path semantics, bump the Host Analysis cache schema when it
-changes.
+changes, while preserving backward read compatibility for still-valid older schema entries.
 Large segmented walking turns should be controlled by the render-time `Turn Smoothing
 Strength` slider, where higher values concatenate stop-and-go X-axis pan motion into a
 smoother monotonic S-curve turn intent instead of a straight-line fit. The exposed maximum is `4.0`;
