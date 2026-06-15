@@ -7,6 +7,8 @@ private struct FeedbackError: Error, CustomStringConvertible {
 
 private struct Options {
     var cachePath: String?
+    var compareCachePath: String?
+    var compareTolerance: Float = 0.0005
     var cacheRoot: String?
     var relativeTime: Double?
     var note: String?
@@ -198,6 +200,43 @@ private struct Analysis {
     }
 }
 
+private struct FloatArrayComparison {
+    let name: String
+    let baselineCount: Int
+    let comparedCount: Int
+    let maxDelta: Float
+    let maxIndex: Int?
+    let baselineValue: Float?
+    let comparedValue: Float?
+    let passed: Bool
+}
+
+private struct IntArrayComparison {
+    let name: String
+    let baselineCount: Int
+    let comparedCount: Int
+    let mismatchCount: Int
+    let firstMismatchIndex: Int?
+    let baselineValue: Int32?
+    let comparedValue: Int32?
+    let passed: Bool
+}
+
+private struct CacheComparison {
+    let baseline: Analysis
+    let compared: Analysis
+    let tolerance: Float
+    let metadataIssues: [String]
+    let floatComparisons: [FloatArrayComparison]
+    let intComparisons: [IntArrayComparison]
+
+    var passed: Bool {
+        metadataIssues.isEmpty
+            && floatComparisons.allSatisfy(\.passed)
+            && intComparisons.allSatisfy(\.passed)
+    }
+}
+
 private struct BandAssessment {
     let name: String
     let detected: Float
@@ -381,6 +420,196 @@ private func loadAnalysis(path: String) throws -> Analysis {
     let data = try Data(contentsOf: url)
     let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
     return try Analysis(cache: cache, cachePath: expandedPath)
+}
+
+private func compareCaches(baseline: Analysis, compared: Analysis, tolerance: Float) -> CacheComparison {
+    var metadataIssues: [String] = []
+    let timeTolerance = 1e-9
+
+    func appendIssue(_ issue: String) {
+        metadataIssues.append(issue)
+    }
+
+    func compareMetadata<T: Equatable>(_ name: String, _ baselineValue: T, _ comparedValue: T) {
+        if baselineValue != comparedValue {
+            appendIssue("\(name) differs: baseline \(baselineValue), compared \(comparedValue)")
+        }
+    }
+
+    func compareTimeMetadata(_ name: String, _ baselineValue: Double, _ comparedValue: Double) {
+        if abs(baselineValue - comparedValue) > timeTolerance {
+            appendIssue(String(format: "%@ differs: baseline %.12f, compared %.12f", name, baselineValue, comparedValue))
+        }
+    }
+
+    compareMetadata("schemaVersion", baseline.schemaVersion, compared.schemaVersion)
+    compareMetadata("sampleWidth", baseline.sampleWidth, compared.sampleWidth)
+    compareMetadata("sampleHeight", baseline.sampleHeight, compared.sampleHeight)
+    compareMetadata("frameCount", baseline.frames.count, compared.frames.count)
+    compareTimeMetadata("rangeStartSeconds", baseline.rangeStartSeconds, compared.rangeStartSeconds)
+    compareTimeMetadata("rangeDurationSeconds", baseline.rangeDurationSeconds, compared.rangeDurationSeconds)
+    compareTimeMetadata("frameDurationSeconds", baseline.frameDurationSeconds, compared.frameDurationSeconds)
+
+    let sharedFrameCount = min(baseline.frames.count, compared.frames.count)
+    var frameTimeMismatchCount = 0
+    var firstFrameTimeMismatch: (index: Int, baseline: Double, compared: Double)?
+    var fingerprintMismatchCount = 0
+    var firstFingerprintMismatch: (index: Int, baseline: String, compared: String)?
+    for index in 0..<sharedFrameCount {
+        let baselineFrame = baseline.frames[index]
+        let comparedFrame = compared.frames[index]
+        if abs(baselineFrame.time - comparedFrame.time) > timeTolerance {
+            frameTimeMismatchCount += 1
+            if firstFrameTimeMismatch == nil {
+                firstFrameTimeMismatch = (index, baselineFrame.time, comparedFrame.time)
+            }
+        }
+        if baselineFrame.fingerprint != comparedFrame.fingerprint {
+            fingerprintMismatchCount += 1
+            if firstFingerprintMismatch == nil {
+                firstFingerprintMismatch = (index, baselineFrame.fingerprint, comparedFrame.fingerprint)
+            }
+        }
+    }
+    if let mismatch = firstFrameTimeMismatch {
+        appendIssue(String(format: "frame times differ at %d and %d total frame(s): baseline %.12f, compared %.12f",
+                           mismatch.index,
+                           frameTimeMismatchCount,
+                           mismatch.baseline,
+                           mismatch.compared))
+    }
+    if let mismatch = firstFingerprintMismatch {
+        appendIssue("frame fingerprints differ at \(mismatch.index) and \(fingerprintMismatchCount) total frame(s): baseline \(mismatch.baseline), compared \(mismatch.compared)")
+    }
+
+    let floatComparisons = floatComparisonInputs(baseline: baseline, compared: compared)
+        .map { name, baselineValues, comparedValues in
+            compareFloatArray(name: name, baselineValues: baselineValues, comparedValues: comparedValues, tolerance: tolerance)
+        }
+    let intComparisons = intComparisonInputs(baseline: baseline, compared: compared)
+        .map { name, baselineValues, comparedValues in
+            compareIntArray(name: name, baselineValues: baselineValues, comparedValues: comparedValues)
+        }
+
+    return CacheComparison(
+        baseline: baseline,
+        compared: compared,
+        tolerance: tolerance,
+        metadataIssues: metadataIssues,
+        floatComparisons: floatComparisons,
+        intComparisons: intComparisons
+    )
+}
+
+private func floatComparisonInputs(baseline: Analysis, compared: Analysis) -> [(String, [Float], [Float])] {
+    [
+        ("frame.blurAmount", baseline.frames.map(\.blurAmount), compared.frames.map(\.blurAmount)),
+        ("residuals", baseline.residuals, compared.residuals),
+        ("rollMotion", baseline.rollMotion, compared.rollMotion),
+        ("pathX", baseline.pathX, compared.pathX),
+        ("pathY", baseline.pathY, compared.pathY),
+        ("pathRoll", baseline.pathRoll, compared.pathRoll),
+        ("footstepPathX", baseline.footstepPathX, compared.footstepPathX),
+        ("footstepPathY", baseline.footstepPathY, compared.footstepPathY),
+        ("footstepPathRoll", baseline.footstepPathRoll, compared.footstepPathRoll),
+        ("pathYaw", baseline.pathYaw, compared.pathYaw),
+        ("pathPitch", baseline.pathPitch, compared.pathPitch),
+        ("pathShearX", baseline.pathShearX, compared.pathShearX),
+        ("pathShearY", baseline.pathShearY, compared.pathShearY),
+        ("pathPerspectiveX", baseline.pathPerspectiveX, compared.pathPerspectiveX),
+        ("pathPerspectiveY", baseline.pathPerspectiveY, compared.pathPerspectiveY),
+        ("analysisConfidence", baseline.analysisConfidence, compared.analysisConfidence),
+        ("warpConfidence", baseline.warpConfidence, compared.warpConfidence),
+        ("blurAmounts", baseline.blurAmounts, compared.blurAmounts)
+    ]
+}
+
+private func intComparisonInputs(baseline: Analysis, compared: Analysis) -> [(String, [Int32], [Int32])] {
+    [
+        ("acceptedBlockCounts", baseline.acceptedBlockCounts, compared.acceptedBlockCounts),
+        ("totalBlockCounts", baseline.totalBlockCounts, compared.totalBlockCounts),
+        ("searchRadiusHitCounts", baseline.searchRadiusHitCounts, compared.searchRadiusHitCounts),
+        ("searchRadiusTotalCounts", baseline.searchRadiusTotalCounts, compared.searchRadiusTotalCounts)
+    ]
+}
+
+private func compareFloatArray(
+    name: String,
+    baselineValues: [Float],
+    comparedValues: [Float],
+    tolerance: Float
+) -> FloatArrayComparison {
+    let sharedCount = min(baselineValues.count, comparedValues.count)
+    var maxDelta: Float = 0.0
+    var maxIndex: Int?
+    var baselineValue: Float?
+    var comparedValue: Float?
+    var hasNonFiniteMismatch = false
+    for index in 0..<sharedCount {
+        let left = baselineValues[index]
+        let right = comparedValues[index]
+        let delta: Float
+        if left.isFinite && right.isFinite {
+            delta = abs(left - right)
+        } else if left == right {
+            delta = 0.0
+        } else {
+            hasNonFiniteMismatch = true
+            delta = Float.greatestFiniteMagnitude
+        }
+        if maxIndex == nil || delta > maxDelta {
+            maxDelta = delta
+            maxIndex = index
+            baselineValue = left
+            comparedValue = right
+        }
+    }
+    let passed = baselineValues.count == comparedValues.count
+        && !hasNonFiniteMismatch
+        && maxDelta <= tolerance
+    return FloatArrayComparison(
+        name: name,
+        baselineCount: baselineValues.count,
+        comparedCount: comparedValues.count,
+        maxDelta: maxDelta,
+        maxIndex: maxIndex,
+        baselineValue: baselineValue,
+        comparedValue: comparedValue,
+        passed: passed
+    )
+}
+
+private func compareIntArray(
+    name: String,
+    baselineValues: [Int32],
+    comparedValues: [Int32]
+) -> IntArrayComparison {
+    let sharedCount = min(baselineValues.count, comparedValues.count)
+    var mismatchCount = abs(baselineValues.count - comparedValues.count)
+    var firstMismatchIndex: Int?
+    var baselineValue: Int32?
+    var comparedValue: Int32?
+    for index in 0..<sharedCount where baselineValues[index] != comparedValues[index] {
+        mismatchCount += 1
+        if firstMismatchIndex == nil {
+            firstMismatchIndex = index
+            baselineValue = baselineValues[index]
+            comparedValue = comparedValues[index]
+        }
+    }
+    if firstMismatchIndex == nil, baselineValues.count != comparedValues.count {
+        firstMismatchIndex = sharedCount
+    }
+    return IntArrayComparison(
+        name: name,
+        baselineCount: baselineValues.count,
+        comparedCount: comparedValues.count,
+        mismatchCount: mismatchCount,
+        firstMismatchIndex: firstMismatchIndex,
+        baselineValue: baselineValue,
+        comparedValue: comparedValue,
+        passed: mismatchCount == 0
+    )
 }
 
 private func expandPath(_ path: String) -> String {
@@ -1299,6 +1528,112 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
     print("")
 }
 
+private func renderCacheComparisonHuman(_ comparison: CacheComparison) {
+    print("Stabilizer Host Analysis cache comparison")
+    print("Baseline: \(comparison.baseline.cachePath)")
+    print("Compared: \(comparison.compared.cachePath)")
+    print(String(format: "Tolerance: %.9f", comparison.tolerance))
+    print("Baseline schema \(comparison.baseline.schemaVersion), frames \(comparison.baseline.frames.count), sample \(comparison.baseline.sampleWidth)x\(comparison.baseline.sampleHeight)")
+    print("Compared schema \(comparison.compared.schemaVersion), frames \(comparison.compared.frames.count), sample \(comparison.compared.sampleWidth)x\(comparison.compared.sampleHeight)")
+    print("Result: \(comparison.passed ? "MATCH" : "MISMATCH")")
+    if !comparison.metadataIssues.isEmpty {
+        print("")
+        print("Metadata issues:")
+        for issue in comparison.metadataIssues {
+            print("  \(issue)")
+        }
+    }
+    print("")
+    print("Float arrays:")
+    for item in comparison.floatComparisons {
+        let status = item.passed ? "MATCH" : "MISMATCH"
+        let index = item.maxIndex.map(String.init) ?? "-"
+        let baselineValue = item.baselineValue.map { String(format: "%.9f", $0) } ?? "-"
+        let comparedValue = item.comparedValue.map { String(format: "%.9f", $0) } ?? "-"
+        print(String(format: "  %-22@ %@ count %d/%d maxDelta %.9f at %@ baseline %@ compared %@",
+                     item.name as NSString,
+                     status,
+                     item.baselineCount,
+                     item.comparedCount,
+                     item.maxDelta,
+                     index as NSString,
+                     baselineValue as NSString,
+                     comparedValue as NSString))
+    }
+    print("")
+    print("Integer arrays:")
+    for item in comparison.intComparisons {
+        let status = item.passed ? "MATCH" : "MISMATCH"
+        let index = item.firstMismatchIndex.map(String.init) ?? "-"
+        let baselineValue = item.baselineValue.map(String.init) ?? "-"
+        let comparedValue = item.comparedValue.map(String.init) ?? "-"
+        print(String(format: "  %-22@ %@ count %d/%d mismatches %d first %@ baseline %@ compared %@",
+                     item.name as NSString,
+                     status,
+                     item.baselineCount,
+                     item.comparedCount,
+                     item.mismatchCount,
+                     index as NSString,
+                     baselineValue as NSString,
+                     comparedValue as NSString))
+    }
+}
+
+private func renderCacheComparisonJSON(_ comparison: CacheComparison) throws {
+    let root: [String: Any] = [
+        "baselineCache": comparison.baseline.cachePath,
+        "comparedCache": comparison.compared.cachePath,
+        "passed": comparison.passed,
+        "tolerance": comparison.tolerance,
+        "baseline": [
+            "schemaVersion": comparison.baseline.schemaVersion,
+            "frameCount": comparison.baseline.frames.count,
+            "sampleWidth": comparison.baseline.sampleWidth,
+            "sampleHeight": comparison.baseline.sampleHeight,
+            "rangeStartSeconds": comparison.baseline.rangeStartSeconds,
+            "rangeDurationSeconds": comparison.baseline.rangeDurationSeconds,
+            "frameDurationSeconds": comparison.baseline.frameDurationSeconds
+        ] as [String: Any],
+        "compared": [
+            "schemaVersion": comparison.compared.schemaVersion,
+            "frameCount": comparison.compared.frames.count,
+            "sampleWidth": comparison.compared.sampleWidth,
+            "sampleHeight": comparison.compared.sampleHeight,
+            "rangeStartSeconds": comparison.compared.rangeStartSeconds,
+            "rangeDurationSeconds": comparison.compared.rangeDurationSeconds,
+            "frameDurationSeconds": comparison.compared.frameDurationSeconds
+        ] as [String: Any],
+        "metadataIssues": comparison.metadataIssues,
+        "floatArrays": comparison.floatComparisons.map { item in
+            [
+                "name": item.name,
+                "passed": item.passed,
+                "baselineCount": item.baselineCount,
+                "comparedCount": item.comparedCount,
+                "maxDelta": item.maxDelta,
+                "maxIndex": jsonValue(item.maxIndex),
+                "baselineValue": jsonValue(item.baselineValue),
+                "comparedValue": jsonValue(item.comparedValue)
+            ] as [String: Any]
+        },
+        "integerArrays": comparison.intComparisons.map { item in
+            [
+                "name": item.name,
+                "passed": item.passed,
+                "baselineCount": item.baselineCount,
+                "comparedCount": item.comparedCount,
+                "mismatchCount": item.mismatchCount,
+                "firstMismatchIndex": jsonValue(item.firstMismatchIndex),
+                "baselineValue": jsonValue(item.baselineValue),
+                "comparedValue": jsonValue(item.comparedValue)
+            ] as [String: Any]
+        }
+    ]
+    let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+    FileHandle.standardOutput.write(data)
+    print("")
+}
+
 private func renderCacheInventoryHuman(_ entries: [CacheInventoryEntry], rootPath: String) {
     print("Stabilizer Host Analysis caches")
     print("Root: \(expandPath(rootPath))")
@@ -1376,6 +1711,14 @@ private func parseOptions() throws -> Options {
         switch arg {
         case "--cache":
             options.cachePath = try nextValue(for: arg)
+        case "--compare-cache":
+            options.compareCachePath = try nextValue(for: arg)
+        case "--compare-tolerance":
+            let tolerance = try nextDouble(for: arg)
+            guard tolerance >= 0.0 else {
+                throw FeedbackError(description: "--compare-tolerance must be >= 0, got \(tolerance)")
+            }
+            options.compareTolerance = Float(tolerance)
         case "--cache-root":
             options.cacheRoot = try nextValue(for: arg)
         case "--list-caches":
@@ -1432,11 +1775,13 @@ private func printUsage() {
       stabilizer_feedback.sh --cache /path/to/host-analysis-v2.json --time 5.0 --json
       stabilizer_feedback.sh --cache /path/to/host-analysis-v2.json --limit 5
       stabilizer_feedback.sh --list-caches --cache-root /path/to/TokyoWalkingStabilizerHostAnalysis
+      stabilizer_feedback.sh --cache /path/to/baseline.json --compare-cache /path/to/new.json
 
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
     --turn-window should match the Inspector Turn Detection Window when it is not 6.0.
     --list-caches reports saved cache readiness without repairing cache files.
+    --compare-cache validates saved cache equivalence; float arrays may differ only within --compare-tolerance.
     """)
 }
 
@@ -1465,6 +1810,21 @@ do {
             try renderCacheInventoryJSON(entries, rootPath: cacheRoot)
         } else {
             renderCacheInventoryHuman(entries, rootPath: cacheRoot)
+        }
+    } else if let compareCachePath = options.compareCachePath {
+        guard let cachePath = options.cachePath else {
+            throw FeedbackError(description: "--compare-cache requires --cache pointing to the baseline host-analysis cache file")
+        }
+        let baseline = try loadAnalysis(path: cachePath)
+        let compared = try loadAnalysis(path: compareCachePath)
+        let comparison = compareCaches(baseline: baseline, compared: compared, tolerance: options.compareTolerance)
+        if options.json {
+            try renderCacheComparisonJSON(comparison)
+        } else {
+            renderCacheComparisonHuman(comparison)
+        }
+        if !comparison.passed {
+            throw FeedbackError(description: "Host Analysis cache comparison failed")
         }
     } else {
         guard let cachePath = options.cachePath else {

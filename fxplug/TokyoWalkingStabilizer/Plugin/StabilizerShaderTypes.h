@@ -27,7 +27,10 @@ typedef enum StabilizerComputeBufferIndex {
     SCBI_ShiftUniforms = 3,
     SCBI_ShiftBatchUniforms = 3,
     SCBI_DownsampleOutput = 0,
-    SCBI_DownsampleUniforms = 1
+    SCBI_DownsampleUniforms = 1,
+    SCBI_ShiftScorePartials = 4,
+    SCBI_ShiftResults = 5,
+    SCBI_ShiftResolveUniforms = 6
 } StabilizerComputeBufferIndex;
 
 typedef struct StabilizerVertex2D {
@@ -65,6 +68,27 @@ typedef struct StabilizerDownsampleUniforms {
     uint width;
     uint height;
 } StabilizerDownsampleUniforms;
+
+typedef struct StabilizerShiftScorePartial {
+    float total;
+    uint samples;
+} StabilizerShiftScorePartial;
+
+typedef struct StabilizerShiftResult {
+    float dx;
+    float dy;
+    float score;
+    uint searchRadiusHit;
+} StabilizerShiftResult;
+
+typedef struct StabilizerShiftResolveUniforms {
+    uint radius;
+    uint chunkCount;
+    uint blockCount;
+    int centerX;
+    int centerY;
+    uint refine;
+} StabilizerShiftResolveUniforms;
 
 typedef struct TokyoWalkingStabilizerTransformUniforms {
     vector_float2 pixelOffset;

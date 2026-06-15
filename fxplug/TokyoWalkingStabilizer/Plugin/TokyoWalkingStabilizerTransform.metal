@@ -479,3 +479,196 @@ kernel void stabilizerBatchShiftScores(
     }
     scores[scoreIndex] = samples == 0 ? INFINITY : total / float(samples) / 255.0;
 }
+
+static float stabilizerAxisOffset(float before, float center, float after) {
+    if (!isfinite(before) || !isfinite(center) || !isfinite(after)) {
+        return 0.0;
+    }
+    float denominator = before - (2.0 * center) + after;
+    if (fabs(denominator) < 1.0e-9) {
+        return 0.0;
+    }
+    return clamp(0.5 * (before - after) / denominator, -0.5, 0.5);
+}
+
+static StabilizerShiftScorePartial stabilizerPartialShiftScore(
+    device const uchar *previous,
+    device const uchar *current,
+    StabilizerShiftBatchUniforms uniforms,
+    uint shiftIndex,
+    uint chunkIndex,
+    uint chunkCount
+) {
+    uint side = (uniforms.radius * 2) + 1;
+    int dx = int(shiftIndex % side) + uniforms.centerX - int(uniforms.radius);
+    int dy = int(shiftIndex / side) + uniforms.centerY - int(uniforms.radius);
+    int xStart = max(max(int(uniforms.x0), -dx), 0);
+    int yStart = max(max(int(uniforms.y0), -dy), 0);
+    int xEnd = min(min(int(uniforms.x0 + uniforms.regionWidth), int(uniforms.width) - dx), int(uniforms.width));
+    int yEnd = min(min(int(uniforms.y0 + uniforms.regionHeight), int(uniforms.height) - dy), int(uniforms.height));
+
+    if ((xEnd - xStart) < 18 || (yEnd - yStart) < 12 || chunkCount == 0) {
+        StabilizerShiftScorePartial empty;
+        empty.total = 0.0;
+        empty.samples = 0;
+        return empty;
+    }
+
+    uint stride = max(1u, uniforms.stride);
+    uint rowCount = uint(max(0, yEnd - yStart) + int(stride) - 1) / stride;
+    uint rowStart = (rowCount * chunkIndex) / chunkCount;
+    uint rowEnd = (rowCount * (chunkIndex + 1)) / chunkCount;
+
+    float total = 0.0;
+    uint samples = 0;
+    for (uint rowSample = rowStart; rowSample < rowEnd; rowSample += 1) {
+        int y = yStart + int(rowSample * stride);
+        int previousRow = y * int(uniforms.width);
+        int currentRow = (y + dy) * int(uniforms.width);
+        for (int x = xStart; x < xEnd; x += int(stride)) {
+            total += abs(float(previous[previousRow + x]) - float(current[currentRow + x + dx]));
+            samples += 1;
+        }
+    }
+    StabilizerShiftScorePartial partial;
+    partial.total = total;
+    partial.samples = samples;
+    return partial;
+}
+
+static float stabilizerResolvedShiftScore(
+    device const StabilizerShiftScorePartial *partials,
+    uint blockIndex,
+    uint shiftIndex,
+    uint scoreCount,
+    uint chunkCount
+) {
+    float total = 0.0;
+    uint samples = 0;
+    uint base = ((blockIndex * chunkCount) * scoreCount) + shiftIndex;
+    for (uint chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+        StabilizerShiftScorePartial partial = partials[base + (chunkIndex * scoreCount)];
+        total += partial.total;
+        samples += partial.samples;
+    }
+    return samples == 0 ? INFINITY : total / float(samples) / 255.0;
+}
+
+static float stabilizerResolvedShiftScoreAt(
+    device const StabilizerShiftScorePartial *partials,
+    uint blockIndex,
+    int dx,
+    int dy,
+    constant StabilizerShiftResolveUniforms &resolve
+) {
+    uint side = (resolve.radius * 2) + 1;
+    int x = dx - resolve.centerX + int(resolve.radius);
+    int y = dy - resolve.centerY + int(resolve.radius);
+    if (x < 0 || x >= int(side) || y < 0 || y >= int(side)) {
+        return INFINITY;
+    }
+    uint scoreIndex = uint(y) * side + uint(x);
+    return stabilizerResolvedShiftScore(partials, blockIndex, scoreIndex, side * side, resolve.chunkCount);
+}
+
+kernel void stabilizerShiftScorePartials(
+    device const uchar *previous [[buffer(SCBI_PreviousFrame)]],
+    device const uchar *current [[buffer(SCBI_CurrentFrame)]],
+    device StabilizerShiftScorePartial *partials [[buffer(SCBI_ShiftScorePartials)]],
+    constant StabilizerShiftBatchUniforms &uniforms [[buffer(SCBI_ShiftUniforms)]],
+    constant StabilizerShiftResolveUniforms &resolve [[buffer(SCBI_ShiftResolveUniforms)]],
+    uint3 gid [[thread_position_in_grid]]
+) {
+    uint side = (uniforms.radius * 2) + 1;
+    uint scoreCount = side * side;
+    if (gid.x >= scoreCount || gid.z >= resolve.chunkCount) {
+        return;
+    }
+    uint partialIndex = (gid.z * scoreCount) + gid.x;
+    partials[partialIndex] = stabilizerPartialShiftScore(
+        previous,
+        current,
+        uniforms,
+        gid.x,
+        gid.z,
+        resolve.chunkCount
+    );
+}
+
+kernel void stabilizerBatchShiftScorePartials(
+    device const uchar *previous [[buffer(SCBI_PreviousFrame)]],
+    device const uchar *current [[buffer(SCBI_CurrentFrame)]],
+    device StabilizerShiftScorePartial *partials [[buffer(SCBI_ShiftScorePartials)]],
+    device const StabilizerShiftBatchUniforms *uniformsList [[buffer(SCBI_ShiftBatchUniforms)]],
+    constant StabilizerShiftResolveUniforms &resolve [[buffer(SCBI_ShiftResolveUniforms)]],
+    uint3 gid [[thread_position_in_grid]]
+) {
+    uint blockIndex = gid.y;
+    if (blockIndex >= resolve.blockCount || gid.z >= resolve.chunkCount) {
+        return;
+    }
+    StabilizerShiftBatchUniforms uniforms = uniformsList[blockIndex];
+    uint side = (uniforms.radius * 2) + 1;
+    uint scoreCount = side * side;
+    if (gid.x >= scoreCount) {
+        return;
+    }
+    uint partialIndex = (((blockIndex * resolve.chunkCount) + gid.z) * scoreCount) + gid.x;
+    partials[partialIndex] = stabilizerPartialShiftScore(
+        previous,
+        current,
+        uniforms,
+        gid.x,
+        gid.z,
+        resolve.chunkCount
+    );
+}
+
+kernel void stabilizerResolveShiftResults(
+    device const StabilizerShiftScorePartial *partials [[buffer(SCBI_ShiftScorePartials)]],
+    device StabilizerShiftResult *results [[buffer(SCBI_ShiftResults)]],
+    constant StabilizerShiftResolveUniforms &resolve [[buffer(SCBI_ShiftResolveUniforms)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= resolve.blockCount) {
+        return;
+    }
+    uint side = (resolve.radius * 2) + 1;
+    uint scoreCount = side * side;
+    uint bestIndex = 0;
+    float bestScore = INFINITY;
+    for (uint index = 0; index < scoreCount; index += 1) {
+        float score = stabilizerResolvedShiftScore(partials, gid, index, scoreCount, resolve.chunkCount);
+        if (score < bestScore) {
+            bestIndex = index;
+            bestScore = score;
+        }
+    }
+
+    int bestDx = int(bestIndex % side) + resolve.centerX - int(resolve.radius);
+    int bestDy = int(bestIndex / side) + resolve.centerY - int(resolve.radius);
+    bool searchRadiusHit = abs(bestDx - resolve.centerX) >= int(resolve.radius)
+        || abs(bestDy - resolve.centerY) >= int(resolve.radius);
+
+    float refinedDx = float(bestDx);
+    float refinedDy = float(bestDy);
+    if (resolve.refine != 0) {
+        refinedDx += stabilizerAxisOffset(
+            stabilizerResolvedShiftScoreAt(partials, gid, bestDx - 1, bestDy, resolve),
+            bestScore,
+            stabilizerResolvedShiftScoreAt(partials, gid, bestDx + 1, bestDy, resolve)
+        );
+        refinedDy += stabilizerAxisOffset(
+            stabilizerResolvedShiftScoreAt(partials, gid, bestDx, bestDy - 1, resolve),
+            bestScore,
+            stabilizerResolvedShiftScoreAt(partials, gid, bestDx, bestDy + 1, resolve)
+        );
+    }
+
+    StabilizerShiftResult result;
+    result.dx = refinedDx;
+    result.dy = refinedDy;
+    result.score = bestScore;
+    result.searchRadiusHit = searchRadiusHit ? 1u : 0u;
+    results[gid] = result;
+}

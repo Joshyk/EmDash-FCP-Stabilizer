@@ -246,10 +246,15 @@ private struct StabilizerBlockShift {
 fileprivate final class MetalAnalysisContext {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
-    let shiftPipelineState: MTLComputePipelineState
-    let batchShiftPipelineState: MTLComputePipelineState
+    let shiftPartialPipelineState: MTLComputePipelineState
+    let batchShiftPartialPipelineState: MTLComputePipelineState
+    let resolveShiftPipelineState: MTLComputePipelineState
     private var reusableShiftScoreBuffer: MTLBuffer?
     private var reusableShiftScoreBufferLength = 0
+    private var reusableShiftPartialBuffer: MTLBuffer?
+    private var reusableShiftPartialBufferLength = 0
+    private var reusableShiftResultBuffer: MTLBuffer?
+    private var reusableShiftResultBufferLength = 0
     private var reusableShiftBatchUniformBuffer: MTLBuffer?
     private var reusableShiftBatchUniformBufferLength = 0
 
@@ -260,15 +265,17 @@ fileprivate final class MetalAnalysisContext {
         guard
             let commandQueue = device.makeCommandQueue(),
             let library = device.makeDefaultLibrary(),
-            let shiftFunction = library.makeFunction(name: "stabilizerShiftScores"),
-            let batchShiftFunction = library.makeFunction(name: "stabilizerBatchShiftScores")
+            let shiftPartialFunction = library.makeFunction(name: "stabilizerShiftScorePartials"),
+            let batchShiftPartialFunction = library.makeFunction(name: "stabilizerBatchShiftScorePartials"),
+            let resolveShiftFunction = library.makeFunction(name: "stabilizerResolveShiftResults")
         else {
             throw AutoStabilizationEstimator.metalError("Stabilizer Metal analysis resources were unavailable.")
         }
         self.device = device
         self.commandQueue = commandQueue
-        self.shiftPipelineState = try device.makeComputePipelineState(function: shiftFunction)
-        self.batchShiftPipelineState = try device.makeComputePipelineState(function: batchShiftFunction)
+        self.shiftPartialPipelineState = try device.makeComputePipelineState(function: shiftPartialFunction)
+        self.batchShiftPartialPipelineState = try device.makeComputePipelineState(function: batchShiftPartialFunction)
+        self.resolveShiftPipelineState = try device.makeComputePipelineState(function: resolveShiftFunction)
     }
 
     func frameBuffer(for frame: StabilizerAnalysisFrame) throws -> MTLBuffer {
@@ -304,6 +311,32 @@ fileprivate final class MetalAnalysisContext {
         }
         reusableShiftScoreBuffer = buffer
         reusableShiftScoreBufferLength = length
+        return buffer
+    }
+
+    func shiftPartialBuffer(length: Int) throws -> MTLBuffer {
+        if let buffer = reusableShiftPartialBuffer,
+           reusableShiftPartialBufferLength >= length {
+            return buffer
+        }
+        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer Metal shift partial buffer.")
+        }
+        reusableShiftPartialBuffer = buffer
+        reusableShiftPartialBufferLength = length
+        return buffer
+    }
+
+    func shiftResultBuffer(length: Int) throws -> MTLBuffer {
+        if let buffer = reusableShiftResultBuffer,
+           reusableShiftResultBufferLength >= length {
+            return buffer
+        }
+        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer Metal shift result buffer.")
+        }
+        reusableShiftResultBuffer = buffer
+        reusableShiftResultBufferLength = length
         return buffer
     }
 
@@ -1545,6 +1578,13 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    private static func shiftScoreChunkCount(regionHeight: Int, stride: UInt32) -> Int {
+        let stride = max(1, Int(stride))
+        let sampledRows = max(1, (max(1, regionHeight) + stride - 1) / stride)
+        let targetRowsPerChunk = 8
+        return max(1, min(128, (sampledRows + targetRowsPerChunk - 1) / targetRowsPerChunk))
+    }
+
     private static func estimateShift(
         context: MetalAnalysisContext,
         previous: MTLBuffer,
@@ -1564,15 +1604,21 @@ enum AutoStabilizationEstimator {
         let centerY = Int(center.1.rounded())
         let side = (radius * 2) + 1
         let scoreCount = side * side
+        let chunkCount = shiftScoreChunkCount(regionHeight: height, stride: stride)
+        let partialBuffer = try context.shiftPartialBuffer(
+            length: MemoryLayout<StabilizerShiftScorePartial>.stride * scoreCount * chunkCount
+        )
+        let resultBuffer = try context.shiftResultBuffer(
+            length: MemoryLayout<StabilizerShiftResult>.stride
+        )
         guard
             let commandBuffer = context.commandQueue.makeCommandBuffer(),
-            let encoder = commandBuffer.makeComputeCommandEncoder()
+            let partialEncoder = commandBuffer.makeComputeCommandEncoder()
         else {
             throw metalError("Could not allocate Stabilizer Metal shift resources.")
         }
-        let scoreBuffer = try context.shiftScoreBuffer(length: MemoryLayout<Float>.stride * scoreCount)
 
-        var uniforms = StabilizerShiftUniforms(
+        var uniforms = StabilizerShiftBatchUniforms(
             width: UInt32(sampleWidth),
             height: UInt32(sampleHeight),
             x0: UInt32(x0),
@@ -1584,33 +1630,46 @@ enum AutoStabilizationEstimator {
             radius: UInt32(radius),
             stride: max(1, stride)
         )
-
-        encoder.setComputePipelineState(context.shiftPipelineState)
-        encoder.setBuffer(previous, offset: 0, index: Int(SCBI_PreviousFrame.rawValue))
-        encoder.setBuffer(current, offset: 0, index: Int(SCBI_CurrentFrame.rawValue))
-        encoder.setBuffer(scoreBuffer, offset: 0, index: Int(SCBI_ShiftScores.rawValue))
-        encoder.setBytes(&uniforms, length: MemoryLayout<StabilizerShiftUniforms>.stride, index: Int(SCBI_ShiftUniforms.rawValue))
-        encoder.dispatchThreads(
-            MTLSize(width: scoreCount, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: min(256, scoreCount), height: 1, depth: 1)
+        var resolveUniforms = StabilizerShiftResolveUniforms(
+            radius: UInt32(radius),
+            chunkCount: UInt32(chunkCount),
+            blockCount: 1,
+            centerX: Int32(centerX),
+            centerY: Int32(centerY),
+            refine: refine ? 1 : 0
         )
-        encoder.endEncoding()
+
+        partialEncoder.setComputePipelineState(context.shiftPartialPipelineState)
+        partialEncoder.setBuffer(previous, offset: 0, index: Int(SCBI_PreviousFrame.rawValue))
+        partialEncoder.setBuffer(current, offset: 0, index: Int(SCBI_CurrentFrame.rawValue))
+        partialEncoder.setBuffer(partialBuffer, offset: 0, index: Int(SCBI_ShiftScorePartials.rawValue))
+        partialEncoder.setBytes(&uniforms, length: MemoryLayout<StabilizerShiftBatchUniforms>.stride, index: Int(SCBI_ShiftUniforms.rawValue))
+        partialEncoder.setBytes(&resolveUniforms, length: MemoryLayout<StabilizerShiftResolveUniforms>.stride, index: Int(SCBI_ShiftResolveUniforms.rawValue))
+        partialEncoder.dispatchThreads(
+            MTLSize(width: scoreCount, height: 1, depth: chunkCount),
+            threadsPerThreadgroup: MTLSize(width: min(16, scoreCount), height: 1, depth: 1)
+        )
+        partialEncoder.endEncoding()
+        guard let resolveEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw metalError("Could not allocate Stabilizer Metal shift resolve resources.")
+        }
+        resolveEncoder.setComputePipelineState(context.resolveShiftPipelineState)
+        resolveEncoder.setBuffer(partialBuffer, offset: 0, index: Int(SCBI_ShiftScorePartials.rawValue))
+        resolveEncoder.setBuffer(resultBuffer, offset: 0, index: Int(SCBI_ShiftResults.rawValue))
+        resolveEncoder.setBytes(&resolveUniforms, length: MemoryLayout<StabilizerShiftResolveUniforms>.stride, index: Int(SCBI_ShiftResolveUniforms.rawValue))
+        resolveEncoder.dispatchThreads(
+            MTLSize(width: 1, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+        )
+        resolveEncoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         if let error = commandBuffer.error {
             throw error
         }
 
-        let scores = scoreBuffer.contents().assumingMemoryBound(to: Float.self)
-        return resolvedShift(
-            scores: scores,
-            scoreCount: scoreCount,
-            side: side,
-            radius: radius,
-            centerX: centerX,
-            centerY: centerY,
-            refine: refine
-        )
+        let result = resultBuffer.contents().assumingMemoryBound(to: StabilizerShiftResult.self)[0]
+        return (result.dx, result.dy, result.score, result.searchRadiusHit != 0)
     }
 
     private static func estimateShifts(
@@ -1632,7 +1691,14 @@ enum AutoStabilizationEstimator {
         let centerY = Int(center.1.rounded())
         let side = (radius * 2) + 1
         let scoreCount = side * side
-        let scoreBuffer = try context.shiftScoreBuffer(length: MemoryLayout<Float>.stride * scoreCount * blocks.count)
+        let maxBlockHeight = blocks.map(\.height).max() ?? 0
+        let chunkCount = shiftScoreChunkCount(regionHeight: maxBlockHeight, stride: stride)
+        let partialBuffer = try context.shiftPartialBuffer(
+            length: MemoryLayout<StabilizerShiftScorePartial>.stride * scoreCount * blocks.count * chunkCount
+        )
+        let resultBuffer = try context.shiftResultBuffer(
+            length: MemoryLayout<StabilizerShiftResult>.stride * blocks.count
+        )
         let uniforms = blocks.map { block in
             StabilizerShiftBatchUniforms(
                 width: UInt32(sampleWidth),
@@ -1648,46 +1714,59 @@ enum AutoStabilizationEstimator {
             )
         }
         let uniformBuffer = try context.shiftBatchUniformBuffer(uniforms: uniforms)
+        var resolveUniforms = StabilizerShiftResolveUniforms(
+            radius: UInt32(radius),
+            chunkCount: UInt32(chunkCount),
+            blockCount: UInt32(blocks.count),
+            centerX: Int32(centerX),
+            centerY: Int32(centerY),
+            refine: refine ? 1 : 0
+        )
         guard
             let commandBuffer = context.commandQueue.makeCommandBuffer(),
-            let encoder = commandBuffer.makeComputeCommandEncoder()
+            let partialEncoder = commandBuffer.makeComputeCommandEncoder()
         else {
             throw metalError("Could not allocate Stabilizer Metal batch shift resources.")
         }
 
-        encoder.setComputePipelineState(context.batchShiftPipelineState)
-        encoder.setBuffer(previous, offset: 0, index: Int(SCBI_PreviousFrame.rawValue))
-        encoder.setBuffer(current, offset: 0, index: Int(SCBI_CurrentFrame.rawValue))
-        encoder.setBuffer(scoreBuffer, offset: 0, index: Int(SCBI_ShiftScores.rawValue))
-        encoder.setBuffer(uniformBuffer, offset: 0, index: Int(SCBI_ShiftBatchUniforms.rawValue))
-        encoder.dispatchThreads(
-            MTLSize(width: scoreCount, height: blocks.count, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: min(256, scoreCount), height: 1, depth: 1)
+        partialEncoder.setComputePipelineState(context.batchShiftPartialPipelineState)
+        partialEncoder.setBuffer(previous, offset: 0, index: Int(SCBI_PreviousFrame.rawValue))
+        partialEncoder.setBuffer(current, offset: 0, index: Int(SCBI_CurrentFrame.rawValue))
+        partialEncoder.setBuffer(partialBuffer, offset: 0, index: Int(SCBI_ShiftScorePartials.rawValue))
+        partialEncoder.setBuffer(uniformBuffer, offset: 0, index: Int(SCBI_ShiftBatchUniforms.rawValue))
+        partialEncoder.setBytes(&resolveUniforms, length: MemoryLayout<StabilizerShiftResolveUniforms>.stride, index: Int(SCBI_ShiftResolveUniforms.rawValue))
+        partialEncoder.dispatchThreads(
+            MTLSize(width: scoreCount, height: blocks.count, depth: chunkCount),
+            threadsPerThreadgroup: MTLSize(width: min(16, scoreCount), height: 1, depth: 1)
         )
-        encoder.endEncoding()
+        partialEncoder.endEncoding()
+        guard let resolveEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw metalError("Could not allocate Stabilizer Metal batch shift resolve resources.")
+        }
+        resolveEncoder.setComputePipelineState(context.resolveShiftPipelineState)
+        resolveEncoder.setBuffer(partialBuffer, offset: 0, index: Int(SCBI_ShiftScorePartials.rawValue))
+        resolveEncoder.setBuffer(resultBuffer, offset: 0, index: Int(SCBI_ShiftResults.rawValue))
+        resolveEncoder.setBytes(&resolveUniforms, length: MemoryLayout<StabilizerShiftResolveUniforms>.stride, index: Int(SCBI_ShiftResolveUniforms.rawValue))
+        resolveEncoder.dispatchThreads(
+            MTLSize(width: blocks.count, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(32, blocks.count), height: 1, depth: 1)
+        )
+        resolveEncoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         if let error = commandBuffer.error {
             throw error
         }
 
-        let scores = scoreBuffer.contents().assumingMemoryBound(to: Float.self)
+        let results = resultBuffer.contents().assumingMemoryBound(to: StabilizerShiftResult.self)
         return blocks.enumerated().map { index, block in
-            let shift = resolvedShift(
-                scores: scores.advanced(by: index * scoreCount),
-                scoreCount: scoreCount,
-                side: side,
-                radius: radius,
-                centerX: centerX,
-                centerY: centerY,
-                refine: refine
-            )
+            let shift = results[index]
             return StabilizerBlockShift(
                 block: block,
                 dx: shift.dx,
                 dy: shift.dy,
                 score: shift.score,
-                searchRadiusHit: shift.searchRadiusHit
+                searchRadiusHit: shift.searchRadiusHit != 0
             )
         }
     }
