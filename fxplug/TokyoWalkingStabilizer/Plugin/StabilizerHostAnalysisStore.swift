@@ -215,6 +215,7 @@ final class StabilizerHostAnalysisStore {
     private static let analysisScratchDirectoryName = "analysis-work"
 
     private let lock = NSLock()
+    private let downsampleBufferPool = StabilizerDownsampleBufferPool()
     private var framesByTimeKey: [Int64: StabilizerAnalysisFrame] = [:]
     private var streamingAnalysisBuilder: StreamingStabilizationAnalysisBuilder?
     private var preparedAnalysis: StabilizerPreparedAnalysis?
@@ -251,6 +252,10 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         defer { lock.unlock() }
         return framesByTimeKey.count
+    }
+
+    var reusableDownsampleBufferPool: StabilizerDownsampleBufferPool {
+        downsampleBufferPool
     }
 
     var revision: UInt64 {

@@ -165,8 +165,111 @@ extension StabilizerAnalysisFrame {
 struct StabilizerAnalysisSample {
     let frame: StabilizerAnalysisFrame
     let lumaBuffer: MTLBuffer
+    let lumaBufferLease: StabilizerDownsampleBufferLease?
     let downsampleMilliseconds: Double
     let blurMilliseconds: Double
+}
+
+final class StabilizerDownsampleBufferLease {
+    let buffer: MTLBuffer
+    let reused: Bool
+    private let releaseHandler: () -> Void
+    private let lock = NSLock()
+    private var released = false
+
+    init(buffer: MTLBuffer, reused: Bool, releaseHandler: @escaping () -> Void) {
+        self.buffer = buffer
+        self.reused = reused
+        self.releaseHandler = releaseHandler
+    }
+
+    deinit {
+        release()
+    }
+
+    func release() {
+        lock.lock()
+        guard !released else {
+            lock.unlock()
+            return
+        }
+        released = true
+        lock.unlock()
+        releaseHandler()
+    }
+}
+
+final class StabilizerDownsampleBufferPool {
+    private struct Slot {
+        var buffer: MTLBuffer
+        var length: Int
+        var deviceRegistryID: UInt64
+        var inUse: Bool
+    }
+
+    private let lock = NSLock()
+    private var slots: [Slot] = []
+    private let maxSlotCount = 2
+
+    func leaseBuffer(device: MTLDevice, length: Int) throws -> StabilizerDownsampleBufferLease {
+        let length = max(1, length)
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+
+        if let index = slots.firstIndex(where: {
+            !$0.inUse && $0.deviceRegistryID == device.registryID && $0.length >= length
+        }) {
+            slots[index].inUse = true
+            return lease(forSlotAt: index, reused: true)
+        }
+
+        if let index = slots.firstIndex(where: { !$0.inUse }) {
+            guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+                throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer reusable downsample buffer.")
+            }
+            slots[index] = Slot(
+                buffer: buffer,
+                length: length,
+                deviceRegistryID: device.registryID,
+                inUse: true
+            )
+            return lease(forSlotAt: index, reused: false)
+        }
+
+        if slots.count < maxSlotCount {
+            guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+                throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer reusable downsample buffer.")
+            }
+            slots.append(Slot(
+                buffer: buffer,
+                length: length,
+                deviceRegistryID: device.registryID,
+                inUse: true
+            ))
+            return lease(forSlotAt: slots.count - 1, reused: false)
+        }
+
+        throw AutoStabilizationEstimator.metalError("Stabilizer downsample ping-pong buffers were both in use; Host Analysis frame callbacks overlapped.")
+    }
+
+    private func lease(forSlotAt index: Int, reused: Bool) -> StabilizerDownsampleBufferLease {
+        StabilizerDownsampleBufferLease(buffer: slots[index].buffer, reused: reused) { [weak self] in
+            self?.releaseSlot(at: index)
+        }
+    }
+
+    private func releaseSlot(at index: Int) {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        guard slots.indices.contains(index) else {
+            return
+        }
+        slots[index].inUse = false
+    }
 }
 
 struct StabilizerPreparedAnalysis {
@@ -1164,7 +1267,13 @@ enum AutoStabilizationEstimator {
         try analysisSample(from: tile, at: frameTime, sampleWidth: sampleWidth, sampleHeight: sampleHeight).frame
     }
 
-    static func analysisSample(from tile: FxImageTile, at frameTime: CMTime? = nil, sampleWidth: Int, sampleHeight: Int) throws -> StabilizerAnalysisSample {
+    static func analysisSample(
+        from tile: FxImageTile,
+        at frameTime: CMTime? = nil,
+        sampleWidth: Int,
+        sampleHeight: Int,
+        downsampleBufferPool: StabilizerDownsampleBufferPool? = nil
+    ) throws -> StabilizerAnalysisSample {
         let startedAt = CFAbsoluteTimeGetCurrent()
         let time = CMTimeGetSeconds(frameTime ?? tile.mediaTime)
         guard time.isFinite else {
@@ -1180,11 +1289,21 @@ enum AutoStabilizationEstimator {
             let inputTexture = tile.metalTexture(for: device),
             let commandQueue = deviceCache.commandQueue(with: tile.deviceRegistryID, pixelFormat: pixelFormat),
             let pipelineState = deviceCache.downsamplePipelineState(with: tile.deviceRegistryID, pixelFormat: pixelFormat),
-            let outputBuffer = device.makeBuffer(length: sampleWidth * sampleHeight, options: .storageModeShared),
             let commandBuffer = commandQueue.makeCommandBuffer(),
             let encoder = commandBuffer.makeComputeCommandEncoder()
         else {
             throw metalError("Stabilizer Metal downsample resources were unavailable for Host Analysis.")
+        }
+        let outputBufferLength = sampleWidth * sampleHeight
+        let outputLease = try downsampleBufferPool?.leaseBuffer(device: device, length: outputBufferLength)
+        let outputBuffer: MTLBuffer
+        if let outputLease {
+            outputBuffer = outputLease.buffer
+        } else {
+            guard let allocatedOutputBuffer = device.makeBuffer(length: outputBufferLength, options: .storageModeShared) else {
+                throw metalError("Could not allocate Stabilizer Metal downsample buffer.")
+            }
+            outputBuffer = allocatedOutputBuffer
         }
         defer {
             deviceCache.returnCommandQueueToCache(commandQueue: commandQueue)
@@ -1213,13 +1332,14 @@ enum AutoStabilizationEstimator {
         let blur = blurAmount(pixels, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
         let blurMilliseconds = (CFAbsoluteTimeGetCurrent() - blurStartedAt) * 1000.0
         os_log(
-            "Host Analysis downsample frame %{public}.3f sample %{public}dx%{public}d took %{public}.3f ms.",
+            "Host Analysis downsample frame %{public}.3f sample %{public}dx%{public}d took %{public}.3f ms; reused output buffer %{public}@.",
             log: stabilizerHostAnalysisLog,
             type: .debug,
             time,
             sampleWidth,
             sampleHeight,
-            downsampleMilliseconds
+            downsampleMilliseconds,
+            outputLease?.reused == true ? "yes" : "no"
         )
         return StabilizerAnalysisSample(
             frame: StabilizerAnalysisFrame(
@@ -1230,6 +1350,7 @@ enum AutoStabilizationEstimator {
                 blurAmount: blur
             ),
             lumaBuffer: outputBuffer,
+            lumaBufferLease: outputLease,
             downsampleMilliseconds: downsampleMilliseconds,
             blurMilliseconds: blurMilliseconds
         )
@@ -2701,6 +2822,7 @@ final class StreamingStabilizationAnalysisBuilder {
     private var frames: [StabilizerAnalysisFrame] = []
     private var motions: [PairMotion] = []
     private var previousFrameBuffer: MTLBuffer?
+    private var previousFrameBufferLease: StabilizerDownsampleBufferLease?
     private var sampleWidth: Int?
     private var sampleHeight: Int?
 
@@ -2771,6 +2893,7 @@ final class StreamingStabilizationAnalysisBuilder {
         }
         frames.append(frame.withoutRetainedPixels())
         previousFrameBuffer = currentFrameBuffer
+        previousFrameBufferLease = sample.lumaBufferLease
         return timing
     }
 

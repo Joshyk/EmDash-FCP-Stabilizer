@@ -4172,7 +4172,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 from: frame,
                 at: frameTime,
                 sampleWidth: sampleSize.width,
-                sampleHeight: sampleSize.height
+                sampleHeight: sampleSize.height,
+                downsampleBufferPool: route.store.reusableDownsampleBufferPool
             )
             try route.store.append(analysisSample, sourceInfo: frameInfo)
             recordActiveAnalysisFrameAccepted(
