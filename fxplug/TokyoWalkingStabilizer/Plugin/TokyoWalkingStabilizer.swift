@@ -35,6 +35,7 @@ private enum ParameterID: UInt32 {
     case autoCropZoomSmoothness = 38
     case autoCropPositionSpeed = 39
     case autoCropPositionSmoothness = 40
+    case autoCropEnabled = 41
 }
 
 private struct StabilizerInfoFields {
@@ -42,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.141"
+private let tokyoWalkingStabilizerVersion = "0.3.142"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -185,6 +186,7 @@ private struct StabilizerPluginState {
     var autoCropZoomSmoothness: Double
     var autoCropPositionSpeed: Double
     var autoCropPositionSmoothness: Double
+    var autoCropEnabled: Bool
     var edgeDisplayMode: Int32
     var debugOverlay: Bool
     var sampleScale: Int32
@@ -663,6 +665,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             delta: 0.25,
             parameterFlags: flags
         )
+        paramAPI.addToggleButton(
+            withName: "Remove Black Edges",
+            parameterID: ParameterID.autoCropEnabled.rawValue,
+            defaultValue: true,
+            parameterFlags: flags
+        )
         paramAPI.addFloatSlider(
             withName: "Auto Crop Zoom Speed",
             parameterID: ParameterID.autoCropZoomSpeed.rawValue,
@@ -806,6 +814,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropZoomSmoothness: stabilizerDefaultAutoCropZoomSmoothness,
             autoCropPositionSpeed: stabilizerDefaultAutoCropPositionSpeed,
             autoCropPositionSmoothness: stabilizerDefaultAutoCropPositionSmoothness,
+            autoCropEnabled: true,
             edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
             debugOverlay: false,
             sampleScale: StabilizerSampleScale.defaultScale.rawValue,
@@ -830,6 +839,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.getFloatValue(&state.autoCropZoomSmoothness, fromParameter: ParameterID.autoCropZoomSmoothness.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.autoCropPositionSpeed, fromParameter: ParameterID.autoCropPositionSpeed.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.autoCropPositionSmoothness, fromParameter: ParameterID.autoCropPositionSmoothness.rawValue, at: renderTime)
+        var autoCropEnabled = ObjCBool(state.autoCropEnabled)
+        paramAPI.getBoolValue(&autoCropEnabled, fromParameter: ParameterID.autoCropEnabled.rawValue, at: renderTime)
+        state.autoCropEnabled = autoCropEnabled.boolValue
         paramAPI.getIntValue(&state.edgeDisplayMode, fromParameter: ParameterID.edgeDisplayMode.rawValue, at: renderTime)
         var debugOverlay = ObjCBool(state.debugOverlay)
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
@@ -3825,7 +3837,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform = .identity
         }
         publishRenderAnalysisDecisionIfChanged(
-            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
+            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | auto crop \(state.autoCropEnabled ? "on" : "off") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
         )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
         let renderStoreRevision = hostAnalysisStore.revision
@@ -3908,7 +3920,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             0.0
         )
         let autoCropFraming: AutoCropFraming
-        if renderUsesPreparedAnalysis,
+        if state.autoCropEnabled,
+           renderUsesPreparedAnalysis,
            let preparedAnalysis = activePreparedAnalysis {
             autoCropFraming = Self.cachedAutoCropFraming(
                 preparedAnalysis: preparedAnalysis,

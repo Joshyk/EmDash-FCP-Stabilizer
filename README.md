@@ -25,9 +25,11 @@ The main correction stages are:
   perspective trim for distant background shake.
 - `Turn Smoothing`: X-only smoothing for stop-and-go walking turns.
 
-The effect keeps render scale fixed at `1.0`. Edge fill is controlled separately
-by `Edge Display Mode`, which switches between stretched source edges and black
-outside-source pixels.
+`Remove Black Edges` is on by default and applies dynamic Auto Crop framing during
+render so stabilized pixels stay inside the source image. Turn it off when you need
+to temporarily bypass the Auto Crop work for playback diagnosis; edge fill then
+comes from `Edge Display Mode`, which switches between stretched source edges and
+black outside-source pixels.
 
 ## Basic Workflow
 
@@ -125,6 +127,11 @@ local tracking support to reduce single-frame gate flicker, then drops tiny warp
 deltas through a deadband so useful ridge-line correction is less likely to
 disappear while high-side gate jumps and low-confidence warp evidence are
 suppressed instead of producing a wavy image.
+
+`Remove Black Edges` controls dynamic Auto Crop framing. When it is off, the render
+path skips Auto Crop window sampling and binary-search framing completely, so
+`Edge Display Mode` directly controls whether outside-source pixels are stretched
+or black.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the

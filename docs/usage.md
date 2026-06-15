@@ -140,6 +140,9 @@ fallbacks.
   mode this is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
+- `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
+  Turn it off to skip Auto Crop window sampling and binary-search framing completely while
+  checking playback cost; `Edge Display Mode` then directly controls outside-source pixels.
 - `Sample Size`: analysis image size as a percentage of the original clip dimensions. The
   options are `100%`, `75%`, `50%`, `25%`, and `10%`. The default is `100%` for full source
   detail; choose a smaller value only when you want a faster debug pass. The actual pixel

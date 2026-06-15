@@ -162,7 +162,7 @@
 		<onHDRDisplay>0</onHDRDisplay>
 	</sceneSettings>
 	<publishSettings>
-		<version>2</version>
+		<version>3</version>
 		<target object="10036" channel="./1" name="Overall Strength"/>
 		<target object="10036" channel="./7" name="Footstep Jitter X Strength"/>
 		<target object="10036" channel="./18" name="Footstep Jitter Y Strength"/>
@@ -173,6 +173,7 @@
 		<target object="10036" channel="./28" name="Far-field Warp Strength"/>
 		<target object="10036" channel="./23" name="Turn Smoothing Strength"/>
 		<target object="10036" channel="./9" name="Turn Detection Window"/>
+		<target object="10036" channel="./41" name="Remove Black Edges"/>
 		<target object="10036" channel="./37" name="Auto Crop Zoom Speed"/>
 		<target object="10036" channel="./38" name="Auto Crop Zoom Smoothness"/>
 		<target object="10036" channel="./39" name="Auto Crop Position Speed"/>
@@ -273,7 +274,7 @@
 				<parameter name="Width" id="313" flags="8589934610" default="1" value="1920"/>
 				<parameter name="Height" id="314" flags="8589934610" default="1" value="1080"/>
 			</parameter>
-			<filter name="Tokyo Walking Stabilizer" id="10036" factoryID="6" pluginUUID="BEB2015D-70A9-43B0-8D5E-04CEE7ADC49D" pluginVersion="2" pluginName="Tokyo Walking Stabilizer" pluginDynamicParams="0">
+			<filter name="Tokyo Walking Stabilizer" id="10036" factoryID="6" pluginUUID="BEB2015D-70A9-43B0-8D5E-04CEE7ADC49D" pluginVersion="3" pluginName="Tokyo Walking Stabilizer" pluginDynamicParams="0">
 				<timing in="0 1 1 0" out="1529856 153600 1 0" offset="0 1 1 0"/>
 				<baseFlags>8589934609</baseFlags>
 				<parameter name="Footstep Jitter X Strength" id="7" flags="12884901904" default="1" value="1"/>
@@ -286,6 +287,7 @@
 				<parameter name="Far-field Warp Strength" id="28" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Smoothing Strength" id="23" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Detection Window" id="9" flags="12884901904" default="6" value="6"/>
+				<parameter name="Remove Black Edges" id="41" flags="12884901904" default="1" value="1"/>
 				<parameter name="Auto Crop Zoom Speed" id="37" flags="12884901904" default="1" value="1"/>
 				<parameter name="Auto Crop Zoom Smoothness" id="38" flags="12884901904" default="0.35" value="0.35"/>
 				<parameter name="Auto Crop Position Speed" id="39" flags="12884901904" default="1" value="1"/>
@@ -295,7 +297,7 @@
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
-					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.140" value="Needs Analysis | FxPlug 0.3.140"/>
+					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.142" value="Needs Analysis | FxPlug 0.3.142"/>
 					<parameter name="Sample Info" id="32" flags="12884901909" default="Sample: 100% | Analysis: -" value="Sample: 100% | Analysis: -"/>
 					<parameter name="Queue" id="36" flags="12884901909" default="Queue: -" value="Queue: -"/>
 				<parameter name="Host Analysis Cache Identity" id="33" flags="12884901906" default="" value=""/>

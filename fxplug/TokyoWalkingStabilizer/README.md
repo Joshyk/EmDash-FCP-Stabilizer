@@ -53,8 +53,10 @@ estimators, or Transform-keyframe writers back into this target.
   shorter `0.36` second in-range smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
-- `Edge Display Mode` switches preview edges between stretched source edges and black
-  outside-source pixels, making stabilization movement visible when needed.
+- `Remove Black Edges` is on by default and applies dynamic Auto Crop framing during
+  render. Turning it off skips Auto Crop window sampling and framing entirely, so
+  `Edge Display Mode` directly switches preview edges between stretched source edges and
+  black outside-source pixels.
 - Updates a hidden render revision parameter when Host Analysis/cache state changes so Final
   Cut Pro refreshes the preview from the prepared motion paths.
 - Monitors the bundle-local persistent cache location from render/preview instances and
@@ -291,6 +293,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   has the same source-time range.
 - `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
   `Cache Cleared` in `Host Analysis Status`.
+- `Remove Black Edges`: default on. Applies dynamic Auto Crop framing so stabilized
+  frames avoid outside-source pixels. Turn it off to bypass Auto Crop render-time
+  sampling and binary-search framing while checking playback cost; `Edge Display Mode`
+  then decides whether outside-source pixels are stretched or black.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. During a real analysis
   run, the status advances as `Analyzing Host Frames (N)`. If Final Cut Pro restores an
