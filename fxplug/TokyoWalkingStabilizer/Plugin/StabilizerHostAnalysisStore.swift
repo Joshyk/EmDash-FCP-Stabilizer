@@ -987,23 +987,32 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         let offsetSeconds = renderToAnalysisOffsetSeconds
         lock.unlock()
+        let sourceSecondsForClamp: Double
         let mappedSeconds: Double?
         if let offsetSeconds, offsetSeconds.isFinite {
             let candidateSeconds = renderSeconds + offsetSeconds
+            sourceSecondsForClamp = candidateSeconds
             mappedSeconds = Self.renderSeconds(candidateSeconds, isInside: analysis.frames)
                 ? candidateSeconds
                 : nil
         } else {
+            sourceSecondsForClamp = renderSeconds
             mappedSeconds = mappedAnalysisSecondsForSourceRequest(
                 forRenderSeconds: renderSeconds,
                 frames: analysis.frames
             )
         }
-        guard let mappedSeconds else {
+        let sourceSeconds = mappedSeconds ?? clampedSourceRequestSecondsIfNeeded(
+            sourceSeconds: sourceSecondsForClamp,
+            renderSeconds: renderSeconds,
+            expectedRange: expectedRange,
+            frames: analysis.frames
+        )
+        guard let sourceSeconds else {
             return nil
         }
         let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : CMTimeScale(600)
-        return CMTime(seconds: mappedSeconds, preferredTimescale: preferredTimescale)
+        return CMTime(seconds: sourceSeconds, preferredTimescale: preferredTimescale)
     }
 
     func analysisRenderTime(for renderTime: CMTime, preparedAnalysis analysis: StabilizerPreparedAnalysis) -> CMTime {
@@ -2167,6 +2176,54 @@ final class StabilizerHostAnalysisStore {
             }
         }
         return bestSeconds
+    }
+
+    private func clampedSourceRequestSecondsIfNeeded(
+        sourceSeconds: Double,
+        renderSeconds: Double,
+        expectedRange: HostAnalysisExpectedRange?,
+        frames: [StabilizerAnalysisFrame]
+    ) -> Double? {
+        guard activeCacheIdentity != nil,
+              let expectedRange,
+              expectedRange.isValid,
+              sourceSeconds.isFinite,
+              renderSeconds.isFinite,
+              let firstFrameTime = frames.first?.time,
+              let lastFrameTime = frames.last?.time,
+              firstFrameTime.isFinite,
+              lastFrameTime.isFinite,
+              !Self.renderSeconds(sourceSeconds, isInside: frames)
+        else {
+            return nil
+        }
+
+        let frameDuration = expectedRange.frameDurationSeconds.isFinite && expectedRange.frameDurationSeconds > 0.0
+            ? expectedRange.frameDurationSeconds
+            : 1.0 / 600.0
+        let tolerance = max(1.0 / 600.0, frameDuration * 1.5)
+        let renderInsideExpectedRange = renderSeconds >= expectedRange.startSeconds - tolerance
+            && renderSeconds <= expectedRange.endSeconds + tolerance
+        let expectedRangeOverlapsPreparedFrames = expectedRange.endSeconds >= firstFrameTime - tolerance
+            && expectedRange.startSeconds <= lastFrameTime + tolerance
+        guard renderInsideExpectedRange,
+              expectedRangeOverlapsPreparedFrames
+        else {
+            return nil
+        }
+        let clampedSeconds = min(max(sourceSeconds, firstFrameTime), lastFrameTime)
+        os_log(
+            "Clamped Host Analysis source request to prepared frame range. render=%{public}.6f requested=%{public}.6f clamped=%{public}.6f frames=%{public}.6f-%{public}.6f expected=%{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .debug,
+            renderSeconds,
+            sourceSeconds,
+            clampedSeconds,
+            firstFrameTime,
+            lastFrameTime,
+            Self.expectedRangeDescription(expectedRange)
+        )
+        return clampedSeconds
     }
 
     private func bumpRevisionLocked() {
