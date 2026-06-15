@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.140"
+private let tokyoWalkingStabilizerVersion = "0.3.141"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -112,6 +112,62 @@ private struct AutoCropFraming {
         scale: 1.0,
         positionPixels: vector_float2(0.0, 0.0)
     )
+}
+
+private struct AutoCropTransformSignature: Hashable {
+    let pixelOffsetX: UInt32
+    let pixelOffsetY: UInt32
+    let macroPixelOffsetX: UInt32
+    let macroPixelOffsetY: UInt32
+    let rotationDegrees: UInt32
+    let shearX: UInt32
+    let shearY: UInt32
+    let perspectiveX: UInt32
+    let perspectiveY: UInt32
+    let yawPitchProxyX: UInt32
+    let yawPitchProxyY: UInt32
+
+    init(_ transform: StabilizerAutoTransform) {
+        pixelOffsetX = transform.pixelOffset.x.bitPattern
+        pixelOffsetY = transform.pixelOffset.y.bitPattern
+        macroPixelOffsetX = transform.macroPixelOffset.x.bitPattern
+        macroPixelOffsetY = transform.macroPixelOffset.y.bitPattern
+        rotationDegrees = transform.rotationDegrees.bitPattern
+        shearX = transform.shear.x.bitPattern
+        shearY = transform.shear.y.bitPattern
+        perspectiveX = transform.perspective.x.bitPattern
+        perspectiveY = transform.perspective.y.bitPattern
+        yawPitchProxyX = transform.yawPitchProxy.x.bitPattern
+        yawPitchProxyY = transform.yawPitchProxy.y.bitPattern
+    }
+}
+
+private struct AutoCropFramingCacheKey: Hashable {
+    let cacheIdentity: String?
+    let analysisRevision: UInt64
+    let renderTimeValue: Int64
+    let renderTimeScale: Int32
+    let renderTimeEpoch: Int64
+    let outputWidth: Int32
+    let outputHeight: Int32
+    let analysisFrameCount: Int
+    let analysisFirstTime: UInt64
+    let analysisLastTime: UInt64
+    let panSmoothSeconds: UInt64
+    let masterStrength: UInt32
+    let zoomSpeed: UInt64
+    let zoomSmoothness: UInt64
+    let positionSpeed: UInt64
+    let positionSmoothness: UInt64
+    let microJitterX: UInt64
+    let microJitterY: UInt64
+    let microJitterRotation: UInt64
+    let strideWobbleX: UInt64
+    let strideWobbleY: UInt64
+    let strideWobbleRotation: UInt64
+    let panStabilizationStrength: UInt64
+    let farFieldWarp: UInt64
+    let currentTransform: AutoCropTransformSignature
 }
 
 private struct StabilizerPluginState {
@@ -450,6 +506,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static let activeAnalysisStoreLock = NSLock()
     private static var activeAnalysisSessions: [UUID: ActiveHostAnalysisSession] = [:]
     private static var hostAnalysisStartReserved = false
+    private static let autoCropFramingCacheLock = NSLock()
+    private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
+    private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
+    private static let autoCropFramingCacheLimit = 32
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -1209,6 +1269,80 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return min(max(baseScale, minimumScale), 2.25)
     }
 
+    private static func cachedAutoCropFraming(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        zoomSpeed: Double,
+        zoomSmoothness: Double,
+        positionSpeed: Double,
+        positionSmoothness: Double,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> AutoCropFraming {
+        let key = AutoCropFramingCacheKey(
+            cacheIdentity: cacheIdentity,
+            analysisRevision: analysisRevision,
+            renderTimeValue: renderTime.value,
+            renderTimeScale: renderTime.timescale,
+            renderTimeEpoch: renderTime.epoch,
+            outputWidth: Int32(clamping: Int(outputSize.x.rounded())),
+            outputHeight: Int32(clamping: Int(outputSize.y.rounded())),
+            analysisFrameCount: preparedAnalysis.frames.count,
+            analysisFirstTime: preparedAnalysis.frames.first?.time.bitPattern ?? 0,
+            analysisLastTime: preparedAnalysis.frames.last?.time.bitPattern ?? 0,
+            panSmoothSeconds: panSmoothSeconds.bitPattern,
+            masterStrength: masterStrength.bitPattern,
+            zoomSpeed: zoomSpeed.bitPattern,
+            zoomSmoothness: zoomSmoothness.bitPattern,
+            positionSpeed: positionSpeed.bitPattern,
+            positionSmoothness: positionSmoothness.bitPattern,
+            microJitterX: strengths.microJitterX.bitPattern,
+            microJitterY: strengths.microJitterY.bitPattern,
+            microJitterRotation: strengths.microJitterRotation.bitPattern,
+            strideWobbleX: strengths.strideWobbleX.bitPattern,
+            strideWobbleY: strengths.strideWobbleY.bitPattern,
+            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+            farFieldWarp: strengths.farFieldWarp.bitPattern,
+            currentTransform: AutoCropTransformSignature(currentTransform)
+        )
+
+        autoCropFramingCacheLock.lock()
+        defer { autoCropFramingCacheLock.unlock() }
+
+        if let cachedFraming = autoCropFramingCache[key] {
+            return cachedFraming
+        }
+
+        // Keep the first tile miss serialized so parallel FxPlug tile renders do not all
+        // repeat the same expensive window sampling and scale search for one frame.
+        let framing = autoCropFraming(
+            preparedAnalysis: preparedAnalysis,
+            renderTime: renderTime,
+            currentTransform: currentTransform,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            zoomSpeed: zoomSpeed,
+            zoomSmoothness: zoomSmoothness,
+            positionSpeed: positionSpeed,
+            positionSmoothness: positionSmoothness
+        )
+        autoCropFramingCache[key] = framing
+        autoCropFramingCacheOrder.append(key)
+        while autoCropFramingCacheOrder.count > autoCropFramingCacheLimit {
+            let oldestKey = autoCropFramingCacheOrder.removeFirst()
+            autoCropFramingCache.removeValue(forKey: oldestKey)
+        }
+        return framing
+    }
+
     private static func autoCropFraming(
         preparedAnalysis: StabilizerPreparedAnalysis,
         renderTime: CMTime,
@@ -1322,7 +1456,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             if abs(offset) <= 1e-6 {
                 transform = currentTransform
             } else {
-                transform = AutoStabilizationEstimator.estimate(
+                transform = AutoStabilizationEstimator.autoCropWindowEstimate(
                     preparedAnalysis: preparedAnalysis,
                     renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
                     outputSize: outputSize,
@@ -3695,6 +3829,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
         let renderStoreRevision = hostAnalysisStore.revision
+        let renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
         let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
         if renderStoreChangedStatus || abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
             publishPreviewInvalidationOnMain(
@@ -3775,7 +3910,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let autoCropFraming: AutoCropFraming
         if renderUsesPreparedAnalysis,
            let preparedAnalysis = activePreparedAnalysis {
-            autoCropFraming = Self.autoCropFraming(
+            autoCropFraming = Self.cachedAutoCropFraming(
                 preparedAnalysis: preparedAnalysis,
                 renderTime: hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis),
                 currentTransform: autoTransform,
@@ -3786,7 +3921,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 zoomSpeed: state.autoCropZoomSpeed,
                 zoomSmoothness: state.autoCropZoomSmoothness,
                 positionSpeed: state.autoCropPositionSpeed,
-                positionSmoothness: state.autoCropPositionSmoothness
+                positionSmoothness: state.autoCropPositionSmoothness,
+                analysisRevision: renderStoreRevision,
+                cacheIdentity: renderCacheIdentity
             )
         } else {
             autoCropFraming = .identity

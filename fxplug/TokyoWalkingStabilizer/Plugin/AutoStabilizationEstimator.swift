@@ -482,6 +482,27 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    static func autoCropWindowEstimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths = .defaultStrengths
+    ) -> StabilizerAutoTransform {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite else {
+            return .identity
+        }
+
+        return rawEstimate(
+            preparedAnalysis: analysis,
+            renderSeconds: renderSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        )
+    }
+
     private static func rawEstimate(
         preparedAnalysis analysis: StabilizerPreparedAnalysis,
         renderSeconds: Double,
