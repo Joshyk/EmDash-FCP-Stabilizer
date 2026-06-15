@@ -4,6 +4,12 @@
 
 Always reply to the user in Japanese unless the user explicitly asks for another language.
 
+Mac の UI 操作が必要な場合、ユーザーが操作可能なら Codex は先にユーザーへ
+操作を依頼する。依頼時は、操作してほしい内容と実行してほしい具体的な手順を
+明示し、操作後の結果を選択肢で返せる形にする。Codex が直接 Computer Use で
+操作するのは、ユーザーが明示的に依頼した場合、またはユーザーが操作できず
+UI 操作が必要な場合に限る。
+
 ## Project
 
 This directory hosts the native `Tokyo Walking Stabilizer` FxPlug project for Final Cut Pro and
