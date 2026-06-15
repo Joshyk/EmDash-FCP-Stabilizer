@@ -119,6 +119,49 @@ private struct LoadedPersistentHostAnalysisCache {
     let preparedAnalysis: StabilizerPreparedAnalysis
 }
 
+private struct PersistentCacheLoadTiming {
+    let candidateCount: Int
+    let decodeMilliseconds: Double
+}
+
+private enum PersistentCacheLoadAttempt {
+    case loaded(LoadedPersistentHostAnalysisCache)
+    case unusable(HostAnalysisStatus, String)
+    case skipped
+}
+
+private struct HostAnalysisTimingAccumulator {
+    var downsampleFrameCount = 0
+    var downsampleMilliseconds = 0.0
+    var blurMilliseconds = 0.0
+    var motionPairCount = 0
+    var globalShiftMilliseconds = 0.0
+    var localBatchShiftMilliseconds = 0.0
+    var pairMotionMilliseconds = 0.0
+    var cacheCandidateCount = 0
+    var cacheDecodeMilliseconds = 0.0
+    var finishMilliseconds = 0.0
+    var persistMilliseconds = 0.0
+
+    mutating func record(sample: StabilizerAnalysisSample) {
+        downsampleFrameCount += 1
+        downsampleMilliseconds += sample.downsampleMilliseconds
+        blurMilliseconds += sample.blurMilliseconds
+    }
+
+    mutating func record(pairTiming: StabilizerPairMotionTiming) {
+        motionPairCount += 1
+        globalShiftMilliseconds += pairTiming.globalMilliseconds
+        localBatchShiftMilliseconds += pairTiming.localBatchMilliseconds
+        pairMotionMilliseconds += pairTiming.totalMilliseconds
+    }
+
+    mutating func record(cacheTiming: PersistentCacheLoadTiming) {
+        cacheCandidateCount += cacheTiming.candidateCount
+        cacheDecodeMilliseconds += cacheTiming.decodeMilliseconds
+    }
+}
+
 struct StabilizerHostAnalysisInspectorSnapshot {
     let analysisInfoText: String
     let requestedSampleScalePercent: Double?
@@ -202,6 +245,7 @@ final class StabilizerHostAnalysisStore {
     private var latestSourceFrameInfo: StabilizerSourceFrameInfo?
     private var latestSampleSize: (width: Int, height: Int)?
     private var analysisInfoText = "No Analysis"
+    private var analysisTiming = HostAnalysisTimingAccumulator()
 
     var frameCount: Int {
         lock.lock()
@@ -435,6 +479,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Analyzing S\(Self.sampleScaleDescription(requestedSampleScalePercent))"
+        analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
     }
@@ -540,6 +585,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "No Analysis"
+        analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
         if shouldRemovePersistentCache {
@@ -576,6 +622,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Cache Cleared"
+        analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
         removePersistentCache(logFailures: true)
@@ -604,12 +651,14 @@ final class StabilizerHostAnalysisStore {
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = "Proxy rejected. Use original media."
+        analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
         NSLog("TokyoWalkingStabilizer: rejected Host Analysis proxy media: \(reason)")
     }
 
-    func append(_ frame: StabilizerAnalysisFrame, sourceInfo: StabilizerSourceFrameInfo?) throws {
+    func append(_ sample: StabilizerAnalysisSample, sourceInfo: StabilizerSourceFrameInfo?) throws {
+        let frame = sample.frame
         let key = Self.timeKey(frame.time)
         lock.lock()
         if framesByTimeKey[key] != nil {
@@ -617,14 +666,10 @@ final class StabilizerHostAnalysisStore {
             return
         }
         if streamingAnalysisBuilder == nil {
-            do {
-                streamingAnalysisBuilder = try StreamingStabilizationAnalysisBuilder()
-            } catch {
-                lock.unlock()
-                throw error
-            }
+            streamingAnalysisBuilder = StreamingStabilizationAnalysisBuilder()
         }
         let builder = streamingAnalysisBuilder
+        analysisTiming.record(sample: sample)
         lock.unlock()
 
         guard let builder else {
@@ -634,7 +679,11 @@ final class StabilizerHostAnalysisStore {
                 userInfo: [NSLocalizedDescriptionKey: "Stabilizer streaming analysis builder was unavailable."]
             )
         }
-        try builder.append(frame)
+        if let pairTiming = try builder.append(sample) {
+            lock.lock()
+            analysisTiming.record(pairTiming: pairTiming)
+            lock.unlock()
+        }
 
         lock.lock()
         framesByTimeKey[key] = frame.withoutRetainedPixels()
@@ -646,13 +695,22 @@ final class StabilizerHostAnalysisStore {
     }
 
     func finish() throws {
+        let finishStartedAt = CFAbsoluteTimeGetCurrent()
+        var persistMilliseconds = 0.0
         do {
             try rebuildPreparedAnalysis(markFinished: true)
             try validateCompletedFrameCoverage()
             markAnalysisCompleted()
+            let persistStartedAt = CFAbsoluteTimeGetCurrent()
             persistIfCompleted()
+            persistMilliseconds = (CFAbsoluteTimeGetCurrent() - persistStartedAt) * 1000.0
             releaseRetainedAnalysisPixels()
             removeLegacyAnalysisScratchDirectory()
+            recordFinishTiming(
+                finishMilliseconds: (CFAbsoluteTimeGetCurrent() - finishStartedAt) * 1000.0,
+                persistMilliseconds: persistMilliseconds
+            )
+            logTimingSummary(label: "completed")
         } catch {
             lock.lock()
             preparedAnalysis = nil
@@ -666,6 +724,60 @@ final class StabilizerHostAnalysisStore {
             NSLog("TokyoWalkingStabilizer: Metal Host Analysis preparation failed: \(error.localizedDescription)")
             throw error
         }
+    }
+
+    private func recordFinishTiming(finishMilliseconds: Double, persistMilliseconds: Double) {
+        lock.lock()
+        analysisTiming.finishMilliseconds = finishMilliseconds
+        analysisTiming.persistMilliseconds = persistMilliseconds
+        lock.unlock()
+    }
+
+    private func recordCacheLoadTiming(candidateCount: Int, decodeMilliseconds: Double) {
+        lock.lock()
+        analysisTiming.record(cacheTiming: PersistentCacheLoadTiming(
+            candidateCount: candidateCount,
+            decodeMilliseconds: decodeMilliseconds
+        ))
+        lock.unlock()
+    }
+
+    private func logTimingSummary(label: String) {
+        lock.lock()
+        let timing = analysisTiming
+        lock.unlock()
+        os_log(
+            "Host Analysis timing summary %{public}@ frames=%{public}d downsample=%{public}.3f ms blur=%{public}.3f ms pairs=%{public}d global=%{public}.3f ms local=%{public}.3f ms pair=%{public}.3f ms cacheCandidates=%{public}d cacheDecode=%{public}.3f ms persist=%{public}.3f ms finish=%{public}.3f ms.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            label,
+            timing.downsampleFrameCount,
+            timing.downsampleMilliseconds,
+            timing.blurMilliseconds,
+            timing.motionPairCount,
+            timing.globalShiftMilliseconds,
+            timing.localBatchShiftMilliseconds,
+            timing.pairMotionMilliseconds,
+            timing.cacheCandidateCount,
+            timing.cacheDecodeMilliseconds,
+            timing.persistMilliseconds,
+            timing.finishMilliseconds
+        )
+        NSLog(
+            "TokyoWalkingStabilizer: Host Analysis timing summary %@ frames=%d downsample=%.3f ms blur=%.3f ms pairs=%d global=%.3f ms local=%.3f ms pair=%.3f ms cacheCandidates=%d cacheDecode=%.3f ms persist=%.3f ms finish=%.3f ms.",
+            label,
+            timing.downsampleFrameCount,
+            timing.downsampleMilliseconds,
+            timing.blurMilliseconds,
+            timing.motionPairCount,
+            timing.globalShiftMilliseconds,
+            timing.localBatchShiftMilliseconds,
+            timing.pairMotionMilliseconds,
+            timing.cacheCandidateCount,
+            timing.cacheDecodeMilliseconds,
+            timing.persistMilliseconds,
+            timing.finishMilliseconds
+        )
     }
 
     func installCompletedAnalysis(from completedStore: StabilizerHostAnalysisStore) {
@@ -993,15 +1105,20 @@ final class StabilizerHostAnalysisStore {
         var unusableCacheSummaries: [(status: HostAnalysisStatus, summary: String)] = []
         while !candidateURLs.isEmpty {
             let activeURL = candidateURLs.removeFirst()
-            if let unsupportedSummary = Self.unsupportedPersistentCacheSummary(at: activeURL) {
-                unusableCacheSummaries.append((.cacheUnsupported, unsupportedSummary))
+            let candidateStartedAt = CFAbsoluteTimeGetCurrent()
+            let loadAttempt = Self.loadPersistentCacheCandidate(at: activeURL)
+            recordCacheLoadTiming(
+                candidateCount: 1,
+                decodeMilliseconds: (CFAbsoluteTimeGetCurrent() - candidateStartedAt) * 1000.0
+            )
+            let activeCandidate: LoadedPersistentHostAnalysisCache
+            switch loadAttempt {
+            case .loaded(let loadedCandidate):
+                activeCandidate = loadedCandidate
+            case .unusable(let status, let summary):
+                unusableCacheSummaries.append((status, summary))
                 continue
-            }
-            if let incompleteSummary = Self.incompletePersistentCacheSummary(at: activeURL) {
-                unusableCacheSummaries.append((.cacheIncomplete, incompleteSummary))
-                continue
-            }
-            guard let activeCandidate = Self.loadPersistentCache(at: activeURL) else {
+            case .skipped:
                 continue
             }
             let matchesExpectedRange = Self.cache(activeCandidate.cache, matches: expectedRange)
@@ -2535,68 +2652,68 @@ final class StabilizerHostAnalysisStore {
         return candidateURLs
     }
 
-    private static func unsupportedPersistentCacheSummary(at url: URL) -> String? {
-        do {
-            if let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-               fileSize > maxPersistentCacheReadBytes {
-                return nil
-            }
-            let data = try Data(contentsOf: url)
-            let header = try JSONDecoder().decode(PersistedHostAnalysisSchemaHeader.self, from: data)
-            guard !supportedCacheSchemaVersions.contains(header.schemaVersion) else {
-                return nil
-            }
-            let expectedSchema = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ",")
-            return "Cache Unsupported (schema \(header.schemaVersion), need \(expectedSchema)) | \(url.lastPathComponent)"
-        } catch {
-            return nil
-        }
-    }
-
-    private static func incompletePersistentCacheSummary(at url: URL) -> String? {
-        do {
-            if let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-               fileSize > maxPersistentCacheReadBytes {
-                return nil
-            }
-            let data = try Data(contentsOf: url)
-            let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
-            guard supportedCacheSchemaVersions.contains(cache.schemaVersion) else {
-                return nil
-            }
-            let frameCount = cache.frames.count
-            guard frameCount >= 3 else {
-                return "Cache Incomplete (only \(frameCount) frames) | \(url.lastPathComponent)"
-            }
-            if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frameCount) {
-                return "Cache Incomplete (\(coverageReason)) | \(url.lastPathComponent)"
-            }
-            if let mismatchReason = preparedPathArrayMismatchReason(for: cache, frameCount: frameCount) {
-                return "Cache Incomplete (\(mismatchReason)) | \(url.lastPathComponent)"
-            }
-            return nil
-        } catch {
-            return nil
-        }
-    }
-
     private static func loadPersistentCache(at url: URL) -> LoadedPersistentHostAnalysisCache? {
+        guard case .loaded(let loadedCache) = loadPersistentCacheCandidate(at: url) else {
+            return nil
+        }
+        return loadedCache
+    }
+
+    private static func unsupportedPersistentCacheSummary(schemaVersion: Int, fileName: String) -> String {
+        let expectedSchema = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ",")
+        return "Cache Unsupported (schema \(schemaVersion), need \(expectedSchema)) | \(fileName)"
+    }
+
+    private static func incompletePersistentCacheSummary(for cache: PersistedHostAnalysisCache, fileName: String) -> String? {
+        let frameCount = cache.frames.count
+        guard frameCount >= 3 else {
+            return "Cache Incomplete (only \(frameCount) frames) | \(fileName)"
+        }
+        if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frameCount) {
+            return "Cache Incomplete (\(coverageReason)) | \(fileName)"
+        }
+        if let mismatchReason = preparedPathArrayMismatchReason(for: cache, frameCount: frameCount) {
+            return "Cache Incomplete (\(mismatchReason)) | \(fileName)"
+        }
+        return nil
+    }
+
+    private static func loadPersistentCacheCandidate(at url: URL) -> PersistentCacheLoadAttempt {
         do {
             if let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                fileSize > maxPersistentCacheReadBytes {
                 NSLog("TokyoWalkingStabilizer: ignoring oversized Host Analysis cache at \(url.path) (\(fileSize) bytes).")
-                return nil
+                return .skipped
             }
             let data = try Data(contentsOf: url)
-            let cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
+            let cache: PersistedHostAnalysisCache
+            do {
+                cache = try JSONDecoder().decode(PersistedHostAnalysisCache.self, from: data)
+            } catch {
+                if let header = try? JSONDecoder().decode(PersistedHostAnalysisSchemaHeader.self, from: data),
+                   !supportedCacheSchemaVersions.contains(header.schemaVersion) {
+                    let summary = unsupportedPersistentCacheSummary(schemaVersion: header.schemaVersion, fileName: url.lastPathComponent)
+                    NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache with unsupported schema \(header.schemaVersion) at \(url.path).")
+                    return .unusable(.cacheUnsupported, summary)
+                }
+                NSLog("TokyoWalkingStabilizer: failed to load Host Analysis cache \(url.path): \(error.localizedDescription)")
+                return .skipped
+            }
             guard supportedCacheSchemaVersions.contains(cache.schemaVersion) else {
                 NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache with unsupported schema \(cache.schemaVersion) at \(url.path).")
-                return nil
+                return .unusable(
+                    .cacheUnsupported,
+                    unsupportedPersistentCacheSummary(schemaVersion: cache.schemaVersion, fileName: url.lastPathComponent)
+                )
             }
             if let maximumFrameCount = plausiblePersistedFrameCountLimit(for: cache),
                cache.frames.count > maximumFrameCount {
                 NSLog("TokyoWalkingStabilizer: ignoring oversized Host Analysis cache at \(url.path): \(cache.frames.count) frames exceeded expected limit \(maximumFrameCount).")
-                return nil
+                return .skipped
+            }
+            if let incompleteSummary = incompletePersistentCacheSummary(for: cache, fileName: url.lastPathComponent) {
+                NSLog("TokyoWalkingStabilizer: ignoring incomplete Host Analysis cache at \(url.path): \(incompleteSummary).")
+                return .unusable(.cacheIncomplete, incompleteSummary)
             }
             let frames = cache.frames.compactMap { persistedFrame -> StabilizerAnalysisFrame? in
                 let pixels = persistedFrame.pixels.map { [UInt8]($0) } ?? []
@@ -2618,15 +2735,11 @@ final class StabilizerHostAnalysisStore {
             }
             guard frames.count >= 3 else {
                 NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache with too few frames at \(url.path).")
-                return nil
-            }
-            if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frames.count) {
-                NSLog("TokyoWalkingStabilizer: ignoring incomplete Host Analysis cache at \(url.path): \(coverageReason).")
-                return nil
+                return .unusable(.cacheIncomplete, "Cache Incomplete (only \(frames.count) readable frames) | \(url.lastPathComponent)")
             }
             guard let cacheIdentity = persistentCacheIdentity(for: cache, frames: frames) else {
                 NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache with incomplete fingerprints at \(url.path).")
-                return nil
+                return .skipped
             }
             let prepared = try preparedAnalysis(from: cache, frames: frames)
             let lightweightCache = PersistedHostAnalysisCache(
@@ -2663,17 +2776,19 @@ final class StabilizerHostAnalysisStore {
                 searchRadiusHitCounts: cache.searchRadiusHitCounts,
                 searchRadiusTotalCounts: cache.searchRadiusTotalCounts
             )
-            return LoadedPersistentHostAnalysisCache(
-                fileName: url.lastPathComponent,
-                url: url,
-                cache: lightweightCache,
-                identity: cacheIdentity,
-                frames: frames,
-                preparedAnalysis: prepared
+            return .loaded(
+                LoadedPersistentHostAnalysisCache(
+                    fileName: url.lastPathComponent,
+                    url: url,
+                    cache: lightweightCache,
+                    identity: cacheIdentity,
+                    frames: frames,
+                    preparedAnalysis: prepared
+                )
             )
         } catch {
             NSLog("TokyoWalkingStabilizer: failed to load Host Analysis cache \(url.path): \(error.localizedDescription)")
-            return nil
+            return .skipped
         }
     }
 

@@ -162,6 +162,13 @@ extension StabilizerAnalysisFrame {
     }
 }
 
+struct StabilizerAnalysisSample {
+    let frame: StabilizerAnalysisFrame
+    let lumaBuffer: MTLBuffer
+    let downsampleMilliseconds: Double
+    let blurMilliseconds: Double
+}
+
 struct StabilizerPreparedAnalysis {
     let frames: [StabilizerAnalysisFrame]
     let residuals: [Float]
@@ -205,6 +212,17 @@ fileprivate struct PairMotion {
     let totalBlockCount: Int32
     let searchRadiusHitCount: Int32
     let searchRadiusTotalCount: Int32
+}
+
+struct StabilizerPairMotionTiming {
+    let globalMilliseconds: Double
+    let localBatchMilliseconds: Double
+    let totalMilliseconds: Double
+}
+
+fileprivate struct PairMotionResult {
+    let motion: PairMotion
+    let timing: StabilizerPairMotionTiming
 }
 
 private struct StabilizerMotionBlock {
@@ -265,6 +283,15 @@ fileprivate final class MetalAnalysisContext {
             throw AutoStabilizationEstimator.metalError("Could not allocate Stabilizer Metal analysis frame buffer.")
         }
         return buffer
+    }
+
+    func validateFrameBuffer(_ buffer: MTLBuffer, sampleWidth: Int, sampleHeight: Int) throws {
+        guard buffer.device.registryID == device.registryID else {
+            throw AutoStabilizationEstimator.metalError("Stabilizer analysis luma buffer was created on a different Metal device.")
+        }
+        guard buffer.length >= sampleWidth * sampleHeight else {
+            throw AutoStabilizationEstimator.metalError("Stabilizer analysis luma buffer was smaller than the expected sample size.")
+        }
     }
 
     func shiftScoreBuffer(length: Int) throws -> MTLBuffer {
@@ -1101,6 +1128,10 @@ enum AutoStabilizationEstimator {
     }
 
     static func analysisFrame(from tile: FxImageTile, at frameTime: CMTime? = nil, sampleWidth: Int, sampleHeight: Int) throws -> StabilizerAnalysisFrame {
+        try analysisSample(from: tile, at: frameTime, sampleWidth: sampleWidth, sampleHeight: sampleHeight).frame
+    }
+
+    static func analysisSample(from tile: FxImageTile, at frameTime: CMTime? = nil, sampleWidth: Int, sampleHeight: Int) throws -> StabilizerAnalysisSample {
         let startedAt = CFAbsoluteTimeGetCurrent()
         let time = CMTimeGetSeconds(frameTime ?? tile.mediaTime)
         guard time.isFinite else {
@@ -1144,6 +1175,10 @@ enum AutoStabilizationEstimator {
 
         let pointer = outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
         let pixels = Array(UnsafeBufferPointer(start: pointer, count: sampleWidth * sampleHeight))
+        let downsampleMilliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
+        let blurStartedAt = CFAbsoluteTimeGetCurrent()
+        let blur = blurAmount(pixels, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        let blurMilliseconds = (CFAbsoluteTimeGetCurrent() - blurStartedAt) * 1000.0
         os_log(
             "Host Analysis downsample frame %{public}.3f sample %{public}dx%{public}d took %{public}.3f ms.",
             log: stabilizerHostAnalysisLog,
@@ -1151,14 +1186,19 @@ enum AutoStabilizationEstimator {
             time,
             sampleWidth,
             sampleHeight,
-            (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
+            downsampleMilliseconds
         )
-        return StabilizerAnalysisFrame(
-            time: time,
-            pixels: pixels,
-            sampleWidth: sampleWidth,
-            sampleHeight: sampleHeight,
-            blurAmount: blurAmount(pixels, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        return StabilizerAnalysisSample(
+            frame: StabilizerAnalysisFrame(
+                time: time,
+                pixels: pixels,
+                sampleWidth: sampleWidth,
+                sampleHeight: sampleHeight,
+                blurAmount: blur
+            ),
+            lumaBuffer: outputBuffer,
+            downsampleMilliseconds: downsampleMilliseconds,
+            blurMilliseconds: blurMilliseconds
         )
     }
 
@@ -1202,6 +1242,16 @@ enum AutoStabilizationEstimator {
     }
 
     fileprivate static func pairMotion(context: MetalAnalysisContext, previous: MTLBuffer, current: MTLBuffer, sampleWidth: Int, sampleHeight: Int) throws -> PairMotion {
+        try pairMotionResult(
+            context: context,
+            previous: previous,
+            current: current,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight
+        ).motion
+    }
+
+    fileprivate static func pairMotionResult(context: MetalAnalysisContext, previous: MTLBuffer, current: MTLBuffer, sampleWidth: Int, sampleHeight: Int) throws -> PairMotionResult {
         let pairStartedAt = CFAbsoluteTimeGetCurrent()
         let globalStartedAt = CFAbsoluteTimeGetCurrent()
         let global = try estimateShift(
@@ -1281,24 +1331,31 @@ enum AutoStabilizationEstimator {
             analysisConfidence: analysisConfidence
         )
 
-        return PairMotion(
-            dx: robustDx,
-            dy: robustDy,
-            residual: median(motionBlocksForModel.map(\.score)) ?? global.score,
-            signedRoll: signedRoll,
-            rollMotion: rollMotion,
-            yawProxy: warpMotion.yawProxy,
-            pitchProxy: warpMotion.pitchProxy,
-            shearX: warpMotion.shearX,
-            shearY: warpMotion.shearY,
-            perspectiveX: warpMotion.perspectiveX,
-            perspectiveY: warpMotion.perspectiveY,
-            analysisConfidence: analysisConfidence,
-            warpConfidence: warpMotion.confidence,
-            acceptedBlockCount: Int32(acceptedCount),
-            totalBlockCount: Int32(blocks.count),
-            searchRadiusHitCount: Int32(searchRadiusHitCount),
-            searchRadiusTotalCount: Int32(searchRadiusTotalCount)
+        return PairMotionResult(
+            motion: PairMotion(
+                dx: robustDx,
+                dy: robustDy,
+                residual: median(motionBlocksForModel.map(\.score)) ?? global.score,
+                signedRoll: signedRoll,
+                rollMotion: rollMotion,
+                yawProxy: warpMotion.yawProxy,
+                pitchProxy: warpMotion.pitchProxy,
+                shearX: warpMotion.shearX,
+                shearY: warpMotion.shearY,
+                perspectiveX: warpMotion.perspectiveX,
+                perspectiveY: warpMotion.perspectiveY,
+                analysisConfidence: analysisConfidence,
+                warpConfidence: warpMotion.confidence,
+                acceptedBlockCount: Int32(acceptedCount),
+                totalBlockCount: Int32(blocks.count),
+                searchRadiusHitCount: Int32(searchRadiusHitCount),
+                searchRadiusTotalCount: Int32(searchRadiusTotalCount)
+            ),
+            timing: StabilizerPairMotionTiming(
+                globalMilliseconds: globalDurationMilliseconds,
+                localBatchMilliseconds: localDurationMilliseconds,
+                totalMilliseconds: (CFAbsoluteTimeGetCurrent() - pairStartedAt) * 1000.0
+            )
         )
     }
 
@@ -2561,22 +2618,21 @@ enum AutoStabilizationEstimator {
 }
 
 final class StreamingStabilizationAnalysisBuilder {
-    private let context: MetalAnalysisContext
+    private var context: MetalAnalysisContext?
     private var frames: [StabilizerAnalysisFrame] = []
     private var motions: [PairMotion] = []
     private var previousFrameBuffer: MTLBuffer?
     private var sampleWidth: Int?
     private var sampleHeight: Int?
 
-    init() throws {
-        context = try MetalAnalysisContext()
-    }
+    init() {}
 
     var frameCount: Int {
         frames.count
     }
 
-    func append(_ frame: StabilizerAnalysisFrame) throws {
+    func append(_ sample: StabilizerAnalysisSample) throws -> StabilizerPairMotionTiming? {
+        let frame = sample.frame
         guard frame.pixels.count == frame.sampleWidth * frame.sampleHeight else {
             throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis frame pixels were unavailable.")
         }
@@ -2592,15 +2648,26 @@ final class StreamingStabilizationAnalysisBuilder {
             sampleHeight = frame.sampleHeight
         }
 
-        let currentFrameBuffer = try context.frameBuffer(for: frame)
+        if context == nil {
+            context = try MetalAnalysisContext(preferredDevice: sample.lumaBuffer.device)
+        }
+        guard let context else {
+            throw AutoStabilizationEstimator.metalError("Stabilizer Metal analysis context was unavailable.")
+        }
+        try context.validateFrameBuffer(sample.lumaBuffer, sampleWidth: frame.sampleWidth, sampleHeight: frame.sampleHeight)
+
+        let currentFrameBuffer = sample.lumaBuffer
+        let timing: StabilizerPairMotionTiming?
         if let previousFrameBuffer {
-            motions.append(try AutoStabilizationEstimator.pairMotion(
+            let result = try AutoStabilizationEstimator.pairMotionResult(
                 context: context,
                 previous: previousFrameBuffer,
                 current: currentFrameBuffer,
                 sampleWidth: frame.sampleWidth,
                 sampleHeight: frame.sampleHeight
-            ))
+            )
+            motions.append(result.motion)
+            timing = result.timing
         } else {
             motions.append(PairMotion(
                 dx: 0.0,
@@ -2621,9 +2688,11 @@ final class StreamingStabilizationAnalysisBuilder {
                 searchRadiusHitCount: 0,
                 searchRadiusTotalCount: 0
             ))
+            timing = nil
         }
         frames.append(frame.withoutRetainedPixels())
         previousFrameBuffer = currentFrameBuffer
+        return timing
     }
 
     func preparedAnalysis() throws -> StabilizerPreparedAnalysis? {

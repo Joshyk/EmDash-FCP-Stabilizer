@@ -890,6 +890,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishStabilizerInfo(force: true)
         let expectedRange = currentInputRange()
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
+        if hostAnalysisStore.hasCompletedAnalysis,
+           let activeIdentity = hostAnalysisStore.activeCacheIdentity,
+           StabilizerHostAnalysisStore.cacheIdentity(activeIdentity, matches: expectedRange) {
+            os_log(
+                "Start Host Analysis reused active prepared cache %{public}@ without reset or disk reload.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                activeIdentity
+            )
+            NSLog("TokyoWalkingStabilizer: Start Host Analysis reused active prepared cache \(activeIdentity) without reset or disk reload.")
+            publishHostAnalysisCacheIdentity(activeIdentity, force: true)
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+            return
+        }
         hostAnalysisStore.reset()
         let loadedPersistentCache: Bool
         if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
@@ -4105,13 +4121,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             throw hostAnalysisRoutingError("Stabilizer Host Analysis session could not derive a sample size for the current clip frame.")
         }
         do {
-            let analysisFrame = try AutoStabilizationEstimator.analysisFrame(
+            let analysisSample = try AutoStabilizationEstimator.analysisSample(
                 from: frame,
                 at: frameTime,
                 sampleWidth: sampleSize.width,
                 sampleHeight: sampleSize.height
             )
-            try route.store.append(analysisFrame, sourceInfo: frameInfo)
+            try route.store.append(analysisSample, sourceInfo: frameInfo)
             recordActiveAnalysisFrameAccepted(
                 sessionID: route.sessionID,
                 frameTime: frameTime,
@@ -4125,15 +4141,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     type: .default,
                     route.sessionID.uuidString,
                     CMTimeGetSeconds(frameTime),
-                    analysisFrame.sampleWidth,
-                    analysisFrame.sampleHeight
+                    analysisSample.frame.sampleWidth,
+                    analysisSample.frame.sampleHeight
                 )
                 NSLog(
                     "TokyoWalkingStabilizer: received first Host Analysis frame for session %@ at %.3f seconds, sample %dx%d.",
                     route.sessionID.uuidString,
                     CMTimeGetSeconds(frameTime),
-                    analysisFrame.sampleWidth,
-                    analysisFrame.sampleHeight
+                    analysisSample.frame.sampleWidth,
+                    analysisSample.frame.sampleHeight
                 )
             }
             publishActiveAnalysisProgressIfNeeded(
