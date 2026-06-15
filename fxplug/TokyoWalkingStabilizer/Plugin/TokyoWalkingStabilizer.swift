@@ -2834,11 +2834,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         index: index,
                         preferenceURL: preferenceURL
                     )
-                    if let candidate = resolvedBookmark.candidate {
-                        resolvedCandidates.append(candidate)
-                    }
                     if let rejectReason = resolvedBookmark.rejectReason {
                         bookmarkRejections.append(rejectReason)
+                    }
+                    if let candidate = resolvedBookmark.candidate {
+                        if let rejectReason = activeFinalCutLibraryCandidateRejectionReason(candidate, index: index) {
+                            candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+                            bookmarkRejections.append(rejectReason)
+                        } else {
+                            resolvedCandidates.append(candidate)
+                        }
                     }
                 }
                 let uniqueCandidates = uniqueStandardizedBundleCandidates(resolvedCandidates)
@@ -2961,6 +2966,44 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             ),
             nil
         )
+    }
+
+    private static func activeFinalCutLibraryCandidateRejectionReason(
+        _ candidate: FCPActiveLibraryBundleCandidate,
+        index: Int
+    ) -> String? {
+        let bundleRoot = candidate.bundleRoot.standardizedFileURL
+        let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
+        do {
+            let handle = try FileHandle(forReadingFrom: libraryMarkerURL)
+            try? handle.close()
+        } catch {
+            return "bookmark \(index) active library marker unreadable at \(libraryMarkerURL.path): \(error.localizedDescription)"
+        }
+
+        let childURLs: [URL]
+        do {
+            childURLs = try FileManager.default.contentsOfDirectory(
+                at: bundleRoot,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            return "bookmark \(index) active library bundle unreadable at \(bundleRoot.path): \(error.localizedDescription)"
+        }
+
+        let eventRoots = childURLs.filter { childURL in
+            let childIsDirectory = (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            guard childIsDirectory else {
+                return false
+            }
+            let eventMarkerURL = childURL.appendingPathComponent("CurrentVersion.fcpevent", isDirectory: false)
+            return FileManager.default.fileExists(atPath: eventMarkerURL.path)
+        }
+        if eventRoots.isEmpty {
+            return "bookmark \(index) active library has no readable top-level Events at \(bundleRoot.path)"
+        }
+        return nil
     }
 
     private static func activeFinalCutLibraryEventSelection(
