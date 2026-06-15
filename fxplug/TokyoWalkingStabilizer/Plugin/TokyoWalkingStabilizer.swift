@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.68"
+private let tokyoWalkingStabilizerVersion = "0.3.74"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -3793,10 +3793,36 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func sourceRequestTime(for renderTime: CMTime, pluginState data: Data?) -> (time: CMTime, clamped: Bool) {
-        if let state = Self.pluginState(from: data) {
+        let state = Self.pluginState(from: data)
+        let expectedRange = state.flatMap(Self.expectedInputRange(from:)) ?? currentInputRange()
+        if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
+            if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
+               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
+                // Keep the preferred cache active before FxPlug asks the host for the input frame.
+            } else {
+                _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true)
+            }
+        }
+        if let mappedTime = hostAnalysisStore.mappedSourceRequestTime(for: renderTime, expectedRange: expectedRange) {
+            let mappedSeconds = CMTimeGetSeconds(mappedTime)
+            let renderSeconds = CMTimeGetSeconds(renderTime)
+            if mappedSeconds.isFinite,
+               renderSeconds.isFinite,
+               abs(mappedSeconds - renderSeconds) > 1e-9 {
+                os_log(
+                    "Mapped source request time through Host Analysis cache. render=%{public}.6f source=%{public}.6f.",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    renderSeconds,
+                    mappedSeconds
+                )
+                return (mappedTime, true)
+            }
+        }
+        if let state {
             return Self.sourceRequestTime(for: renderTime, state: state)
         }
-        guard let expectedRange = currentInputRange() else {
+        guard let expectedRange else {
             return (renderTime, false)
         }
         let sourceRequest = Self.sourceRequestTime(for: renderTime, expectedRange: expectedRange)

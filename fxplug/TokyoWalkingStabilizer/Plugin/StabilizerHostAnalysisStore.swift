@@ -822,17 +822,26 @@ final class StabilizerHostAnalysisStore {
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                         if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
-                            let analysisTime = analysisRenderTime(for: renderTime, preparedAnalysis: analysis)
-                            if Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange),
-                               Self.renderSeconds(CMTimeGetSeconds(analysisTime), isInside: analysis.frames) {
+                            let renderSeconds = CMTimeGetSeconds(renderTime)
+                            let mappedSourceSeconds = mappedAnalysisSecondsForSourceRequest(
+                                forRenderSeconds: renderSeconds,
+                                frames: analysis.frames
+                            )
+                            let analysisSeconds = mappedSourceSeconds ?? CMTimeGetSeconds(renderTime)
+                            let currentRenderTimeIsCovered = Self.renderSeconds(renderSeconds, isInside: analysis.frames)
+                            let startMatchedMappedTimeIsCovered = Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange)
+                                && mappedSourceSeconds != nil
+                            if currentRenderTimeIsCovered || startMatchedMappedTimeIsCovered {
                                 os_log(
-                                    "Using start-matched range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                    "Using covered range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@ render=%{public}.6f analysis=%{public}.6f.",
                                     log: stabilizerHostAnalysisLog,
                                     type: .default,
                                     activeIdentity,
                                     Self.expectedRangeDescription(expectedRange),
                                     validationIssue.reason,
-                                    rejectionReason
+                                    rejectionReason,
+                                    renderSeconds,
+                                    analysisSeconds
                                 )
                                 if validationIssue.isScaledProxy {
                                     markProxyPreviewForRender(reason: validationIssue.reason)
@@ -964,13 +973,37 @@ final class StabilizerHostAnalysisStore {
         markSourceUnavailableForRender(reason: reason)
     }
 
-    func mappedSourceRequestTime(for renderTime: CMTime) -> CMTime? {
+    func mappedSourceRequestTime(for renderTime: CMTime, expectedRange: HostAnalysisExpectedRange?) -> CMTime? {
         guard hasCompletedAnalysis,
               let analysis = preparedAnalysisSnapshot()
         else {
             return nil
         }
-        return analysisRenderTime(for: renderTime, preparedAnalysis: analysis)
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite else {
+            return nil
+        }
+
+        lock.lock()
+        let offsetSeconds = renderToAnalysisOffsetSeconds
+        lock.unlock()
+        let mappedSeconds: Double?
+        if let offsetSeconds, offsetSeconds.isFinite {
+            let candidateSeconds = renderSeconds + offsetSeconds
+            mappedSeconds = Self.renderSeconds(candidateSeconds, isInside: analysis.frames)
+                ? candidateSeconds
+                : nil
+        } else {
+            mappedSeconds = mappedAnalysisSecondsForSourceRequest(
+                forRenderSeconds: renderSeconds,
+                frames: analysis.frames
+            )
+        }
+        guard let mappedSeconds else {
+            return nil
+        }
+        let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : CMTimeScale(600)
+        return CMTime(seconds: mappedSeconds, preferredTimescale: preferredTimescale)
     }
 
     func analysisRenderTime(for renderTime: CMTime, preparedAnalysis analysis: StabilizerPreparedAnalysis) -> CMTime {
@@ -2084,6 +2117,53 @@ final class StabilizerHostAnalysisStore {
             if score < bestScore {
                 bestScore = score
                 bestSeconds = clampedCandidate
+            }
+        }
+        return bestSeconds
+    }
+
+    private func mappedAnalysisSecondsForSourceRequest(forRenderSeconds renderSeconds: Double, frames: [StabilizerAnalysisFrame]) -> Double? {
+        guard let firstFrameTime = frames.first?.time,
+              let lastFrameTime = frames.last?.time,
+              renderSeconds.isFinite,
+              firstFrameTime.isFinite,
+              lastFrameTime.isFinite
+        else {
+            return nil
+        }
+
+        let activeRangeSnapshot: CMTimeRange
+        let activeFrameDurationSnapshot: CMTime
+        lock.lock()
+        activeRangeSnapshot = activeRange
+        activeFrameDurationSnapshot = activeFrameDuration
+        lock.unlock()
+
+        let rangeStartSeconds = CMTimeGetSeconds(activeRangeSnapshot.start)
+        let frameDurationSeconds = CMTimeGetSeconds(activeFrameDurationSnapshot)
+        let padding = max(0.05, frameDurationSeconds.isFinite ? frameDurationSeconds * 2.0 : 0.05)
+        var candidates = [renderSeconds, renderSeconds + firstFrameTime, renderSeconds - firstFrameTime]
+        if rangeStartSeconds.isFinite {
+            candidates.append(renderSeconds - rangeStartSeconds + firstFrameTime)
+            candidates.append(renderSeconds + rangeStartSeconds - firstFrameTime)
+        }
+
+        var bestSeconds: Double?
+        var bestScore = Double.greatestFiniteMagnitude
+        for candidate in candidates where candidate.isFinite {
+            let distance = Self.frameRangeDistance(
+                candidate,
+                firstFrameTime: firstFrameTime,
+                lastFrameTime: lastFrameTime,
+                padding: padding
+            )
+            guard distance <= 0.0 else {
+                continue
+            }
+            let score = abs(candidate - renderSeconds) * 1e-9
+            if score < bestScore {
+                bestScore = score
+                bestSeconds = min(max(candidate, firstFrameTime), lastFrameTime)
             }
         }
         return bestSeconds
