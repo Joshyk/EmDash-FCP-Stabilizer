@@ -42,8 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.139"
-private let tokyoWalkingStabilizerRenderRevisionBase = 439_000_000.0
+private let tokyoWalkingStabilizerVersion = "0.3.140"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -451,6 +450,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static let activeAnalysisStoreLock = NSLock()
     private static var activeAnalysisSessions: [UUID: ActiveHostAnalysisSession] = [:]
     private static var hostAnalysisStartReserved = false
+
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
     private let cacheIdentityLock = NSLock()
@@ -786,12 +786,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             state.inputFrameDurationSeconds = inputRange.frameDurationSeconds
         }
         let expectedRange = Self.expectedInputRange(from: state)
-        if let expectedRange,
-           configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
+        if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
+               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
-            } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange) {
+            } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
@@ -801,24 +800,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     force: true
                 )
             }
-        } else if expectedRange == nil {
-            publishHostAnalysisCacheIdentity(nil, force: true)
-            publishHostAnalysisStatus(force: true, statusOverride: "Needs Analysis")
-            publishStabilizerInfo(force: true, state: state)
-            publishRenderRevision(
-                hostAnalysisStore.renderInvalidationToken,
-                currentParameterValue: state.renderRevision,
-                force: true
-            )
         }
-        let cappedHostFrameCount = expectedRange == nil ? 0 : min(hostAnalysisStore.frameCount, Int(Int32.max))
+        let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
-        if expectedRange != nil {
-            publishHostAnalysisStatus()
-            publishStabilizerInfo(state: state)
-            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, currentParameterValue: state.renderRevision)
-        }
+        publishHostAnalysisStatus()
+        publishStabilizerInfo(state: state)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, currentParameterValue: state.renderRevision)
 
         pluginState?.pointee = NSData(bytes: &state, length: MemoryLayout<StabilizerPluginState>.size)
     }
@@ -832,23 +820,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         hostAnalysisStore.reset()
         let loadedPersistentCache: Bool
-        if let expectedRange,
-           configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
+        if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
+               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 loadedPersistentCache = true
             } else {
-                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(expectedRange: expectedRange)
+                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true)
             }
         } else {
             loadedPersistentCache = false
-            if expectedRange == nil {
-                os_log("Start preflight skipped saved cache lookup because FxTimingAPI did not provide an active input range; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
-                NSLog("TokyoWalkingStabilizer: Start Host Analysis could not read the active input range; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
-            } else {
-                os_log("Start preflight could not resolve Event cache root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
-                NSLog("TokyoWalkingStabilizer: Start Host Analysis could not preflight the Event cache root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
-            }
+            os_log("Start preflight could not resolve Event cache root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
+            NSLog("TokyoWalkingStabilizer: Start Host Analysis could not preflight the Event cache root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
         }
         if loadedPersistentCache {
             publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: true)
@@ -1688,47 +1670,30 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return "Queue: -"
     }
 
-    private static func runtimeScopedRenderRevision(_ revision: Double) -> Double {
-        let storeComponent = revision > 0.0 && revision.isFinite
-            ? revision.truncatingRemainder(dividingBy: 1_000_000.0)
-            : 0.0
-        return tokyoWalkingStabilizerRenderRevisionBase + storeComponent
-    }
-
     private func publishRenderRevision(_ revision: Double, currentParameterValue: Double? = nil, force: Bool = false) {
-        let scopedRevision = Self.runtimeScopedRenderRevision(revision)
-        guard scopedRevision > 0.0 else {
+        guard revision > 0.0 else {
             return
         }
-        let parameterNeedsUpdate = currentParameterValue.map { abs($0 - scopedRevision) >= 0.5 } ?? false
+        let parameterNeedsUpdate = currentParameterValue.map { abs($0 - revision) >= 0.5 } ?? false
         if currentParameterValue != nil,
            !parameterNeedsUpdate {
             statusLock.lock()
-            lastPublishedRenderRevision = scopedRevision
+            lastPublishedRenderRevision = revision
             statusLock.unlock()
             return
         }
         statusLock.lock()
-        let shouldPublish = force || parameterNeedsUpdate || lastPublishedRenderRevision != scopedRevision
+        let shouldPublish = force || parameterNeedsUpdate || lastPublishedRenderRevision != revision
         statusLock.unlock()
         guard shouldPublish,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
         }
-        if settingAPI.setFloatValue(scopedRevision, toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
+        if settingAPI.setFloatValue(revision, toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
             statusLock.lock()
-            lastPublishedRenderRevision = scopedRevision
+            lastPublishedRenderRevision = revision
             statusLock.unlock()
-            os_log(
-                "Published Render Revision parameter. revision=%{public}.3f raw=%{public}.3f force=%{public}@ current=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                scopedRevision,
-                revision,
-                force ? "yes" : "no",
-                currentParameterValue.map { String(format: "%.3f", $0) } ?? "-"
-            )
         } else {
             NSLog("TokyoWalkingStabilizer: failed to update Render Revision parameter.")
         }
@@ -1806,24 +1771,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func pollPersistentCacheForPreviewInvalidation() {
-        let preferredIdentity = currentPreferredHostAnalysisCacheIdentity()
-        guard let expectedRange = currentInputRange() else {
-            DispatchQueue.main.async { [weak self] in
-                guard let self else {
-                    return
-                }
-                if preferredIdentity != nil {
-                    self.publishHostAnalysisCacheIdentity(nil, force: true)
-                }
-                self.publishHostAnalysisStatus(force: true, statusOverride: "Needs Analysis")
-                self.publishStabilizerInfo(force: true)
-                self.publishRenderRevision(
-                    self.hostAnalysisStore.renderInvalidationToken,
-                    force: true
-                )
-            }
-            return
-        }
+        let expectedRange = currentInputRange()
         guard configureProjectBundleCacheDirectory(expectedRange: expectedRange) else {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
@@ -1832,12 +1780,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
             return
         }
+        if let expectedRange,
+           let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
+           !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
+            publishHostAnalysisCacheIdentity(nil, force: true)
+        }
         let loadedCache: Bool
-        if let preferredIdentity,
-           hostAnalysisStore.activatePersistentCache(
-               identity: preferredIdentity,
-               expectedRange: expectedRange
-           ) {
+        if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
+           hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
             loadedCache = true
         } else {
             loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange)
@@ -2637,41 +2587,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         ""
                     )
                 }
-                let sidebarBundleSelection = activeFinalCutLibrarySidebarBundleSelection(from: bundleCandidates)
-                if let selection = sidebarBundleSelection.selection {
-                    for candidate in bundleCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
-                        candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
-                    }
-                    let bundleCandidate = selection.candidate
-                    guard let eventResolution = fcpEventRoot(
-                        containing: internalBundleHostAnalysisCacheRoot(in: bundleCandidate.bundleRoot),
-                        in: bundleCandidate.bundleRoot,
-                        expectedRange: expectedRange
-                    ) else {
-                        bundleCandidate.securityScopedURL?.stopAccessingSecurityScopedResource()
-                        return (
-                            nil,
-                            "Selected Final Cut Pro library \(bundleCandidate.bundleRoot.path) did not resolve to a single Event cache root. \(sidebarBundleSelection.rejectReason)"
-                        )
-                    }
-                    return (
-                        FCPActiveLibraryEventResolution(
-                            bundleRoot: bundleCandidate.bundleRoot,
-                            eventResolution: FCPEventRootResolution(
-                                eventRoot: eventResolution.eventRoot,
-                                sourceDescription: "\(selection.sourceDescription) / \(eventResolution.sourceDescription)"
-                            ),
-                            securityScopedURL: bundleCandidate.securityScopedURL
-                        ),
-                        ""
-                    )
-                }
                 for candidate in bundleCandidates {
                     candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
                 }
                 return (
                     nil,
-                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(rangedSelection.rejectReason) \(sidebarSelection.rejectReason) \(sidebarBundleSelection.rejectReason)"
+                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(rangedSelection.rejectReason) \(sidebarSelection.rejectReason)"
                 )
             }
         }
@@ -2957,8 +2878,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 inspectedBundles.append("\(bundleRoot.path)(missing CurrentVersion.flexolibrary)")
                 continue
             }
-            let markerMatch = libraryMarkerContainsSidebarEventIdentifier(eventIdentifier, markerURL: libraryMarkerURL)
-            guard markerMatch.containsIdentifier else {
+            let markerMatch = libraryMarkerContainsIdentifiers(sidebarSelection.identifiers, markerURL: libraryMarkerURL)
+            guard markerMatch.containsAllIdentifiers else {
                 inspectedBundles.append("\(bundleRoot.path)(sidebarIDs:no: \(markerMatch.rejectReason))")
                 continue
             }
@@ -2999,60 +2920,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return (
             nil,
             "Multiple active libraries matched Final Cut Pro library sidebar selection \(sidebarSelection.rawSelection): \(matches.map { "\($0.candidate.bundleRoot.path) -> \($0.eventResolution.eventRoot.path)" }.joined(separator: " | "))"
-        )
-    }
-
-    private static func activeFinalCutLibrarySidebarBundleSelection(
-        from candidates: [FCPActiveLibraryBundleCandidate]
-    ) -> (selection: FCPActiveLibraryBundleSelection?, rejectReason: String) {
-        let sidebarLookup = finalCutLibrarySidebarSelection()
-        guard let sidebarSelection = sidebarLookup.selection else {
-            return (nil, "Final Cut Pro library sidebar selection unavailable for library-row match: \(sidebarLookup.rejectReason)")
-        }
-
-        var matches: [FCPActiveLibraryBundleSelection] = []
-        var inspectedBundles: [String] = []
-        for candidate in candidates {
-            let bundleRoot = candidate.bundleRoot
-            let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
-            guard FileManager.default.fileExists(atPath: libraryMarkerURL.path) else {
-                inspectedBundles.append("\(bundleRoot.path)(missing CurrentVersion.flexolibrary)")
-                continue
-            }
-            let matchingLibraryIdentifier = sidebarSelection.identifiers.first { identifier in
-                libraryMarkerContainsLibraryIdentifier(identifier, markerURL: libraryMarkerURL).containsIdentifier
-            }
-            guard let matchingLibraryIdentifier else {
-                inspectedBundles.append("\(bundleRoot.path)(libraryID:no)")
-                continue
-            }
-            inspectedBundles.append("\(bundleRoot.path)(libraryID:yes:\(matchingLibraryIdentifier))")
-            matches.append(FCPActiveLibraryBundleSelection(
-                candidate: candidate,
-                sourceDescription: "Final Cut Pro library sidebar selected library \(matchingLibraryIdentifier)"
-            ))
-        }
-
-        if matches.count == 1, let match = matches.first {
-            os_log(
-                "Active library resolver selected bundle %{public}@ by Final Cut Pro library sidebar selected library row %{public}@ identifiers=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                match.candidate.bundleRoot.path,
-                sidebarSelection.rawSelection,
-                sidebarSelection.identifiers.joined(separator: ",")
-            )
-            return (match, "")
-        }
-        if matches.isEmpty {
-            return (
-                nil,
-                "No active library matched Final Cut Pro library sidebar selected library row \(sidebarSelection.rawSelection). inspected=\(inspectedBundles.joined(separator: " | "))"
-            )
-        }
-        return (
-            nil,
-            "Multiple active libraries matched Final Cut Pro library sidebar selected library row \(sidebarSelection.rawSelection): \(matches.map(\.candidate.bundleRoot.path).joined(separator: " | "))"
         )
     }
 
@@ -3124,76 +2991,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func libraryMarkerContainsSidebarEventIdentifier(
-        _ eventIdentifier: String,
+    private static func libraryMarkerContainsIdentifiers(
+        _ identifiers: [String],
         markerURL: URL
-    ) -> (containsIdentifier: Bool, rejectReason: String) {
+    ) -> (containsAllIdentifiers: Bool, rejectReason: String) {
         do {
             let markerData = try Data(contentsOf: markerURL)
-            let variants = Set([eventIdentifier, eventIdentifier.uppercased(), eventIdentifier.lowercased()])
-            guard variants.contains(where: { markerData.range(of: Data($0.utf8)) != nil }) else {
-                return (false, "missing selected Event identifier \(eventIdentifier)")
+            for identifier in identifiers {
+                let variants = Set([identifier, identifier.uppercased(), identifier.lowercased()])
+                guard variants.contains(where: { markerData.range(of: Data($0.utf8)) != nil }) else {
+                    return (false, "missing \(identifier)")
+                }
             }
             return (true, "")
         } catch {
             return (false, "unreadable CurrentVersion.flexolibrary: \(error.localizedDescription)")
         }
-    }
-
-    private static func libraryMarkerContainsLibraryIdentifier(
-        _ libraryIdentifier: String,
-        markerURL: URL
-    ) -> (containsIdentifier: Bool, rejectReason: String) {
-        var database: OpaquePointer?
-        let openResult = markerURL.path.withCString { path in
-            sqlite3_open_v2(
-                path,
-                &database,
-                SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX,
-                nil
-            )
-        }
-        guard openResult == SQLITE_OK, let database else {
-            let message = sqliteErrorMessage(database)
-            if let database {
-                sqlite3_close(database)
-            }
-            return (false, "could not open CurrentVersion.flexolibrary read-only at \(markerURL.path): \(message)")
-        }
-        defer {
-            sqlite3_close(database)
-        }
-
-        let sql = """
-        SELECT 1
-        FROM ZCOLLECTION
-        WHERE ZIDENTIFIER = ? COLLATE NOCASE AND ZTYPE = 'FFLibrary'
-        LIMIT 1
-        """
-        var statement: OpaquePointer?
-        let prepareResult = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
-        guard prepareResult == SQLITE_OK, let statement else {
-            return (false, "could not prepare library identifier lookup: \(sqliteErrorMessage(database))")
-        }
-        defer {
-            sqlite3_finalize(statement)
-        }
-
-        let bindResult = libraryIdentifier.withCString { libraryIdentifierCString in
-            sqlite3_bind_text(statement, 1, libraryIdentifierCString, -1, sqliteTransientDestructor)
-        }
-        guard bindResult == SQLITE_OK else {
-            return (false, "could not bind library identifier \(libraryIdentifier): \(sqliteErrorMessage(database))")
-        }
-
-        let stepResult = sqlite3_step(statement)
-        if stepResult == SQLITE_ROW {
-            return (true, "")
-        }
-        if stepResult == SQLITE_DONE {
-            return (false, "selected library identifier \(libraryIdentifier) was not an FFLibrary row")
-        }
-        return (false, "could not step library identifier lookup: \(sqliteErrorMessage(database))")
     }
 
     private static func eventRootForEventIdentifier(
@@ -3612,108 +3425,53 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func currentRenderExpectedRange(from state: StabilizerPluginState) -> HostAnalysisExpectedRange? {
-        currentInputRange()
-            ?? Self.expectedInputRange(from: state)
+        currentInputRange() ?? Self.expectedInputRange(from: state)
     }
 
     private static func pluginState(from data: Data?) -> StabilizerPluginState? {
-        guard let data,
-              data.count >= MemoryLayout<StabilizerPluginState>.size
-        else {
-            return nil
-        }
-        return data.withUnsafeBytes { pointer in
+        data?.withUnsafeBytes { pointer in
             pointer.bindMemory(to: StabilizerPluginState.self).baseAddress?.pointee
         }
     }
 
-    private static func sourcePassthroughState() -> StabilizerPluginState {
-        StabilizerPluginState(
-            strength: 0.0,
-            microJitterXStrength: 1.0,
-            microJitterYStrength: 1.0,
-            microJitterRotationStrength: 0.2,
-            strideWobbleXStrength: 0.65,
-            strideWobbleYStrength: 0.70,
-            strideWobbleRotationStrength: 0.2,
-            panStabilizationStrength: 1.0,
-            farFieldWarpStrength: 1.0,
-            panSmoothSeconds: 6.0,
-            autoCropZoomSpeed: stabilizerDefaultAutoCropZoomSpeed,
-            autoCropZoomSmoothness: stabilizerDefaultAutoCropZoomSmoothness,
-            autoCropPositionSpeed: stabilizerDefaultAutoCropPositionSpeed,
-            autoCropPositionSmoothness: stabilizerDefaultAutoCropPositionSmoothness,
-            edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
-            debugOverlay: false,
-            sampleScale: StabilizerSampleScale.defaultScale.rawValue,
-            hostAnalysisFrameCount: 0,
-            hostAnalysisRevision: 0,
-            renderRevision: 0.0,
-            inputRangeStartSeconds: .nan,
-            inputRangeDurationSeconds: .nan,
-            inputFrameDurationSeconds: .nan
-        )
+    private static func sourceRequestTime(for renderTime: CMTime, pluginState data: Data?) -> (time: CMTime, clamped: Bool) {
+        guard let state = pluginState(from: data) else {
+            return (renderTime, false)
+        }
+        return sourceRequestTime(for: renderTime, state: state)
     }
 
-    private static func expectedRange(fromCacheIdentity identity: String?) -> HostAnalysisExpectedRange? {
-        guard let identity = identity?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !identity.isEmpty
-        else {
-            return nil
+    private static func sourceRequestTime(for renderTime: CMTime, state: StabilizerPluginState) -> (time: CMTime, clamped: Bool) {
+        guard let range = expectedInputRange(from: state) else {
+            return (renderTime, false)
         }
-        let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
-        let startIndex: Int
-        if parts.first == "memory" {
-            startIndex = 2
-        } else if parts.count >= 10 {
-            startIndex = 1
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        let frameDurationSeconds = range.frameDurationSeconds
+        guard renderSeconds.isFinite,
+              frameDurationSeconds.isFinite,
+              frameDurationSeconds > 0.0
+        else {
+            return (renderTime, false)
+        }
+
+        let startSeconds = range.startSeconds
+        let endSeconds = range.endSeconds
+        let lastFrameSeconds = max(startSeconds, endSeconds - frameDurationSeconds)
+        let toleranceSeconds = max(1.0 / 600.0, frameDurationSeconds * 1.5)
+        let clampedSeconds: Double
+        if renderSeconds < startSeconds && renderSeconds >= startSeconds - toleranceSeconds {
+            clampedSeconds = startSeconds
+        } else if renderSeconds > lastFrameSeconds && renderSeconds <= endSeconds + toleranceSeconds {
+            clampedSeconds = lastFrameSeconds
         } else {
-            startIndex = 0
+            clampedSeconds = renderSeconds
         }
-        guard parts.count > startIndex + 2,
-              let startKey = Int64(parts[startIndex]),
-              let durationKey = Int64(parts[startIndex + 1]),
-              let frameDurationKey = Int64(parts[startIndex + 2])
-        else {
-            return nil
+        guard abs(clampedSeconds - renderSeconds) > 1e-9 else {
+            return (renderTime, false)
         }
-        let range = HostAnalysisExpectedRange(
-            startSeconds: Double(startKey) / 600.0,
-            durationSeconds: Double(durationKey) / 600.0,
-            frameDurationSeconds: Double(frameDurationKey) / 600.0
-        )
-        return range.isValid ? range : nil
-    }
 
-    private func expectedRangeFromPreferredHostAnalysisCacheIdentity() -> HostAnalysisExpectedRange? {
-        if let expectedRange = Self.expectedRange(fromCacheIdentity: currentPreferredHostAnalysisCacheIdentity()) {
-            os_log(
-                "Derived Host Analysis expected range from cached identity. expectedRange=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                Self.expectedRangeDescription(expectedRange)
-            )
-            return expectedRange
-        }
-        guard let paramAPI = apiManager.api(for: FxParameterRetrievalAPI_v6.self) as? FxParameterRetrievalAPI_v6 else {
-            return nil
-        }
-        var cacheIdentityValue = NSString()
-        guard paramAPI.getStringParameterValue(&cacheIdentityValue, fromParameter: ParameterID.hostAnalysisCacheIdentity.rawValue) else {
-            return nil
-        }
-        let identity = cacheIdentityValue as String
-        updatePreferredHostAnalysisCacheIdentity(identity)
-        guard let expectedRange = Self.expectedRange(fromCacheIdentity: identity) else {
-            return nil
-        }
-        os_log(
-            "Derived Host Analysis expected range from Host Analysis Cache Identity parameter. expectedRange=%{public}@.",
-            log: stabilizerHostAnalysisLog,
-            type: .default,
-            Self.expectedRangeDescription(expectedRange)
-        )
-        return expectedRange
+        let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : 600
+        return (CMTime(seconds: clampedSeconds, preferredTimescale: preferredTimescale), true)
     }
 
     private func requestedSampleScalePercent(at time: CMTime) -> Double {
@@ -3799,102 +3557,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return "\(status) | FxPlug \(tokyoWalkingStabilizerVersion)"
     }
 
-    private static func sourceRequestTime(for renderTime: CMTime, pluginState data: Data?) -> (time: CMTime, clamped: Bool) {
-        guard let state = pluginState(from: data) else {
-            return (renderTime, false)
-        }
-        return sourceRequestTime(for: renderTime, state: state)
-    }
-
-    private static func sourceRequestTime(for renderTime: CMTime, state: StabilizerPluginState) -> (time: CMTime, clamped: Bool) {
-        guard let range = expectedInputRange(from: state) else {
-            return (renderTime, false)
-        }
-        return sourceRequestTime(for: renderTime, expectedRange: range)
-    }
-
-    private static func sourceRequestTime(for renderTime: CMTime, expectedRange range: HostAnalysisExpectedRange) -> (time: CMTime, clamped: Bool) {
-        let renderSeconds = CMTimeGetSeconds(renderTime)
-        let frameDurationSeconds = range.frameDurationSeconds
-        guard renderSeconds.isFinite,
-              frameDurationSeconds.isFinite,
-              frameDurationSeconds > 0.0
-        else {
-            return (renderTime, false)
-        }
-
-        let startSeconds = range.startSeconds
-        let endSeconds = range.endSeconds
-        let lastFrameSeconds = max(startSeconds, endSeconds - frameDurationSeconds)
-        let toleranceSeconds = max(1.0 / 600.0, frameDurationSeconds * 1.5)
-        let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : 600
-        if renderSeconds >= -toleranceSeconds,
-           renderSeconds < startSeconds - toleranceSeconds {
-            let mappedSeconds = startSeconds + max(renderSeconds, 0.0)
-            return (CMTime(seconds: mappedSeconds, preferredTimescale: preferredTimescale), true)
-        }
-        let clampedSeconds: Double
-        if renderSeconds < startSeconds && renderSeconds >= startSeconds - toleranceSeconds {
-            clampedSeconds = startSeconds
-        } else if renderSeconds > lastFrameSeconds && renderSeconds <= endSeconds + toleranceSeconds {
-            clampedSeconds = lastFrameSeconds
-        } else {
-            clampedSeconds = renderSeconds
-        }
-        guard abs(clampedSeconds - renderSeconds) > 1e-9 else {
-            return (renderTime, false)
-        }
-
-        return (CMTime(seconds: clampedSeconds, preferredTimescale: preferredTimescale), true)
-    }
-
-    private static func sourceRequestTime(
-        for renderTime: CMTime,
-        sourceStartSeconds: Double,
-        frameDurationSeconds: Double
-    ) -> (time: CMTime, clamped: Bool) {
-        let renderSeconds = CMTimeGetSeconds(renderTime)
-        guard renderSeconds.isFinite,
-              sourceStartSeconds.isFinite,
-              frameDurationSeconds.isFinite,
-              frameDurationSeconds > 0.0
-        else {
-            return (renderTime, false)
-        }
-        let toleranceSeconds = max(1.0 / 600.0, frameDurationSeconds * 1.5)
-        guard renderSeconds >= -toleranceSeconds,
-              renderSeconds < sourceStartSeconds - toleranceSeconds
-        else {
-            return (renderTime, false)
-        }
-        let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : 600
-        let mappedSeconds = sourceStartSeconds + max(renderSeconds, 0.0)
-        return (CMTime(seconds: mappedSeconds, preferredTimescale: preferredTimescale), true)
-    }
-
     func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
         var requests: [FxImageTileRequest] = []
-        let sourceRequest = self.sourceRequestTime(for: renderTime, pluginState: pluginState)
-        os_log(
-            "Schedule input request | FxPlug %{public}@ | render=%{public}.6f | source=%{public}.6f | mapped=%{public}@ | stateBytes=%{public}d.",
-            log: stabilizerHostAnalysisLog,
-            type: .default,
-            tokyoWalkingStabilizerVersion,
-            CMTimeGetSeconds(renderTime),
-            CMTimeGetSeconds(sourceRequest.time),
-            sourceRequest.clamped ? "yes" : "no",
-            pluginState?.count ?? 0
-        )
+        let sourceRequest = Self.sourceRequestTime(for: renderTime, pluginState: pluginState)
         if sourceRequest.clamped {
             NSLog(
-                "TokyoWalkingStabilizer: mapped source request time from %.6f to %.6f to keep render inside the input range.",
-                CMTimeGetSeconds(renderTime),
-                CMTimeGetSeconds(sourceRequest.time)
-            )
-            os_log(
-                "Mapped source request time into input range. render=%{public}.6f source=%{public}.6f.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
+                "TokyoWalkingStabilizer: clamped source request time from %.6f to %.6f to keep clip-edge render inside the input range.",
                 CMTimeGetSeconds(renderTime),
                 CMTimeGetSeconds(sourceRequest.time)
             )
@@ -3911,93 +3579,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         inputImageRequests?.pointee = requests as NSArray
     }
 
-    private func sourceRequestTime(for renderTime: CMTime, pluginState data: Data?) -> (time: CMTime, clamped: Bool) {
-        let state = Self.pluginState(from: data)
-        let expectedRange = state.flatMap(Self.expectedInputRange(from:)) ?? currentInputRange()
-        var loadedCacheForSourceRequest = false
-        if let expectedRange,
-           configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
-            if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
-                // Keep the preferred cache active before FxPlug asks the host for the input frame.
-            } else {
-                _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange)
-            }
-            if !hostAnalysisStore.hasCompletedAnalysis {
-                loadedCacheForSourceRequest = hostAnalysisStore.loadPersistentCache(
-                    expectedRange: expectedRange
-                )
-            }
-        }
-        if let expectedRange,
-           let mappedTime = hostAnalysisStore.mappedSourceRequestTime(for: renderTime, expectedRange: expectedRange) {
-            let mappedSeconds = CMTimeGetSeconds(mappedTime)
-            let renderSeconds = CMTimeGetSeconds(renderTime)
-            if mappedSeconds.isFinite,
-               renderSeconds.isFinite,
-               abs(mappedSeconds - renderSeconds) > 1e-9 {
-                os_log(
-                    "Mapped source request time through Host Analysis cache. render=%{public}.6f source=%{public}.6f.",
-                    log: stabilizerHostAnalysisLog,
-                    type: .default,
-                    renderSeconds,
-                    mappedSeconds
-                )
-                return (mappedTime, true)
-            }
-        }
-        if loadedCacheForSourceRequest {
-            os_log(
-                "Loaded Host Analysis cache during source request but did not map render time. render=%{public}.6f expectedRange=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                CMTimeGetSeconds(renderTime),
-                Self.expectedRangeDescription(expectedRange)
-            )
-        }
-        if let stateRange = state.flatMap(Self.expectedInputRange(from:)) {
-            return Self.sourceRequestTime(for: renderTime, expectedRange: stateRange)
-        }
-        guard let expectedRange else {
-            if let cachedRange = expectedRangeFromPreferredHostAnalysisCacheIdentity() {
-                let sourceRequest = Self.sourceRequestTime(
-                    for: renderTime,
-                    sourceStartSeconds: cachedRange.startSeconds,
-                    frameDurationSeconds: cachedRange.frameDurationSeconds
-                )
-                if sourceRequest.clamped {
-                    os_log(
-                        "Mapped source request using cached source start only because plugin state and FxTimingAPI range were unavailable. render=%{public}.6f source=%{public}.6f cacheRange=%{public}@.",
-                        log: stabilizerHostAnalysisLog,
-                        type: .default,
-                        CMTimeGetSeconds(renderTime),
-                        CMTimeGetSeconds(sourceRequest.time),
-                        Self.expectedRangeDescription(cachedRange)
-                    )
-                    NSLog(
-                        "TokyoWalkingStabilizer: mapped source request using cached source start only from %.6f to %.6f because plugin state and FxTimingAPI range were unavailable.",
-                        CMTimeGetSeconds(renderTime),
-                        CMTimeGetSeconds(sourceRequest.time)
-                    )
-                }
-                return sourceRequest
-            }
-            return (renderTime, false)
-        }
-        let sourceRequest = Self.sourceRequestTime(for: renderTime, expectedRange: expectedRange)
-        if sourceRequest.clamped {
-            os_log(
-                "Clamped source request using FxTimingAPI because plugin state was unavailable. render=%{public}.6f source=%{public}.6f expectedRange=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                CMTimeGetSeconds(renderTime),
-                CMTimeGetSeconds(sourceRequest.time),
-                Self.expectedRangeDescription(expectedRange)
-            )
-        }
-        return sourceRequest
-    }
-
     func destinationImageRect(_ destinationImageRect: UnsafeMutablePointer<FxRect>, sourceImages: [FxImageTile], destinationImage: FxImageTile, pluginState: Data?, at renderTime: CMTime) throws {
         destinationImageRect.pointee = destinationImage.imagePixelBounds
     }
@@ -4011,67 +3592,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func renderTargetTexture(
-        for destinationImage: FxImageTile,
-        device: MTLDevice,
-        pixelFormat: MTLPixelFormat,
-        hostTexture: MTLTexture
-    ) -> (texture: MTLTexture, mode: String)? {
-        if hostTexture.usage.contains(.renderTarget) {
-            return (hostTexture, "host")
-        }
-
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: pixelFormat,
-            width: hostTexture.width,
-            height: hostTexture.height,
-            mipmapped: false
-        )
-        descriptor.usage = [.renderTarget, .shaderRead]
-        guard let renderTexture = device.makeTexture(
-            descriptor: descriptor,
-            iosurface: destinationImage.ioSurface,
-            plane: 0
-        ) else {
-            return nil
-        }
-        return (renderTexture, "iosurface-render-target")
-    }
-
     func renderDestinationImage(_ destinationImage: FxImageTile, sourceImages: [FxImageTile], pluginState: Data?, at renderTime: CMTime) throws {
-        let renderSeconds = CMTimeGetSeconds(renderTime)
-        os_log(
-            "Render entry | FxPlug %{public}@ | render %{public}.6f | stateBytes %{public}d | sources %{public}d.",
-            log: stabilizerHostAnalysisLog,
-            type: .default,
-            tokyoWalkingStabilizerVersion,
-            renderSeconds,
-            pluginState?.count ?? 0,
-            sourceImages.count
-        )
-        let decodedState = Self.pluginState(from: pluginState)
-        if decodedState == nil {
-            publishRenderAnalysisDecisionIfChanged(
-                String(
-                    format: "Render source passthrough | FxPlug %@ | plugin state unavailable | render %.6f | state bytes %d | sources %d",
-                    tokyoWalkingStabilizerVersion,
-                    renderSeconds,
-                    pluginState?.count ?? 0,
-                    sourceImages.count
-                )
-            )
-            publishHostAnalysisStatus(statusOverride: "Source Passthrough - Plugin State Unavailable")
+        guard let state = Self.pluginState(from: pluginState) else {
+            return
         }
-        let currentRenderRevision = decodedState?.renderRevision ?? 0.0
         guard sourceImages.indices.contains(0) else {
-            publishRenderAnalysisDecisionIfChanged(
-                String(
-                    format: "Render skipped | FxPlug %@ | no effect clip source image | render %.6f | sources %d",
-                    tokyoWalkingStabilizerVersion,
-                    renderSeconds,
-                    sourceImages.count
-                )
-            )
             hostAnalysisStore.noteSourceUnavailableForRender(
                 reason: "Final Cut Pro did not provide an effect clip source image for render."
             )
@@ -4080,89 +3605,36 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 infoForce: true,
                 revision: hostAnalysisStore.renderInvalidationToken,
                 revisionForce: true,
-                currentRenderRevision: currentRenderRevision
+                currentRenderRevision: state.renderRevision
             )
             return
         }
-        let state = decodedState ?? Self.sourcePassthroughState()
         let sourceImage = sourceImages[0]
         if let unavailableReason = StabilizerOriginalMediaPolicy.sourceUnavailableReason(for: sourceImage) {
-            publishRenderAnalysisDecisionIfChanged(
-                String(
-                    format: "Render skipped | FxPlug %@ | source unavailable | render %.6f | reason %@",
-                    tokyoWalkingStabilizerVersion,
-                    renderSeconds,
-                    unavailableReason
-                )
-            )
             hostAnalysisStore.noteSourceUnavailableForRender(reason: unavailableReason)
             publishPreviewInvalidationOnMain(
                 statusForce: true,
                 infoForce: true,
                 revision: hostAnalysisStore.renderInvalidationToken,
                 revisionForce: true,
-                currentRenderRevision: currentRenderRevision
+                currentRenderRevision: state.renderRevision
             )
             return
         }
 
         let deviceCache = MetalDeviceCache.deviceCache
         let pixelFormat = MetalDeviceCache.fxMTLPixelFormat(for: destinationImage)
-        let commandQueue = deviceCache.commandQueue(with: sourceImage.deviceRegistryID, pixelFormat: pixelFormat)
-        let device = deviceCache.device(with: sourceImage.deviceRegistryID)
-        let inputTexture = device.flatMap { sourceImage.metalTexture(for: $0) }
-        let hostOutputTexture = device.flatMap { destinationImage.metalTexture(for: $0) }
-        let renderOutput = device.flatMap { resolvedDevice -> (texture: MTLTexture, mode: String)? in
-            guard let hostOutputTexture else {
-                return nil
-            }
-            return Self.renderTargetTexture(
-                for: destinationImage,
-                device: resolvedDevice,
-                pixelFormat: pixelFormat,
-                hostTexture: hostOutputTexture
-            )
-        }
-        let pipelineState = deviceCache.pipelineState(with: sourceImage.deviceRegistryID, pixelFormat: pixelFormat)
-        let commandBuffer = commandQueue?.makeCommandBuffer()
-        guard let activeCommandQueue = commandQueue,
-              device != nil,
-              let inputTexture,
-              let hostOutputTexture,
-              let renderOutput,
-              let pipelineState,
-              let commandBuffer
+        guard
+            let commandQueue = deviceCache.commandQueue(with: sourceImage.deviceRegistryID, pixelFormat: pixelFormat),
+            let device = deviceCache.device(with: sourceImage.deviceRegistryID),
+            let inputTexture = sourceImage.metalTexture(for: device),
+            let outputTexture = destinationImage.metalTexture(for: device),
+            let pipelineState = deviceCache.pipelineState(with: sourceImage.deviceRegistryID, pixelFormat: pixelFormat),
+            let commandBuffer = commandQueue.makeCommandBuffer()
         else {
-            if let commandQueue {
-                deviceCache.returnCommandQueueToCache(commandQueue: commandQueue)
-            }
-            let renderSeconds = CMTimeGetSeconds(renderTime)
-            let diagnostic = String(
-                format: "Render skipped | FxPlug %@ | Metal resources unavailable | render %.6f | registry %@ | pixelFormat %d | queue %@ | device %@ | input %@ | hostOutput %@ | renderOutput %@ | pipeline %@ | command %@",
-                tokyoWalkingStabilizerVersion,
-                renderSeconds,
-                String(describing: sourceImage.deviceRegistryID),
-                pixelFormat.rawValue,
-                commandQueue == nil ? "no" : "yes",
-                device == nil ? "no" : "yes",
-                inputTexture == nil ? "no" : "yes",
-                hostOutputTexture == nil ? "no" : "yes",
-                renderOutput == nil ? "no" : "yes",
-                pipelineState == nil ? "no" : "yes",
-                commandBuffer == nil ? "no" : "yes"
-            )
-            publishRenderAnalysisDecisionIfChanged(diagnostic)
-            NSLog("TokyoWalkingStabilizer: %@", diagnostic)
-            throw NSError(
-                domain: FxPlugErrorDomain,
-                code: Int(kFxError_InvalidParameter),
-                userInfo: [NSLocalizedDescriptionKey: diagnostic]
-            )
+            NSLog("TokyoWalkingStabilizer: render skipped because Metal input/output resources were unavailable.")
+            return
         }
-        defer {
-            deviceCache.returnCommandQueueToCache(commandQueue: activeCommandQueue)
-        }
-        let outputTexture = renderOutput.texture
 
         let outputWidth = destinationImage.tilePixelBounds.right - destinationImage.tilePixelBounds.left
         let outputHeight = destinationImage.tilePixelBounds.top - destinationImage.tilePixelBounds.bottom
@@ -4190,12 +3662,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panStabilizationStrength: state.panStabilizationStrength,
             farFieldWarp: state.farFieldWarpStrength
         )
-        let configuredProjectBundleCache = transformEnabled && expectedRange != nil
+        let configuredProjectBundleCache = transformEnabled
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)
             : false
         let hasCompletedHostAnalysis = hostAnalysisStore.hasCompletedAnalysis
         let canUseHostAnalysisStoreForRender = transformEnabled
-            && expectedRange != nil
             && (hasCompletedHostAnalysis || configuredProjectBundleCache)
         if transformEnabled,
            canUseHostAnalysisStoreForRender,
@@ -4220,54 +3691,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform = .identity
         }
         publishRenderAnalysisDecisionIfChanged(
-            String(
-                format: "Render Host Analysis decision | FxPlug %@ | render %.6f | sourceMedia %.6f | sourceKind %d | sourceError %@ | transform %@ | completed %@ | project cache %@ | prepared %@ | debug %@ | frames %d | sourceImage %d,%d,%d,%d | sourceTile %d,%d,%d,%d | destImage %d,%d,%d,%d | destTile %d,%d,%d,%d | sourceRegistry %@ | destRegistry %@ | sourceTexture %dx%d | hostOutput %dx%d/usage%llu | outputTexture %dx%d | outputUsage %llu | outputMode %@ | range %@",
-                tokyoWalkingStabilizerVersion,
-                CMTimeGetSeconds(renderTime),
-                CMTimeGetSeconds(sourceImage.mediaTime),
-                Int(sourceImage.imageSource.rawValue),
-                sourceImage.requestError?.localizedDescription ?? "-",
-                transformEnabled ? "on" : "off",
-                hasCompletedHostAnalysis ? "yes" : "no",
-                configuredProjectBundleCache ? "configured" : "not configured",
-                renderUsesPreparedAnalysis ? "yes" : "no",
-                state.debugOverlay ? "on" : "off",
-                Int(state.hostAnalysisFrameCount),
-                Int(sourceImage.imagePixelBounds.left),
-                Int(sourceImage.imagePixelBounds.bottom),
-                Int(sourceImage.imagePixelBounds.right),
-                Int(sourceImage.imagePixelBounds.top),
-                Int(sourceImage.tilePixelBounds.left),
-                Int(sourceImage.tilePixelBounds.bottom),
-                Int(sourceImage.tilePixelBounds.right),
-                Int(sourceImage.tilePixelBounds.top),
-                Int(destinationImage.imagePixelBounds.left),
-                Int(destinationImage.imagePixelBounds.bottom),
-                Int(destinationImage.imagePixelBounds.right),
-                Int(destinationImage.imagePixelBounds.top),
-                Int(destinationImage.tilePixelBounds.left),
-                Int(destinationImage.tilePixelBounds.bottom),
-                Int(destinationImage.tilePixelBounds.right),
-                Int(destinationImage.tilePixelBounds.top),
-                String(describing: sourceImage.deviceRegistryID),
-                String(describing: destinationImage.deviceRegistryID),
-                inputTexture.width,
-                inputTexture.height,
-                hostOutputTexture.width,
-                hostOutputTexture.height,
-                UInt64(hostOutputTexture.usage.rawValue),
-                outputTexture.width,
-                outputTexture.height,
-                UInt64(outputTexture.usage.rawValue),
-                renderOutput.mode,
-                Self.expectedRangeDescription(expectedRange)
-            )
+            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
         )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
-        let scopedRenderInvalidationToken = Self.runtimeScopedRenderRevision(renderInvalidationToken)
         let renderStoreRevision = hostAnalysisStore.revision
         let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
-        if renderStoreChangedStatus || abs(scopedRenderInvalidationToken - state.renderRevision) >= 0.5 {
+        if renderStoreChangedStatus || abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
                 infoForce: true,
@@ -4402,18 +3831,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         descriptor.colorAttachments[0] = colorAttachment
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
-            os_log(
-                "Render command encoder unavailable. render=%{public}.6f prepared=%{public}@ outputUsage=%{public}llu outputPixelFormat=%{public}llu outputFramebufferOnly=%{public}@ inputUsage=%{public}llu.",
-                log: stabilizerHostAnalysisLog,
-                type: .error,
-                CMTimeGetSeconds(renderTime),
-                renderUsesPreparedAnalysis ? "yes" : "no",
-                UInt64(outputTexture.usage.rawValue),
-                UInt64(outputTexture.pixelFormat.rawValue),
-                outputTexture.isFramebufferOnly ? "yes" : "no",
-                UInt64(inputTexture.usage.rawValue)
-            )
-            NSLog("TokyoWalkingStabilizer: render command encoder unavailable.")
+            deviceCache.returnCommandQueueToCache(commandQueue: commandQueue)
             return
         }
 
@@ -4426,45 +3844,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
 
-        let commandRenderSeconds = CMTimeGetSeconds(renderTime)
-        let commandUsesPreparedAnalysis = renderUsesPreparedAnalysis
-        let commandOutputUsage = UInt64(outputTexture.usage.rawValue)
-        let commandOutputPixelFormat = UInt64(outputTexture.pixelFormat.rawValue)
-        let commandOutputFramebufferOnly = outputTexture.isFramebufferOnly
-        let commandHostOutputUsage = UInt64(hostOutputTexture.usage.rawValue)
-        let commandOutputMode = renderOutput.mode
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        os_log(
-            "Render command completed. render=%{public}.6f prepared=%{public}@ status=%{public}d hostOutputUsage=%{public}llu outputUsage=%{public}llu outputPixelFormat=%{public}llu outputFramebufferOnly=%{public}@ outputMode=%{public}@.",
-            log: stabilizerHostAnalysisLog,
-            type: .default,
-            commandRenderSeconds,
-            commandUsesPreparedAnalysis ? "yes" : "no",
-            commandBuffer.status.rawValue,
-            commandHostOutputUsage,
-            commandOutputUsage,
-            commandOutputPixelFormat,
-            commandOutputFramebufferOnly ? "yes" : "no",
-            commandOutputMode
-        )
-        if commandBuffer.status == .error {
-            let errorText = commandBuffer.error.map { String(describing: $0) } ?? "unknown"
-            os_log(
-                "Render command failed. render=%{public}.6f prepared=%{public}@ error=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .error,
-                commandRenderSeconds,
-                commandUsesPreparedAnalysis ? "yes" : "no",
-                errorText
-            )
-            NSLog("TokyoWalkingStabilizer: render command failed: \(errorText)")
-            throw NSError(
-                domain: FxPlugErrorDomain,
-                code: Int(kFxError_InvalidParameter),
-                userInfo: [NSLocalizedDescriptionKey: "TokyoWalkingStabilizer render command failed: \(errorText)"]
-            )
-        }
+        deviceCache.returnCommandQueueToCache(commandQueue: commandQueue)
     }
 
     func desiredAnalysisTimeRange(_ desiredRange: UnsafeMutablePointer<CMTimeRange>!, forInputWith inputTimeRange: CMTimeRange) throws {

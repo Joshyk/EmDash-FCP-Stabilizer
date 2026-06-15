@@ -789,36 +789,22 @@ final class StabilizerHostAnalysisStore {
             return nil
         }
 
-        let sourceValidationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage)
-        let canPreviewRangeMismatchFromProxy = sourceValidationIssue?.isScaledProxy == true
-        let allowRangeMismatchedCache = sourceValidationIssue == nil || canPreviewRangeMismatchFromProxy
         let preferredIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let preferredIdentity,
            !preferredIdentity.isEmpty {
-            _ = activatePersistentCache(
-                identity: preferredIdentity,
-                expectedRange: expectedRange,
-                allowRangeMismatch: allowRangeMismatchedCache
-            )
+            _ = activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true)
         }
         if let expectedRange, expectedRange.isValid {
             _ = activateCompletedMemoryAnalysisIfNeeded(expectedRange: expectedRange)
         }
 
         while true {
-            if shouldReloadPersistentCacheForConsumer(),
-               loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: allowRangeMismatchedCache) {
+            if shouldReloadPersistentCacheForConsumer(), loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true) {
                 continue
             }
             guard let analysis = preparedAnalysisSnapshot() else {
-                guard activateNextPersistentCache(
-                    afterRejecting: nil,
-                    expectedRange: expectedRange,
-                    allowRangeMismatch: allowRangeMismatchedCache
-                ) || loadPersistentCache(
-                    expectedRange: expectedRange,
-                    allowRangeMismatch: allowRangeMismatchedCache
-                )
+                guard activateNextPersistentCache(afterRejecting: nil, expectedRange: expectedRange, allowRangeMismatch: true)
+                    || loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true)
                 else {
                     return nil
                 }
@@ -833,59 +819,39 @@ final class StabilizerHostAnalysisStore {
             let activeIdentity = activeCacheIdentity
             if let activeIdentity,
                !Self.cacheIdentity(activeIdentity, matches: expectedRange) {
-                if let validationIssue = sourceValidationIssue {
-                    if validationIssue.isScaledProxy,
-                       !Self.cacheIdentity(activeIdentity, covers: expectedRange) {
-                        let rejectionReason = "persisted cache range does not cover the active clip (\(Self.expectedRangeDescription(expectedRange)))"
-                        guard activateNextPersistentCache(
-                            afterRejecting: rejectionReason,
-                            expectedRange: expectedRange,
-                            allowRangeMismatch: allowRangeMismatchedCache
-                        ) else {
-                            rejectPersistentCache(reason: rejectionReason)
+                if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
+                    guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
+                        if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
+                            if Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange),
+                               Self.renderSeconds(CMTimeGetSeconds(renderTime), isInside: analysis.frames) {
+                                os_log(
+                                    "Using start-matched range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                    log: stabilizerHostAnalysisLog,
+                                    type: .default,
+                                    activeIdentity,
+                                    Self.expectedRangeDescription(expectedRange),
+                                    validationIssue.reason,
+                                    rejectionReason
+                                )
+                                if validationIssue.isScaledProxy {
+                                    markProxyPreviewForRender(reason: validationIssue.reason)
+                                } else {
+                                    markSourceMetadataUnconfirmedPreviewForRender(reason: validationIssue.reason)
+                                }
+                                return analysis
+                            }
+                            os_log(
+                                "Range-mismatched Host Analysis cache could not be validated against the current source frame. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                log: stabilizerHostAnalysisLog,
+                                type: .error,
+                                activeIdentity,
+                                Self.expectedRangeDescription(expectedRange),
+                                validationIssue.reason,
+                                rejectionReason
+                            )
+                            markProxyNeedsOriginalValidationForRender(reason: validationIssue.reason)
                             return nil
                         }
-                        continue
-                    }
-                    if validationIssue.isScaledProxy,
-                       let previewTiming = rangeMismatchedProxyPreviewTiming(
-                           activeIdentity: activeIdentity,
-                           expectedRange: expectedRange,
-                           analysis: analysis,
-                           renderTime: renderTime
-                       ) {
-                        markProxyPreviewForRender(reason: validationIssue.reason)
-                        updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
-                        os_log(
-                            "Using start-matched range-mismatched Host Analysis cache for proxy preview before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ render=%{public}.6f analysis=%{public}.6f.",
-                            log: stabilizerHostAnalysisLog,
-                            type: .default,
-                            activeIdentity,
-                            Self.expectedRangeDescription(expectedRange),
-                            validationIssue.reason,
-                            previewTiming.renderSeconds,
-                            previewTiming.analysisSeconds
-                        )
-                        return analysis
-                    }
-                    os_log(
-                        "Range-mismatched Host Analysis cache requires original-frame validation before preview. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
-                        log: stabilizerHostAnalysisLog,
-                        type: .error,
-                        activeIdentity,
-                        Self.expectedRangeDescription(expectedRange),
-                        validationIssue.reason,
-                        "source frame is not comparable"
-                    )
-                    markProxyNeedsOriginalValidationForRender(reason: validationIssue.reason)
-                    return nil
-                }
-                if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
-                    guard activateNextPersistentCache(
-                        afterRejecting: rejectionReason,
-                        expectedRange: expectedRange,
-                        allowRangeMismatch: allowRangeMismatchedCache
-                    ) else {
                         rejectPersistentCache(reason: rejectionReason)
                         return nil
                     }
@@ -917,20 +883,16 @@ final class StabilizerHostAnalysisStore {
                 if activateCompletedMemoryAnalysisIfNeeded(expectedRange: expectedRange) {
                     continue
                 }
-                if activateNextPersistentCache(
-                    afterRejecting: nil,
-                    expectedRange: expectedRange,
-                    allowRangeMismatch: allowRangeMismatchedCache
-                ) {
+                if activateNextPersistentCache(afterRejecting: nil, expectedRange: expectedRange, allowRangeMismatch: true) {
                     continue
                 }
-                if loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: allowRangeMismatchedCache) {
+                if loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true) {
                     continue
                 }
                 return nil
             }
 
-            if let validationIssue = sourceValidationIssue {
+            if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
                 if let activeIdentity,
                    Self.cacheIdentity(activeIdentity, matches: expectedRange) {
                     if validationIssue.isScaledProxy {
@@ -971,11 +933,7 @@ final class StabilizerHostAnalysisStore {
                 if activateNextCompletedMemoryAnalysis(afterRejecting: rejectionReason, expectedRange: expectedRange) {
                     continue
                 }
-                guard activateNextPersistentCache(
-                    afterRejecting: rejectionReason,
-                    expectedRange: expectedRange,
-                    allowRangeMismatch: allowRangeMismatchedCache
-                ) else {
+                guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                     if activeIdentity == nil {
                         rejectActiveInMemoryAnalysis(reason: rejectionReason)
                         return nil
@@ -1003,83 +961,6 @@ final class StabilizerHostAnalysisStore {
 
     func noteSourceUnavailableForRender(reason: String) {
         markSourceUnavailableForRender(reason: reason)
-    }
-
-    func mappedSourceRequestTime(for renderTime: CMTime, expectedRange: HostAnalysisExpectedRange?) -> CMTime? {
-        guard let expectedRange, expectedRange.isValid else {
-            os_log(
-                "Skipped Host Analysis source request mapping because the active clip range is unavailable.",
-                log: stabilizerHostAnalysisLog,
-                type: .default
-            )
-            return nil
-        }
-        guard hasCompletedAnalysis,
-              let analysis = preparedAnalysisSnapshot()
-        else {
-            return nil
-        }
-        lock.lock()
-        let activeIdentity = activePersistentCacheIdentity
-        let state = validationState
-        let currentStatus = status
-        lock.unlock()
-        guard state == .validated || state == .notRequired else {
-            os_log(
-                "Skipped Host Analysis source request mapping because the active cache is not render-validated. validation=%{public}@ status=%{public}@ expectedRange=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                Self.validationStateDescription(state),
-                Self.statusDescription(currentStatus),
-                Self.expectedRangeDescription(expectedRange)
-            )
-            return nil
-        }
-        if let activeIdentity,
-           !Self.cacheIdentity(activeIdentity, matches: expectedRange) {
-            os_log(
-                "Skipped Host Analysis source request mapping because active cache range does not exactly match the current clip. identity=%{public}@ expectedRange=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                activeIdentity,
-                Self.expectedRangeDescription(expectedRange)
-            )
-            return nil
-        }
-        let renderSeconds = CMTimeGetSeconds(renderTime)
-        guard renderSeconds.isFinite else {
-            return nil
-        }
-
-        lock.lock()
-        let offsetSeconds = renderToAnalysisOffsetSeconds
-        lock.unlock()
-        let sourceSecondsForClamp: Double
-        let mappedSeconds: Double?
-        if let offsetSeconds, offsetSeconds.isFinite {
-            let candidateSeconds = renderSeconds + offsetSeconds
-            sourceSecondsForClamp = candidateSeconds
-            mappedSeconds = Self.renderSeconds(candidateSeconds, isInside: analysis.frames)
-                ? candidateSeconds
-                : nil
-        } else {
-            sourceSecondsForClamp = renderSeconds
-            mappedSeconds = mappedAnalysisSecondsForSourceRequest(
-                forRenderSeconds: renderSeconds,
-                frames: analysis.frames
-            )
-        }
-        let sourceSeconds = mappedSeconds ?? clampedSourceRequestSecondsIfNeeded(
-            sourceSeconds: sourceSecondsForClamp,
-            renderSeconds: renderSeconds,
-            expectedRange: expectedRange,
-            frames: analysis.frames
-        )
-        guard let sourceSeconds else {
-            return nil
-        }
-        let preferredTimescale = renderTime.timescale > 0 ? renderTime.timescale : CMTimeScale(600)
-        return CMTime(seconds: sourceSeconds, preferredTimescale: preferredTimescale)
     }
 
     func analysisRenderTime(for renderTime: CMTime, preparedAnalysis analysis: StabilizerPreparedAnalysis) -> CMTime {
@@ -1124,11 +1005,6 @@ final class StabilizerHostAnalysisStore {
                 continue
             }
             let matchesExpectedRange = Self.cache(activeCandidate.cache, matches: expectedRange)
-            if !matchesExpectedRange,
-               Self.cache(activeCandidate.cache, isPrefixShortOf: expectedRange) {
-                NSLog("TokyoWalkingStabilizer: skipped Host Analysis cache \(activeCandidate.fileName) because it only covers the beginning of the active clip.")
-                continue
-            }
             guard allowRangeMismatch || matchesExpectedRange else {
                 NSLog("TokyoWalkingStabilizer: skipped Host Analysis cache \(activeCandidate.fileName) because its range does not match the active clip.")
                 continue
@@ -1171,17 +1047,11 @@ final class StabilizerHostAnalysisStore {
             }
             lock.unlock()
         }
-        if !allowRangeMismatch {
-            _ = deactivateActivePersistentCacheIfNeeded(expectedRange: expectedRange)
-        }
         return false
     }
 
     func reloadPersistentCacheForConsumerIfNeeded(expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
         guard shouldReloadPersistentCacheForConsumer() else {
-            if !allowRangeMismatch {
-                return deactivateActivePersistentCacheIfNeeded(expectedRange: expectedRange)
-            }
             return false
         }
         return loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: allowRangeMismatch)
@@ -1192,19 +1062,7 @@ final class StabilizerHostAnalysisStore {
         guard !trimmedIdentity.isEmpty else {
             return false
         }
-        if Self.cacheIdentity(trimmedIdentity, isPrefixShortOf: expectedRange) {
-            _ = deactivateActivePersistentCacheIfNeeded(expectedRange: expectedRange)
-            os_log(
-                "Rejected saved Host Analysis cache identity because it only covers the beginning of the active clip. identity=%{public}@ expectedRange=%{public}@.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                trimmedIdentity,
-                Self.expectedRangeDescription(expectedRange)
-            )
-            return false
-        }
         guard allowRangeMismatch || Self.cacheIdentity(trimmedIdentity, matches: expectedRange) else {
-            _ = deactivateActivePersistentCacheIfNeeded(expectedRange: expectedRange)
             return false
         }
 
@@ -1226,7 +1084,6 @@ final class StabilizerHostAnalysisStore {
         for candidateURL in Self.persistentCacheCandidateURLs() {
             guard let candidate = Self.loadPersistentCache(at: candidateURL),
                   candidate.identity == trimmedIdentity,
-                  !Self.cache(candidate.cache, isPrefixShortOf: expectedRange),
                   (allowRangeMismatch || Self.cache(candidate.cache, matches: expectedRange))
             else {
                 continue
@@ -1914,24 +1771,6 @@ final class StabilizerHostAnalysisStore {
         return closestFrame
     }
 
-    @discardableResult
-    private func deactivateActivePersistentCacheIfNeeded(expectedRange: HostAnalysisExpectedRange?) -> Bool {
-        guard let expectedRange,
-              expectedRange.isValid
-        else {
-            return false
-        }
-        lock.lock()
-        let activeIdentity = activePersistentCacheIdentity
-        let shouldDeactivate = activeIdentity.map { !Self.cacheIdentity($0, matches: expectedRange) } ?? false
-        lock.unlock()
-        guard shouldDeactivate else {
-            return false
-        }
-        deactivateActiveCacheForRangeMismatch()
-        return true
-    }
-
     private func deactivateActiveCacheForRangeMismatch() {
         lock.lock()
         let oldFileName = activePersistentCacheFileName
@@ -2063,11 +1902,6 @@ final class StabilizerHostAnalysisStore {
                 continue
             }
             let matchesExpectedRange = Self.cache(nextCandidate.cache, matches: expectedRange)
-            if !matchesExpectedRange,
-               Self.cache(nextCandidate.cache, isPrefixShortOf: expectedRange) {
-                NSLog("TokyoWalkingStabilizer: skipped Host Analysis cache candidate \(nextCandidate.fileName) because it only covers the beginning of the active clip.")
-                continue
-            }
             guard allowRangeMismatch || matchesExpectedRange else {
                 NSLog("TokyoWalkingStabilizer: skipped Host Analysis cache candidate \(nextCandidate.fileName) because its range does not match the active clip.")
                 continue
@@ -2245,173 +2079,6 @@ final class StabilizerHostAnalysisStore {
         return bestSeconds
     }
 
-    private func mappedAnalysisSecondsForSourceRequest(forRenderSeconds renderSeconds: Double, frames: [StabilizerAnalysisFrame]) -> Double? {
-        guard let firstFrameTime = frames.first?.time,
-              let lastFrameTime = frames.last?.time,
-              renderSeconds.isFinite,
-              firstFrameTime.isFinite,
-              lastFrameTime.isFinite
-        else {
-            return nil
-        }
-
-        let activeRangeSnapshot: CMTimeRange
-        let activeFrameDurationSnapshot: CMTime
-        lock.lock()
-        activeRangeSnapshot = activeRange
-        activeFrameDurationSnapshot = activeFrameDuration
-        lock.unlock()
-
-        let rangeStartSeconds = CMTimeGetSeconds(activeRangeSnapshot.start)
-        let frameDurationSeconds = CMTimeGetSeconds(activeFrameDurationSnapshot)
-        let padding = max(0.05, frameDurationSeconds.isFinite ? frameDurationSeconds * 2.0 : 0.05)
-        var candidates = [renderSeconds, renderSeconds + firstFrameTime, renderSeconds - firstFrameTime]
-        if rangeStartSeconds.isFinite {
-            candidates.append(renderSeconds - rangeStartSeconds + firstFrameTime)
-            candidates.append(renderSeconds + rangeStartSeconds - firstFrameTime)
-        }
-
-        var bestSeconds: Double?
-        var bestScore = Double.greatestFiniteMagnitude
-        for candidate in candidates where candidate.isFinite {
-            let distance = Self.frameRangeDistance(
-                candidate,
-                firstFrameTime: firstFrameTime,
-                lastFrameTime: lastFrameTime,
-                padding: padding
-            )
-            guard distance <= 0.0 else {
-                continue
-            }
-            let score = abs(candidate - renderSeconds) * 1e-9
-            if score < bestScore {
-                bestScore = score
-                bestSeconds = min(max(candidate, firstFrameTime), lastFrameTime)
-            }
-        }
-        return bestSeconds
-    }
-
-    private func clampedSourceRequestSecondsIfNeeded(
-        sourceSeconds: Double,
-        renderSeconds: Double,
-        expectedRange: HostAnalysisExpectedRange?,
-        frames: [StabilizerAnalysisFrame]
-    ) -> Double? {
-        guard activeCacheIdentity != nil,
-              let expectedRange,
-              expectedRange.isValid,
-              sourceSeconds.isFinite,
-              renderSeconds.isFinite,
-              let firstFrameTime = frames.first?.time,
-              let lastFrameTime = frames.last?.time,
-              firstFrameTime.isFinite,
-              lastFrameTime.isFinite,
-              !Self.renderSeconds(sourceSeconds, isInside: frames)
-        else {
-            return nil
-        }
-
-        let frameDuration = expectedRange.frameDurationSeconds.isFinite && expectedRange.frameDurationSeconds > 0.0
-            ? expectedRange.frameDurationSeconds
-            : 1.0 / 600.0
-        let tolerance = max(1.0 / 600.0, frameDuration * 1.5)
-        let renderInsideExpectedRange = renderSeconds >= expectedRange.startSeconds - tolerance
-            && renderSeconds <= expectedRange.endSeconds + tolerance
-        let expectedRangeOverlapsPreparedFrames = expectedRange.endSeconds >= firstFrameTime - tolerance
-            && expectedRange.startSeconds <= lastFrameTime + tolerance
-        let renderNearExpectedBoundary = renderSeconds <= expectedRange.startSeconds + tolerance
-            || renderSeconds >= expectedRange.endSeconds - tolerance
-        guard renderInsideExpectedRange,
-              expectedRangeOverlapsPreparedFrames,
-              renderNearExpectedBoundary
-        else {
-            return nil
-        }
-        let clampedSeconds = min(max(sourceSeconds, firstFrameTime), lastFrameTime)
-        os_log(
-            "Clamped Host Analysis source request to prepared frame range. render=%{public}.6f requested=%{public}.6f clamped=%{public}.6f frames=%{public}.6f-%{public}.6f expected=%{public}@.",
-            log: stabilizerHostAnalysisLog,
-            type: .debug,
-            renderSeconds,
-            sourceSeconds,
-            clampedSeconds,
-            firstFrameTime,
-            lastFrameTime,
-            Self.expectedRangeDescription(expectedRange)
-        )
-        return clampedSeconds
-    }
-
-    private static func validationStateDescription(_ state: HostAnalysisValidationState) -> String {
-        switch state {
-        case .notRequired:
-            return "notRequired"
-        case .pending:
-            return "pending"
-        case .validated:
-            return "validated"
-        case .rejected:
-            return "rejected"
-        }
-    }
-
-    private static func statusDescription(_ status: HostAnalysisStatus) -> String {
-        switch status {
-        case .needsAnalysis:
-            return "needsAnalysis"
-        case .requested:
-            return "requested"
-        case .queued:
-            return "queued"
-        case .analyzing:
-            return "analyzing"
-        case .cacheLoaded:
-            return "cacheLoaded"
-        case .ready:
-            return "ready"
-        case .cacheRejected:
-            return "cacheRejected"
-        case .cacheUnsupported:
-            return "cacheUnsupported"
-        case .cacheIncomplete:
-            return "cacheIncomplete"
-        case .cacheCleared:
-            return "cacheCleared"
-        case .projectCacheUnavailable:
-            return "projectCacheUnavailable"
-        case .proxyRejected:
-            return "proxyRejected"
-        case .proxyPreview:
-            return "proxyPreview"
-        case .sourceMetadataUnconfirmedPreview:
-            return "sourceMetadataUnconfirmedPreview"
-        case .proxyNeedsOriginalValidation:
-            return "proxyNeedsOriginalValidation"
-        case .sourceUnavailable:
-            return "sourceUnavailable"
-        }
-    }
-
-    private func rangeMismatchedProxyPreviewTiming(
-        activeIdentity: String,
-        expectedRange: HostAnalysisExpectedRange?,
-        analysis: StabilizerPreparedAnalysis,
-        renderTime: CMTime
-    ) -> (renderSeconds: Double, analysisSeconds: Double)? {
-        guard Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) else {
-            return nil
-        }
-        let renderSeconds = CMTimeGetSeconds(renderTime)
-        guard renderSeconds.isFinite,
-              Self.renderSeconds(renderSeconds, isInside: analysis.frames)
-        else {
-            return nil
-        }
-        let analysisSeconds = mappedAnalysisSeconds(forRenderSeconds: renderSeconds, frames: analysis.frames)
-        return (renderSeconds, analysisSeconds)
-    }
-
     private func bumpRevisionLocked() {
         analysisRevision &+= 1
         renderRevisionToken = Self.nextRenderInvalidationToken(after: renderRevisionToken)
@@ -2508,58 +2175,23 @@ final class StabilizerHostAnalysisStore {
 
     static func cacheIdentity(_ identity: String, matches expectedRange: HostAnalysisExpectedRange?) -> Bool {
         guard let expectedRange, expectedRange.isValid else {
-            return false
+            return true
         }
-        guard let range = cacheIdentityRange(identity) else {
-            return false
-        }
-        return range.startKey == timeKey(expectedRange.startSeconds)
-            && range.durationKey == timeKey(expectedRange.durationSeconds)
-    }
-
-    private static func cacheIdentity(_ identity: String, covers expectedRange: HostAnalysisExpectedRange?) -> Bool {
-        guard let expectedRange, expectedRange.isValid else {
-            return false
-        }
-        guard let range = cacheIdentityRange(identity) else {
-            return false
-        }
-        return cacheRangeCoversExpectedRange(
-            startKey: range.startKey,
-            durationKey: range.durationKey,
-            expectedRange: expectedRange
-        )
-    }
-
-    private static func cacheIdentity(_ identity: String, isPrefixShortOf expectedRange: HostAnalysisExpectedRange?) -> Bool {
-        guard let expectedRange, expectedRange.isValid else {
-            return false
-        }
-        guard let range = cacheIdentityRange(identity) else {
-            return false
-        }
-        return cacheRangeIsPrefixShortOfExpectedRange(
-            startKey: range.startKey,
-            durationKey: range.durationKey,
-            expectedRange: expectedRange
-        )
-    }
-
-    private static func cacheIdentityRange(_ identity: String) -> (startKey: Int64, durationKey: Int64)? {
         let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
         let startIndex = parts.count >= 10 ? 1 : 0
         guard parts.count > startIndex + 1,
               let rangeStartKey = Int64(parts[startIndex]),
               let rangeDurationKey = Int64(parts[startIndex + 1])
         else {
-            return nil
+            return false
         }
-        return (rangeStartKey, rangeDurationKey)
+        return rangeStartKey == timeKey(expectedRange.startSeconds)
+            && rangeDurationKey == timeKey(expectedRange.durationSeconds)
     }
 
     private static func cacheIdentityStartMatches(_ identity: String, expectedRange: HostAnalysisExpectedRange?) -> Bool {
         guard let expectedRange, expectedRange.isValid else {
-            return false
+            return true
         }
         let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
         let startIndex = parts.count >= 10 ? 1 : 0
@@ -2580,50 +2212,10 @@ final class StabilizerHostAnalysisStore {
 
     private static func cache(_ cache: PersistedHostAnalysisCache, matches expectedRange: HostAnalysisExpectedRange?) -> Bool {
         guard let expectedRange, expectedRange.isValid else {
-            return false
+            return true
         }
         return timeKey(cache.rangeStartSeconds) == timeKey(expectedRange.startSeconds)
             && timeKey(cache.rangeDurationSeconds) == timeKey(expectedRange.durationSeconds)
-    }
-
-    private static func cache(_ cache: PersistedHostAnalysisCache, covers expectedRange: HostAnalysisExpectedRange?) -> Bool {
-        guard let expectedRange, expectedRange.isValid else {
-            return false
-        }
-        return cacheRangeCoversExpectedRange(
-            startKey: timeKey(cache.rangeStartSeconds),
-            durationKey: timeKey(cache.rangeDurationSeconds),
-            expectedRange: expectedRange
-        )
-    }
-
-    private static func cache(_ cache: PersistedHostAnalysisCache, isPrefixShortOf expectedRange: HostAnalysisExpectedRange?) -> Bool {
-        guard let expectedRange, expectedRange.isValid else {
-            return false
-        }
-        return cacheRangeIsPrefixShortOfExpectedRange(
-            startKey: timeKey(cache.rangeStartSeconds),
-            durationKey: timeKey(cache.rangeDurationSeconds),
-            expectedRange: expectedRange
-        )
-    }
-
-    private static func cacheRangeCoversExpectedRange(startKey: Int64, durationKey: Int64, expectedRange: HostAnalysisExpectedRange) -> Bool {
-        let expectedStartKey = timeKey(expectedRange.startSeconds)
-        let expectedEndKey = timeKey(expectedRange.endSeconds)
-        let cacheEndKey = startKey + durationKey
-        let toleranceKey: Int64 = 2
-        return startKey <= expectedStartKey + toleranceKey
-            && cacheEndKey >= expectedEndKey - toleranceKey
-    }
-
-    private static func cacheRangeIsPrefixShortOfExpectedRange(startKey: Int64, durationKey: Int64, expectedRange: HostAnalysisExpectedRange) -> Bool {
-        let expectedStartKey = timeKey(expectedRange.startSeconds)
-        let expectedEndKey = timeKey(expectedRange.endSeconds)
-        let cacheEndKey = startKey + durationKey
-        let toleranceKey: Int64 = 2
-        return abs(startKey - expectedStartKey) <= toleranceKey
-            && cacheEndKey < expectedEndKey - toleranceKey
     }
 
     private static func validFrameDurationSeconds(_ frameDuration: CMTime, frames: [StabilizerAnalysisFrame]) -> Double {

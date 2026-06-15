@@ -105,8 +105,6 @@ final class MetalDeviceCache: NSObject {
         switch imageTile.ioSurface.pixelFormat {
         case kCVPixelFormatType_128RGBAFloat:
             return .rgba32Float
-        case kCVPixelFormatType_64RGBAHalf:
-            return .rgba16Float
         case kCVPixelFormatType_32BGRA:
             return .bgra8Unorm
         default:

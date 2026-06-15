@@ -153,10 +153,6 @@ unregister_old_plugins
 unregister_stale_plugins
 
 if [ "$source_app" != "$install_app" ]; then
-	if [ -d "$install_app" ]; then
-		"$LSREGISTER" -u "$install_app" >/dev/null 2>&1 || true
-		rm -rf "$install_app"
-	fi
 	ditto "$source_app" "$install_app"
 fi
 xattr -dr com.apple.quarantine "$install_app" >/dev/null 2>&1 || true
