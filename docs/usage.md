@@ -149,7 +149,8 @@ fallbacks.
   size and frame count are shown in `Sample Info`.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
-  pixels black so the viewer shows how far stabilization is moving the image.
+  pixels black so the viewer shows how far stabilization is moving the image. New effect
+  instances default to `Black Outside`.
 - `Start Host Analysis`: resets the current in-memory host-analysis frames, reloads a saved
   persistent cache if one exists, and only asks Final Cut Pro to start a forward GPU
   analysis when no saved cache can be loaded. Saved cache files remain available for later

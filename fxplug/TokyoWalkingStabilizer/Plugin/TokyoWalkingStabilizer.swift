@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.142"
+private let tokyoWalkingStabilizerVersion = "0.3.143"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -725,7 +725,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addPopupMenu(
             withName: "Edge Display Mode",
             parameterID: ParameterID.edgeDisplayMode.rawValue,
-            defaultValue: UInt32(StabilizerEdgeDisplayMode.stretchEdges.rawValue),
+            defaultValue: UInt32(StabilizerEdgeDisplayMode.blackOutside.rawValue),
             menuEntries: ["Stretch Edges", "Black Outside"],
             parameterFlags: flags
         )
@@ -815,7 +815,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropPositionSpeed: stabilizerDefaultAutoCropPositionSpeed,
             autoCropPositionSmoothness: stabilizerDefaultAutoCropPositionSmoothness,
             autoCropEnabled: true,
-            edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
+            edgeDisplayMode: StabilizerEdgeDisplayMode.blackOutside.rawValue,
             debugOverlay: false,
             sampleScale: StabilizerSampleScale.defaultScale.rawValue,
             hostAnalysisFrameCount: 0,

@@ -29,7 +29,7 @@ The main correction stages are:
 render so stabilized pixels stay inside the source image. Turn it off when you need
 to temporarily bypass the Auto Crop work for playback diagnosis; edge fill then
 comes from `Edge Display Mode`, which switches between stretched source edges and
-black outside-source pixels.
+black outside-source pixels. `Edge Display Mode` defaults to `Black Outside`.
 
 ## Basic Workflow
 
@@ -131,7 +131,7 @@ suppressed instead of producing a wavy image.
 `Remove Black Edges` controls dynamic Auto Crop framing. When it is off, the render
 path skips Auto Crop window sampling and binary-search framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
-or black.
+or black. New effect instances default that menu to `Black Outside`.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the

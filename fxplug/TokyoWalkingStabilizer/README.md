@@ -56,7 +56,8 @@ estimators, or Transform-keyframe writers back into this target.
 - `Remove Black Edges` is on by default and applies dynamic Auto Crop framing during
   render. Turning it off skips Auto Crop window sampling and framing entirely, so
   `Edge Display Mode` directly switches preview edges between stretched source edges and
-  black outside-source pixels.
+  black outside-source pixels. New effect instances default `Edge Display Mode` to
+  `Black Outside`.
 - Updates a hidden render revision parameter when Host Analysis/cache state changes so Final
   Cut Pro refreshes the preview from the prepared motion paths.
 - Monitors the bundle-local persistent cache location from render/preview instances and
@@ -238,8 +239,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   `Source Media Unavailable - Check FCP Proxy`, keeps the saved cache intact, and suppresses
   Debug Overlay diagnostics over the placeholder. Switch Viewer playback to
   Original/Optimized or create proxy media to inspect the stabilized image.
-- `Edge Display Mode`: chooses whether transformed pixels outside the source image stretch
-  edge pixels or draw black.
+- `Edge Display Mode`: defaults to `Black Outside` and chooses whether transformed pixels
+  outside the source image stretch edge pixels or draw black.
 - Host Analysis is always used. It requests GPU analysis frames from the host. Incomplete
   host analysis renders identity for that source instead of silently switching modes.
   Proxy media is rejected for Host Analysis input and for unvalidated persisted-cache
