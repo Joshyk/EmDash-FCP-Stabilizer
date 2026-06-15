@@ -4,6 +4,21 @@
 
 Always reply to the user in Japanese unless the user explicitly asks for another language.
 
+Mac の UI 操作が必要な場合、ユーザーが操作可能なら Codex は先にユーザーへ
+操作を依頼する。依頼時は、操作してほしい内容と実行してほしい具体的な手順を
+明示し、操作後の結果を選択肢で返せる形にする。Codex が直接 Computer Use で
+操作するのは、ユーザーが明示的に依頼した場合、またはユーザーが操作できず
+UI 操作が必要な場合に限る。
+Final Cut Pro の quit/open は、Computer Use より先に Terminal/SSH から
+`osascript` や `open -a "Final Cut Pro"` で実行する。Computer Use は、ユーザーが
+明示的に許可した quit/open 操作、または Terminal/SSH でできない UI 操作だけに使う。
+ユーザーの FCP 操作や確認待ちで作業を止める場合は、チャットだけでなく
+Codex Stop hook と同じ iMessage 経路で通知する。送信先と送信方法は
+`/Users/justadev/.codex/hooks/imessage_stop.py` の設定を source of truth にし、
+`CODEX_HOOK_IMESSAGE_TO` が未設定なら hook の default recipient を使う。
+macOS `display notification` だけではユーザーが気づかないので、待機・操作依頼の
+主通知として使わない。
+
 ## Project
 
 This directory hosts the native `Tokyo Walking Stabilizer` FxPlug project for Final Cut Pro and

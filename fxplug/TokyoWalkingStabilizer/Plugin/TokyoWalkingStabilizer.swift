@@ -31,6 +31,10 @@ private enum ParameterID: UInt32 {
     case clipRangeInfo = 34
     case analysisSampleInfo = 35
     case queueInfo = 36
+    case autoCropZoomSpeed = 37
+    case autoCropZoomSmoothness = 38
+    case autoCropPositionSpeed = 39
+    case autoCropPositionSmoothness = 40
 }
 
 private struct StabilizerInfoFields {
@@ -38,10 +42,14 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.60"
+private let tokyoWalkingStabilizerVersion = "0.3.140"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
+private let stabilizerDefaultAutoCropZoomSpeed = 1.0
+private let stabilizerDefaultAutoCropZoomSmoothness = 0.35
+private let stabilizerDefaultAutoCropPositionSpeed = 1.0
+private let stabilizerDefaultAutoCropPositionSmoothness = 0.80
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
@@ -96,6 +104,16 @@ enum StabilizerSampleScale: Int32 {
     }
 }
 
+private struct AutoCropFraming {
+    var scale: Float
+    var positionPixels: vector_float2
+
+    static let identity = AutoCropFraming(
+        scale: 1.0,
+        positionPixels: vector_float2(0.0, 0.0)
+    )
+}
+
 private struct StabilizerPluginState {
     var strength: Double
     var microJitterXStrength: Double
@@ -107,6 +125,10 @@ private struct StabilizerPluginState {
     var panStabilizationStrength: Double
     var farFieldWarpStrength: Double
     var panSmoothSeconds: Double
+    var autoCropZoomSpeed: Double
+    var autoCropZoomSmoothness: Double
+    var autoCropPositionSpeed: Double
+    var autoCropPositionSmoothness: Double
     var edgeDisplayMode: Int32
     var debugOverlay: Bool
     var sampleScale: Int32
@@ -581,6 +603,50 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             delta: 0.25,
             parameterFlags: flags
         )
+        paramAPI.addFloatSlider(
+            withName: "Auto Crop Zoom Speed",
+            parameterID: ParameterID.autoCropZoomSpeed.rawValue,
+            defaultValue: stabilizerDefaultAutoCropZoomSpeed,
+            parameterMin: 0.1,
+            parameterMax: 4.0,
+            sliderMin: 0.1,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Auto Crop Zoom Smoothness",
+            parameterID: ParameterID.autoCropZoomSmoothness.rawValue,
+            defaultValue: stabilizerDefaultAutoCropZoomSmoothness,
+            parameterMin: 0.0,
+            parameterMax: 2.0,
+            sliderMin: 0.0,
+            sliderMax: 2.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Auto Crop Position Speed",
+            parameterID: ParameterID.autoCropPositionSpeed.rawValue,
+            defaultValue: stabilizerDefaultAutoCropPositionSpeed,
+            parameterMin: 0.1,
+            parameterMax: 4.0,
+            sliderMin: 0.1,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
+        paramAPI.addFloatSlider(
+            withName: "Auto Crop Position Smoothness",
+            parameterID: ParameterID.autoCropPositionSmoothness.rawValue,
+            defaultValue: stabilizerDefaultAutoCropPositionSmoothness,
+            parameterMin: 0.0,
+            parameterMax: 4.0,
+            sliderMin: 0.0,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: flags
+        )
         paramAPI.addPopupMenu(
             withName: "Sample Size",
             parameterID: ParameterID.sampleScale.rawValue,
@@ -676,6 +742,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panStabilizationStrength: 1.0,
             farFieldWarpStrength: 1.0,
             panSmoothSeconds: 6.0,
+            autoCropZoomSpeed: stabilizerDefaultAutoCropZoomSpeed,
+            autoCropZoomSmoothness: stabilizerDefaultAutoCropZoomSmoothness,
+            autoCropPositionSpeed: stabilizerDefaultAutoCropPositionSpeed,
+            autoCropPositionSmoothness: stabilizerDefaultAutoCropPositionSmoothness,
             edgeDisplayMode: StabilizerEdgeDisplayMode.stretchEdges.rawValue,
             debugOverlay: false,
             sampleScale: StabilizerSampleScale.defaultScale.rawValue,
@@ -696,6 +766,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.getFloatValue(&state.panStabilizationStrength, fromParameter: ParameterID.panStabilizationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.farFieldWarpStrength, fromParameter: ParameterID.farFieldWarpStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.autoCropZoomSpeed, fromParameter: ParameterID.autoCropZoomSpeed.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.autoCropZoomSmoothness, fromParameter: ParameterID.autoCropZoomSmoothness.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.autoCropPositionSpeed, fromParameter: ParameterID.autoCropPositionSpeed.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.autoCropPositionSmoothness, fromParameter: ParameterID.autoCropPositionSmoothness.rawValue, at: renderTime)
         paramAPI.getIntValue(&state.edgeDisplayMode, fromParameter: ParameterID.edgeDisplayMode.rawValue, at: renderTime)
         var debugOverlay = ObjCBool(state.debugOverlay)
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
@@ -1133,6 +1207,328 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let baseScale = min(Float(width) / 3840.0, Float(height) / 2160.0) * 1.35
         let minimumScale: Float = renderSourceIsProxy ? 0.25 : 0.75
         return min(max(baseScale, minimumScale), 2.25)
+    }
+
+    private static func autoCropFraming(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        zoomSpeed: Double,
+        zoomSmoothness: Double,
+        positionSpeed: Double,
+        positionSmoothness: Double
+    ) -> AutoCropFraming {
+        guard masterStrength > 0.0001,
+              outputSize.x > 1.0,
+              outputSize.y > 1.0
+        else {
+            return .identity
+        }
+
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite else {
+            return .identity
+        }
+
+        let positionSamples = autoCropTransformSamples(
+            preparedAnalysis: preparedAnalysis,
+            centerSeconds: renderSeconds,
+            windowSeconds: autoCropWindowSeconds(smoothness: positionSmoothness, speed: positionSpeed),
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            currentTransform: currentTransform
+        )
+        let slowPositionPixels = autoCropPositionPixels(from: positionSamples, masterStrength: masterStrength)
+        let positionPixels = blackSafeAutoCropPosition(
+            preferredPositionPixels: slowPositionPixels,
+            transform: currentTransform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        )
+
+        let zoomSamples = autoCropTransformSamples(
+            preparedAnalysis: preparedAnalysis,
+            centerSeconds: renderSeconds,
+            windowSeconds: autoCropWindowSeconds(smoothness: zoomSmoothness, speed: zoomSpeed),
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            currentTransform: currentTransform
+        )
+        let scale = zoomSamples.reduce(Float(1.0)) { partial, sample in
+            return max(
+                partial,
+                requiredAutoCropScale(
+                    transform: sample.transform,
+                    outputSize: outputSize,
+                    masterStrength: masterStrength,
+                    cropPositionPixels: positionPixels
+                )
+            )
+        }
+
+        return AutoCropFraming(
+            scale: max(1.0, scale),
+            positionPixels: positionPixels
+        )
+    }
+
+    private static func autoCropWindowSeconds(smoothness: Double, speed: Double) -> Double {
+        let boundedSmoothness = min(max(smoothness, 0.0), 4.0)
+        let boundedSpeed = min(max(speed, 0.1), 4.0)
+        return boundedSmoothness / boundedSpeed
+    }
+
+    private static func autoCropTransformSamples(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        centerSeconds: Double,
+        windowSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        currentTransform: StabilizerAutoTransform
+    ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+        guard windowSeconds > 1e-6,
+              let firstTime = preparedAnalysis.frames.first?.time,
+              let lastTime = preparedAnalysis.frames.last?.time
+        else {
+            return [(currentTransform, 1.0)]
+        }
+
+        let sampleCount = 7
+        let centerIndex = sampleCount / 2
+        let halfWindow = windowSeconds * 0.5
+        let sigma = max(1e-6, halfWindow * 0.5)
+        var samples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+
+        for sampleIndex in 0..<sampleCount {
+            let fraction = Double(sampleIndex - centerIndex) / Double(max(1, sampleCount - 1))
+            let offset = fraction * windowSeconds
+            let sampleSeconds = centerSeconds + offset
+            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                continue
+            }
+            let normalizedDistance = offset / sigma
+            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard weight > 0.0001 else {
+                continue
+            }
+            let transform: StabilizerAutoTransform
+            if abs(offset) <= 1e-6 {
+                transform = currentTransform
+            } else {
+                transform = AutoStabilizationEstimator.estimate(
+                    preparedAnalysis: preparedAnalysis,
+                    renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
+                    outputSize: outputSize,
+                    panSmoothSeconds: panSmoothSeconds,
+                    strengths: strengths
+                )
+            }
+            samples.append((transform, weight))
+        }
+
+        if samples.contains(where: { abs($0.weight - 1.0) <= 1e-6 }) {
+            return samples
+        }
+        samples.append((currentTransform, 1.0))
+        return samples
+    }
+
+    private static func autoCropPositionPixels(
+        from samples: [(transform: StabilizerAutoTransform, weight: Float)],
+        masterStrength: Float
+    ) -> vector_float2 {
+        let totalWeight = samples.reduce(Float(0.0)) { $0 + $1.weight }
+        guard totalWeight > 1e-6 else {
+            return vector_float2(0.0, 0.0)
+        }
+        let weightedPosition = samples.reduce(vector_float2(0.0, 0.0)) { partial, sample in
+            partial + (sample.transform.macroPixelOffset * sample.weight)
+        }
+        return (weightedPosition / totalWeight) * masterStrength
+    }
+
+    private static func blackSafeAutoCropPosition(
+        preferredPositionPixels: vector_float2,
+        transform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float
+    ) -> vector_float2 {
+        if autoCropCenterIsInsideSource(
+            cropPositionPixels: preferredPositionPixels,
+            transform: transform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        ) {
+            return preferredPositionPixels
+        }
+
+        let currentPositionPixels = transform.pixelOffset * masterStrength
+        guard autoCropCenterIsInsideSource(
+            cropPositionPixels: currentPositionPixels,
+            transform: transform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        ) else {
+            return currentPositionPixels
+        }
+
+        var invalidFraction: Float = 0.0
+        var validFraction: Float = 1.0
+        for _ in 0..<18 {
+            let midpoint = (invalidFraction + validFraction) * 0.5
+            let candidate = (preferredPositionPixels * (1.0 - midpoint)) + (currentPositionPixels * midpoint)
+            if autoCropCenterIsInsideSource(
+                cropPositionPixels: candidate,
+                transform: transform,
+                outputSize: outputSize,
+                masterStrength: masterStrength
+            ) {
+                validFraction = midpoint
+            } else {
+                invalidFraction = midpoint
+            }
+        }
+        return (preferredPositionPixels * (1.0 - validFraction)) + (currentPositionPixels * validFraction)
+    }
+
+    private static func autoCropCenterIsInsideSource(
+        cropPositionPixels: vector_float2,
+        transform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float
+    ) -> Bool {
+        let halfSize = outputSize * 0.5
+        let marginPixels = autoCropMarginPixels(outputSize: outputSize)
+        let sourcePixel = autoCropSourcePixel(
+            outputPixel: vector_float2(0.0, 0.0),
+            scale: 1.0,
+            transform: transform,
+            outputSize: outputSize,
+            masterStrength: masterStrength,
+            cropPositionPixels: cropPositionPixels
+        )
+        return sourcePixel.x >= (-halfSize.x + marginPixels)
+            && sourcePixel.x <= (halfSize.x - marginPixels)
+            && sourcePixel.y >= (-halfSize.y + marginPixels)
+            && sourcePixel.y <= (halfSize.y - marginPixels)
+    }
+
+    private static func requiredAutoCropScale(
+        transform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float,
+        cropPositionPixels: vector_float2
+    ) -> Float {
+        var upper: Float = 1.0
+        while upper < 128.0,
+              !autoCropScaleContainsSource(
+                  scale: upper,
+                  transform: transform,
+                  outputSize: outputSize,
+                  masterStrength: masterStrength,
+                  cropPositionPixels: cropPositionPixels
+              ) {
+            upper *= 2.0
+        }
+
+        var lower: Float = 1.0
+        for _ in 0..<18 {
+            let midpoint = (lower + upper) * 0.5
+            if autoCropScaleContainsSource(
+                scale: midpoint,
+                transform: transform,
+                outputSize: outputSize,
+                masterStrength: masterStrength,
+                cropPositionPixels: cropPositionPixels
+            ) {
+                upper = midpoint
+            } else {
+                lower = midpoint
+            }
+        }
+        return upper
+    }
+
+    private static func autoCropScaleContainsSource(
+        scale: Float,
+        transform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float,
+        cropPositionPixels: vector_float2
+    ) -> Bool {
+        let sampleSteps = 6
+        let halfSize = outputSize * 0.5
+        let marginPixels = autoCropMarginPixels(outputSize: outputSize)
+
+        for yIndex in 0...sampleSteps {
+            for xIndex in 0...sampleSteps {
+                let xFraction = (Float(xIndex) / Float(sampleSteps)) - 0.5
+                let yFraction = (Float(yIndex) / Float(sampleSteps)) - 0.5
+                let outputPixel = vector_float2(
+                    xFraction * outputSize.x,
+                    yFraction * outputSize.y
+                )
+                let sourcePixel = autoCropSourcePixel(
+                    outputPixel: outputPixel,
+                    scale: scale,
+                    transform: transform,
+                    outputSize: outputSize,
+                    masterStrength: masterStrength,
+                    cropPositionPixels: cropPositionPixels
+                )
+                if sourcePixel.x < (-halfSize.x + marginPixels)
+                    || sourcePixel.x > (halfSize.x - marginPixels)
+                    || sourcePixel.y < (-halfSize.y + marginPixels)
+                    || sourcePixel.y > (halfSize.y - marginPixels) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private static func autoCropMarginPixels(outputSize: vector_float2) -> Float {
+        min(Float(1.0), max(0.0, min(outputSize.x, outputSize.y) * 0.001))
+    }
+
+    private static func autoCropSourcePixel(
+        outputPixel: vector_float2,
+        scale: Float,
+        transform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float,
+        cropPositionPixels: vector_float2
+    ) -> vector_float2 {
+        let framedPixels = (outputPixel / max(scale, 1.0)) + cropPositionPixels
+        let rotationRadians = transform.rotationDegrees * .pi / 180.0 * masterStrength
+        let sine = Darwin.sinf(-rotationRadians)
+        let cosine = Darwin.cosf(-rotationRadians)
+        let rotated = vector_float2(
+            (framedPixels.x * cosine) - (framedPixels.y * sine),
+            (framedPixels.x * sine) + (framedPixels.y * cosine)
+        )
+
+        var stabilizedPixels = rotated - (transform.pixelOffset * masterStrength)
+        let perspective = (transform.perspective + transform.yawPitchProxy) * masterStrength
+        let normalizedPixels = stabilizedPixels / outputSize
+        let perspectiveDenominator = max(
+            Float(0.35),
+            1.0 + (perspective.x * normalizedPixels.x) + (perspective.y * normalizedPixels.y)
+        )
+        stabilizedPixels /= perspectiveDenominator
+        let shear = transform.shear * masterStrength
+        stabilizedPixels -= vector_float2(
+            shear.x * stabilizedPixels.y,
+            shear.y * stabilizedPixels.x
+        )
+        return stabilizedPixels
     }
 
     private func publishHostAnalysisStatus(force: Bool = false, statusOverride: String? = nil) {
@@ -3252,9 +3648,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let masterStrength = Float(max(0.0, state.strength))
         let transformEnabled = masterStrength > 0.0001
         let autoTransform: StabilizerAutoTransform
+        var activePreparedAnalysis: StabilizerPreparedAnalysis?
         var renderUsesPreparedAnalysis = false
         let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
+        let correctionStrengths = StabilizerCorrectionStrengths(
+            microJitterX: state.microJitterXStrength,
+            microJitterY: state.microJitterYStrength,
+            microJitterRotation: state.microJitterRotationStrength,
+            strideWobbleX: state.strideWobbleXStrength,
+            strideWobbleY: state.strideWobbleYStrength,
+            strideWobbleRotation: state.strideWobbleRotationStrength,
+            panStabilizationStrength: state.panStabilizationStrength,
+            farFieldWarp: state.farFieldWarpStrength
+        )
         let configuredProjectBundleCache = transformEnabled
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)
             : false
@@ -3270,6 +3677,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                expectedRange: expectedRange
            ) {
             renderUsesPreparedAnalysis = true
+            activePreparedAnalysis = preparedAnalysis
             publishHostAnalysisCacheIdentityOnMain(hostAnalysisStore.activeCacheIdentity, force: false)
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             autoTransform = AutoStabilizationEstimator.estimate(
@@ -3277,16 +3685,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 renderTime: analysisRenderTime,
                 outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
                 panSmoothSeconds: state.panSmoothSeconds,
-                strengths: StabilizerCorrectionStrengths(
-                    microJitterX: state.microJitterXStrength,
-                    microJitterY: state.microJitterYStrength,
-                    microJitterRotation: state.microJitterRotationStrength,
-                    strideWobbleX: state.strideWobbleXStrength,
-                    strideWobbleY: state.strideWobbleYStrength,
-                    strideWobbleRotation: state.strideWobbleRotationStrength,
-                    panStabilizationStrength: state.panStabilizationStrength,
-                    farFieldWarp: state.farFieldWarpStrength
-                )
+                strengths: correctionStrengths
             )
         } else {
             autoTransform = .identity
@@ -3373,6 +3772,25 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             0.0,
             0.0
         )
+        let autoCropFraming: AutoCropFraming
+        if renderUsesPreparedAnalysis,
+           let preparedAnalysis = activePreparedAnalysis {
+            autoCropFraming = Self.autoCropFraming(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis),
+                currentTransform: autoTransform,
+                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                panSmoothSeconds: state.panSmoothSeconds,
+                strengths: correctionStrengths,
+                masterStrength: masterStrength,
+                zoomSpeed: state.autoCropZoomSpeed,
+                zoomSmoothness: state.autoCropZoomSmoothness,
+                positionSpeed: state.autoCropPositionSpeed,
+                positionSmoothness: state.autoCropPositionSmoothness
+            )
+        } else {
+            autoCropFraming = .identity
+        }
 
         var transform = TokyoWalkingStabilizerTransformUniforms(
             pixelOffset: autoTransform.pixelOffset * masterStrength,
@@ -3389,7 +3807,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             edgeMode: Float(state.edgeDisplayMode),
             debugOverlay: state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? 1.0 : 0.0,
             debugMode: renderSourceIsProxy ? 2.0 : 1.0,
-            debugOverlayScale: debugOverlayScale
+            debugOverlayScale: debugOverlayScale,
+            autoCropScale: autoCropFraming.scale,
+            autoCropPositionPixels: autoCropFraming.positionPixels
         )
         if state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis {
             publishHostAnalysisRenderDiagnostics(
