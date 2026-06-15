@@ -13,8 +13,11 @@ Final Cut Pro の quit/open は、Computer Use より先に Terminal/SSH から
 `osascript` や `open -a "Final Cut Pro"` で実行する。Computer Use は、ユーザーが
 明示的に許可した quit/open 操作、または Terminal/SSH でできない UI 操作だけに使う。
 ユーザーの FCP 操作や確認待ちで作業を止める場合は、チャットだけでなく
-`osascript -e 'display notification ...'` で macOS 通知を出し、離席中でも
-気づけるようにする。
+Codex Stop hook と同じ iMessage 経路で通知する。送信先と送信方法は
+`/Users/justadev/.codex/hooks/imessage_stop.py` の設定を source of truth にし、
+`CODEX_HOOK_IMESSAGE_TO` が未設定なら hook の default recipient を使う。
+macOS `display notification` だけではユーザーが気づかないので、待機・操作依頼の
+主通知として使わない。
 
 ## Project
 
