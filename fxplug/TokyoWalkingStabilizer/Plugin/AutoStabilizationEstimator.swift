@@ -366,7 +366,7 @@ fileprivate struct StabilizerPendingShiftResult {
     }
 }
 
-private struct StabilizerMotionBlock {
+fileprivate struct StabilizerMotionBlock {
     let x0: Int
     let y0: Int
     let width: Int
@@ -376,7 +376,7 @@ private struct StabilizerMotionBlock {
     let farFieldWeight: Float
 }
 
-private struct StabilizerBlockShift {
+fileprivate struct StabilizerBlockShift {
     let block: StabilizerMotionBlock
     let dx: Float
     let dy: Float
@@ -384,12 +384,20 @@ private struct StabilizerBlockShift {
     let searchRadiusHit: Bool
 }
 
+fileprivate struct StabilizerMotionBlockBatch {
+    let blocks: [StabilizerMotionBlock]
+    let uniforms: [StabilizerShiftBatchUniforms]
+    let maxBlockHeight: Int
+}
+
 fileprivate final class MetalAnalysisContext {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let shiftPartialPipelineState: MTLComputePipelineState
     let batchShiftPartialPipelineState: MTLComputePipelineState
+    let batchShiftPartialWithGlobalCenterPipelineState: MTLComputePipelineState
     let resolveShiftPipelineState: MTLComputePipelineState
+    let resolveShiftWithGlobalCenterPipelineState: MTLComputePipelineState
     private var reusableShiftScoreBuffer: MTLBuffer?
     private var reusableShiftScoreBufferLength = 0
     private var reusableShiftPartialBuffer: MTLBuffer?
@@ -408,7 +416,9 @@ fileprivate final class MetalAnalysisContext {
             let library = device.makeDefaultLibrary(),
             let shiftPartialFunction = library.makeFunction(name: "stabilizerShiftScorePartials"),
             let batchShiftPartialFunction = library.makeFunction(name: "stabilizerBatchShiftScorePartials"),
-            let resolveShiftFunction = library.makeFunction(name: "stabilizerResolveShiftResults")
+            let batchShiftPartialWithGlobalCenterFunction = library.makeFunction(name: "stabilizerBatchShiftScorePartialsWithGlobalCenter"),
+            let resolveShiftFunction = library.makeFunction(name: "stabilizerResolveShiftResults"),
+            let resolveShiftWithGlobalCenterFunction = library.makeFunction(name: "stabilizerResolveShiftResultsWithGlobalCenter")
         else {
             throw AutoStabilizationEstimator.metalError("Stabilizer Metal analysis resources were unavailable.")
         }
@@ -416,7 +426,9 @@ fileprivate final class MetalAnalysisContext {
         self.commandQueue = commandQueue
         self.shiftPartialPipelineState = try device.makeComputePipelineState(function: shiftPartialFunction)
         self.batchShiftPartialPipelineState = try device.makeComputePipelineState(function: batchShiftPartialFunction)
+        self.batchShiftPartialWithGlobalCenterPipelineState = try device.makeComputePipelineState(function: batchShiftPartialWithGlobalCenterFunction)
         self.resolveShiftPipelineState = try device.makeComputePipelineState(function: resolveShiftFunction)
+        self.resolveShiftWithGlobalCenterPipelineState = try device.makeComputePipelineState(function: resolveShiftWithGlobalCenterFunction)
     }
 
     func frameBuffer(for frame: StabilizerAnalysisFrame) throws -> MTLBuffer {
@@ -1455,56 +1467,36 @@ enum AutoStabilizationEstimator {
         current: MTLBuffer,
         sampleWidth: Int,
         sampleHeight: Int,
+        motionBlockBatch cachedMotionBlockBatch: StabilizerMotionBlockBatch? = nil,
+        motionBlockUniformBuffer: MTLBuffer? = nil,
         overlappedMetricsWork: (() -> StabilizerFrameMetrics)? = nil
     ) throws -> PairMotionResult {
         let pairStartedAt = CFAbsoluteTimeGetCurrent()
-        let globalStartedAt = CFAbsoluteTimeGetCurrent()
-        let pendingGlobal = try beginEstimateShift(
+        let blockBatch = cachedMotionBlockBatch ?? motionBlockBatch(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        let blocks = blockBatch.blocks
+        let shiftResult = try estimateGlobalAndLocalShifts(
             context: context,
             previous: previous,
             current: current,
-            x0: 8,
-            y0: 6,
-            width: max(8, sampleWidth - 16),
-            height: max(8, sampleHeight - 12),
-            radius: globalSearchRadius,
-            center: (0.0, 0.0),
-            refine: true,
-            stride: 2,
+            blockBatch: blockBatch,
+            localUniformBuffer: motionBlockUniformBuffer,
             sampleWidth: sampleWidth,
-            sampleHeight: sampleHeight
+            sampleHeight: sampleHeight,
+            overlappedMetricsWork: overlappedMetricsWork
         )
-        let metricsStartedAt = CFAbsoluteTimeGetCurrent()
-        let overlappedMetrics = overlappedMetricsWork?()
-        let overlappedMetricsMilliseconds = overlappedMetrics == nil ? 0.0 : (CFAbsoluteTimeGetCurrent() - metricsStartedAt) * 1000.0
-        let global = try pendingGlobal.waitForResult()
-        let globalDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - globalStartedAt) * 1000.0
-        let center = (round(global.dx), round(global.dy))
-        let blocks = motionBlocks(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
-        let localStartedAt = CFAbsoluteTimeGetCurrent()
-        let blockShifts = try estimateShifts(
-            context: context,
-            previous: previous,
-            current: current,
-            blocks: blocks,
-            radius: localSearchRadius,
-            center: center,
-            refine: true,
-            stride: 1,
-            sampleWidth: sampleWidth,
-            sampleHeight: sampleHeight
-        )
-        let localDurationMilliseconds = (CFAbsoluteTimeGetCurrent() - localStartedAt) * 1000.0
+        let global = shiftResult.global
+        let blockShifts = shiftResult.blockShifts
         os_log(
-            "Host Analysis shift scoring pair sample %{public}dx%{public}d blocks %{public}d global %{public}.3f ms local batch %{public}.3f ms overlapped metrics %{public}.3f ms total %{public}.3f ms.",
+            "Host Analysis fused shift scoring pair sample %{public}dx%{public}d blocks %{public}d global(est) %{public}.3f ms local(est) %{public}.3f ms command %{public}.3f ms overlapped metrics %{public}.3f ms total %{public}.3f ms.",
             log: stabilizerHostAnalysisLog,
             type: .debug,
             sampleWidth,
             sampleHeight,
             blocks.count,
-            globalDurationMilliseconds,
-            localDurationMilliseconds,
-            overlappedMetricsMilliseconds,
+            shiftResult.globalMilliseconds,
+            shiftResult.localBatchMilliseconds,
+            shiftResult.commandMilliseconds,
+            shiftResult.overlappedMetricsMilliseconds,
             (CFAbsoluteTimeGetCurrent() - pairStartedAt) * 1000.0
         )
         let acceptedBlocks = acceptedMotionBlocks(blockShifts, global: (global.dx, global.dy, global.score))
@@ -1562,12 +1554,12 @@ enum AutoStabilizationEstimator {
                 searchRadiusTotalCount: Int32(searchRadiusTotalCount)
             ),
             timing: StabilizerPairMotionTiming(
-                globalMilliseconds: globalDurationMilliseconds,
-                localBatchMilliseconds: localDurationMilliseconds,
+                globalMilliseconds: shiftResult.globalMilliseconds,
+                localBatchMilliseconds: shiftResult.localBatchMilliseconds,
                 totalMilliseconds: (CFAbsoluteTimeGetCurrent() - pairStartedAt) * 1000.0
             ),
-            overlappedFrameMetrics: overlappedMetrics,
-            overlappedMetricsMilliseconds: overlappedMetricsMilliseconds
+            overlappedFrameMetrics: shiftResult.overlappedFrameMetrics,
+            overlappedMetricsMilliseconds: shiftResult.overlappedMetricsMilliseconds
         )
     }
 
@@ -1698,6 +1690,30 @@ enum AutoStabilizationEstimator {
         return blocks
     }
 
+    fileprivate static func motionBlockBatch(sampleWidth: Int, sampleHeight: Int) -> StabilizerMotionBlockBatch {
+        let blocks = motionBlocks(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        let localStride: UInt32 = 1
+        let uniforms = blocks.map { block in
+            StabilizerShiftBatchUniforms(
+                width: UInt32(sampleWidth),
+                height: UInt32(sampleHeight),
+                x0: UInt32(block.x0),
+                y0: UInt32(block.y0),
+                regionWidth: UInt32(block.width),
+                regionHeight: UInt32(block.height),
+                centerX: 0,
+                centerY: 0,
+                radius: UInt32(localSearchRadius),
+                stride: max(1, localStride)
+            )
+        }
+        return StabilizerMotionBlockBatch(
+            blocks: blocks,
+            uniforms: uniforms,
+            maxBlockHeight: blocks.map(\.height).max() ?? 0
+        )
+    }
+
     private static func farFieldWeight(centerY: Float, sampleHeight: Int) -> Float {
         let normalizedY = centerY / Float(max(1, sampleHeight))
         return clamp((0.82 - normalizedY) / 0.62, min: 0.20, max: 1.0)
@@ -1820,6 +1836,234 @@ enum AutoStabilizationEstimator {
         let sampledRows = max(1, (max(1, regionHeight) + stride - 1) / stride)
         let targetRowsPerChunk = 8
         return max(1, min(128, (sampledRows + targetRowsPerChunk - 1) / targetRowsPerChunk))
+    }
+
+    private static func splitFusedShiftTiming(totalMilliseconds: Double, globalUnits: Int, localUnits: Int) -> (globalMilliseconds: Double, localMilliseconds: Double) {
+        let globalUnits = max(1, globalUnits)
+        let localUnits = max(1, localUnits)
+        let totalUnits = Double(globalUnits + localUnits)
+        return (
+            globalMilliseconds: totalMilliseconds * (Double(globalUnits) / totalUnits),
+            localMilliseconds: totalMilliseconds * (Double(localUnits) / totalUnits)
+        )
+    }
+
+    private static func estimateGlobalAndLocalShifts(
+        context: MetalAnalysisContext,
+        previous: MTLBuffer,
+        current: MTLBuffer,
+        blockBatch: StabilizerMotionBlockBatch,
+        localUniformBuffer: MTLBuffer?,
+        sampleWidth: Int,
+        sampleHeight: Int,
+        overlappedMetricsWork: (() -> StabilizerFrameMetrics)?
+    ) throws -> (
+        global: (dx: Float, dy: Float, score: Float, searchRadiusHit: Bool),
+        blockShifts: [StabilizerBlockShift],
+        globalMilliseconds: Double,
+        localBatchMilliseconds: Double,
+        commandMilliseconds: Double,
+        overlappedFrameMetrics: StabilizerFrameMetrics?,
+        overlappedMetricsMilliseconds: Double
+    ) {
+        let blocks = blockBatch.blocks
+        guard !blocks.isEmpty else {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            let pendingGlobal = try beginEstimateShift(
+                context: context,
+                previous: previous,
+                current: current,
+                x0: 8,
+                y0: 6,
+                width: max(8, sampleWidth - 16),
+                height: max(8, sampleHeight - 12),
+                radius: globalSearchRadius,
+                center: (0.0, 0.0),
+                refine: true,
+                stride: 2,
+                sampleWidth: sampleWidth,
+                sampleHeight: sampleHeight
+            )
+            let metricsStartedAt = CFAbsoluteTimeGetCurrent()
+            let overlappedMetrics = overlappedMetricsWork?()
+            let overlappedMetricsMilliseconds = overlappedMetrics == nil ? 0.0 : (CFAbsoluteTimeGetCurrent() - metricsStartedAt) * 1000.0
+            let global = try pendingGlobal.waitForResult()
+            let elapsedMilliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
+            return (
+                global: (global.dx, global.dy, global.score, global.searchRadiusHit),
+                blockShifts: [],
+                globalMilliseconds: elapsedMilliseconds,
+                localBatchMilliseconds: 0.0,
+                commandMilliseconds: elapsedMilliseconds,
+                overlappedFrameMetrics: overlappedMetrics,
+                overlappedMetricsMilliseconds: overlappedMetricsMilliseconds
+            )
+        }
+
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        let globalX0 = 8
+        let globalY0 = 6
+        let globalWidth = max(8, sampleWidth - 16)
+        let globalHeight = max(8, sampleHeight - 12)
+        let globalStride: UInt32 = 2
+        let globalSide = (globalSearchRadius * 2) + 1
+        let globalScoreCount = globalSide * globalSide
+        let globalChunkCount = shiftScoreChunkCount(regionHeight: globalHeight, stride: globalStride)
+
+        let localStride: UInt32 = 1
+        let localSide = (localSearchRadius * 2) + 1
+        let localScoreCount = localSide * localSide
+        let localChunkCount = shiftScoreChunkCount(regionHeight: blockBatch.maxBlockHeight, stride: localStride)
+
+        let partialBuffer = try context.shiftPartialBuffer(
+            length: MemoryLayout<StabilizerShiftScorePartial>.stride * max(
+                globalScoreCount * globalChunkCount,
+                localScoreCount * blocks.count * localChunkCount
+            )
+        )
+        let resultStride = MemoryLayout<StabilizerShiftResult>.stride
+        let localResultOffset = resultStride
+        let resultBuffer = try context.shiftResultBuffer(length: resultStride * (blocks.count + 1))
+        let uniformBuffer: MTLBuffer
+        if let localUniformBuffer {
+            guard localUniformBuffer.device.registryID == context.device.registryID else {
+                throw metalError("Stabilizer cached local shift uniform buffer was created on a different Metal device.")
+            }
+            let expectedUniformLength = MemoryLayout<StabilizerShiftBatchUniforms>.stride * blockBatch.uniforms.count
+            guard localUniformBuffer.length >= expectedUniformLength else {
+                throw metalError("Stabilizer cached local shift uniform buffer was smaller than the expected block batch.")
+            }
+            uniformBuffer = localUniformBuffer
+        } else {
+            uniformBuffer = try context.shiftBatchUniformBuffer(uniforms: blockBatch.uniforms)
+        }
+
+        guard let commandBuffer = context.commandQueue.makeCommandBuffer() else {
+            throw metalError("Could not allocate Stabilizer Metal fused shift command buffer.")
+        }
+
+        var globalUniforms = StabilizerShiftBatchUniforms(
+            width: UInt32(sampleWidth),
+            height: UInt32(sampleHeight),
+            x0: UInt32(globalX0),
+            y0: UInt32(globalY0),
+            regionWidth: UInt32(globalWidth),
+            regionHeight: UInt32(globalHeight),
+            centerX: 0,
+            centerY: 0,
+            radius: UInt32(globalSearchRadius),
+            stride: max(1, globalStride)
+        )
+        var globalResolveUniforms = StabilizerShiftResolveUniforms(
+            radius: UInt32(globalSearchRadius),
+            chunkCount: UInt32(globalChunkCount),
+            blockCount: 1,
+            centerX: 0,
+            centerY: 0,
+            refine: 1
+        )
+        guard let globalPartialEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw metalError("Could not allocate Stabilizer Metal fused global shift resources.")
+        }
+        globalPartialEncoder.setComputePipelineState(context.shiftPartialPipelineState)
+        globalPartialEncoder.setBuffer(previous, offset: 0, index: Int(SCBI_PreviousFrame.rawValue))
+        globalPartialEncoder.setBuffer(current, offset: 0, index: Int(SCBI_CurrentFrame.rawValue))
+        globalPartialEncoder.setBuffer(partialBuffer, offset: 0, index: Int(SCBI_ShiftScorePartials.rawValue))
+        globalPartialEncoder.setBytes(&globalUniforms, length: MemoryLayout<StabilizerShiftBatchUniforms>.stride, index: Int(SCBI_ShiftUniforms.rawValue))
+        globalPartialEncoder.setBytes(&globalResolveUniforms, length: MemoryLayout<StabilizerShiftResolveUniforms>.stride, index: Int(SCBI_ShiftResolveUniforms.rawValue))
+        globalPartialEncoder.dispatchThreads(
+            MTLSize(width: globalScoreCount, height: 1, depth: globalChunkCount),
+            threadsPerThreadgroup: MTLSize(width: min(16, globalScoreCount), height: 1, depth: 1)
+        )
+        globalPartialEncoder.endEncoding()
+
+        guard let globalResolveEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw metalError("Could not allocate Stabilizer Metal fused global resolve resources.")
+        }
+        globalResolveEncoder.setComputePipelineState(context.resolveShiftPipelineState)
+        globalResolveEncoder.setBuffer(partialBuffer, offset: 0, index: Int(SCBI_ShiftScorePartials.rawValue))
+        globalResolveEncoder.setBuffer(resultBuffer, offset: 0, index: Int(SCBI_ShiftResults.rawValue))
+        globalResolveEncoder.setBytes(&globalResolveUniforms, length: MemoryLayout<StabilizerShiftResolveUniforms>.stride, index: Int(SCBI_ShiftResolveUniforms.rawValue))
+        globalResolveEncoder.dispatchThreads(
+            MTLSize(width: 1, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+        )
+        globalResolveEncoder.endEncoding()
+
+        var localResolveUniforms = StabilizerShiftResolveUniforms(
+            radius: UInt32(localSearchRadius),
+            chunkCount: UInt32(localChunkCount),
+            blockCount: UInt32(blocks.count),
+            centerX: 0,
+            centerY: 0,
+            refine: 1
+        )
+        guard let localPartialEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw metalError("Could not allocate Stabilizer Metal fused local shift resources.")
+        }
+        localPartialEncoder.setComputePipelineState(context.batchShiftPartialWithGlobalCenterPipelineState)
+        localPartialEncoder.setBuffer(previous, offset: 0, index: Int(SCBI_PreviousFrame.rawValue))
+        localPartialEncoder.setBuffer(current, offset: 0, index: Int(SCBI_CurrentFrame.rawValue))
+        localPartialEncoder.setBuffer(partialBuffer, offset: 0, index: Int(SCBI_ShiftScorePartials.rawValue))
+        localPartialEncoder.setBuffer(uniformBuffer, offset: 0, index: Int(SCBI_ShiftBatchUniforms.rawValue))
+        localPartialEncoder.setBuffer(resultBuffer, offset: 0, index: Int(SCBI_GlobalShiftResult.rawValue))
+        localPartialEncoder.setBytes(&localResolveUniforms, length: MemoryLayout<StabilizerShiftResolveUniforms>.stride, index: Int(SCBI_ShiftResolveUniforms.rawValue))
+        localPartialEncoder.dispatchThreads(
+            MTLSize(width: localScoreCount, height: blocks.count, depth: localChunkCount),
+            threadsPerThreadgroup: MTLSize(width: min(16, localScoreCount), height: 1, depth: 1)
+        )
+        localPartialEncoder.endEncoding()
+
+        guard let localResolveEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw metalError("Could not allocate Stabilizer Metal fused local resolve resources.")
+        }
+        localResolveEncoder.setComputePipelineState(context.resolveShiftWithGlobalCenterPipelineState)
+        localResolveEncoder.setBuffer(partialBuffer, offset: 0, index: Int(SCBI_ShiftScorePartials.rawValue))
+        localResolveEncoder.setBuffer(resultBuffer, offset: localResultOffset, index: Int(SCBI_ShiftResults.rawValue))
+        localResolveEncoder.setBuffer(resultBuffer, offset: 0, index: Int(SCBI_GlobalShiftResult.rawValue))
+        localResolveEncoder.setBytes(&localResolveUniforms, length: MemoryLayout<StabilizerShiftResolveUniforms>.stride, index: Int(SCBI_ShiftResolveUniforms.rawValue))
+        localResolveEncoder.dispatchThreads(
+            MTLSize(width: blocks.count, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(32, blocks.count), height: 1, depth: 1)
+        )
+        localResolveEncoder.endEncoding()
+
+        commandBuffer.commit()
+        let metricsStartedAt = CFAbsoluteTimeGetCurrent()
+        let overlappedMetrics = overlappedMetricsWork?()
+        let overlappedMetricsMilliseconds = overlappedMetrics == nil ? 0.0 : (CFAbsoluteTimeGetCurrent() - metricsStartedAt) * 1000.0
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw error
+        }
+
+        let elapsedMilliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
+        let timingSplit = splitFusedShiftTiming(
+            totalMilliseconds: elapsedMilliseconds,
+            globalUnits: globalScoreCount * globalChunkCount,
+            localUnits: localScoreCount * localChunkCount * blocks.count
+        )
+        let results = resultBuffer.contents().assumingMemoryBound(to: StabilizerShiftResult.self)
+        let global = results[0]
+        let blockShifts = blocks.enumerated().map { index, block in
+            let shift = results[index + 1]
+            return StabilizerBlockShift(
+                block: block,
+                dx: shift.dx,
+                dy: shift.dy,
+                score: shift.score,
+                searchRadiusHit: shift.searchRadiusHit != 0
+            )
+        }
+        return (
+            global: (global.dx, global.dy, global.score, global.searchRadiusHit != 0),
+            blockShifts: blockShifts,
+            globalMilliseconds: timingSplit.globalMilliseconds,
+            localBatchMilliseconds: timingSplit.localMilliseconds,
+            commandMilliseconds: elapsedMilliseconds,
+            overlappedFrameMetrics: overlappedMetrics,
+            overlappedMetricsMilliseconds: overlappedMetricsMilliseconds
+        )
     }
 
     private static func estimateShift(
@@ -2980,6 +3224,8 @@ final class StreamingStabilizationAnalysisBuilder {
     private var previousFrameBufferLease: StabilizerDownsampleBufferLease?
     private var sampleWidth: Int?
     private var sampleHeight: Int?
+    private var motionBlockBatch: StabilizerMotionBlockBatch?
+    private var motionBlockUniformBuffer: MTLBuffer?
 
     init() {}
 
@@ -3002,6 +3248,10 @@ final class StreamingStabilizationAnalysisBuilder {
         } else {
             sampleWidth = sample.sampleWidth
             sampleHeight = sample.sampleHeight
+            motionBlockBatch = AutoStabilizationEstimator.motionBlockBatch(
+                sampleWidth: sample.sampleWidth,
+                sampleHeight: sample.sampleHeight
+            )
         }
 
         if context == nil {
@@ -3011,6 +3261,12 @@ final class StreamingStabilizationAnalysisBuilder {
             throw AutoStabilizationEstimator.metalError("Stabilizer Metal analysis context was unavailable.")
         }
         try context.validateFrameBuffer(sample.lumaBuffer, sampleWidth: sample.sampleWidth, sampleHeight: sample.sampleHeight)
+        guard let motionBlockBatch else {
+            throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis motion block batch was unavailable.")
+        }
+        if motionBlockUniformBuffer == nil, !motionBlockBatch.uniforms.isEmpty {
+            motionBlockUniformBuffer = try context.shiftBatchUniformBuffer(uniforms: motionBlockBatch.uniforms)
+        }
 
         let currentFrameBuffer = sample.lumaBuffer
         let timing: StabilizerPairMotionTiming?
@@ -3023,6 +3279,8 @@ final class StreamingStabilizationAnalysisBuilder {
                 current: currentFrameBuffer,
                 sampleWidth: sample.sampleWidth,
                 sampleHeight: sample.sampleHeight,
+                motionBlockBatch: motionBlockBatch,
+                motionBlockUniformBuffer: motionBlockUniformBuffer,
                 overlappedMetricsWork: {
                     AutoStabilizationEstimator.frameMetrics(
                         sample.pixels,

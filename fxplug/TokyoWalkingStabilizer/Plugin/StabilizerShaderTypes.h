@@ -30,7 +30,8 @@ typedef enum StabilizerComputeBufferIndex {
     SCBI_DownsampleUniforms = 1,
     SCBI_ShiftScorePartials = 4,
     SCBI_ShiftResults = 5,
-    SCBI_ShiftResolveUniforms = 6
+    SCBI_ShiftResolveUniforms = 6,
+    SCBI_GlobalShiftResult = 7
 } StabilizerComputeBufferIndex;
 
 typedef struct StabilizerVertex2D {
