@@ -827,11 +827,18 @@ final class StabilizerHostAnalysisStore {
                                 forRenderSeconds: renderSeconds,
                                 frames: analysis.frames
                             )
-                            let analysisSeconds = mappedSourceSeconds ?? CMTimeGetSeconds(renderTime)
+                            let clampedSourceSeconds = mappedSourceSeconds ?? clampedSourceRequestSecondsIfNeeded(
+                                sourceSeconds: renderSeconds,
+                                renderSeconds: renderSeconds,
+                                expectedRange: expectedRange,
+                                frames: analysis.frames
+                            )
+                            let analysisSeconds = clampedSourceSeconds ?? CMTimeGetSeconds(renderTime)
                             let currentRenderTimeIsCovered = Self.renderSeconds(renderSeconds, isInside: analysis.frames)
+                            let sourceRequestTimeIsCovered = clampedSourceSeconds != nil
                             let startMatchedMappedTimeIsCovered = Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange)
                                 && mappedSourceSeconds != nil
-                            if currentRenderTimeIsCovered || startMatchedMappedTimeIsCovered {
+                            if currentRenderTimeIsCovered || sourceRequestTimeIsCovered || startMatchedMappedTimeIsCovered {
                                 os_log(
                                     "Using covered range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@ render=%{public}.6f analysis=%{public}.6f.",
                                     log: stabilizerHostAnalysisLog,
