@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.63"
+private let tokyoWalkingStabilizerVersion = "0.3.65"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1694,6 +1694,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             statusLock.lock()
             lastPublishedRenderRevision = revision
             statusLock.unlock()
+            os_log(
+                "Published Render Revision parameter. revision=%{public}.3f force=%{public}@ current=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                revision,
+                force ? "yes" : "no",
+                currentParameterValue.map { String(format: "%.3f", $0) } ?? "-"
+            )
         } else {
             NSLog("TokyoWalkingStabilizer: failed to update Render Revision parameter.")
         }
@@ -1771,7 +1779,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func pollPersistentCacheForPreviewInvalidation() {
+        let preferredIdentity = currentPreferredHostAnalysisCacheIdentity()
         let expectedRange = currentInputRange()
+            ?? Self.expectedRange(fromCacheIdentity: preferredIdentity)
         guard configureProjectBundleCacheDirectory(expectedRange: expectedRange) else {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
@@ -1780,14 +1790,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
             return
         }
-        if let expectedRange,
-           let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            publishHostAnalysisCacheIdentity(nil, force: true)
-        }
         let loadedCache: Bool
-        if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
+        if let preferredIdentity,
+           hostAnalysisStore.activatePersistentCache(
+               identity: preferredIdentity,
+               expectedRange: expectedRange,
+               allowRangeMismatch: true
+           ) {
             loadedCache = true
         } else {
             loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange)
@@ -2587,12 +2596,41 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         ""
                     )
                 }
+                let sidebarBundleSelection = activeFinalCutLibrarySidebarBundleSelection(from: bundleCandidates)
+                if let selection = sidebarBundleSelection.selection {
+                    for candidate in bundleCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
+                        candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+                    }
+                    let bundleCandidate = selection.candidate
+                    guard let eventResolution = fcpEventRoot(
+                        containing: internalBundleHostAnalysisCacheRoot(in: bundleCandidate.bundleRoot),
+                        in: bundleCandidate.bundleRoot,
+                        expectedRange: expectedRange
+                    ) else {
+                        bundleCandidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+                        return (
+                            nil,
+                            "Selected Final Cut Pro library \(bundleCandidate.bundleRoot.path) did not resolve to a single Event cache root. \(sidebarBundleSelection.rejectReason)"
+                        )
+                    }
+                    return (
+                        FCPActiveLibraryEventResolution(
+                            bundleRoot: bundleCandidate.bundleRoot,
+                            eventResolution: FCPEventRootResolution(
+                                eventRoot: eventResolution.eventRoot,
+                                sourceDescription: "\(selection.sourceDescription) / \(eventResolution.sourceDescription)"
+                            ),
+                            securityScopedURL: bundleCandidate.securityScopedURL
+                        ),
+                        ""
+                    )
+                }
                 for candidate in bundleCandidates {
                     candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
                 }
                 return (
                     nil,
-                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(rangedSelection.rejectReason) \(sidebarSelection.rejectReason)"
+                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(rangedSelection.rejectReason) \(sidebarSelection.rejectReason) \(sidebarBundleSelection.rejectReason)"
                 )
             }
         }
@@ -2878,8 +2916,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 inspectedBundles.append("\(bundleRoot.path)(missing CurrentVersion.flexolibrary)")
                 continue
             }
-            let markerMatch = libraryMarkerContainsIdentifiers(sidebarSelection.identifiers, markerURL: libraryMarkerURL)
-            guard markerMatch.containsAllIdentifiers else {
+            let markerMatch = libraryMarkerContainsSidebarEventIdentifier(eventIdentifier, markerURL: libraryMarkerURL)
+            guard markerMatch.containsIdentifier else {
                 inspectedBundles.append("\(bundleRoot.path)(sidebarIDs:no: \(markerMatch.rejectReason))")
                 continue
             }
@@ -2920,6 +2958,60 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return (
             nil,
             "Multiple active libraries matched Final Cut Pro library sidebar selection \(sidebarSelection.rawSelection): \(matches.map { "\($0.candidate.bundleRoot.path) -> \($0.eventResolution.eventRoot.path)" }.joined(separator: " | "))"
+        )
+    }
+
+    private static func activeFinalCutLibrarySidebarBundleSelection(
+        from candidates: [FCPActiveLibraryBundleCandidate]
+    ) -> (selection: FCPActiveLibraryBundleSelection?, rejectReason: String) {
+        let sidebarLookup = finalCutLibrarySidebarSelection()
+        guard let sidebarSelection = sidebarLookup.selection else {
+            return (nil, "Final Cut Pro library sidebar selection unavailable for library-row match: \(sidebarLookup.rejectReason)")
+        }
+
+        var matches: [FCPActiveLibraryBundleSelection] = []
+        var inspectedBundles: [String] = []
+        for candidate in candidates {
+            let bundleRoot = candidate.bundleRoot
+            let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
+            guard FileManager.default.fileExists(atPath: libraryMarkerURL.path) else {
+                inspectedBundles.append("\(bundleRoot.path)(missing CurrentVersion.flexolibrary)")
+                continue
+            }
+            let matchingLibraryIdentifier = sidebarSelection.identifiers.first { identifier in
+                libraryMarkerContainsLibraryIdentifier(identifier, markerURL: libraryMarkerURL).containsIdentifier
+            }
+            guard let matchingLibraryIdentifier else {
+                inspectedBundles.append("\(bundleRoot.path)(libraryID:no)")
+                continue
+            }
+            inspectedBundles.append("\(bundleRoot.path)(libraryID:yes:\(matchingLibraryIdentifier))")
+            matches.append(FCPActiveLibraryBundleSelection(
+                candidate: candidate,
+                sourceDescription: "Final Cut Pro library sidebar selected library \(matchingLibraryIdentifier)"
+            ))
+        }
+
+        if matches.count == 1, let match = matches.first {
+            os_log(
+                "Active library resolver selected bundle %{public}@ by Final Cut Pro library sidebar selected library row %{public}@ identifiers=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                match.candidate.bundleRoot.path,
+                sidebarSelection.rawSelection,
+                sidebarSelection.identifiers.joined(separator: ",")
+            )
+            return (match, "")
+        }
+        if matches.isEmpty {
+            return (
+                nil,
+                "No active library matched Final Cut Pro library sidebar selected library row \(sidebarSelection.rawSelection). inspected=\(inspectedBundles.joined(separator: " | "))"
+            )
+        }
+        return (
+            nil,
+            "Multiple active libraries matched Final Cut Pro library sidebar selected library row \(sidebarSelection.rawSelection): \(matches.map(\.candidate.bundleRoot.path).joined(separator: " | "))"
         )
     }
 
@@ -2991,22 +3083,76 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func libraryMarkerContainsIdentifiers(
-        _ identifiers: [String],
+    private static func libraryMarkerContainsSidebarEventIdentifier(
+        _ eventIdentifier: String,
         markerURL: URL
-    ) -> (containsAllIdentifiers: Bool, rejectReason: String) {
+    ) -> (containsIdentifier: Bool, rejectReason: String) {
         do {
             let markerData = try Data(contentsOf: markerURL)
-            for identifier in identifiers {
-                let variants = Set([identifier, identifier.uppercased(), identifier.lowercased()])
-                guard variants.contains(where: { markerData.range(of: Data($0.utf8)) != nil }) else {
-                    return (false, "missing \(identifier)")
-                }
+            let variants = Set([eventIdentifier, eventIdentifier.uppercased(), eventIdentifier.lowercased()])
+            guard variants.contains(where: { markerData.range(of: Data($0.utf8)) != nil }) else {
+                return (false, "missing selected Event identifier \(eventIdentifier)")
             }
             return (true, "")
         } catch {
             return (false, "unreadable CurrentVersion.flexolibrary: \(error.localizedDescription)")
         }
+    }
+
+    private static func libraryMarkerContainsLibraryIdentifier(
+        _ libraryIdentifier: String,
+        markerURL: URL
+    ) -> (containsIdentifier: Bool, rejectReason: String) {
+        var database: OpaquePointer?
+        let openResult = markerURL.path.withCString { path in
+            sqlite3_open_v2(
+                path,
+                &database,
+                SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX,
+                nil
+            )
+        }
+        guard openResult == SQLITE_OK, let database else {
+            let message = sqliteErrorMessage(database)
+            if let database {
+                sqlite3_close(database)
+            }
+            return (false, "could not open CurrentVersion.flexolibrary read-only at \(markerURL.path): \(message)")
+        }
+        defer {
+            sqlite3_close(database)
+        }
+
+        let sql = """
+        SELECT 1
+        FROM ZCOLLECTION
+        WHERE ZIDENTIFIER = ? COLLATE NOCASE AND ZTYPE = 'FFLibrary'
+        LIMIT 1
+        """
+        var statement: OpaquePointer?
+        let prepareResult = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
+        guard prepareResult == SQLITE_OK, let statement else {
+            return (false, "could not prepare library identifier lookup: \(sqliteErrorMessage(database))")
+        }
+        defer {
+            sqlite3_finalize(statement)
+        }
+
+        let bindResult = libraryIdentifier.withCString { libraryIdentifierCString in
+            sqlite3_bind_text(statement, 1, libraryIdentifierCString, -1, sqliteTransientDestructor)
+        }
+        guard bindResult == SQLITE_OK else {
+            return (false, "could not bind library identifier \(libraryIdentifier): \(sqliteErrorMessage(database))")
+        }
+
+        let stepResult = sqlite3_step(statement)
+        if stepResult == SQLITE_ROW {
+            return (true, "")
+        }
+        if stepResult == SQLITE_DONE {
+            return (false, "selected library identifier \(libraryIdentifier) was not an FFLibrary row")
+        }
+        return (false, "could not step library identifier lookup: \(sqliteErrorMessage(database))")
     }
 
     private static func eventRootForEventIdentifier(
@@ -3425,13 +3571,76 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func currentRenderExpectedRange(from state: StabilizerPluginState) -> HostAnalysisExpectedRange? {
-        currentInputRange() ?? Self.expectedInputRange(from: state)
+        currentInputRange()
+            ?? Self.expectedInputRange(from: state)
+            ?? expectedRangeFromPreferredHostAnalysisCacheIdentity()
     }
 
     private static func pluginState(from data: Data?) -> StabilizerPluginState? {
         data?.withUnsafeBytes { pointer in
             pointer.bindMemory(to: StabilizerPluginState.self).baseAddress?.pointee
         }
+    }
+
+    private static func expectedRange(fromCacheIdentity identity: String?) -> HostAnalysisExpectedRange? {
+        guard let identity = identity?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !identity.isEmpty
+        else {
+            return nil
+        }
+        let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
+        let startIndex: Int
+        if parts.first == "memory" {
+            startIndex = 2
+        } else if parts.count >= 10 {
+            startIndex = 1
+        } else {
+            startIndex = 0
+        }
+        guard parts.count > startIndex + 2,
+              let startKey = Int64(parts[startIndex]),
+              let durationKey = Int64(parts[startIndex + 1]),
+              let frameDurationKey = Int64(parts[startIndex + 2])
+        else {
+            return nil
+        }
+        let range = HostAnalysisExpectedRange(
+            startSeconds: Double(startKey) / 600.0,
+            durationSeconds: Double(durationKey) / 600.0,
+            frameDurationSeconds: Double(frameDurationKey) / 600.0
+        )
+        return range.isValid ? range : nil
+    }
+
+    private func expectedRangeFromPreferredHostAnalysisCacheIdentity() -> HostAnalysisExpectedRange? {
+        if let expectedRange = Self.expectedRange(fromCacheIdentity: currentPreferredHostAnalysisCacheIdentity()) {
+            os_log(
+                "Derived Host Analysis expected range from cached identity. expectedRange=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                Self.expectedRangeDescription(expectedRange)
+            )
+            return expectedRange
+        }
+        guard let paramAPI = apiManager.api(for: FxParameterRetrievalAPI_v6.self) as? FxParameterRetrievalAPI_v6 else {
+            return nil
+        }
+        var cacheIdentityValue = NSString()
+        guard paramAPI.getStringParameterValue(&cacheIdentityValue, fromParameter: ParameterID.hostAnalysisCacheIdentity.rawValue) else {
+            return nil
+        }
+        let identity = cacheIdentityValue as String
+        updatePreferredHostAnalysisCacheIdentity(identity)
+        guard let expectedRange = Self.expectedRange(fromCacheIdentity: identity) else {
+            return nil
+        }
+        os_log(
+            "Derived Host Analysis expected range from Host Analysis Cache Identity parameter. expectedRange=%{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            Self.expectedRangeDescription(expectedRange)
+        )
+        return expectedRange
     }
 
     private static func sourceRequestTime(for renderTime: CMTime, pluginState data: Data?) -> (time: CMTime, clamped: Bool) {
@@ -3581,11 +3790,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private func sourceRequestTime(for renderTime: CMTime, pluginState data: Data?) -> (time: CMTime, clamped: Bool) {
         let rangeRequest = Self.sourceRequestTime(for: renderTime, pluginState: data)
-        if rangeRequest.clamped {
-            return rangeRequest
-        }
+        let expectedRange: HostAnalysisExpectedRange?
         if let state = Self.pluginState(from: data) {
-            let expectedRange = currentRenderExpectedRange(from: state)
+            expectedRange = currentRenderExpectedRange(from: state)
+        } else {
+            expectedRange = expectedRangeFromPreferredHostAnalysisCacheIdentity()
+        }
+        if expectedRange != nil || currentPreferredHostAnalysisCacheIdentity() != nil {
             if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
                 if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
                    !preferredIdentity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
