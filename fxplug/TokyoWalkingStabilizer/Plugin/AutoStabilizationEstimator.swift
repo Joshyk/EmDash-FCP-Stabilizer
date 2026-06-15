@@ -1315,7 +1315,7 @@ enum AutoStabilizationEstimator {
 
     static func analysisFrame(from tile: FxImageTile, at frameTime: CMTime? = nil, sampleWidth: Int, sampleHeight: Int) throws -> StabilizerAnalysisFrame {
         let sample = try analysisSample(from: tile, at: frameTime, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
-        return analysisFrame(from: sample, metrics: frameMetrics(sample.pixels, sampleWidth: sample.sampleWidth, sampleHeight: sample.sampleHeight))
+        return analysisFrame(from: sample, metrics: try frameMetrics(sample))
     }
 
     static func analysisSample(
@@ -1323,7 +1323,8 @@ enum AutoStabilizationEstimator {
         at frameTime: CMTime? = nil,
         sampleWidth: Int,
         sampleHeight: Int,
-        downsampleBufferPool: StabilizerDownsampleBufferPool? = nil
+        downsampleBufferPool: StabilizerDownsampleBufferPool? = nil,
+        retainPixels: Bool = true
     ) throws -> StabilizerAnalysisSample {
         let startedAt = CFAbsoluteTimeGetCurrent()
         let time = CMTimeGetSeconds(frameTime ?? tile.mediaTime)
@@ -1377,18 +1378,24 @@ enum AutoStabilizationEstimator {
         }
 
         let pixelCount = sampleWidth * sampleHeight
-        let pointer = outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
-        let pixels = Array(UnsafeBufferPointer(start: pointer, count: pixelCount))
+        let pixels: [UInt8]
+        if retainPixels {
+            let pointer = outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
+            pixels = Array(UnsafeBufferPointer(start: pointer, count: pixelCount))
+        } else {
+            pixels = []
+        }
         let downsampleMilliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
         os_log(
-            "Host Analysis downsample frame %{public}.3f sample %{public}dx%{public}d took %{public}.3f ms; reused output buffer %{public}@.",
+            "Host Analysis downsample frame %{public}.3f sample %{public}dx%{public}d took %{public}.3f ms; reused output buffer %{public}@; retained pixels %{public}@.",
             log: stabilizerHostAnalysisLog,
             type: .debug,
             time,
             sampleWidth,
             sampleHeight,
             downsampleMilliseconds,
-            outputLease?.reused == true ? "yes" : "no"
+            outputLease?.reused == true ? "yes" : "no",
+            retainPixels ? "yes" : "no"
         )
         return StabilizerAnalysisSample(
             time: time,
@@ -1399,6 +1406,21 @@ enum AutoStabilizationEstimator {
             lumaBufferLease: outputLease,
             downsampleMilliseconds: downsampleMilliseconds
         )
+    }
+
+    fileprivate static func frameMetrics(_ sample: StabilizerAnalysisSample) throws -> StabilizerFrameMetrics {
+        let pixelCount = sample.sampleWidth * sample.sampleHeight
+        if !sample.pixels.isEmpty {
+            guard sample.pixels.count == pixelCount else {
+                throw metalError("Stabilizer analysis sample retained an unexpected pixel count.")
+            }
+            return frameMetrics(sample.pixels, sampleWidth: sample.sampleWidth, sampleHeight: sample.sampleHeight)
+        }
+        guard sample.lumaBuffer.length >= pixelCount else {
+            throw metalError("Stabilizer analysis luma buffer was smaller than the expected sample size.")
+        }
+        let pointer = sample.lumaBuffer.contents().assumingMemoryBound(to: UInt8.self)
+        return frameMetrics(pointer, byteCount: pixelCount, sampleWidth: sample.sampleWidth, sampleHeight: sample.sampleHeight)
     }
 
     fileprivate static func analysisFrame(from sample: StabilizerAnalysisSample, metrics: StabilizerFrameMetrics) -> StabilizerAnalysisFrame {
@@ -1469,7 +1491,7 @@ enum AutoStabilizationEstimator {
         sampleHeight: Int,
         motionBlockBatch cachedMotionBlockBatch: StabilizerMotionBlockBatch? = nil,
         motionBlockUniformBuffer: MTLBuffer? = nil,
-        overlappedMetricsWork: (() -> StabilizerFrameMetrics)? = nil
+        overlappedMetricsWork: (() throws -> StabilizerFrameMetrics)? = nil
     ) throws -> PairMotionResult {
         let pairStartedAt = CFAbsoluteTimeGetCurrent()
         let blockBatch = cachedMotionBlockBatch ?? motionBlockBatch(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
@@ -1856,7 +1878,7 @@ enum AutoStabilizationEstimator {
         localUniformBuffer: MTLBuffer?,
         sampleWidth: Int,
         sampleHeight: Int,
-        overlappedMetricsWork: (() -> StabilizerFrameMetrics)?
+        overlappedMetricsWork: (() throws -> StabilizerFrameMetrics)?
     ) throws -> (
         global: (dx: Float, dy: Float, score: Float, searchRadiusHit: Bool),
         blockShifts: [StabilizerBlockShift],
@@ -1885,7 +1907,7 @@ enum AutoStabilizationEstimator {
                 sampleHeight: sampleHeight
             )
             let metricsStartedAt = CFAbsoluteTimeGetCurrent()
-            let overlappedMetrics = overlappedMetricsWork?()
+            let overlappedMetrics = try overlappedMetricsWork?()
             let overlappedMetricsMilliseconds = overlappedMetrics == nil ? 0.0 : (CFAbsoluteTimeGetCurrent() - metricsStartedAt) * 1000.0
             let global = try pendingGlobal.waitForResult()
             let elapsedMilliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0
@@ -2030,7 +2052,7 @@ enum AutoStabilizationEstimator {
 
         commandBuffer.commit()
         let metricsStartedAt = CFAbsoluteTimeGetCurrent()
-        let overlappedMetrics = overlappedMetricsWork?()
+        let overlappedMetrics = try overlappedMetricsWork?()
         let overlappedMetricsMilliseconds = overlappedMetrics == nil ? 0.0 : (CFAbsoluteTimeGetCurrent() - metricsStartedAt) * 1000.0
         commandBuffer.waitUntilCompleted()
         if let error = commandBuffer.error {
@@ -3235,8 +3257,8 @@ final class StreamingStabilizationAnalysisBuilder {
 
     func append(_ sample: StabilizerAnalysisSample) throws -> StabilizerStreamingAnalysisAppendResult {
         let expectedPixelCount = sample.sampleWidth * sample.sampleHeight
-        guard sample.pixels.count == expectedPixelCount else {
-            throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis frame pixels were unavailable.")
+        if !sample.pixels.isEmpty, sample.pixels.count != expectedPixelCount {
+            throw AutoStabilizationEstimator.metalError("Stabilizer streaming analysis frame retained an unexpected pixel count.")
         }
         if let sampleWidth, let sampleHeight {
             guard sample.sampleWidth == sampleWidth, sample.sampleHeight == sampleHeight else {
@@ -3282,11 +3304,7 @@ final class StreamingStabilizationAnalysisBuilder {
                 motionBlockBatch: motionBlockBatch,
                 motionBlockUniformBuffer: motionBlockUniformBuffer,
                 overlappedMetricsWork: {
-                    AutoStabilizationEstimator.frameMetrics(
-                        sample.pixels,
-                        sampleWidth: sample.sampleWidth,
-                        sampleHeight: sample.sampleHeight
-                    )
+                    try AutoStabilizationEstimator.frameMetrics(sample)
                 }
             )
             motions.append(result.motion)
@@ -3298,11 +3316,7 @@ final class StreamingStabilizationAnalysisBuilder {
             metricsMilliseconds = result.overlappedMetricsMilliseconds
         } else {
             let metricsStartedAt = CFAbsoluteTimeGetCurrent()
-            metrics = AutoStabilizationEstimator.frameMetrics(
-                sample.pixels,
-                sampleWidth: sample.sampleWidth,
-                sampleHeight: sample.sampleHeight
-            )
+            metrics = try AutoStabilizationEstimator.frameMetrics(sample)
             metricsMilliseconds = (CFAbsoluteTimeGetCurrent() - metricsStartedAt) * 1000.0
             motions.append(PairMotion(
                 dx: 0.0,
