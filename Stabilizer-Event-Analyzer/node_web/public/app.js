@@ -92,25 +92,52 @@ function exportNameForPath(sourcePath) {
   return parts[parts.length - 1] || sourcePath;
 }
 
+function dirname(sourcePath) {
+  const parts = sourcePath.split("/");
+  parts.pop();
+  return parts.join("/") || "/";
+}
+
+function defaultImportsDirForSource(sourcePath) {
+  if (!sourcePath) return "";
+  const name = exportNameForPath(sourcePath);
+  const parent = dirname(sourcePath);
+  if (name === "Info.fcpxml" && exportNameForPath(parent).endsWith(".fcpxmld")) {
+    return dirname(parent);
+  }
+  if (name.endsWith(".fcpxmld")) {
+    return parent;
+  }
+  return parent;
+}
+
 function currentExportItem(sourcePath) {
   return state.exportItems.find((item) => item.path === sourcePath) || {
     name: exportNameForPath(sourcePath),
     path: sourcePath,
+    importsDir: defaultImportsDirForSource(sourcePath),
     kind: exportKindForPath(sourcePath),
     mtimeMs: Date.now(),
   };
 }
 
+function setImportsDirForSource(sourcePath, sourceItem = null) {
+  el.cacheRootInput.value = (sourceItem && sourceItem.importsDir) || defaultImportsDirForSource(sourcePath);
+  updateRunState();
+}
+
 function saveDebugPreset() {
   const sourcePath = state.sourcePath || el.sourcePathInput.value.trim();
   const assetIds = Array.from(state.selectedAssetIds);
+  const importsDir = el.cacheRootInput.value.trim();
   if (!sourcePath || !assetIds.length) return;
   const preset = {
     version: 1,
     sourcePath,
     sourceItem: currentExportItem(sourcePath),
     assetIds,
-    cacheRoot: el.cacheRootInput.value.trim(),
+    importsDir,
+    cacheRoot: importsDir,
     sampleScalePercent: Number(el.sampleScaleInput.value),
     maxFrames: el.maxFramesInput.value ? Number(el.maxFramesInput.value) : null,
     savedAt: Date.now(),
@@ -155,6 +182,7 @@ function renderExports(items) {
     row.addEventListener("click", () => {
       state.sourcePath = item.path;
       el.sourcePathInput.value = item.path;
+      setImportsDirForSource(item.path, item);
       loadAssets();
     });
     el.exportsList.appendChild(row);
@@ -224,7 +252,7 @@ async function loadConfig() {
   renderAppVersion(state.config.appVersion || window.STABILIZER_EVENT_ANALYZER_VERSION);
   el.cacheRootInput.value = state.config.cacheRoot || "";
   el.sampleScaleInput.value = String(state.config.defaultSampleScalePercent || 100);
-  el.configText.textContent = `Imports: ${state.config.outputDir}`;
+  el.configText.textContent = "Imports: same folder as selected export";
   renderExports([]);
   updateDebugPresetState();
   updateRunState();
@@ -246,6 +274,7 @@ async function selectExportFiles() {
   if (!currentStillSelected) {
     state.sourcePath = payload.items[0].path;
     el.sourcePathInput.value = state.sourcePath;
+    setImportsDirForSource(state.sourcePath, payload.items[0]);
     await loadAssets();
   }
   setStatus(`Selected ${(payload.items || []).length} export file(s)${rejectionText}.`, rejected.length ? "error" : "ok");
@@ -253,6 +282,9 @@ async function selectExportFiles() {
 
 async function loadAssets() {
   state.sourcePath = el.sourcePathInput.value.trim();
+  if (!el.cacheRootInput.value.trim()) {
+    setImportsDirForSource(state.sourcePath);
+  }
   state.assets = [];
   state.selectedAssetIds.clear();
   state.lastResult = null;
@@ -313,7 +345,7 @@ async function applyDebugPreset() {
   ];
   renderExports(nextItems);
   state.pendingPresetAssetIds = new Set(assetIds);
-  if (preset.cacheRoot) el.cacheRootInput.value = preset.cacheRoot;
+  el.cacheRootInput.value = preset.importsDir || preset.cacheRoot || defaultImportsDirForSource(preset.sourcePath);
   if (preset.sampleScalePercent) el.sampleScaleInput.value = String(preset.sampleScalePercent);
   el.maxFramesInput.value = preset.maxFrames ? String(preset.maxFrames) : "";
   setStatus("Loading debug preset...");
@@ -328,7 +360,7 @@ async function applyDebugPreset() {
 }
 
 async function selectCacheRoot() {
-  setStatus("Selecting Event folder...");
+  setStatus("Selecting Imports folder...");
   const payload = await api("/api/select-cache-root", {
     method: "POST",
   });
@@ -338,13 +370,16 @@ async function selectCacheRoot() {
   }
   el.cacheRootInput.value = payload.item.path;
   updateRunState();
-  setStatus(`Selected ${payload.item.kind}: ${payload.item.path}`, "ok");
+  setStatus(`Selected Imports: ${payload.item.path}`, "ok");
 }
 
 function runBody() {
+  const importsDir = el.cacheRootInput.value.trim();
   return {
     sourcePath: state.sourcePath,
-    cacheRoot: el.cacheRootInput.value.trim(),
+    cacheRoot: importsDir,
+    importsDir,
+    outputDir: importsDir,
     assetIds: Array.from(state.selectedAssetIds),
     sampleScalePercent: Number(el.sampleScaleInput.value),
     maxFrames: el.maxFramesInput.value ? Number(el.maxFramesInput.value) : null,

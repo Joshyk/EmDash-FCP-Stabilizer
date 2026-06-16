@@ -178,6 +178,18 @@ async function ensureDirs() {
   await fsp.mkdir(JOB_DIR, { recursive: true });
 }
 
+function defaultImportsDirForSource(sourcePath) {
+  const resolved = expandPath(sourcePath);
+  if (!resolved) return "";
+  if (path.basename(resolved) === "Info.fcpxml" && path.basename(path.dirname(resolved)).endsWith(".fcpxmld")) {
+    return path.dirname(path.dirname(resolved));
+  }
+  if (path.basename(resolved).endsWith(".fcpxmld")) {
+    return path.dirname(resolved);
+  }
+  return path.dirname(resolved);
+}
+
 function runTextProcess(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -207,10 +219,10 @@ async function exportItemForPath(selectedPath) {
   const stat = await fsp.stat(resolved);
   const name = path.basename(resolved);
   if (stat.isDirectory() && name.endsWith(".fcpxmld")) {
-    return { name, path: resolved, mtimeMs: stat.mtimeMs, kind: "fcpxmld" };
+    return { name, path: resolved, importsDir: defaultImportsDirForSource(resolved), mtimeMs: stat.mtimeMs, kind: "fcpxmld" };
   }
   if (stat.isFile() && name.endsWith(".fcpxml")) {
-    return { name, path: resolved, mtimeMs: stat.mtimeMs, kind: "fcpxml" };
+    return { name, path: resolved, importsDir: defaultImportsDirForSource(resolved), mtimeMs: stat.mtimeMs, kind: "fcpxml" };
   }
   throw new Error(`${selectedPath} is not an FCPXMLD package or .fcpxml file`);
 }
@@ -265,7 +277,7 @@ async function cacheRootItemForPath(selectedPath) {
 
 async function selectCacheRoot() {
   const script = [
-    'set selectedFolder to choose folder with prompt "Select Final Cut Pro Event folder or TokyoWalkingStabilizerHostAnalysis cache root"',
+    'set selectedFolder to choose folder with prompt "Select Imports folder"',
     "return POSIX path of selectedFolder",
   ].join("\n");
   let stdout = "";
@@ -303,12 +315,19 @@ function cacheRootValue(value) {
   return resolved;
 }
 
+function outputDirValue(value, sourcePath) {
+  const resolved = expandPath(value || defaultImportsDirForSource(sourcePath) || OUTPUT_DIR);
+  if (!resolved) throw new Error("imports directory is required");
+  return resolved;
+}
+
 async function runAnalyzer(body, progress, forcedJobId) {
   const id = forcedJobId || jobId();
   const dir = path.join(JOB_DIR, id);
   await fsp.mkdir(dir, { recursive: true });
   const sourcePath = expandPath(body.sourcePath);
-  const cacheRoot = cacheRootValue(body.cacheRoot);
+  const importsDir = outputDirValue(body.importsDir || body.outputDir, sourcePath);
+  const cacheRoot = cacheRootValue(body.cacheRoot || importsDir);
   const sampleScalePercent = Number(body.sampleScalePercent || DEFAULT_SAMPLE_SCALE_PERCENT);
   if (!SAMPLE_SCALE_PERCENT_CHOICES.includes(sampleScalePercent)) {
     throw new Error(`sampleScalePercent must be one of ${SAMPLE_SCALE_PERCENT_CHOICES.join(", ")}`);
@@ -347,7 +366,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     "--analysis-json",
     analysisPath,
     "--output-dir",
-    OUTPUT_DIR,
+    importsDir,
   ], { jobId: id });
 
   return {
@@ -355,6 +374,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     jobId: id,
     sourcePath,
     cacheRoot: analysis.cacheRoot,
+    importsDir,
     analysisPath,
     resultCount: (analysis.results || []).length,
     results: analysis.results || [],
@@ -421,6 +441,7 @@ async function handleApi(req, res, pathname) {
         appVersion: packageInfo.version,
         repoRoot: REPO_ROOT,
         outputDir: OUTPUT_DIR,
+        defaultImportsDir: "",
         cacheRoot: CACHE_ROOT,
         sampleScalePercentChoices: SAMPLE_SCALE_PERCENT_CHOICES,
         defaultSampleScalePercent: DEFAULT_SAMPLE_SCALE_PERCENT,

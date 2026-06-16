@@ -9,11 +9,12 @@ The workflow is:
    `Info.fcpxml` files.
 3. Choose an export from the selected file list, then select one or more Event
    media assets.
-4. Select the Event folder or final Tokyo Walking Stabilizer cache root with the
-   macOS folder picker.
+4. Use `Imports` for the generated import package and analysis staging cache.
+   It defaults to the same folder as the selected export. Use `Select Imports`
+   only when you want a different folder.
 5. Run serial analysis for the full media duration of each selected asset.
 6. Write schema-compatible Tokyo Walking Stabilizer persisted cache files to an
-   explicit Event cache root.
+   explicit Imports staging folder.
 7. Build an import FCPXMLD that adds Tokyo Walking Stabilizer filters carrying
    the generated cache identity.
 
@@ -43,15 +44,16 @@ Then open `http://127.0.0.1:3091`.
 same Event media clips from browser-local storage. It does not open the macOS
 file picker and does not write any shared fallback cache.
 
-## Cache Root
+## Imports
 
-Use `Select Event Folder` in the Web UI and choose either the Event folder,
-`Analysis Files`, or the final cache root:
+`Imports` defaults to the same folder as the selected `.fcpxmld` package or
+`Info.fcpxml` export. The generated `*-stabilizer.fcpxmld` import package is
+written there, and analysis cache files are staged below that folder:
 
 ```text
-SomeEvent/
-SomeEvent/Analysis Files/
-SomeEvent/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
+Exports/
+Exports/SomeEvent-stabilizer.fcpxmld/
+Exports/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
 ```
 
 The tool never falls back to Application Support or any shared cache location.
