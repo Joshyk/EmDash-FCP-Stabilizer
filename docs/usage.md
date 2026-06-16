@@ -223,8 +223,6 @@ fallbacks.
   are routed through a process-wide session registry with per-clip in-progress stores; if a
   callback cannot be assigned unambiguously, the plug-in fails visibly instead of mixing
   frames between clips.
-- `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
-  `Cache Cleared`.
 - `Host Analysis Status`: read-only status for analysis and cache reuse. It appends
   the current FxPlug runtime version when Final Cut Pro accepts status parameter
   updates. `Queued Host Analysis` means this clip is waiting for the plug-in's serial Host

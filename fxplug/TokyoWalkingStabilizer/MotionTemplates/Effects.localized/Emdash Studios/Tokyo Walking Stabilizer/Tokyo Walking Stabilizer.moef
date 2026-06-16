@@ -181,7 +181,6 @@
 		<target object="10036" channel="./19" name="Sample Size"/>
 		<target object="10036" channel="./27" name="Edge Display Mode"/>
 		<target object="10036" channel="./14" name="Start Host Analysis"/>
-		<target object="10036" channel="./17" name="Clear Host Analysis Cache"/>
 		<target object="10036" channel="./15" name="Host Analysis Status"/>
 		<target object="10036" channel="./32" name="Sample Info"/>
 		<target object="10036" channel="./36" name="Queue"/>
@@ -296,7 +295,6 @@
 				<parameter name="Edge Display Mode" id="27" flags="12884901904" default="1" value="1"/>
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
-				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
 					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.143" value="Needs Analysis | FxPlug 0.3.143"/>
 					<parameter name="Sample Info" id="32" flags="12884901909" default="Sample: - | Analysis: -" value="Sample: - | Analysis: -"/>
 					<parameter name="Queue" id="36" flags="12884901909" default="Queue: -" value="Queue: -"/>

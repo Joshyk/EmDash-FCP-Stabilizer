@@ -16,7 +16,6 @@ private enum ParameterID: UInt32 {
     case startHostAnalysis = 14
     case hostAnalysisStatus = 15
     case sampleInfo = 32
-    case clearHostAnalysisCache = 17
     case yStrength = 18
     case sampleScale = 19
     case renderRevision = 20
@@ -761,12 +760,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             selector: #selector(startHostAnalysis),
             parameterFlags: flags
         )
-        paramAPI.addPushButton(
-            withName: "Clear Host Analysis Cache",
-            parameterID: ParameterID.clearHostAnalysisCache.rawValue,
-            selector: #selector(clearHostAnalysisCache),
-            parameterFlags: flags
-        )
         paramAPI.addStringParameter(
             withName: "Host Analysis Status",
             parameterID: ParameterID.hostAnalysisStatus.rawValue,
@@ -978,21 +971,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
             }
         }
-    }
-
-    @objc(clearHostAnalysisCache)
-    func clearHostAnalysisCache() {
-        Self.removeQueuedSerialAnalysis(self)
-        guard configureProjectBundleCacheDirectory(expectedRange: currentInputRange(), forceRefresh: true) else {
-            publishHostAnalysisStatus(force: true)
-            publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-            return
-        }
-        hostAnalysisStore.clearPersistentCache()
-        publishHostAnalysisStatus(force: true)
-        publishStabilizerInfo(force: true)
-        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
     }
 
     @discardableResult

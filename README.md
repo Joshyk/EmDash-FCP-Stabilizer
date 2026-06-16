@@ -375,8 +375,7 @@ Render-only version bumps should reuse compatible Host Analysis caches from the 
 
 Rejected cache candidates are visible in status/log output and are remembered by
 file identity inside the active runtime, so the same invalid candidate is not
-loaded again on the next start. Rejected files remain on disk. `Clear Host
-Analysis Cache` is the explicit delete path and shows `Cache Cleared`.
+loaded again on the next start. Rejected files remain on disk.
 
 Unsupported schema candidates show `Cache Unsupported - Run Host Analysis`
 instead of being silently ignored or deleted. This keeps stale caches available
