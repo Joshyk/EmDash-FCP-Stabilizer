@@ -215,6 +215,19 @@ struct HostAnalysisExpectedRange {
             && durationSeconds > 0.0
     }
 
+    var inputStartTrimToleranceSeconds: Double {
+        guard frameDurationSeconds.isFinite,
+              frameDurationSeconds > 0.0
+        else {
+            return 0.001
+        }
+        return max(0.001, frameDurationSeconds * 0.5)
+    }
+
+    var startsAfterNativeClipStart: Bool {
+        startSeconds > inputStartTrimToleranceSeconds
+    }
+
     var interactionSignature: String {
         String(
             format: "%.6f|%.6f|%.6f",
@@ -1044,7 +1057,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         requestHostAnalysisIfNeeded(
             force: true,
             acceptedSampleScalePercentOverride: requestedSamplePercent,
-            resetStoreBeforeStart: true
+            resetStoreBeforeStart: true,
+            actionName: "Reanalyze"
         )
     }
 
@@ -1057,14 +1071,35 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return true
         }
+        if expectedRange.startsAfterNativeClipStart {
+            markHostAnalysisActionBlockedForTrimmedClip(
+                actionName: actionName,
+                expectedRange: expectedRange,
+                analysisRange: nil,
+                analysisDescription: "current input range",
+                reason: String(format: "input starts %.3fs after native clip start", expectedRange.startSeconds)
+            )
+            return false
+        }
         if let activeRange = hostAnalysisStore.activeExpectedRange,
            !Self.analysisRange(activeRange, matches: expectedRange) {
-            markHostAnalysisActionBlockedForTrimmedClip(actionName: actionName, expectedRange: expectedRange, analysisRange: activeRange)
+            markHostAnalysisActionBlockedForTrimmedClip(
+                actionName: actionName,
+                expectedRange: expectedRange,
+                analysisRange: activeRange,
+                reason: "active analysis range does not match current input range"
+            )
             return false
         }
         if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
            !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            markHostAnalysisActionBlockedForTrimmedClip(actionName: actionName, expectedRange: expectedRange, analysisRange: nil)
+            markHostAnalysisActionBlockedForTrimmedClip(
+                actionName: actionName,
+                expectedRange: expectedRange,
+                analysisRange: nil,
+                analysisDescription: "saved analysis identity",
+                reason: "saved analysis identity does not match current input range"
+            )
             return false
         }
         return true
@@ -1073,19 +1108,21 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private func markHostAnalysisActionBlockedForTrimmedClip(
         actionName: String,
         expectedRange: HostAnalysisExpectedRange,
-        analysisRange: HostAnalysisExpectedRange?
+        analysisRange: HostAnalysisExpectedRange?,
+        analysisDescription: String? = nil,
+        reason: String
     ) {
         let message = "\(actionName) Not Started - Trimmed Clip"
         let current = Self.expectedRangeDescription(expectedRange)
-        let existing = analysisRange.map(Self.expectedRangeDescription) ?? "saved analysis identity"
+        let existing = analysisRange.map(Self.expectedRangeDescription) ?? analysisDescription ?? "current input range"
         hostAnalysisStore.markActionMessage(
             message,
-            analysisInfo: "Trimmed clip blocked: current \(current), analysis \(existing)"
+            analysisInfo: "Trimmed clip blocked: \(reason); current \(current), analysis \(existing)"
         )
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-        NSLog("TokyoWalkingStabilizer: \(actionName) Host Analysis blocked because the current clip range is trimmed or range-mismatched. current=\(current) analysis=\(existing)")
+        NSLog("TokyoWalkingStabilizer: \(actionName) Host Analysis blocked because the current clip range is trimmed or range-mismatched. reason=\(reason) current=\(current) analysis=\(existing)")
     }
 
     private func consumeReanalysisConfirmation(
@@ -1120,9 +1157,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         queuedStartRequest: Bool = false,
         queuedAnalysisAPI: FxAnalysisAPI? = nil,
         acceptedSampleScalePercentOverride: Double? = nil,
-        resetStoreBeforeStart: Bool = false
+        resetStoreBeforeStart: Bool = false,
+        actionName: String = "Start"
     ) -> HostAnalysisRequestResult {
-        let acceptedSampleScalePercent = acceptedSampleScalePercentOverride ?? requestedSampleScalePercent(for: currentInputRange())
+        let expectedRange = currentInputRange()
+        let effectiveActionName = queuedStartRequest && resetStoreBeforeStart ? "Reanalyze" : actionName
+        guard canRequestHostAnalysisForCurrentRange(expectedRange, actionName: effectiveActionName) else {
+            Self.removeQueuedSerialAnalysis(self)
+            return .failed
+        }
+        let acceptedSampleScalePercent = acceptedSampleScalePercentOverride ?? requestedSampleScalePercent(for: expectedRange)
         let isQueuedRequest = queuedStartRequest || Self.isQueuedSerialAnalysis(self)
         if hostAnalysisStore.hasCompletedAnalysis && !(force && isQueuedRequest) {
             Self.removeQueuedSerialAnalysis(self)
@@ -4340,6 +4384,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             durationSeconds: CMTimeGetSeconds(analysisRange.duration),
             frameDurationSeconds: CMTimeGetSeconds(frameDuration)
         )
+        if expectedRange.isValid,
+           expectedRange.startsAfterNativeClipStart {
+            let reason = String(format: "input starts %.3fs after native clip start", expectedRange.startSeconds)
+            Self.releaseHostAnalysisStartReservation()
+            markHostAnalysisActionBlockedForTrimmedClip(
+                actionName: "Host Analysis",
+                expectedRange: expectedRange,
+                analysisRange: nil,
+                analysisDescription: "current input range",
+                reason: reason
+            )
+            throw hostAnalysisRoutingError("Host Analysis refused trimmed input range before setup: \(reason).")
+        }
         let configuredProjectCache = configureProjectBundleCacheDirectory(
             expectedRange: expectedRange.isValid ? expectedRange : nil,
             forceRefresh: true

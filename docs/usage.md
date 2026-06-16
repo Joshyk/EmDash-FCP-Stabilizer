@@ -228,8 +228,9 @@ fallbacks.
   `Reanalyze Host Analysis` stay pressable so skipped or failed starts report their reason
   in `Host Analysis Status`; they are the only paths that request Host Analysis from Final Cut Pro.
   A selected `Sample Size` without a matching completed analysis is reported as needing
-  analysis for that sample, while a trimmed/range-mismatched persisted analysis reports the
-  trimmed block and does not start or reanalyze. Concurrent analyzer callbacks
+  analysis for that sample, while a Final Cut Pro-reported trimmed input start or
+  range-mismatched persisted analysis reports the trimmed block and does not start or
+  reanalyze. Concurrent analyzer callbacks
   are routed through a process-wide session registry with per-clip in-progress stores; if a
   callback cannot be assigned unambiguously, the plug-in fails visibly instead of mixing
   frames between clips.
@@ -250,7 +251,8 @@ fallbacks.
   stays actionable as `Ready (...) - Original Media Required to Start Analysis`. Range
   mismatches from stale persisted analysis candidates show `Persisted Analysis Range Mismatch - Run Host Analysis`;
   this does not disable `Start Host Analysis`, but pressing Start/Reanalyze reports the
-  trimmed block and does not request Host Analysis. Start/Reanalyze button state is refreshed when
+  trimmed block and does not request Host Analysis. A Final Cut Pro-reported nonzero input
+  start is also blocked before `startForwardAnalysis`. Start/Reanalyze button state is refreshed when
   the input range changes and periodically from plugin-state/render callbacks, so trimming
   or expanding the timeline clip does not leave stale button flags behind.
 - `Sample Info`: read-only Inspector row showing the accepted sample percentage, actual
@@ -440,9 +442,9 @@ FxPlug.
   domain than analysis time, the effect applies that offset before reading the prepared
   motion paths. If Final Cut Pro reports a render/timeline range that differs from the saved
   source analysis range, the effect accepts that active persisted analysis only after the current
-  source-frame fingerprint validates against the saved frame set. A trimmed timeline range
-  blocks `Start Host Analysis` and `Reanalyze Host Analysis` so analysis is not started for
-  the wrong duration.
+  source-frame fingerprint validates against the saved frame set. A Final Cut Pro-reported
+  nonzero input start blocks `Start Host Analysis` and `Reanalyze Host Analysis` so analysis
+  is not started for the wrong duration.
 
 ## Host Analysis Persisted Analysis
 
