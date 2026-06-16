@@ -237,7 +237,9 @@ fallbacks.
   `Queue` come from that same in-progress analysis store instead of mixing
   `Analyzing Host Frames (N)` with stale cache metadata from another clip. When `Start Host
   Analysis` is disabled because the viewer is currently using scaled/proxy media, the status
-  stays actionable as `Ready (...) - Original Media Required to Start Analysis`.
+  stays actionable as `Ready (...) - Original Media Required to Start Analysis`. Range
+  mismatches from stale cache candidates show `Cache Range Mismatch - Run Host Analysis`;
+  this does not disable `Start Host Analysis`.
 - `Sample Info`: read-only Inspector row showing the actual analyzed pixel sample size and
   frame count, for example `Sample: 573x302 | Analysis: 10500f`. `Clip Range` is deprecated
   from the visible Inspector metadata.
@@ -423,7 +425,8 @@ FxPlug.
   domain than analysis time, the effect applies that offset before reading the prepared
   motion paths. If Final Cut Pro reports a render/timeline range that differs from the saved
   source analysis range, the effect accepts that active cache only after the current
-  source-frame fingerprint validates against the saved frame set.
+  source-frame fingerprint validates against the saved frame set. A trimmed timeline range
+  is not a Host Analysis start blocker.
 
 ## Host Analysis Cache
 

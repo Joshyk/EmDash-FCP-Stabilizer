@@ -304,7 +304,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   analysis store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata
   from another clip. When `Start Host Analysis` is disabled because the viewer is currently
   using scaled/proxy media, the status stays actionable as
-  `Ready (...) - Original Media Required to Start Analysis`.
+  `Ready (...) - Original Media Required to Start Analysis`. Range mismatches from stale
+  cache candidates show `Cache Range Mismatch - Run Host Analysis` and keep `Start Host
+  Analysis` enabled.
 - `Sample Info`: read-only Inspector row showing the actual analyzed pixel sample size and
   frame count, for example `Sample: 573x302 | Analysis: 10500f`. `Clip Range` is deprecated
   from the visible Inspector metadata. Older saved timeline instances may keep stale saved Inspector strings,

@@ -212,30 +212,6 @@ struct HostAnalysisExpectedRange {
             && durationSeconds > 0.0
     }
 
-    var hasTimelineHeadTrim: Bool {
-        startSeconds > trimDetectionToleranceSeconds
-    }
-
-    var trimmedTimelineAnalysisRejectionReason: String? {
-        guard hasTimelineHeadTrim else {
-            return nil
-        }
-        return String(
-            format: "input starts %.3fs after source start; run Host Analysis from Open Clip or import analysis.",
-            startSeconds
-        )
-    }
-
-    var trimmedTimelineAnalysisStatusText: String? {
-        hasTimelineHeadTrim ? "Invalid - Trimmed Clip" : nil
-    }
-
-    private var trimDetectionToleranceSeconds: Double {
-        if frameDurationSeconds.isFinite, frameDurationSeconds > 0.0 {
-            return max(0.000001, min(1.0 / 600.0, frameDurationSeconds * 0.25))
-        }
-        return 0.000001
-    }
 }
 
 private struct ActiveHostAnalysisRoute {
@@ -877,18 +853,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             state.inputFrameDurationSeconds = inputRange.frameDurationSeconds
         }
         let expectedRange = Self.expectedInputRange(from: state)
-        let trimmedStatusOverride = expectedRange?.trimmedTimelineAnalysisStatusText
-        let canStartHostAnalysisOverride = trimmedStatusOverride == nil ? nil : false
         if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
                hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
             } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true) {
-                publishHostAnalysisStatus(
-                    force: true,
-                    statusOverride: trimmedStatusOverride,
-                    canStartHostAnalysisOverride: canStartHostAnalysisOverride
-                )
+                publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
                 publishRenderRevision(
@@ -901,10 +871,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
-        publishHostAnalysisStatus(
-            statusOverride: trimmedStatusOverride,
-            canStartHostAnalysisOverride: canStartHostAnalysisOverride
-        )
+        publishHostAnalysisStatus()
         publishStabilizerInfo(state: state)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, currentParameterValue: state.renderRevision)
 
@@ -915,13 +882,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     func startHostAnalysis() {
         os_log("Start Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
         let expectedRange = currentInputRange()
-        if let rejectionReason = expectedRange?.trimmedTimelineAnalysisRejectionReason {
-            hostAnalysisStore.markTrimmedClipAnalysisUnavailable(reason: rejectionReason)
-            publishHostAnalysisStatus(force: true, canStartHostAnalysisOverride: false)
-            publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-            return
-        }
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
@@ -962,14 +922,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
         if !loadedPersistentCache {
-            if let rejectionReason = expectedRange?.trimmedTimelineAnalysisRejectionReason {
-                hostAnalysisStore.markTrimmedClipAnalysisUnavailable(reason: rejectionReason)
-                publishHostAnalysisStatus(force: true)
-                publishStabilizerInfo(force: true)
-                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-            } else {
-                requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
-            }
+            requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
         }
     }
 

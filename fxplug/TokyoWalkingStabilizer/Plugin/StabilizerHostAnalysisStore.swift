@@ -448,7 +448,7 @@ final class StabilizerHostAnalysisStore {
         case .cacheCleared:
             return "Cache Cleared"
         case .trimmedClip:
-            return "Invalid - Trimmed Clip"
+            return "Cache Range Mismatch - Run Host Analysis"
         case .projectCacheUnavailable:
             if hasPreparedAnalysis {
                 return "Ready Memory Only - \(unavailableStatusText)"
@@ -482,9 +482,9 @@ final class StabilizerHostAnalysisStore {
         }
 
         switch status {
-        case .requested, .queued, .analyzing, .trimmedClip, .proxyRejected, .proxyNeedsOriginalValidation, .sourceUnavailable:
+        case .requested, .queued, .analyzing, .proxyRejected, .proxyNeedsOriginalValidation, .sourceUnavailable:
             return false
-        case .needsAnalysis, .cacheLoaded, .ready, .cacheRejected, .cacheUnsupported, .cacheIncomplete, .cacheCleared, .projectCacheUnavailable, .proxyPreview, .sourceMetadataUnconfirmedPreview:
+        case .needsAnalysis, .cacheLoaded, .ready, .cacheRejected, .cacheUnsupported, .cacheIncomplete, .cacheCleared, .trimmedClip, .projectCacheUnavailable, .proxyPreview, .sourceMetadataUnconfirmedPreview:
             return true
         }
     }
@@ -573,17 +573,6 @@ final class StabilizerHostAnalysisStore {
             bumpRevisionLocked()
         }
         lock.unlock()
-    }
-
-    func markTrimmedClipAnalysisUnavailable(reason: String) {
-        lock.lock()
-        if preparedAnalysis == nil {
-            status = .trimmedClip
-            analysisInfoText = "Trimmed clip: \(Self.compactReason(reason))"
-            bumpRevisionLocked()
-        }
-        lock.unlock()
-        NSLog("TokyoWalkingStabilizer: refused Host Analysis for trimmed timeline clip: \(reason)")
     }
 
     func markProjectCacheUnavailable(reason: String) {
