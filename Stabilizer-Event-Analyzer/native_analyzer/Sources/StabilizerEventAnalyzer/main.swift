@@ -264,6 +264,68 @@ private func clearProgressLineLocked() {
     }
 }
 
+private final class AnalyzerFrameProgressReporter {
+    private let enabled: Bool
+    private let label: String
+    private let totalFrameCount: Int
+    private let publishEveryFrameCount: Int
+    private let startedAt = Date()
+    private let lock = NSLock()
+    private var completedFrameCount = 0
+    private var lastPublishedFrameCount = 0
+
+    init(enabled: Bool, label: String, totalFrameCount: Int) {
+        self.enabled = enabled
+        self.label = label
+        self.totalFrameCount = max(1, totalFrameCount)
+        self.publishEveryFrameCount = max(1, totalFrameCount / 100)
+    }
+
+    func completeFrame() {
+        publishAfterAddingFrameCount(1, force: false)
+    }
+
+    func finish() {
+        publishAfterAddingFrameCount(0, force: true)
+    }
+
+    private func publishAfterAddingFrameCount(_ frameCount: Int, force: Bool) {
+        guard enabled else {
+            return
+        }
+        let message: String?
+        lock.lock()
+        completedFrameCount += frameCount
+        let shouldPublish = force
+            || completedFrameCount >= totalFrameCount
+            || completedFrameCount - lastPublishedFrameCount >= publishEveryFrameCount
+        if shouldPublish && completedFrameCount != lastPublishedFrameCount {
+            lastPublishedFrameCount = completedFrameCount
+            message = progressMessageLocked()
+        } else {
+            message = nil
+        }
+        lock.unlock()
+        if let message {
+            progressUpdate(true, message)
+        }
+    }
+
+    private func progressMessageLocked() -> String {
+        let elapsedSeconds = max(0.001, Date().timeIntervalSince(startedAt))
+        let fps = Double(completedFrameCount) / elapsedSeconds
+        let percent = min(100.0, (Double(completedFrameCount) / Double(totalFrameCount)) * 100.0)
+        return String(
+            format: "progress %@: %d/%d frame(s) (%.1f%%, %.1f fps)",
+            label,
+            completedFrameCount,
+            totalFrameCount,
+            percent,
+            fps
+        )
+    }
+}
+
 func clamp<T: Comparable>(_ value: T, _ minValue: T, _ maxValue: T) -> T {
     min(max(value, minValue), maxValue)
 }
@@ -937,10 +999,18 @@ private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCo
     return plan.durationSeconds > max(0.10, plan.frameDurationSeconds * 4.0)
 }
 
+private func estimatedFrameCount(durationSeconds: Double, frameDurationSeconds: Double, maxFrames: Int? = nil) -> Int {
+    let boundedDuration = max(frameDurationSeconds, durationSeconds)
+    let frameCount = max(1, Int((boundedDuration / max(1e-9, frameDurationSeconds)).rounded(.up)))
+    if let maxFrames {
+        return min(maxFrames, frameCount)
+    }
+    return frameCount
+}
+
 private func makeFrameReadChunks(durationSeconds: Double, frameDurationSeconds: Double, workerCount: Int) -> [FrameReadChunk] {
     let boundedDuration = max(frameDurationSeconds, durationSeconds)
-    let estimatedFrameCount = max(1, Int((boundedDuration / max(1e-9, frameDurationSeconds)).rounded(.up)))
-    let chunkCount = max(1, min(workerCount, estimatedFrameCount))
+    let chunkCount = max(1, min(workerCount, estimatedFrameCount(durationSeconds: durationSeconds, frameDurationSeconds: frameDurationSeconds)))
     let chunkDuration = boundedDuration / Double(chunkCount)
     let overlapSeconds = max(frameDurationSeconds * 4.0, 0.12)
     return (0..<chunkCount).map { index in
@@ -997,6 +1067,7 @@ private func readFrameChunk(
     maxFrames: Int?,
     progressEnabled: Bool,
     progressEvery: Int,
+    progressReporter: AnalyzerFrameProgressReporter?,
     metalContext: MetalAnalysisContext
 ) throws -> FrameChunkResult {
     let asset = AVURLAsset(url: url)
@@ -1063,7 +1134,9 @@ private func readFrameChunk(
         )
         motions.append(frameAnalysis.motion ?? PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
         frames.append(frame)
-        if progressEvery > 0 && frames.count % progressEvery == 0 {
+        if let progressReporter {
+            progressReporter.completeFrame()
+        } else if progressEvery > 0 && frames.count % progressEvery == 0 {
             progressUpdate(progressEnabled, "progress \(planName): \(frames.count) frame(s)")
         }
     }
@@ -1148,6 +1221,14 @@ private func readFramesInParallel(
     let basePTS = try firstPresentationTimeSeconds(url: url)
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height)
     progress(progressEnabled, "using \(chunks.count) intra-asset media reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each for \(plan.name)")
+    let progressReporter = AnalyzerFrameProgressReporter(
+        enabled: progressEnabled,
+        label: plan.name,
+        totalFrameCount: estimatedFrameCount(
+            durationSeconds: plan.durationSeconds,
+            frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
+        )
+    )
     let resultLock = NSLock()
     let group = DispatchGroup()
     var results = Array<FrameChunkResult?>(repeating: nil, count: chunks.count)
@@ -1167,12 +1248,12 @@ private func readFramesInParallel(
                     maxFrames: nil,
                     progressEnabled: false,
                     progressEvery: 0,
+                    progressReporter: progressReporter,
                     metalContext: context
                 )
                 resultLock.lock()
                 results[chunk.index] = result
                 resultLock.unlock()
-                progressUpdate(progressEnabled, "progress \(plan.name): chunk \(chunk.index + 1)/\(chunk.totalCount) complete")
             } catch {
                 resultLock.lock()
                 if firstError == nil {
@@ -1186,6 +1267,7 @@ private func readFramesInParallel(
     if let firstError {
         throw firstError
     }
+    progressReporter.finish()
     var combinedFrames: [AnalysisFrame] = []
     var combinedMotions: [PairMotion] = []
     for index in 0..<results.count {
@@ -1247,6 +1329,15 @@ func readFrames(
         requiresPreviousFrame: false,
         isLast: true
     )
+    let progressReporter = AnalyzerFrameProgressReporter(
+        enabled: progressEnabled,
+        label: plan.name,
+        totalFrameCount: estimatedFrameCount(
+            durationSeconds: plan.durationSeconds,
+            frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
+            maxFrames: maxFrames
+        )
+    )
     let result = try readFrameChunk(
         url: url,
         planName: plan.name,
@@ -1256,8 +1347,10 @@ func readFrames(
         maxFrames: maxFrames,
         progressEnabled: progressEnabled,
         progressEvery: 30,
+        progressReporter: progressReporter,
         metalContext: metalContext
     )
+    progressReporter.finish()
     guard result.frames.count >= 3 else {
         throw AnalyzerError("analysis requires at least 3 frames; got \(result.frames.count)")
     }
