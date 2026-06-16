@@ -220,11 +220,47 @@ function progressLineHandler(jobIdValue) {
   return (text) => {
     const lines = text.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean);
     if (!lines.length) return;
-    updateJob(jobIdValue, {
-      stage: "analyzing",
-      message: lines[lines.length - 1],
-    });
+    for (const line of lines) {
+      const parsedProgress = parseAnalyzerProgressLine(line);
+      if (parsedProgress) {
+        updateJob(jobIdValue, {
+          stage: "analyzing",
+          progress: parsedProgress,
+        });
+        continue;
+      }
+      updateJob(jobIdValue, {
+        stage: "analyzing",
+        message: line,
+      });
+    }
   };
+}
+
+function parseAnalyzerProgressLine(line) {
+  const frameMatch = /^progress\s+(.+?):\s+(\d+)\/(\d+)\s+frame\(s\)\s+\(([\d.]+)%,\s+([\d.]+)\s+fps\)$/.exec(line);
+  if (frameMatch) {
+    return {
+      kind: "frames",
+      label: frameMatch[1],
+      current: Number(frameMatch[2]),
+      total: Number(frameMatch[3]),
+      percent: Number(frameMatch[4]),
+      fps: Number(frameMatch[5]),
+      message: line,
+    };
+  }
+  const chunkMatch = /^progress\s+(.+?):\s+chunk\s+(\d+)\/(\d+)\s+complete$/.exec(line);
+  if (chunkMatch) {
+    return {
+      kind: "chunks",
+      label: chunkMatch[1],
+      current: Number(chunkMatch[2]),
+      total: Number(chunkMatch[3]),
+      message: line,
+    };
+  }
+  return null;
 }
 
 async function ensureDirs() {
@@ -588,7 +624,13 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error(error.stack || error.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.stack || error.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  parseAnalyzerProgressLine,
+};

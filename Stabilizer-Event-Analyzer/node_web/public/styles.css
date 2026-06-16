@@ -270,6 +270,15 @@ td:nth-child(5) {
   color: var(--error);
 }
 
+.progress-text {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  margin: 8px 0 12px;
+  overflow-wrap: anywhere;
+}
+
 .hidden {
   display: none;
 }

@@ -33,6 +33,7 @@ const el = {
   runButton: document.getElementById("runButton"),
   cancelButton: document.getElementById("cancelButton"),
   statusBox: document.getElementById("statusBox"),
+  progressText: document.getElementById("progressText"),
   resultActions: document.getElementById("resultActions"),
   revealCacheButton: document.getElementById("revealCacheButton"),
   revealImportButton: document.getElementById("revealImportButton"),
@@ -61,6 +62,46 @@ async function api(path, options = {}) {
 function setStatus(message, kind = "") {
   el.statusBox.className = `status-box ${kind}`.trim();
   el.statusBox.textContent = message;
+}
+
+function clearProgress() {
+  el.progressText.textContent = "";
+  el.progressText.classList.add("hidden");
+}
+
+function formatProgress(progress) {
+  if (!progress) return "";
+  if (progress.kind === "frames") {
+    const label = progress.label || "analysis";
+    const current = Number.isFinite(progress.current) ? progress.current : "?";
+    const total = Number.isFinite(progress.total) ? progress.total : "?";
+    const percent = Number.isFinite(progress.percent) ? `${progress.percent.toFixed(1)}%` : "?";
+    const fps = Number.isFinite(progress.fps) ? `${progress.fps.toFixed(1)} fps` : "?";
+    return `${label}: ${current}/${total} frames | ${percent} | ${fps}`;
+  }
+  if (progress.kind === "chunks") {
+    const label = progress.label || "analysis";
+    const current = Number.isFinite(progress.current) ? progress.current : "?";
+    const total = Number.isFinite(progress.total) ? progress.total : "?";
+    return `${label}: chunk ${current}/${total} complete`;
+  }
+  return progress.message || "";
+}
+
+function renderProgress(progress) {
+  const text = formatProgress(progress);
+  if (!text) {
+    clearProgress();
+    return;
+  }
+  el.progressText.textContent = text;
+  el.progressText.classList.remove("hidden");
+}
+
+function jobStatusText(job) {
+  const stage = job.stage || job.status || "";
+  const message = /^progress\s+/.test(job.message || "") ? "" : (job.message || "");
+  return message ? `${stage}: ${message}` : stage;
 }
 
 function readLastAnalysisSettings() {
@@ -388,6 +429,7 @@ function runBody() {
 async function runAnalysis() {
   const body = runBody();
   setStatus("Queueing serial analysis...");
+  clearProgress();
   el.resultActions.classList.add("hidden");
   const payload = await api("/api/run", { method: "POST", body });
   saveLastAnalysisSettings(body);
@@ -403,10 +445,12 @@ async function pollJob() {
   try {
     const payload = await api(`/api/job?id=${encodeURIComponent(state.currentJobId)}`);
     const job = payload.job;
-    setStatus(`${job.stage || job.status}: ${job.message || ""}`);
+    renderProgress(job.progress);
+    setStatus(jobStatusText(job));
     if (job.status === "done") {
       state.lastResult = job.result;
       setStatus(`Done: ${job.result.resultCount} cache(s), ${job.result.insertedFilters} filter insertion(s).`, "ok");
+      clearProgress();
       state.currentJobId = "";
       el.cancelButton.classList.add("hidden");
       el.cancelButton.disabled = false;
@@ -416,6 +460,7 @@ async function pollJob() {
     }
     if (job.status === "error" || job.status === "cancelled") {
       setStatus(job.error || job.message || job.status, "error");
+      clearProgress();
       state.currentJobId = "";
       el.cancelButton.classList.add("hidden");
       el.cancelButton.disabled = false;
@@ -425,6 +470,7 @@ async function pollJob() {
     setTimeout(pollJob, 1200);
   } catch (error) {
     setStatus(error.message, "error");
+    clearProgress();
     state.currentJobId = "";
     el.cancelButton.classList.add("hidden");
     el.cancelButton.disabled = false;
