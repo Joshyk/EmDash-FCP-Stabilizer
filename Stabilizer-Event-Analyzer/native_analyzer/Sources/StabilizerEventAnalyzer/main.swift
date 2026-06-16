@@ -1510,6 +1510,25 @@ func indexEntry(cache: PersistedHostAnalysisCache, fileName: String, identity: S
     )
 }
 
+func copyFileAtomically(from sourceURL: URL, to destinationURL: URL) throws {
+    let fileManager = FileManager.default
+    let temporaryURL = destinationURL
+        .deletingLastPathComponent()
+        .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
+    try? fileManager.removeItem(at: temporaryURL)
+    try fileManager.copyItem(at: sourceURL, to: temporaryURL)
+    do {
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
+        } else {
+            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        }
+    } catch {
+        try? fileManager.removeItem(at: temporaryURL)
+        throw error
+    }
+}
+
 func writeCache(cacheRoot: URL, asset: AssetPlan, prepared: PreparedAnalysis, cache: PersistedHostAnalysisCache, sampleScalePercent: Double) throws -> AnalysisResult {
     let fileManager = FileManager.default
     let storageURL = cacheRoot.appendingPathComponent(cacheStorageDirectoryName, isDirectory: true)
@@ -1517,9 +1536,12 @@ func writeCache(cacheRoot: URL, asset: AssetPlan, prepared: PreparedAnalysis, ca
     let identity = try cacheIdentity(cache: cache, frames: prepared.frames)
     let fileName = try cacheFileName(cache: cache, frames: prepared.frames)
     let encoder = JSONEncoder()
-    let data = try encoder.encode(cache)
-    try data.write(to: storageURL.appendingPathComponent(fileName), options: .atomic)
-    try data.write(to: cacheRoot.appendingPathComponent(cacheFileName), options: .atomic)
+    let storedCacheURL = storageURL.appendingPathComponent(fileName)
+    do {
+        let data = try encoder.encode(cache)
+        try data.write(to: storedCacheURL, options: .atomic)
+    }
+    try copyFileAtomically(from: storedCacheURL, to: cacheRoot.appendingPathComponent(cacheFileName))
 
     let indexURL = cacheRoot.appendingPathComponent(cacheIndexFileName)
     var entries: [PersistedHostAnalysisIndexEntry] = []
