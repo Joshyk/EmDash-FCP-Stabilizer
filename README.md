@@ -48,8 +48,9 @@ Final Cut Pro to analyze the clip. Preview and render callbacks only read comple
 analysis or a validated persisted analysis; they do not start analysis on their own.
 If `Sample Size` changes and no analysis exists for that size, the status reports that the
 selected sample has not been analyzed so `Start Host Analysis` can request that size. If
-the current clip range is trimmed relative to the saved analysis range, Start/Reanalyze
-report the trimmed-clip block instead of starting Host Analysis.
+the current clip range differs from a saved or hidden persisted-analysis identity, Start/Reanalyze
+ignore that stale identity and resolve persisted analysis for the current clip before requesting
+new Host Analysis.
 
 ## Optional Final Cut Pro Shortcuts
 
@@ -154,7 +155,8 @@ media, while staying larger than the old compact panel.
 accepts status parameter updates. For existing timeline instances that keep
 stale saved Inspector strings, `Debug Overlay` is the live render-runtime
 indicator. `Sample Info` combines the accepted `Sample Size`, actual analysis
-sample size, and frame count into one read-only Inspector row. `Clip Range` is
+sample size, and frame count as `Sample: <percent> -> <WxH> | Analysis: <frames>f`.
+`Clip Range` is
 deprecated from the visible Inspector metadata. `Queue`
 uses `#N of M`; repeated Start presses on the same effect instance keep only that
 instance's latest pending request, while other queued clips remain queued. Older

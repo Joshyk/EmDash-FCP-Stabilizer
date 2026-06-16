@@ -775,7 +775,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addStringParameter(
             withName: "Sample Info",
             parameterID: ParameterID.sampleInfo.rawValue,
-            defaultValue: "Sample: - | Analysis: -",
+            defaultValue: "Sample: 100% -> - | Analysis: -",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
@@ -1059,33 +1059,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if let activeRange = hostAnalysisStore.activeExpectedRange,
            !Self.analysisRange(activeRange, matches: expectedRange) {
-            markHostAnalysisActionBlockedForTrimmedClip(actionName: actionName, expectedRange: expectedRange, analysisRange: activeRange)
-            return false
+            NSLog(
+                "TokyoWalkingStabilizer: \(actionName) Host Analysis ignored stale active analysis range. current=\(Self.expectedRangeDescription(expectedRange)) active=\(Self.expectedRangeDescription(activeRange))"
+            )
         }
         if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
            !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            markHostAnalysisActionBlockedForTrimmedClip(actionName: actionName, expectedRange: expectedRange, analysisRange: nil)
-            return false
+            updatePreferredHostAnalysisCacheIdentity(nil)
+            publishHostAnalysisCacheIdentity(nil, force: true)
+            NSLog(
+                "TokyoWalkingStabilizer: \(actionName) Host Analysis cleared stale persisted identity before resolving the current clip. current=\(Self.expectedRangeDescription(expectedRange)) identity=\(preferredIdentity)"
+            )
         }
         return true
-    }
-
-    private func markHostAnalysisActionBlockedForTrimmedClip(
-        actionName: String,
-        expectedRange: HostAnalysisExpectedRange,
-        analysisRange: HostAnalysisExpectedRange?
-    ) {
-        let message = "\(actionName) Not Started - Trimmed Clip"
-        let current = Self.expectedRangeDescription(expectedRange)
-        let existing = analysisRange.map(Self.expectedRangeDescription) ?? "saved analysis identity"
-        hostAnalysisStore.markActionMessage(
-            message,
-            analysisInfo: "Trimmed clip blocked: current \(current), analysis \(existing)"
-        )
-        publishHostAnalysisStatus(force: true)
-        publishStabilizerInfo(force: true)
-        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-        NSLog("TokyoWalkingStabilizer: \(actionName) Host Analysis blocked because the current clip range is trimmed or range-mismatched. current=\(current) analysis=\(existing)")
     }
 
     private func consumeReanalysisConfirmation(
@@ -1879,8 +1865,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         statusOverride: String? = nil
     ) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
-        let startHostAnalysisButtonEnabled = true
-        let reanalyzeHostAnalysisButtonEnabled = true
+        let startHostAnalysisButtonEnabled = hostAnalysisStore.canStartHostAnalysis
+        let reanalyzeHostAnalysisButtonEnabled = hostAnalysisStore.canStartHostAnalysis
         statusLock.lock()
         let shouldPublishStatus = force || status != lastPublishedStatus
         let shouldPublishStartHostAnalysisButton = force
@@ -2007,76 +1993,51 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func stabilizerInfoFields(inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot, state: StabilizerPluginState?) -> StabilizerInfoFields {
-        let analysisInfo = inspectorSnapshot.analysisInfoText
+        _ = state
+        let samplePercent = samplePercentDescription(inspectorSnapshot.requestedSampleScalePercent)
         let sampleSize: String
         let analysisFrameCount: String
         if let sampleWidth = inspectorSnapshot.sampleWidth,
            let sampleHeight = inspectorSnapshot.sampleHeight {
             sampleSize = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
-            if let frameCount = inspectorSnapshot.frameCount {
-                analysisFrameCount = "\(frameCount)f"
-            } else {
-                analysisFrameCount = "-"
-            }
-        } else if let sample = analysisSampleDescription(from: analysisInfo) {
-            sampleSize = sample
-            if let frames = analysisFrameCountDescription(from: analysisInfo) {
-                analysisFrameCount = frames
-            } else {
-                analysisFrameCount = "-"
-            }
         } else {
             sampleSize = "-"
-            analysisFrameCount = analysisFrameCountDescription(from: analysisInfo) ?? "-"
+        }
+        if let frameCount = inspectorSnapshot.frameCount {
+            analysisFrameCount = "\(frameCount)f"
+        } else {
+            analysisFrameCount = "-"
         }
         return StabilizerInfoFields(
-            sample: "Sample: \(sampleSize) | Analysis: \(analysisFrameCount)",
-            queue: queueDescription(from: analysisInfo)
+            sample: "Sample: \(samplePercent) -> \(sampleSize) | Analysis: \(analysisFrameCount)",
+            queue: queueDescription(from: inspectorSnapshot.queueState)
         )
     }
 
-    private static func analysisSampleDescription(from analysisInfo: String) -> String? {
-        analysisInfo.split(separator: " ").first { token in
-            let parts = token.split(separator: "x")
-            guard parts.count == 2 else {
-                return false
-            }
-            return parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
-        }.map(String.init)
+    private static func samplePercentDescription(_ percent: Double?) -> String {
+        guard let percent,
+              percent.isFinite
+        else {
+            return "unknown"
+        }
+        if abs(percent.rounded() - percent) <= 0.001 {
+            return "\(Int(percent.rounded()))%"
+        }
+        return String(format: "%.1f%%", percent)
     }
 
-    private static func analysisFrameCountDescription(from analysisInfo: String) -> String? {
-        analysisInfo.split(separator: " ").first { token in
-            token.hasSuffix("f") && token.dropLast().allSatisfy(\.isNumber)
-        }.map(String.init)
-    }
-
-    private static func queueDescription(from analysisInfo: String) -> String {
-        if analysisInfo.hasPrefix("Queued #") {
-            let pieces = analysisInfo.split(separator: ":", maxSplits: 1).map(String.init)
-            let head = pieces.first ?? analysisInfo
-            let queueToken = head.split(separator: " ").first { $0.hasPrefix("#") }.map(String.init) ?? "#?"
-            let reason = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
-            let order: String
-            if queueToken.contains("/") {
-                let parts = queueToken.dropFirst().split(separator: "/", maxSplits: 1).map(String.init)
-                if parts.count == 2 {
-                    order = "#\(parts[0]) of \(parts[1])"
-                } else {
-                    order = queueToken
-                }
-            } else {
-                order = queueToken
-            }
+    private static func queueDescription(from queueState: StabilizerHostAnalysisQueueState) -> String {
+        switch queueState {
+        case .idle:
+            return "Queue: -"
+        case .starting:
+            return "Queue: Starting"
+        case .active:
+            return "Queue: Active"
+        case .queued(let position, let totalCount, let reason):
+            let order = "#\(position) of \(max(position, totalCount))"
             return reason.isEmpty ? "Queue: \(order)" : "Queue: \(order) \(reason)"
         }
-        if analysisInfo.hasPrefix("Requested ") {
-            return "Queue: Starting"
-        }
-        if analysisInfo.hasPrefix("Analyzing") {
-            return "Queue: Active"
-        }
-        return "Queue: -"
     }
 
     private func publishRenderRevision(_ revision: Double, currentParameterValue: Double? = nil, force: Bool = false) {

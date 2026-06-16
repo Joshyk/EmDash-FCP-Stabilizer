@@ -167,12 +167,20 @@ private struct HostAnalysisTimingAccumulator {
 
 struct StabilizerHostAnalysisInspectorSnapshot {
     let analysisInfoText: String
+    let queueState: StabilizerHostAnalysisQueueState
     let requestedSampleScalePercent: Double?
     let rangeStartSeconds: Double?
     let rangeEndSeconds: Double?
     let sampleWidth: Int?
     let sampleHeight: Int?
     let frameCount: Int?
+}
+
+enum StabilizerHostAnalysisQueueState {
+    case idle
+    case starting
+    case active
+    case queued(position: Int, totalCount: Int, reason: String)
 }
 
 final class StabilizerHostAnalysisStore {
@@ -190,6 +198,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo: StabilizerSourceFrameInfo?,
         latestSampleSize: (width: Int, height: Int)?,
         analysisInfoText: String,
+        queueState: StabilizerHostAnalysisQueueState,
         activePersistentCacheIdentity: String?
     )
 
@@ -250,6 +259,7 @@ final class StabilizerHostAnalysisStore {
     private var latestSourceFrameInfo: StabilizerSourceFrameInfo?
     private var latestSampleSize: (width: Int, height: Int)?
     private var analysisInfoText = "No Analysis"
+    private var queueState: StabilizerHostAnalysisQueueState = .idle
     private var actionStatusText: String?
     private var analysisTiming = HostAnalysisTimingAccumulator()
 
@@ -327,6 +337,7 @@ final class StabilizerHostAnalysisStore {
 
         return StabilizerHostAnalysisInspectorSnapshot(
             analysisInfoText: analysisInfoText,
+            queueState: queueState,
             requestedSampleScalePercent: activeRequestedSampleScalePercent.isFinite ? activeRequestedSampleScalePercent : nil,
             rangeStartSeconds: rangeSeconds.start,
             rangeEndSeconds: rangeSeconds.end,
@@ -602,6 +613,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Analyzing \(Self.sampleScaleDescription(requestedSampleScalePercent))"
+        queueState = .active
         actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
@@ -625,6 +637,7 @@ final class StabilizerHostAnalysisStore {
             status = .requested
             activeRequestedSampleScalePercent = requestedSampleScalePercent
             analysisInfoText = "Requested \(Self.sampleScaleDescription(requestedSampleScalePercent))"
+            queueState = .starting
             actionStatusText = nil
             bumpRevisionLocked()
         }
@@ -637,7 +650,9 @@ final class StabilizerHostAnalysisStore {
             status = .queued
             activeRequestedSampleScalePercent = requestedSampleScalePercent
             let queueTotal = max(position, totalCount)
-            analysisInfoText = "Queued #\(position)/\(queueTotal) \(Self.sampleScaleDescription(requestedSampleScalePercent)): \(Self.compactReason(reason))"
+            let compactReason = Self.compactReason(reason)
+            analysisInfoText = "Queued #\(position)/\(queueTotal) \(Self.sampleScaleDescription(requestedSampleScalePercent)): \(compactReason)"
+            queueState = .queued(position: position, totalCount: queueTotal, reason: compactReason)
             actionStatusText = nil
             bumpRevisionLocked()
         }
@@ -650,6 +665,7 @@ final class StabilizerHostAnalysisStore {
             status = .needsAnalysis
             analysisInfoText = "Start failed: \(Self.compactReason(reason))"
         }
+        queueState = .idle
         actionStatusText = "Host Analysis Not Started - \(Self.compactReason(reason))"
         bumpRevisionLocked()
         lock.unlock()
@@ -661,6 +677,7 @@ final class StabilizerHostAnalysisStore {
         if let analysisInfo {
             analysisInfoText = analysisInfo
         }
+        queueState = .idle
         bumpRevisionLocked()
         lock.unlock()
     }
@@ -690,6 +707,7 @@ final class StabilizerHostAnalysisStore {
             status = .projectCacheUnavailable
             projectCacheUnavailableStatusText = statusText
             analysisInfoText = "\(statusText). \(reason)"
+            queueState = .idle
             bumpRevisionLocked()
         } else {
             projectCacheUnavailableStatusText = statusText
@@ -740,6 +758,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "No Analysis"
+        queueState = .idle
         actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
@@ -779,6 +798,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Persisted Analysis Cleared"
+        queueState = .idle
         actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
@@ -810,6 +830,7 @@ final class StabilizerHostAnalysisStore {
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = "Proxy rejected. Use original media."
+        queueState = .idle
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
@@ -974,6 +995,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = snapshot.latestSourceFrameInfo
         latestSampleSize = snapshot.latestSampleSize
         analysisInfoText = snapshot.analysisInfoText
+        queueState = snapshot.queueState
     }
 
     private func retainCompletedMemoryAnalysisLocked(_ snapshot: CompletedHostAnalysisSnapshot) -> String? {
@@ -1330,6 +1352,7 @@ final class StabilizerHostAnalysisStore {
                 eventName: activeCandidate.cache.eventName ?? Self.currentProjectBundleCacheEventName,
                 cacheIdentity: activeCandidate.identity
             )
+            queueState = .idle
             lock.unlock()
             NSLog("TokyoWalkingStabilizer: loaded persisted Host Analysis \(activeCandidate.fileName) with \(activeCandidate.frames.count) frames; \(candidateURLs.count) lazy alternate persisted analysis candidate(s) available.")
             return true
@@ -1339,6 +1362,7 @@ final class StabilizerHostAnalysisStore {
             if preparedAnalysis == nil && status != .analyzing {
                 status = unusableCacheSummary.status
                 analysisInfoText = unusableCacheSummary.summary
+                queueState = .idle
                 bumpRevisionLocked()
             }
             lock.unlock()
@@ -1487,6 +1511,7 @@ final class StabilizerHostAnalysisStore {
         )
         lock.lock()
         analysisInfoText = info
+        queueState = .idle
         bumpRevisionLocked()
         lock.unlock()
     }
@@ -1660,6 +1685,7 @@ final class StabilizerHostAnalysisStore {
             let statusText = projectCacheUnavailableStatusText
             let reason = projectCacheUnavailableReason ?? "Host did not provide a writable Event Analysis Files persisted analysis root."
             analysisInfoText = "\(statusText): \(Self.compactReason(reason))"
+            queueState = .idle
             bumpRevisionLocked()
             lock.unlock()
             NSLog("TokyoWalkingStabilizer: failed to save Host Analysis persisted analysis because no FCP bundle persisted analysis root is configured.")
@@ -1762,6 +1788,7 @@ final class StabilizerHostAnalysisStore {
                 eventName: eventName,
                 cacheIdentity: cacheIdentity
             )
+            queueState = .idle
             bumpRevisionLocked()
             lock.unlock()
             Self.bumpPersistentCacheGeneration()
@@ -1872,6 +1899,7 @@ final class StabilizerHostAnalysisStore {
             latestSourceFrameInfo: latestSourceFrameInfo,
             latestSampleSize: latestSampleSize,
             analysisInfoText: analysisInfoText,
+            queueState: queueState,
             activePersistentCacheIdentity: activePersistentCacheIdentity
         )
         lock.unlock()
@@ -1949,6 +1977,7 @@ final class StabilizerHostAnalysisStore {
         if shouldMark {
             status = .sourceMetadataUnconfirmedPreview
             analysisInfoText = "Original analysis; validation deferred."
+            queueState = .idle
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1964,6 +1993,7 @@ final class StabilizerHostAnalysisStore {
             status = .proxyNeedsOriginalValidation
             currentRenderSourceIsScaledProxy = true
             analysisInfoText = "Needs original validation."
+            queueState = .idle
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1979,6 +2009,7 @@ final class StabilizerHostAnalysisStore {
             status = .trimmedClip
             currentRenderSourceIsScaledProxy = false
             analysisInfoText = "Invalid trimmed clip cache."
+            queueState = .idle
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1994,6 +2025,7 @@ final class StabilizerHostAnalysisStore {
             status = .sourceUnavailable
             currentRenderSourceIsScaledProxy = false
             analysisInfoText = "Source unavailable. Check FCP proxy."
+            queueState = .idle
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -2022,6 +2054,7 @@ final class StabilizerHostAnalysisStore {
         currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
+        queueState = .idle
         bumpRevisionLocked()
         lock.unlock()
         NSLog("TokyoWalkingStabilizer: rejected Host Analysis persisted analysis \(rejectedFileName ?? "<unknown>"): \(reason).")
@@ -2048,6 +2081,7 @@ final class StabilizerHostAnalysisStore {
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = "Memory analysis mismatch. Run again."
+        queueState = .idle
         bumpRevisionLocked()
         lock.unlock()
         NSLog("TokyoWalkingStabilizer: rejected in-memory Host Analysis \(rejectedIdentity ?? "<unknown>"): \(reason).")
@@ -2386,6 +2420,7 @@ final class StabilizerHostAnalysisStore {
             eventName: loadedCache.cache.eventName ?? Self.currentProjectBundleCacheEventName,
             cacheIdentity: loadedCache.identity
         )
+        queueState = .idle
         observedPersistentCacheGeneration = Self.currentPersistentCacheGeneration()
         bumpRevisionLocked()
     }
