@@ -43,9 +43,10 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.151"
+private let tokyoWalkingStabilizerVersion = "0.3.152"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let hostAnalysisControlRefreshIntervalSeconds = 0.5
+private let hostAnalysisStartConfirmationWindowSeconds = 8.0
 private let reanalysisConfirmationWindowSeconds = 8.0
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -238,13 +239,12 @@ struct HostAnalysisExpectedRange {
     }
 
     var trimmedInputStartSeconds: Double? {
-        guard let timelineInputStartSeconds,
-              timelineInputStartSeconds.isFinite,
-              timelineInputStartSeconds > trimStartToleranceSeconds
+        guard startSeconds.isFinite,
+              startSeconds > trimStartToleranceSeconds
         else {
             return nil
         }
-        return timelineInputStartSeconds
+        return startSeconds
     }
 
     var interactionSignature: String {
@@ -647,6 +647,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let expiresAt: Double
     }
 
+    private struct PendingStartConfirmation {
+        let rangeSignature: String
+        let requestedSampleScalePercent: Double
+        let expiresAt: Double
+    }
+
     private static let serialAnalysisQueueLock = NSLock()
     private static var serialAnalysisQueue: [SerialHostAnalysisRequest] = []
     private static let activeAnalysisStoreLock = NSLock()
@@ -677,6 +683,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
     private var persistentCacheMonitor: DispatchSourceTimer?
+    private var pendingStartConfirmation: PendingStartConfirmation?
     private var pendingReanalysisConfirmation: PendingReanalysisConfirmation?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
@@ -1131,6 +1138,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
         if !loadedPersistentCache {
+            guard consumeStartConfirmation(
+                expectedRange: expectedRange,
+                requestedSampleScalePercent: requestedSamplePercent
+            ) else {
+                hostAnalysisStore.markActionMessage(
+                    "Start Not Started - Confirm Whole Clip",
+                    analysisInfo: "Whole clip verification unavailable: FxPlug cannot read the original media duration; press Start again within \(Int(hostAnalysisStartConfirmationWindowSeconds))s only if this effect is on the untrimmed full clip"
+                )
+                publishHostAnalysisStatus(force: true)
+                publishStabilizerInfo(force: true)
+                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+                return
+            }
             requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
         }
     }
@@ -1151,10 +1171,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             expectedRange: expectedRange,
             requestedSampleScalePercent: requestedSamplePercent
         ) else {
-            let message = "Press Reanalyze again within \(Int(reanalysisConfirmationWindowSeconds))s to start fresh analysis"
+            let message = "Press Reanalyze again within \(Int(reanalysisConfirmationWindowSeconds))s only for the untrimmed full clip"
             hostAnalysisStore.markActionMessage(
                 message,
-                analysisInfo: "Reanalysis confirmation required"
+                analysisInfo: "Reanalysis confirmation required; FxPlug cannot read the original media duration"
             )
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
@@ -1185,6 +1205,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
               expectedRange.isValid
         else {
             return true
+        }
+        if let trimmedInputStartSeconds = expectedRange.trimmedInputStartSeconds {
+            markHostAnalysisActionBlockedForTrimmedClip(
+                actionName: actionName,
+                expectedRange: expectedRange,
+                analysisRange: nil,
+                analysisDescription: "current input range",
+                reason: String(format: "input range starts %.3fs after source clip start", trimmedInputStartSeconds)
+            )
+            return false
         }
         if let activeRange = hostAnalysisStore.activeExpectedRange,
            !Self.analysisRange(activeRange, matches: expectedRange) {
@@ -1219,6 +1249,31 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return false
         }
         return true
+    }
+
+    private func consumeStartConfirmation(
+        expectedRange: HostAnalysisExpectedRange?,
+        requestedSampleScalePercent: Double
+    ) -> Bool {
+        let now = Date.timeIntervalSinceReferenceDate
+        let rangeSignature = expectedRange?.interactionSignature ?? "range-unavailable"
+        statusLock.lock()
+        defer { statusLock.unlock() }
+
+        if let pendingStartConfirmation,
+           pendingStartConfirmation.rangeSignature == rangeSignature,
+           abs(pendingStartConfirmation.requestedSampleScalePercent - requestedSampleScalePercent) <= 0.001,
+           pendingStartConfirmation.expiresAt >= now {
+            self.pendingStartConfirmation = nil
+            return true
+        }
+
+        pendingStartConfirmation = PendingStartConfirmation(
+            rangeSignature: rangeSignature,
+            requestedSampleScalePercent: requestedSampleScalePercent,
+            expiresAt: now + hostAnalysisStartConfirmationWindowSeconds
+        )
+        return false
     }
 
     private func markHostAnalysisActionBlockedForTrimmedClip(
@@ -2627,6 +2682,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard let expectedRange,
               expectedRange.isValid
         else {
+            return
+        }
+        guard expectedRange.trimmedInputStartSeconds == nil else {
             return
         }
 
@@ -4593,6 +4651,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             frameDurationSeconds: CMTimeGetSeconds(frameDuration),
             timelineInputStartSeconds: currentTimelineInputStartSeconds()
         )
+        if expectedRange.isValid,
+           let trimmedInputStartSeconds = expectedRange.trimmedInputStartSeconds {
+            let reason = String(format: "input range starts %.3fs after source clip start", trimmedInputStartSeconds)
+            Self.releaseHostAnalysisStartReservation()
+            markHostAnalysisActionBlockedForTrimmedClip(
+                actionName: "Host Analysis",
+                expectedRange: expectedRange,
+                analysisRange: nil,
+                analysisDescription: "current input range",
+                reason: reason
+            )
+            throw hostAnalysisRoutingError("Host Analysis refused trimmed input range before setup: \(reason).")
+        }
         ensureHostAnalysisRangeSeal(expectedRange: expectedRange.isValid ? expectedRange : nil)
         if let rangeSeal = currentHostAnalysisRangeSeal(),
            !rangeSeal.matches(expectedRange.isValid ? expectedRange : nil) {
