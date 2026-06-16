@@ -238,10 +238,10 @@ fallbacks.
   analyzer callback is the active state, `Host Analysis Status`, `Sample Info`, and
   `Queue` come from that same in-progress analysis store instead of mixing
   `Analyzing Host Frames (N)` with stale cache metadata from another clip.
-- `Sample Info`: read-only Inspector row combining the `Sample Size` accepted when Host
-  Analysis was requested, queued, or started with the actual analyzed pixel sample size and
-  frame count when analysis is available. `Clip Range` is deprecated from the visible
-  Inspector metadata.
+- `Sample Info`: read-only Inspector row showing the actual analyzed pixel sample size first,
+  followed by the accepted `Sample Size` setting and frame count, for example
+  `Sample: 573x302 | Setting: 100% | Analysis: 10500f`. `Clip Range` is deprecated from the
+  visible Inspector metadata.
 - `Queue`: read-only Inspector row showing the serial queue position as `#N of M` and
   compact queue reason while this clip is waiting. Repeated starts on the same effect
   instance keep only that instance's latest pending request.

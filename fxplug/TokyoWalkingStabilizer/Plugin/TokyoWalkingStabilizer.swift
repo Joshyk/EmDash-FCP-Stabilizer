@@ -776,7 +776,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addStringParameter(
             withName: "Sample Info",
             parameterID: ParameterID.sampleInfo.rawValue,
-            defaultValue: "Sample: 100% | Analysis: -",
+            defaultValue: "Sample: - | Setting: 100% | Analysis: -",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
@@ -1825,26 +1825,29 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             ?? acceptedSampleDescription(from: analysisInfo)
             ?? state.map { StabilizerSampleScale.scale(for: $0.sampleScale).displayName }
             ?? "-"
-        let analysisSample: String
+        let sampleSize: String
+        let analysisFrameCount: String
         if let sampleWidth = inspectorSnapshot.sampleWidth,
            let sampleHeight = inspectorSnapshot.sampleHeight {
-            let sample = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
+            sampleSize = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
             if let frameCount = inspectorSnapshot.frameCount {
-                analysisSample = "Analysis: \(sample) \(frameCount)f"
+                analysisFrameCount = "\(frameCount)f"
             } else {
-                analysisSample = "Analysis: \(sample)"
+                analysisFrameCount = "-"
             }
         } else if let sample = analysisSampleDescription(from: analysisInfo) {
+            sampleSize = sample
             if let frames = analysisFrameCountDescription(from: analysisInfo) {
-                analysisSample = "Analysis: \(sample) \(frames)"
+                analysisFrameCount = frames
             } else {
-                analysisSample = "Analysis: \(sample)"
+                analysisFrameCount = "-"
             }
         } else {
-            analysisSample = "Analysis: -"
+            sampleSize = "-"
+            analysisFrameCount = analysisFrameCountDescription(from: analysisInfo) ?? "-"
         }
         return StabilizerInfoFields(
-            sample: "Sample: \(acceptedSample) | \(analysisSample)",
+            sample: "Sample: \(sampleSize) | Setting: \(acceptedSample) | Analysis: \(analysisFrameCount)",
             queue: queueDescription(from: analysisInfo)
         )
     }
