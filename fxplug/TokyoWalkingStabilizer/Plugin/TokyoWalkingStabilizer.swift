@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.143"
+private let tokyoWalkingStabilizerVersion = "0.3.144"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1739,7 +1739,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         canStartHostAnalysisOverride: Bool? = nil
     ) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
-        let startHostAnalysisButtonEnabled = canStartHostAnalysisOverride ?? hostAnalysisStore.canStartHostAnalysis
+        _ = canStartHostAnalysisOverride
+        let startHostAnalysisButtonEnabled = true
         let updatePersistedAnalysisButtonEnabled = hostAnalysisStore.persistedAnalysisUpdateSummary != nil
         statusLock.lock()
         let shouldPublishStatus = force || status != lastPublishedStatus
