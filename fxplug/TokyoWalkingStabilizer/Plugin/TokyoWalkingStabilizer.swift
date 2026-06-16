@@ -16,10 +16,10 @@ private enum ParameterID: UInt32 {
     case startHostAnalysis = 14
     case hostAnalysisStatus = 15
     case sampleInfo = 32
+    case clearHostAnalysisCache = 17
     case yStrength = 18
     case sampleScale = 19
     case renderRevision = 20
-    case reanalyzeHostAnalysis = 21
     case panStabilizationStrength = 23
     case edgeDisplayMode = 27
     case farFieldWarpStrength = 28
@@ -43,20 +43,17 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.153"
+private let tokyoWalkingStabilizerVersion = "0.3.144"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
-private let hostAnalysisControlRefreshIntervalSeconds = 0.5
-private let hostAnalysisStartConfirmationWindowSeconds = 8.0
-private let reanalysisConfirmationWindowSeconds = 8.0
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 private let stabilizerDefaultAutoCropZoomSpeed = 1.0
 private let stabilizerDefaultAutoCropZoomSmoothness = 0.35
 private let stabilizerDefaultAutoCropPositionSpeed = 1.0
 private let stabilizerDefaultAutoCropPositionSmoothness = 0.80
-let stabilizerProjectCacheUnavailableMessage = "Project Persisted Analysis Unavailable - Event Analysis Files Unavailable"
-let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Persisted Analysis Unavailable - Ambiguous Event"
-let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Persisted Analysis Unavailable - Ambiguous Active Libraries"
+let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
+let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
+let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -205,19 +202,6 @@ struct HostAnalysisExpectedRange {
     let startSeconds: Double
     let durationSeconds: Double
     let frameDurationSeconds: Double
-    let timelineInputStartSeconds: Double?
-
-    init(
-        startSeconds: Double,
-        durationSeconds: Double,
-        frameDurationSeconds: Double,
-        timelineInputStartSeconds: Double? = nil
-    ) {
-        self.startSeconds = startSeconds
-        self.durationSeconds = durationSeconds
-        self.frameDurationSeconds = frameDurationSeconds
-        self.timelineInputStartSeconds = timelineInputStartSeconds
-    }
 
     var endSeconds: Double {
         startSeconds + durationSeconds
@@ -227,107 +211,6 @@ struct HostAnalysisExpectedRange {
         startSeconds.isFinite
             && durationSeconds.isFinite
             && durationSeconds > 0.0
-    }
-
-    var interactionSignature: String {
-        String(
-            format: "%.6f|%.6f|%.6f",
-            startSeconds,
-            durationSeconds,
-            frameDurationSeconds
-        )
-    }
-}
-
-private struct HostAnalysisRangeSeal {
-    let startKey: Int64
-    let durationKey: Int64
-    let frameDurationKey: Int64
-
-    init(expectedRange: HostAnalysisExpectedRange) {
-        startKey = StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds)
-        durationKey = StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds)
-        frameDurationKey = StabilizerHostAnalysisStore.timeKey(expectedRange.frameDurationSeconds)
-    }
-
-    private init(startKey: Int64, durationKey: Int64, frameDurationKey: Int64) {
-        self.startKey = startKey
-        self.durationKey = durationKey
-        self.frameDurationKey = frameDurationKey
-    }
-
-    var encodedValue: String {
-        "\(startKey),\(durationKey),\(frameDurationKey)"
-    }
-
-    var description: String {
-        "start\(startKey)-duration\(durationKey)-frame\(frameDurationKey)"
-    }
-
-    func matches(_ expectedRange: HostAnalysisExpectedRange?) -> Bool {
-        guard let expectedRange, expectedRange.isValid else {
-            return true
-        }
-        return startKey == StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds)
-            && durationKey == StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds)
-            && frameDurationKey == StabilizerHostAnalysisStore.timeKey(expectedRange.frameDurationSeconds)
-    }
-
-    static func decode(_ value: String) -> HostAnalysisRangeSeal? {
-        let parts = value.split(separator: ",", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              let startKey = Int64(parts[0]),
-              let durationKey = Int64(parts[1]),
-              let frameDurationKey = Int64(parts[2])
-        else {
-            return nil
-        }
-        return HostAnalysisRangeSeal(
-            startKey: startKey,
-            durationKey: durationKey,
-            frameDurationKey: frameDurationKey
-        )
-    }
-}
-
-private struct HostAnalysisHiddenIdentity {
-    let rangeSeal: HostAnalysisRangeSeal?
-    let cacheIdentity: String?
-
-    static func decode(_ rawValue: String?) -> HostAnalysisHiddenIdentity {
-        let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !value.isEmpty else {
-            return HostAnalysisHiddenIdentity(rangeSeal: nil, cacheIdentity: nil)
-        }
-        var rangeSeal: HostAnalysisRangeSeal?
-        var cacheIdentity: String?
-        var sawRecord = false
-        for record in value.split(separator: "|", omittingEmptySubsequences: false).map(String.init) {
-            if let range = record.range(of: "base="), range.lowerBound == record.startIndex {
-                sawRecord = true
-                rangeSeal = HostAnalysisRangeSeal.decode(String(record[range.upperBound...]))
-            } else if let range = record.range(of: "cache="), range.lowerBound == record.startIndex {
-                sawRecord = true
-                let cacheValue = String(record[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                cacheIdentity = cacheValue.isEmpty ? nil : cacheValue
-            }
-        }
-        if !sawRecord {
-            cacheIdentity = value
-        }
-        return HostAnalysisHiddenIdentity(rangeSeal: rangeSeal, cacheIdentity: cacheIdentity)
-    }
-
-    static func encode(rangeSeal: HostAnalysisRangeSeal?, cacheIdentity: String?) -> String {
-        var records: [String] = []
-        if let rangeSeal {
-            records.append("base=\(rangeSeal.encodedValue)")
-        }
-        if let cacheIdentity = cacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !cacheIdentity.isEmpty {
-            records.append("cache=\(cacheIdentity)")
-        }
-        return records.joined(separator: "|")
     }
 }
 
@@ -593,20 +476,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let analysisAPI: FxAnalysisAPI
         let requestedSampleScalePercent: Double
         let reason: String
-        let resetStoreBeforeStart: Bool
 
         init(
             plugin: TokyoWalkingStabilizerPlugIn,
             analysisAPI: FxAnalysisAPI,
             requestedSampleScalePercent: Double,
-            reason: String,
-            resetStoreBeforeStart: Bool
+            reason: String
         ) {
             self.plugin = plugin
             self.analysisAPI = analysisAPI
             self.requestedSampleScalePercent = requestedSampleScalePercent
             self.reason = reason
-            self.resetStoreBeforeStart = resetStoreBeforeStart
         }
     }
 
@@ -623,18 +503,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let requestedSampleScalePercent: Double
     }
 
-    private struct PendingReanalysisConfirmation {
-        let rangeSignature: String
-        let requestedSampleScalePercent: Double
-        let expiresAt: Double
-    }
-
-    private struct PendingStartConfirmation {
-        let rangeSignature: String
-        let requestedSampleScalePercent: Double
-        let expiresAt: Double
-    }
-
     private static let serialAnalysisQueueLock = NSLock()
     private static var serialAnalysisQueue: [SerialHostAnalysisRequest] = []
     private static let activeAnalysisStoreLock = NSLock()
@@ -648,25 +516,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
     private let cacheIdentityLock = NSLock()
-    private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.TokyoWalkingStabilizer.PersistentAnalysisMonitor")
+    private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.TokyoWalkingStabilizer.PersistentCacheMonitor")
     private var lastPublishedStatus = ""
     private var lastPublishedSampleInfo = ""
     private var lastPublishedQueueInfo = ""
     private var lastPublishedRenderRevision: Double?
-    private var lastPublishedStartHostAnalysisButtonEnabled: Bool?
-    private var lastPublishedReanalyzeHostAnalysisButtonEnabled: Bool?
     private var lastPublishedHostAnalysisCacheIdentity: String?
-    private var lastHostAnalysisControlRangeSignature = ""
-    private var lastHostAnalysisControlRefreshTime = 0.0
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
     private var preferredHostAnalysisCacheIdentity: String?
-    private var sealedHostAnalysisRange: HostAnalysisRangeSeal?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
     private var persistentCacheMonitor: DispatchSourceTimer?
-    private var pendingStartConfirmation: PendingStartConfirmation?
-    private var pendingReanalysisConfirmation: PendingReanalysisConfirmation?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
     }
@@ -682,7 +543,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         self.apiManager = apiManager
         super.init()
         _ = Self.sharedHostAnalysisStore
-        startPersistentAnalysisMonitor()
+        startPersistentCacheMonitor()
         NSLog("TokyoWalkingStabilizer: runtime initialized version \(tokyoWalkingStabilizerVersion).")
     }
 
@@ -854,12 +715,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             delta: 0.01,
             parameterFlags: flags
         )
+        let hiddenAnalysisControlFlags = FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
         paramAPI.addPopupMenu(
             withName: "Sample Size",
             parameterID: ParameterID.sampleScale.rawValue,
             defaultValue: UInt32(StabilizerSampleScale.defaultScale.rawValue),
             menuEntries: StabilizerSampleScale.menuEntries,
-            parameterFlags: flags
+            parameterFlags: hiddenAnalysisControlFlags
         )
         paramAPI.addPopupMenu(
             withName: "Edge Display Mode",
@@ -872,31 +734,31 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             withName: "Start Host Analysis",
             parameterID: ParameterID.startHostAnalysis.rawValue,
             selector: #selector(startHostAnalysis),
-            parameterFlags: flags
+            parameterFlags: hiddenAnalysisControlFlags
         )
         paramAPI.addPushButton(
-            withName: "Reanalyze Host Analysis",
-            parameterID: ParameterID.reanalyzeHostAnalysis.rawValue,
-            selector: #selector(reanalyzeHostAnalysis),
-            parameterFlags: flags
+            withName: "Clear Host Analysis Cache",
+            parameterID: ParameterID.clearHostAnalysisCache.rawValue,
+            selector: #selector(clearHostAnalysisCache),
+            parameterFlags: hiddenAnalysisControlFlags
         )
         paramAPI.addStringParameter(
             withName: "Host Analysis Status",
             parameterID: ParameterID.hostAnalysisStatus.rawValue,
-            defaultValue: "Needs Analysis",
+            defaultValue: "External Analysis Required - Run Event Analyzer",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
             withName: "Sample Info",
             parameterID: ParameterID.sampleInfo.rawValue,
-            defaultValue: "Sample: 100% -> - | Analysis: - | Schema: -",
+            defaultValue: "Sample: 100% | Analysis: -",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
             withName: "Queue",
             parameterID: ParameterID.queueInfo.rawValue,
             defaultValue: "Queue: -",
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE | kFxParameterFlag_HIDDEN)
         )
         paramAPI.addFloatSlider(
             withName: "Render Revision",
@@ -910,7 +772,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
         )
         paramAPI.addStringParameter(
-            withName: "Host Analysis Persisted Identity",
+            withName: "Host Analysis Cache Identity",
             parameterID: ParameterID.hostAnalysisCacheIdentity.rawValue,
             defaultValue: "",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
@@ -997,25 +859,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             state.inputFrameDurationSeconds = inputRange.frameDurationSeconds
         }
         let expectedRange = Self.expectedInputRange(from: state)
-        ensureHostAnalysisRangeSeal(expectedRange: expectedRange)
-        let sampleRequirement = currentSampleRequirement(for: expectedRange)
-        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "plugin-state")
         if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(
-                    identity: preferredIdentity,
-                    expectedRange: expectedRange,
-                    allowRangeMismatch: true,
-                    requestedSampleScalePercent: sampleRequirement.percent,
-                    expectedSampleSize: sampleRequirement.sampleSize
-               ) {
+               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
-            } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(
-                expectedRange: expectedRange,
-                allowRangeMismatch: true,
-                requestedSampleScalePercent: sampleRequirement.percent,
-                expectedSampleSize: sampleRequirement.sampleSize
-            ) {
+            } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
@@ -1026,20 +874,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 )
             }
         }
-        if hostAnalysisStore.hasCompletedAnalysis,
-           !hostAnalysisStore.hasCompletedAnalysis(
-                requestedSampleScalePercent: sampleRequirement.percent,
-                expectedSampleSize: sampleRequirement.sampleSize
-           ) {
-            hostAnalysisStore.markRequestedSampleUnavailable(requestedSampleScalePercent: sampleRequirement.percent)
-        } else {
-            hostAnalysisStore.clearRequestedSampleUnavailable()
-        }
         let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
         publishHostAnalysisStatus()
-        publishStabilizerInfo(state: state)
+        publishStabilizerInfo()
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, currentParameterValue: state.renderRevision)
 
         pluginState?.pointee = NSData(bytes: &state, length: MemoryLayout<StabilizerPluginState>.size)
@@ -1047,38 +886,21 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     @objc(startHostAnalysis)
     func startHostAnalysis() {
-        os_log("Start Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
-        let expectedRange = currentInputRange()
-        ensureHostAnalysisRangeSeal(expectedRange: expectedRange)
-        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "start-button", force: true)
-        publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
+        os_log("Deprecated Start Host Analysis pressed in FxPlug %{public}@; reloading external Event Analyzer cache only.", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
+        publishHostAnalysisStatus(force: true, statusOverride: "Reloading Event Analyzer Cache")
         publishStabilizerInfo(force: true)
-        guard canRequestHostAnalysisForCurrentRange(expectedRange, actionName: "Start") else {
-            return
-        }
-        let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
-        let expectedSampleSize = hostAnalysisStore.expectedSampleSizeForCurrentSource(
-            requestedSampleScalePercent: requestedSamplePercent
-        )
-        if hostAnalysisStore.hasCompletedPersistedAnalysis(
-            expectedRange: expectedRange,
-            requestedSampleScalePercent: requestedSamplePercent,
-            expectedSampleSize: expectedSampleSize
-        ),
+        let expectedRange = currentInputRange()
+        if hostAnalysisStore.hasCompletedAnalysis,
            let activeIdentity = hostAnalysisStore.activeCacheIdentity,
            StabilizerHostAnalysisStore.cacheIdentity(activeIdentity, matches: expectedRange) {
             os_log(
-                "Start Host Analysis reused active persisted analysis %{public}@ without reset or disk reload.",
+                "Start Host Analysis reused active prepared cache %{public}@ without reset or disk reload.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 activeIdentity
             )
-            NSLog("TokyoWalkingStabilizer: Start Host Analysis reused active persisted analysis \(activeIdentity) without reset or disk reload.")
+            NSLog("TokyoWalkingStabilizer: Start Host Analysis reused active prepared cache \(activeIdentity) without reset or disk reload.")
             publishHostAnalysisCacheIdentity(activeIdentity, force: true)
-            hostAnalysisStore.markActionMessage(
-                "Host Analysis Not Started - Persisted analysis already ready",
-                analysisInfo: "Start skipped: persisted analysis already ready"
-            )
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -1088,218 +910,37 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let loadedPersistentCache: Bool
         if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(
-                    identity: preferredIdentity,
-                    expectedRange: expectedRange,
-                    allowRangeMismatch: true,
-                    requestedSampleScalePercent: requestedSamplePercent,
-                    expectedSampleSize: expectedSampleSize
-               ) {
+               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 loadedPersistentCache = true
             } else {
-                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(
-                    expectedRange: expectedRange,
-                    allowRangeMismatch: true,
-                    requestedSampleScalePercent: requestedSamplePercent,
-                    expectedSampleSize: expectedSampleSize
-                )
+                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true)
             }
         } else {
             loadedPersistentCache = false
-            os_log("Start preflight could not resolve Event persisted analysis root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
-            NSLog("TokyoWalkingStabilizer: Start Host Analysis could not preflight the Event persisted analysis root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
+            os_log("Deprecated Start Host Analysis could not resolve Event cache root; external Event Analyzer is required.", log: stabilizerHostAnalysisLog, type: .default)
+            NSLog("TokyoWalkingStabilizer: deprecated Start Host Analysis could not resolve the Event cache root; run the Stabilizer Event Analyzer and import its FCPXMLD output.")
         }
         if loadedPersistentCache {
             publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: true)
-            hostAnalysisStore.markActionMessage(
-                "Host Analysis Not Started - Persisted analysis loaded",
-                analysisInfo: "Start skipped: persisted analysis loaded"
+        } else {
+            hostAnalysisStore.markExternalAnalysisRequired(
+                reason: "No compatible Event Analyzer cache was found for this clip. Export Event FCPXMLD, run the Stabilizer Event Analyzer, then import the generated FCPXMLD."
             )
         }
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-        if !loadedPersistentCache {
-            guard consumeStartConfirmation(
-                expectedRange: expectedRange,
-                requestedSampleScalePercent: requestedSamplePercent
-            ) else {
-                hostAnalysisStore.markActionMessage(
-                    "Start Not Started - Confirm Whole Clip",
-                    analysisInfo: "Whole clip verification unavailable: FxPlug cannot read the original media duration; press Start again within \(Int(hostAnalysisStartConfirmationWindowSeconds))s only if this effect is on the untrimmed full clip"
-                )
-                publishHostAnalysisStatus(force: true)
-                publishStabilizerInfo(force: true)
-                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-                return
-            }
-            requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
-        }
     }
 
-    @objc(reanalyzeHostAnalysis)
-    func reanalyzeHostAnalysis() {
-        let expectedRange = currentInputRange()
-        ensureHostAnalysisRangeSeal(expectedRange: expectedRange)
-        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "reanalyze-button", force: true)
-        let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
-        os_log("Reanalyze Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
-        NSLog("TokyoWalkingStabilizer: Reanalyze Host Analysis requested.")
-        guard canRequestHostAnalysisForCurrentRange(expectedRange, actionName: "Reanalyze") else {
-            return
-        }
-
-        guard consumeReanalysisConfirmation(
-            expectedRange: expectedRange,
-            requestedSampleScalePercent: requestedSamplePercent
-        ) else {
-            let message = "Press Reanalyze again within \(Int(reanalysisConfirmationWindowSeconds))s only for the untrimmed full clip"
-            hostAnalysisStore.markActionMessage(
-                message,
-                analysisInfo: "Reanalysis confirmation required; FxPlug cannot read the original media duration"
-            )
-            publishHostAnalysisStatus(force: true)
-            publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-            return
-        }
-
-        publishHostAnalysisStatus(force: true, statusOverride: "Reanalysis Requested")
-        publishStabilizerInfo(force: true)
-        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-        if !configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
-            os_log("Reanalysis preflight could not resolve Event persisted analysis root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
-            NSLog("TokyoWalkingStabilizer: Reanalyze Host Analysis could not preflight the Event persisted analysis root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
-        }
-        requestHostAnalysisIfNeeded(
-            force: true,
-            acceptedSampleScalePercentOverride: requestedSamplePercent,
-            resetStoreBeforeStart: true,
-            actionName: "Reanalyze"
-        )
-    }
-
-    private func canRequestHostAnalysisForCurrentRange(
-        _ expectedRange: HostAnalysisExpectedRange?,
-        actionName: String
-    ) -> Bool {
-        guard let expectedRange,
-              expectedRange.isValid
-        else {
-            return true
-        }
-        if let activeRange = hostAnalysisStore.activeExpectedRange,
-           !Self.analysisRange(activeRange, matches: expectedRange) {
-            markHostAnalysisActionBlockedForTrimmedClip(
-                actionName: actionName,
-                expectedRange: expectedRange,
-                analysisRange: activeRange,
-                reason: "active analysis range does not match current input range"
-            )
-            return false
-        }
-        if let rangeSeal = currentHostAnalysisRangeSeal(),
-           !rangeSeal.matches(expectedRange) {
-            markHostAnalysisActionBlockedForTrimmedClip(
-                actionName: actionName,
-                expectedRange: expectedRange,
-                analysisRange: nil,
-                analysisDescription: rangeSeal.description,
-                reason: "effect baseline range does not match current input range"
-            )
-            return false
-        }
-        if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            markHostAnalysisActionBlockedForTrimmedClip(
-                actionName: actionName,
-                expectedRange: expectedRange,
-                analysisRange: nil,
-                analysisDescription: "saved analysis identity",
-                reason: "saved analysis identity does not match current input range"
-            )
-            return false
-        }
-        return true
-    }
-
-    private func consumeStartConfirmation(
-        expectedRange: HostAnalysisExpectedRange?,
-        requestedSampleScalePercent: Double
-    ) -> Bool {
-        let now = Date.timeIntervalSinceReferenceDate
-        let rangeSignature = expectedRange?.interactionSignature ?? "range-unavailable"
-        statusLock.lock()
-        defer { statusLock.unlock() }
-
-        if let pendingStartConfirmation,
-           pendingStartConfirmation.rangeSignature == rangeSignature,
-           abs(pendingStartConfirmation.requestedSampleScalePercent - requestedSampleScalePercent) <= 0.001,
-           pendingStartConfirmation.expiresAt >= now {
-            self.pendingStartConfirmation = nil
-            return true
-        }
-
-        pendingStartConfirmation = PendingStartConfirmation(
-            rangeSignature: rangeSignature,
-            requestedSampleScalePercent: requestedSampleScalePercent,
-            expiresAt: now + hostAnalysisStartConfirmationWindowSeconds
-        )
-        return false
-    }
-
-    private func markHostAnalysisActionBlockedForTrimmedClip(
-        actionName: String,
-        expectedRange: HostAnalysisExpectedRange,
-        analysisRange: HostAnalysisExpectedRange?,
-        analysisDescription: String? = nil,
-        reason: String
-    ) {
-        let message = "\(actionName) Not Started - Trimmed Clip"
-        let current = Self.expectedRangeDescription(expectedRange)
-        let existing = analysisRange.map(Self.expectedRangeDescription) ?? analysisDescription ?? "current input range"
-        hostAnalysisStore.markActionMessage(
-            message,
-            analysisInfo: "Trimmed clip blocked: \(reason); current \(current), analysis \(existing)"
+    @objc(clearHostAnalysisCache)
+    func clearHostAnalysisCache() {
+        Self.removeQueuedSerialAnalysis(self)
+        hostAnalysisStore.markExternalCacheManaged(
+            reason: "Persisted caches are now created and managed by the Stabilizer Event Analyzer. Delete or rebuild them from the external tool instead of the FCP effect."
         )
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-        os_log(
-            "%{public}@ Host Analysis blocked before start. reason=%{public}@ current=%{public}@ analysis=%{public}@",
-            log: stabilizerHostAnalysisLog,
-            type: .error,
-            actionName,
-            reason,
-            current,
-            existing
-        )
-        NSLog("TokyoWalkingStabilizer: \(actionName) Host Analysis blocked because the current clip range is trimmed or range-mismatched. reason=\(reason) current=\(current) analysis=\(existing)")
-    }
-
-    private func consumeReanalysisConfirmation(
-        expectedRange: HostAnalysisExpectedRange?,
-        requestedSampleScalePercent: Double
-    ) -> Bool {
-        let now = Date.timeIntervalSinceReferenceDate
-        let rangeSignature = expectedRange?.interactionSignature ?? "range-unavailable"
-        statusLock.lock()
-        defer { statusLock.unlock() }
-
-        if let pendingReanalysisConfirmation,
-           pendingReanalysisConfirmation.rangeSignature == rangeSignature,
-           abs(pendingReanalysisConfirmation.requestedSampleScalePercent - requestedSampleScalePercent) <= 0.001,
-           pendingReanalysisConfirmation.expiresAt >= now {
-            self.pendingReanalysisConfirmation = nil
-            return true
-        }
-
-        pendingReanalysisConfirmation = PendingReanalysisConfirmation(
-            rangeSignature: rangeSignature,
-            requestedSampleScalePercent: requestedSampleScalePercent,
-            expiresAt: now + reanalysisConfirmationWindowSeconds
-        )
-        return false
     }
 
     @discardableResult
@@ -1308,18 +949,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         allowSerialQueue: Bool = true,
         queuedStartRequest: Bool = false,
         queuedAnalysisAPI: FxAnalysisAPI? = nil,
-        acceptedSampleScalePercentOverride: Double? = nil,
-        resetStoreBeforeStart: Bool = false,
-        actionName: String = "Start"
+        acceptedSampleScalePercentOverride: Double? = nil
     ) -> HostAnalysisRequestResult {
-        let expectedRange = currentInputRange()
-        ensureHostAnalysisRangeSeal(expectedRange: expectedRange)
-        let effectiveActionName = queuedStartRequest && resetStoreBeforeStart ? "Reanalyze" : actionName
-        guard canRequestHostAnalysisForCurrentRange(expectedRange, actionName: effectiveActionName) else {
-            Self.removeQueuedSerialAnalysis(self)
-            return .failed
-        }
-        let acceptedSampleScalePercent = acceptedSampleScalePercentOverride ?? requestedSampleScalePercent(for: expectedRange)
+        let acceptedSampleScalePercent = acceptedSampleScalePercentOverride ?? requestedSampleScalePercent(for: currentInputRange())
         let isQueuedRequest = queuedStartRequest || Self.isQueuedSerialAnalysis(self)
         if hostAnalysisStore.hasCompletedAnalysis && !(force && isQueuedRequest) {
             Self.removeQueuedSerialAnalysis(self)
@@ -1364,8 +996,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     self,
                     analysisAPI: analysisAPI,
                     requestedSampleScalePercent: acceptedSampleScalePercent,
-                    reason: reason,
-                    resetStoreBeforeStart: resetStoreBeforeStart
+                    reason: reason
                 )
                 hostAnalysisStore.markQueued(
                     position: queuePosition.position,
@@ -1413,8 +1044,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     self,
                     analysisAPI: analysisAPI,
                     requestedSampleScalePercent: acceptedSampleScalePercent,
-                    reason: reason,
-                    resetStoreBeforeStart: resetStoreBeforeStart
+                    reason: reason
                 )
                 hostAnalysisStore.markQueued(
                     position: queuePosition.position,
@@ -1442,14 +1072,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             hostAnalysisStore.reset()
             os_log(
                 "Serial Host Analysis queue reset the shared render store before starting the queued clip.",
-                log: stabilizerHostAnalysisLog,
-                type: .default
-            )
-        } else if resetStoreBeforeStart {
-            publishHostAnalysisCacheIdentity(nil, force: true)
-            hostAnalysisStore.reset()
-            os_log(
-                "Reanalyze Host Analysis reset the shared render store immediately before requesting a fresh Host Analysis pass.",
                 log: stabilizerHostAnalysisLog,
                 type: .default
             )
@@ -1482,8 +1104,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         _ plugin: TokyoWalkingStabilizerPlugIn,
         analysisAPI: FxAnalysisAPI,
         requestedSampleScalePercent: Double,
-        reason: String,
-        resetStoreBeforeStart: Bool = false
+        reason: String
     ) -> SerialHostAnalysisQueuePosition {
         serialAnalysisQueueLock.lock()
         let originalCount = serialAnalysisQueue.count
@@ -1493,8 +1114,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             plugin: plugin,
             analysisAPI: analysisAPI,
             requestedSampleScalePercent: requestedSampleScalePercent,
-            reason: reason,
-            resetStoreBeforeStart: resetStoreBeforeStart
+            reason: reason
         ))
         let position = serialAnalysisQueue.count
         let totalCount = serialAnalysisQueue.count
@@ -1608,8 +1228,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 allowSerialQueue: true,
                 queuedStartRequest: true,
                 queuedAnalysisAPI: nextRequest.analysisAPI,
-                acceptedSampleScalePercentOverride: nextRequest.requestedSampleScalePercent,
-                resetStoreBeforeStart: nextRequest.resetStoreBeforeStart
+                acceptedSampleScalePercentOverride: nextRequest.requestedSampleScalePercent
             )
             switch result {
             case .started, .queued:
@@ -2071,114 +1690,31 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return stabilizedPixels
     }
 
-    private func publishHostAnalysisStatus(
-        force: Bool = false,
-        statusOverride: String? = nil
-    ) {
+    private func publishHostAnalysisStatus(force: Bool = false, statusOverride: String? = nil) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
-        let startHostAnalysisButtonEnabled = hostAnalysisStore.canStartHostAnalysis
-        let reanalyzeHostAnalysisButtonEnabled = hostAnalysisStore.canStartHostAnalysis
         statusLock.lock()
-        let shouldPublishStatus = force || status != lastPublishedStatus
-        let shouldPublishStartHostAnalysisButton = force
-            || lastPublishedStartHostAnalysisButtonEnabled != startHostAnalysisButtonEnabled
-        let shouldPublishReanalyzeHostAnalysisButton = force
-            || lastPublishedReanalyzeHostAnalysisButtonEnabled != reanalyzeHostAnalysisButtonEnabled
+        let shouldPublish = force || status != lastPublishedStatus
         statusLock.unlock()
-        guard shouldPublishStatus || shouldPublishStartHostAnalysisButton || shouldPublishReanalyzeHostAnalysisButton,
+        guard shouldPublish,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
         }
-        if shouldPublishStatus,
-           settingAPI.setStringParameterValue(status, toParameter: ParameterID.hostAnalysisStatus.rawValue) {
+        if settingAPI.setStringParameterValue(status, toParameter: ParameterID.hostAnalysisStatus.rawValue) {
             statusLock.lock()
             lastPublishedStatus = status
             statusLock.unlock()
-        } else if shouldPublishStatus {
+        } else {
             NSLog("TokyoWalkingStabilizer: failed to update Host Analysis Status parameter.")
-        }
-        if shouldPublishStartHostAnalysisButton {
-            publishStartHostAnalysisButtonEnabled(startHostAnalysisButtonEnabled, settingAPI: settingAPI)
-        }
-        if shouldPublishReanalyzeHostAnalysisButton {
-            publishReanalyzeHostAnalysisButtonEnabled(reanalyzeHostAnalysisButtonEnabled, settingAPI: settingAPI)
-        }
-    }
-
-    private func refreshHostAnalysisControlState(
-        expectedRange: HostAnalysisExpectedRange?,
-        reason: String,
-        force: Bool = false
-    ) {
-        let rangeSignature = expectedRange?.interactionSignature ?? "range-unavailable"
-        let now = Date.timeIntervalSinceReferenceDate
-        statusLock.lock()
-        let rangeChanged = rangeSignature != lastHostAnalysisControlRangeSignature
-        let intervalElapsed = now - lastHostAnalysisControlRefreshTime >= hostAnalysisControlRefreshIntervalSeconds
-        let shouldRefresh = force || rangeChanged || intervalElapsed
-        if shouldRefresh {
-            lastHostAnalysisControlRefreshTime = now
-        }
-        if rangeChanged {
-            lastHostAnalysisControlRangeSignature = rangeSignature
-            lastPublishedStatus = ""
-            lastPublishedStartHostAnalysisButtonEnabled = nil
-            lastPublishedReanalyzeHostAnalysisButtonEnabled = nil
-        } else if force {
-            lastPublishedStartHostAnalysisButtonEnabled = nil
-            lastPublishedReanalyzeHostAnalysisButtonEnabled = nil
-        }
-        statusLock.unlock()
-
-        guard shouldRefresh else {
-            return
-        }
-        if rangeChanged {
-            NSLog("TokyoWalkingStabilizer: refreshing Host Analysis controls after input range change from \(reason): \(rangeSignature)")
-        }
-        publishHostAnalysisStatus(force: true)
-    }
-
-    private func publishStartHostAnalysisButtonEnabled(
-        _ enabled: Bool,
-        settingAPI: FxParameterSettingAPI_v5
-    ) {
-        let flags = enabled
-            ? FxParameterFlags(kFxParameterFlag_DEFAULT)
-            : FxParameterFlags(kFxParameterFlag_DEFAULT | kFxParameterFlag_DISABLED)
-        if settingAPI.setParameterFlags(flags, toParameter: ParameterID.startHostAnalysis.rawValue) {
-            statusLock.lock()
-            lastPublishedStartHostAnalysisButtonEnabled = enabled
-            statusLock.unlock()
-        } else {
-            NSLog("TokyoWalkingStabilizer: failed to update Start Host Analysis enabled state to \(enabled).")
-        }
-    }
-
-    private func publishReanalyzeHostAnalysisButtonEnabled(
-        _ enabled: Bool,
-        settingAPI: FxParameterSettingAPI_v5
-    ) {
-        let flags = enabled
-            ? FxParameterFlags(kFxParameterFlag_DEFAULT)
-            : FxParameterFlags(kFxParameterFlag_DEFAULT | kFxParameterFlag_DISABLED)
-        if settingAPI.setParameterFlags(flags, toParameter: ParameterID.reanalyzeHostAnalysis.rawValue) {
-            statusLock.lock()
-            lastPublishedReanalyzeHostAnalysisButtonEnabled = enabled
-            statusLock.unlock()
-        } else {
-            NSLog("TokyoWalkingStabilizer: failed to update Reanalyze Host Analysis enabled state to \(enabled).")
         }
     }
 
     private func publishStabilizerInfo(
         force: Bool = false,
-        state: StabilizerPluginState? = nil,
         inspectorSnapshotOverride: StabilizerHostAnalysisInspectorSnapshot? = nil
     ) {
         let inspectorSnapshot = inspectorSnapshotOverride ?? hostAnalysisStore.inspectorSnapshot
-        let info = Self.stabilizerInfoFields(inspectorSnapshot: inspectorSnapshot, state: state)
+        let info = Self.stabilizerInfoFields(inspectorSnapshot: inspectorSnapshot)
         statusLock.lock()
         let shouldPublish = force
             || info.sample != lastPublishedSampleInfo
@@ -2203,53 +1739,57 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func stabilizerInfoFields(inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot, state: StabilizerPluginState?) -> StabilizerInfoFields {
-        _ = state
-        let samplePercent = samplePercentDescription(inspectorSnapshot.requestedSampleScalePercent)
+    private static func stabilizerInfoFields(inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot) -> StabilizerInfoFields {
+        let analysisInfo = inspectorSnapshot.analysisInfoText
+        let acceptedSample = inspectorSnapshot.requestedSampleScalePercent.map(samplePercentDescription)
+            ?? "unknown"
         let sampleSize: String
-        let analysisFrameCount: String
         if let sampleWidth = inspectorSnapshot.sampleWidth,
            let sampleHeight = inspectorSnapshot.sampleHeight {
             sampleSize = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
         } else {
             sampleSize = "-"
         }
-        if let frameCount = inspectorSnapshot.frameCount {
-            analysisFrameCount = "\(frameCount)f"
-        } else {
-            analysisFrameCount = "-"
-        }
-        let schemaDescription = inspectorSnapshot.cacheSchemaVersion.map { "v\($0)" } ?? "-"
+        let frameCount = inspectorSnapshot.frameCount.map { "\($0)f" } ?? "-"
         return StabilizerInfoFields(
-            sample: "Sample: \(samplePercent) -> \(sampleSize) | Analysis: \(analysisFrameCount) | Schema: \(schemaDescription)",
-            queue: queueDescription(from: inspectorSnapshot.queueState)
+            sample: "Sample: \(acceptedSample) -> \(sampleSize) | Analysis: \(frameCount)",
+            queue: queueDescription(from: analysisInfo)
         )
     }
 
-    private static func samplePercentDescription(_ percent: Double?) -> String {
-        guard let percent,
-              percent.isFinite
-        else {
-            return "unknown"
+    private static func samplePercentDescription(_ percent: Double) -> String {
+        if percent.rounded() == percent {
+            return String(format: "%.0f%%", percent)
         }
-        if abs(percent.rounded() - percent) <= 0.001 {
-            return "\(Int(percent.rounded()))%"
-        }
-        return String(format: "%.1f%%", percent)
+        return String(format: "%.2f%%", percent)
     }
 
-    private static func queueDescription(from queueState: StabilizerHostAnalysisQueueState) -> String {
-        switch queueState {
-        case .idle:
-            return "Queue: -"
-        case .starting:
-            return "Queue: Starting"
-        case .active:
-            return "Queue: Active"
-        case .queued(let position, let totalCount, let reason):
-            let order = "#\(position) of \(max(position, totalCount))"
+    private static func queueDescription(from analysisInfo: String) -> String {
+        if analysisInfo.hasPrefix("Queued #") {
+            let pieces = analysisInfo.split(separator: ":", maxSplits: 1).map(String.init)
+            let head = pieces.first ?? analysisInfo
+            let queueToken = head.split(separator: " ").first { $0.hasPrefix("#") }.map(String.init) ?? "#?"
+            let reason = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
+            let order: String
+            if queueToken.contains("/") {
+                let parts = queueToken.dropFirst().split(separator: "/", maxSplits: 1).map(String.init)
+                if parts.count == 2 {
+                    order = "#\(parts[0]) of \(parts[1])"
+                } else {
+                    order = queueToken
+                }
+            } else {
+                order = queueToken
+            }
             return reason.isEmpty ? "Queue: \(order)" : "Queue: \(order) \(reason)"
         }
+        if analysisInfo.hasPrefix("Requested ") {
+            return "Queue: Starting"
+        }
+        if analysisInfo.hasPrefix("Analyzing") {
+            return "Queue: Active"
+        }
+        return "Queue: -"
     }
 
     private func publishRenderRevision(_ revision: Double, currentParameterValue: Double? = nil, force: Bool = false) {
@@ -2342,7 +1882,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishAnalysisCallbackStatus(analysisStore, canPublishCallbackStatus: true)
     }
 
-    private func startPersistentAnalysisMonitor() {
+    private func startPersistentCacheMonitor() {
         let timer = DispatchSource.makeTimerSource(queue: persistentCacheMonitorQueue)
         timer.schedule(deadline: .now() + 0.5, repeating: 0.75)
         timer.setEventHandler { [weak self] in
@@ -2354,7 +1894,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private func pollPersistentCacheForPreviewInvalidation() {
         let expectedRange = currentCacheResolutionExpectedRange()
-        let sampleRequirement = currentSampleRequirement(for: expectedRange)
         guard configureProjectBundleCacheDirectory(expectedRange: expectedRange) else {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
@@ -2370,19 +1909,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let loadedCache: Bool
         if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           hostAnalysisStore.activatePersistentCache(
-                identity: preferredIdentity,
-                expectedRange: expectedRange,
-                requestedSampleScalePercent: sampleRequirement.percent,
-                expectedSampleSize: sampleRequirement.sampleSize
-           ) {
+           hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
             loadedCache = true
         } else {
-            loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(
-                expectedRange: expectedRange,
-                requestedSampleScalePercent: sampleRequirement.percent,
-                expectedSampleSize: sampleRequirement.sampleSize
-            )
+            loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange)
         }
         guard loadedCache || hostAnalysisStore.hasCompletedAnalysis else {
             return
@@ -2626,13 +2156,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func updatePreferredHostAnalysisCacheIdentity(_ identity: String?) {
-        let rawIdentity = identity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let decodedIdentity = HostAnalysisHiddenIdentity.decode(rawIdentity)
+        let trimmedIdentity = identity?.trimmingCharacters(in: .whitespacesAndNewlines)
         cacheIdentityLock.lock()
-        preferredHostAnalysisCacheIdentity = decodedIdentity.cacheIdentity
-        if rawIdentity.isEmpty || decodedIdentity.rangeSeal != nil {
-            sealedHostAnalysisRange = decodedIdentity.rangeSeal
-        }
+        preferredHostAnalysisCacheIdentity = trimmedIdentity?.isEmpty == false ? trimmedIdentity : nil
         cacheIdentityLock.unlock()
     }
 
@@ -2643,64 +2169,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return identity
     }
 
-    private func currentHostAnalysisRangeSeal() -> HostAnalysisRangeSeal? {
-        cacheIdentityLock.lock()
-        let rangeSeal = sealedHostAnalysisRange
-        cacheIdentityLock.unlock()
-        return rangeSeal
-    }
-
-    private func ensureHostAnalysisRangeSeal(expectedRange: HostAnalysisExpectedRange?) {
-        guard let expectedRange,
-              expectedRange.isValid
-        else {
-            return
-        }
-        let newRangeSeal = HostAnalysisRangeSeal(expectedRange: expectedRange)
-        let cacheIdentityToPublish: String?
-        let didSealRange: Bool
-        let shouldPublishRangeSeal: Bool
-        cacheIdentityLock.lock()
-        if sealedHostAnalysisRange == nil {
-            sealedHostAnalysisRange = newRangeSeal
-            didSealRange = true
-        } else {
-            didSealRange = false
-        }
-        cacheIdentityToPublish = preferredHostAnalysisCacheIdentity
-        let hiddenIdentityValue = HostAnalysisHiddenIdentity.encode(
-            rangeSeal: sealedHostAnalysisRange,
-            cacheIdentity: cacheIdentityToPublish
-        )
-        let normalizedHiddenIdentity = hiddenIdentityValue.isEmpty ? nil : hiddenIdentityValue
-        shouldPublishRangeSeal = lastPublishedHostAnalysisCacheIdentity != normalizedHiddenIdentity
-        cacheIdentityLock.unlock()
-
-        if shouldPublishRangeSeal {
-            publishHostAnalysisCacheIdentity(cacheIdentityToPublish, force: didSealRange)
-        }
-        if didSealRange {
-            os_log(
-                "Sealed Host Analysis baseline range %{public}@ for effect instance.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                newRangeSeal.description
-            )
-            NSLog("TokyoWalkingStabilizer: sealed Host Analysis baseline range \(newRangeSeal.description) for effect instance.")
-        }
-    }
-
     private func publishHostAnalysisCacheIdentity(_ identity: String?, force: Bool = false) {
-        let cacheValue = identity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let normalizedIdentity = cacheValue.isEmpty ? nil : cacheValue
+        let value = identity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedIdentity = value.isEmpty ? nil : value
         cacheIdentityLock.lock()
-        let rangeSeal = sealedHostAnalysisRange
-        let value = HostAnalysisHiddenIdentity.encode(
-            rangeSeal: rangeSeal,
-            cacheIdentity: normalizedIdentity
-        )
-        let normalizedPublishedIdentity = value.isEmpty ? nil : value
-        let shouldPublish = force || lastPublishedHostAnalysisCacheIdentity != normalizedPublishedIdentity
+        let shouldPublish = force || lastPublishedHostAnalysisCacheIdentity != normalizedIdentity
         cacheIdentityLock.unlock()
         guard shouldPublish,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
@@ -2709,11 +2182,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if settingAPI.setStringParameterValue(value, toParameter: ParameterID.hostAnalysisCacheIdentity.rawValue) {
             cacheIdentityLock.lock()
-            lastPublishedHostAnalysisCacheIdentity = normalizedPublishedIdentity
+            lastPublishedHostAnalysisCacheIdentity = normalizedIdentity
             preferredHostAnalysisCacheIdentity = normalizedIdentity
             cacheIdentityLock.unlock()
         } else {
-            NSLog("TokyoWalkingStabilizer: failed to update Host Analysis persisted identity parameter.")
+            NSLog("TokyoWalkingStabilizer: failed to update Host Analysis Cache Identity parameter.")
         }
     }
 
@@ -2772,28 +2245,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let range = HostAnalysisExpectedRange(
             startSeconds: CMTimeGetSeconds(start),
             durationSeconds: CMTimeGetSeconds(duration),
-            frameDurationSeconds: CMTimeGetSeconds(frameDuration),
-            timelineInputStartSeconds: currentTimelineInputStartSeconds(using: timingAPI)
+            frameDurationSeconds: CMTimeGetSeconds(frameDuration)
         )
         return range.isValid ? range : nil
-    }
-
-    private func currentTimelineInputStartSeconds(using timingAPI: FxTimingAPI_v4? = nil) -> Double? {
-        let resolvedTimingAPI: FxTimingAPI_v4?
-        if let timingAPI {
-            resolvedTimingAPI = timingAPI
-        } else {
-            resolvedTimingAPI = apiManager.api(for: FxTimingAPI_v4.self) as? FxTimingAPI_v4
-        }
-        guard let resolvedTimingAPI else {
-            return nil
-        }
-        var timelineInPoint = CMTime.invalid
-        resolvedTimingAPI.inPointTimeOfTimeline(forEffect: &timelineInPoint)
-        var inputStart = CMTime.invalid
-        resolvedTimingAPI.inputTime(&inputStart, fromTimelineTime: timelineInPoint)
-        let seconds = CMTimeGetSeconds(inputStart)
-        return seconds.isFinite ? seconds : nil
     }
 
     private func currentCacheResolutionExpectedRange() -> HostAnalysisExpectedRange? {
@@ -2833,7 +2287,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     guard let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL) else {
                         let reason = "FxProjectAPI media folder is not inside a .fcpbundle: \(projectMediaURL.path)"
                         NSLog("TokyoWalkingStabilizer: \(reason)")
-                        os_log("Event persisted analysis resolver rejected mediaFolderURL %{public}@ because it is not inside a .fcpbundle.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path)
+                        os_log("Event cache resolver rejected mediaFolderURL %{public}@ because it is not inside a .fcpbundle.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path)
                         clearStaleProjectCacheIfNeeded(reason: reason)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
@@ -2841,7 +2295,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         return false
                     }
                     os_log(
-                        "Event persisted analysis resolver input mediaFolderURL=%{public}@ bundleRoot=%{public}@ expectedRange=%{public}@.",
+                        "Event cache resolver input mediaFolderURL=%{public}@ bundleRoot=%{public}@ expectedRange=%{public}@.",
                         log: stabilizerHostAnalysisLog,
                         type: .default,
                         projectMediaURL.path,
@@ -2849,9 +2303,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         Self.expectedRangeDescription(expectedRange)
                     )
                     guard let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot, expectedRange: expectedRange) else {
-                        let reason = "Ambiguous Event for Host Analysis persisted analysis. FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
+                        let reason = "Ambiguous Event for Host Analysis cache. FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
                         NSLog("TokyoWalkingStabilizer: \(reason)")
-                        os_log("Event persisted analysis resolver rejected mediaFolderURL %{public}@ in bundle %{public}@ because no unambiguous Event candidate was selected.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path, bundleRoot.path)
+                        os_log("Event cache resolver rejected mediaFolderURL %{public}@ in bundle %{public}@ because no unambiguous Event candidate was selected.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path, bundleRoot.path)
                         clearStaleProjectCacheIfNeeded(reason: reason)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
@@ -2872,13 +2326,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     if configured {
                         shouldRetainSecurityScopedAccess = didStartAccess
                     } else {
-                        clearStaleProjectCacheIfNeeded(reason: "Event persisted analysis root configuration failed for \(eventResolution.eventRoot.path)")
+                        clearStaleProjectCacheIfNeeded(reason: "Event cache root configuration failed for \(eventResolution.eventRoot.path)")
                     }
                     return configured
                 }
                 let reason = "FxProjectAPI did not provide a project media folder URL."
                 NSLog("TokyoWalkingStabilizer: \(reason)")
-                os_log("Event persisted analysis resolver rejected because FxProjectAPI did not provide mediaFolderURL.", log: stabilizerHostAnalysisLog, type: .error)
+                os_log("Event cache resolver rejected because FxProjectAPI did not provide mediaFolderURL.", log: stabilizerHostAnalysisLog, type: .error)
                 if configureActiveFinalCutLibraryCacheDirectory(
                     markUnavailable: markUnavailable,
                     expectedRange: expectedRange,
@@ -2896,7 +2350,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             } catch {
                 let reason = "FxProjectAPI media folder unavailable: \(error.localizedDescription)"
                 NSLog("TokyoWalkingStabilizer: \(reason)")
-                os_log("Event persisted analysis resolver rejected because mediaFolderURL failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
+                os_log("Event cache resolver rejected because mediaFolderURL failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
                 if Self.isNoMediaFolderError(error),
                    configureActiveFinalCutLibraryCacheDirectory(
                         markUnavailable: markUnavailable,
@@ -2914,9 +2368,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 return false
             }
         } else {
-            let reason = "FxProjectAPI unavailable; Event Analysis Files persisted analysis cannot be resolved."
+            let reason = "FxProjectAPI unavailable; Event Analysis Files cache cannot be resolved."
             NSLog("TokyoWalkingStabilizer: \(reason)")
-            os_log("Event persisted analysis resolver rejected because FxProjectAPI is unavailable.", log: stabilizerHostAnalysisLog, type: .error)
+            os_log("Event cache resolver rejected because FxProjectAPI is unavailable.", log: stabilizerHostAnalysisLog, type: .error)
             if configureActiveFinalCutLibraryCacheDirectory(
                 markUnavailable: markUnavailable,
                 expectedRange: expectedRange,
@@ -2946,10 +2400,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         do {
             try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
         } catch {
-            let reason = "Event Analysis Files persisted analysis root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
+            let reason = "Event Analysis Files cache root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
             NSLog("TokyoWalkingStabilizer: \(reason)")
             os_log(
-                "Event persisted analysis resolver selected Event %{public}@ in bundle %{public}@ but persisted analysis root creation failed at %{public}@: %{public}@.",
+                "Event cache resolver selected Event %{public}@ in bundle %{public}@ but cache root creation failed at %{public}@: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .error,
                 eventResolution.eventRoot.path,
@@ -2971,9 +2425,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             securityScopedURL: retainedSecurityScopedURL,
             eventName: eventResolution.eventRoot.lastPathComponent
         )
-        NSLog("TokyoWalkingStabilizer: using \(eventResolution.sourceDescription) Event Host Analysis persisted analysis at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
+        NSLog("TokyoWalkingStabilizer: using \(eventResolution.sourceDescription) Event Host Analysis cache at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
         os_log(
-            "Event persisted analysis resolver selected Event %{public}@ by %{public}@; bundleRoot=%{public}@ persistedRoot=%{public}@.",
+            "Event cache resolver selected Event %{public}@ by %{public}@; bundleRoot=%{public}@ cacheRoot=%{public}@.",
             log: stabilizerHostAnalysisLog,
             type: .default,
             eventResolution.eventRoot.lastPathComponent,
@@ -3036,7 +2490,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             resolution.securityScopedURL?.stopAccessingSecurityScopedResource()
             if forceRefresh {
                 StabilizerHostAnalysisStore.clearProjectBundleCacheDirectory(
-                    reason: "Event persisted analysis root configuration failed for \(resolution.eventResolution.eventRoot.path)"
+                    reason: "Event cache root configuration failed for \(resolution.eventResolution.eventRoot.path)"
                 )
             }
         }
@@ -3048,7 +2502,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         do {
             try projectAPI.documentID(&documentID)
             os_log(
-                "Event persisted analysis resolver input documentID=%{public}@.",
+                "Event cache resolver input documentID=%{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 projectDocumentIDDescription(documentID)
@@ -3056,7 +2510,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return documentID
         } catch {
             os_log(
-                "Event persisted analysis resolver could not read documentID: %{public}@.",
+                "Event cache resolver could not read documentID: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .error,
                 error.localizedDescription
@@ -3116,12 +2570,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let remainingItems = try FileManager.default.contentsOfDirectory(atPath: legacyURL.path)
             if remainingItems.isEmpty {
                 try FileManager.default.removeItem(at: legacyURL)
-                NSLog("TokyoWalkingStabilizer: moved legacy Host Analysis persisted analysis from \(legacyURL.path) to \(cacheRoot.path).")
+                NSLog("TokyoWalkingStabilizer: moved legacy Host Analysis cache from \(legacyURL.path) to \(cacheRoot.path).")
             } else {
-                NSLog("TokyoWalkingStabilizer: left legacy Host Analysis persisted analysis at \(legacyURL.path) because \(remainingItems.count) item(s) could not be moved without overwriting newer files.")
+                NSLog("TokyoWalkingStabilizer: left legacy Host Analysis cache at \(legacyURL.path) because \(remainingItems.count) item(s) could not be moved without overwriting newer files.")
             }
         } catch {
-            NSLog("TokyoWalkingStabilizer: failed to migrate legacy Host Analysis persisted analysis from \(legacyURL.path) to \(cacheRoot.path): \(error.localizedDescription)")
+            NSLog("TokyoWalkingStabilizer: failed to migrate legacy Host Analysis cache from \(legacyURL.path) to \(cacheRoot.path): \(error.localizedDescription)")
         }
     }
 
@@ -3145,7 +2599,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         try FileManager.default.removeItem(at: itemURL)
                     }
                 } else {
-                    NSLog("TokyoWalkingStabilizer: keeping legacy Host Analysis persisted analysis item \(itemURL.path) because \(destinationItemURL.path) already exists.")
+                    NSLog("TokyoWalkingStabilizer: keeping legacy Host Analysis cache item \(itemURL.path) because \(destinationItemURL.path) already exists.")
                 }
                 continue
             }
@@ -3922,7 +3376,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let bundleRoot = bundleRoot.standardizedFileURL
         let eventRoots = topLevelEventRoots(in: bundleRoot)
         os_log(
-            "Event persisted analysis resolver candidates in %{public}@: %{public}@.",
+            "Event cache resolver candidates in %{public}@: %{public}@.",
             log: stabilizerHostAnalysisLog,
             type: .default,
             bundleRoot.path,
@@ -3944,7 +3398,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if let ancestorEventRoot {
             os_log(
-                "Event persisted analysis resolver selected ancestor Event %{public}@ for mediaFolderURL %{public}@.",
+                "Event cache resolver selected ancestor Event %{public}@ for mediaFolderURL %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 ancestorEventRoot.path,
@@ -3959,7 +3413,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if analysisFilesEventRoots.count == 1,
            let analysisFilesEventRoot = analysisFilesEventRoots.first {
             os_log(
-                "Event persisted analysis resolver selected the only Event with Analysis Files: %{public}@.",
+                "Event cache resolver selected the only Event with Analysis Files: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 analysisFilesEventRoot.path
@@ -3975,7 +3429,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 in: analysisFilesEventRoots
            ) {
             os_log(
-                "Event persisted analysis resolver selected Event %{public}@ by FCP Stabilization range match for %{public}@.",
+                "Event cache resolver selected Event %{public}@ by FCP Stabilization range match for %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 stabilizationMatch.path,
@@ -3989,7 +3443,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if eventRoots.count == 1,
            let onlyEventRoot = eventRoots.first {
             os_log(
-                "Event persisted analysis resolver selected the only top-level Event: %{public}@.",
+                "Event cache resolver selected the only top-level Event: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 onlyEventRoot.path
@@ -4000,7 +3454,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         os_log(
-            "Event persisted analysis resolver rejected ambiguous Event candidates. Analysis Files candidates=%{public}d total candidates=%{public}d expectedRange=%{public}@.",
+            "Event cache resolver rejected ambiguous Event candidates. Analysis Files candidates=%{public}d total candidates=%{public}d expectedRange=%{public}@.",
             log: stabilizerHostAnalysisLog,
             type: .error,
             analysisFilesEventRoots.count,
@@ -4095,17 +3549,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard let expectedRange, expectedRange.isValid else {
             return "none"
         }
-        var description = "start\(StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds))-end\(StabilizerHostAnalysisStore.timeKey(expectedRange.endSeconds))-duration\(StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds))"
-        if let timelineInputStartSeconds = expectedRange.timelineInputStartSeconds,
-           timelineInputStartSeconds.isFinite {
-            description += "-inputStart\(StabilizerHostAnalysisStore.timeKey(timelineInputStartSeconds))"
-        }
-        return description
-    }
-
-    private static func analysisRange(_ lhs: HostAnalysisExpectedRange, matches rhs: HostAnalysisExpectedRange) -> Bool {
-        StabilizerHostAnalysisStore.timeKey(lhs.startSeconds) == StabilizerHostAnalysisStore.timeKey(rhs.startSeconds)
-            && StabilizerHostAnalysisStore.timeKey(lhs.durationSeconds) == StabilizerHostAnalysisStore.timeKey(rhs.durationSeconds)
+        return "start\(StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds))-end\(StabilizerHostAnalysisStore.timeKey(expectedRange.endSeconds))-duration\(StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds))"
     }
 
     private static func topLevelEventRoots(in bundleRoot: URL) -> [URL] {
@@ -4119,7 +3563,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         } catch {
             os_log(
-                "Event persisted analysis resolver could not list active library bundle %{public}@: %{public}@.",
+                "Event cache resolver could not list active library bundle %{public}@: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .error,
                 bundleRoot.path,
@@ -4216,16 +3660,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return requestedSampleScalePercent(at: CMTime(seconds: expectedRange.startSeconds, preferredTimescale: 600))
     }
 
-    private func currentSampleRequirement(
-        for expectedRange: HostAnalysisExpectedRange?
-    ) -> (percent: Double, sampleSize: (width: Int, height: Int)?) {
-        let percent = requestedSampleScalePercent(for: expectedRange)
-        return (
-            percent,
-            hostAnalysisStore.expectedSampleSizeForCurrentSource(requestedSampleScalePercent: percent)
-        )
-    }
-
     private func publishHostAnalysisRenderDiagnostics(
         frameCount: Int,
         panSmoothSeconds: Double,
@@ -4294,11 +3728,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
         var requests: [FxImageTileRequest] = []
-        let state = Self.pluginState(from: pluginState)
-        refreshHostAnalysisControlState(
-            expectedRange: currentInputRange() ?? state.flatMap { Self.expectedInputRange(from: $0) },
-            reason: "schedule-inputs"
-        )
         let sourceRequest = Self.sourceRequestTime(for: renderTime, pluginState: pluginState)
         if sourceRequest.clamped {
             NSLog(
@@ -4336,8 +3765,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard let state = Self.pluginState(from: pluginState) else {
             return
         }
-        let expectedRange = currentRenderExpectedRange(from: state)
-        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "render")
         guard sourceImages.indices.contains(0) else {
             hostAnalysisStore.noteSourceUnavailableForRender(
                 reason: "Final Cut Pro did not provide an effect clip source image for render."
@@ -4392,6 +3819,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let autoTransform: StabilizerAutoTransform
         var activePreparedAnalysis: StabilizerPreparedAnalysis?
         var renderUsesPreparedAnalysis = false
+        let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
         let correctionStrengths = StabilizerCorrectionStrengths(
             microJitterX: state.microJitterXStrength,
@@ -4432,7 +3860,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform = .identity
         }
         publishRenderAnalysisDecisionIfChanged(
-            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project persisted analysis \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | auto crop \(state.autoCropEnabled ? "on" : "off") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
+            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | auto crop \(state.autoCropEnabled ? "on" : "off") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
         )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
         let renderStoreRevision = hostAnalysisStore.revision
@@ -4616,31 +4044,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let expectedRange = HostAnalysisExpectedRange(
             startSeconds: CMTimeGetSeconds(analysisRange.start),
             durationSeconds: CMTimeGetSeconds(analysisRange.duration),
-            frameDurationSeconds: CMTimeGetSeconds(frameDuration),
-            timelineInputStartSeconds: currentTimelineInputStartSeconds()
+            frameDurationSeconds: CMTimeGetSeconds(frameDuration)
         )
-        ensureHostAnalysisRangeSeal(expectedRange: expectedRange.isValid ? expectedRange : nil)
-        if let rangeSeal = currentHostAnalysisRangeSeal(),
-           !rangeSeal.matches(expectedRange.isValid ? expectedRange : nil) {
-            let reason = "effect baseline range does not match current input range"
-            Self.releaseHostAnalysisStartReservation()
-            markHostAnalysisActionBlockedForTrimmedClip(
-                actionName: "Host Analysis",
-                expectedRange: expectedRange,
-                analysisRange: nil,
-                analysisDescription: rangeSeal.description,
-                reason: reason
-            )
-            throw hostAnalysisRoutingError("Host Analysis refused range-mismatched input before setup: \(reason).")
-        }
         let configuredProjectCache = configureProjectBundleCacheDirectory(
             expectedRange: expectedRange.isValid ? expectedRange : nil,
             forceRefresh: true
         )
         let projectCacheUnavailableReason = configuredProjectCache ? nil : hostAnalysisStore.projectCacheUnavailableReasonText
         if !configuredProjectCache {
-            NSLog("TokyoWalkingStabilizer: setup Host Analysis will continue in memory because the Event persisted analysis root is unavailable.")
-            os_log("setupAnalysis continuing in memory because the Event persisted analysis root is unavailable; completed analysis will persist later if the Event persisted analysis root becomes available.", log: stabilizerHostAnalysisLog, type: .error)
+            NSLog("TokyoWalkingStabilizer: setup Host Analysis will continue in memory because the Event cache root is unavailable.")
+            os_log("setupAnalysis continuing in memory because the Event cache root is unavailable; completed analysis will persist later if the Event cache root becomes available.", log: stabilizerHostAnalysisLog, type: .error)
         }
         let analysisStore = StabilizerHostAnalysisStore()
         let requestedSampleScalePercent = requestedSampleScalePercent(at: analysisRange.start)
@@ -4672,11 +4085,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             CMTimeGetSeconds(analysisRange.duration),
             CMTimeGetSeconds(frameDuration)
         )
-        _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(
-            expectedRange: expectedRange.isValid ? expectedRange : nil,
-            requestedSampleScalePercent: requestedSampleScalePercent,
-            expectedSampleSize: nil
-        )
+        _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange.isValid ? expectedRange : nil)
         publishAnalysisCallbackStatus(analysisStore)
     }
 

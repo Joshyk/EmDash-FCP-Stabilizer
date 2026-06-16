@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fcpxml version="1.11">
+  <resources>
+    <format id="r1" name="FFVideoFormat1080p2997" frameDuration="1001/30000s" width="1920" height="1080"/>
+    <asset id="r2" name="P1000307" start="0s" duration="300300/30000s" hasVideo="1" format="r1">
+      <media-rep kind="original-media" src="file:///tmp/P1000307.mov"/>
+    </asset>
+  </resources>
+  <library>
+    <event name="gh6">
+      <project name="Timeline">
+        <sequence format="r1" duration="300300/30000s" tcStart="0s" tcFormat="NDF">
+          <spine>
+            <asset-clip name="P1000307" ref="r2" offset="0s" start="0s" duration="300300/30000s"/>
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>

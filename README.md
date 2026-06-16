@@ -3,8 +3,9 @@
 Native FxPlug 4 effect for Final Cut Pro and Motion, tuned for walking footage
 shot on a gimbal.
 
-This repo is FxPlug-only. It does not contain or support a CommandPost runtime,
-standalone estimator, cache generator, or Transform-keyframe writer.
+This repo contains the FxPlug effect plus the local Stabilizer Event Analyzer
+support tool. The FxPlug target remains native FxPlug/Metal code and does not
+contain a CommandPost runtime or Transform-keyframe writer.
 
 ## What It Does
 
@@ -33,28 +34,21 @@ black outside-source pixels. `Edge Display Mode` defaults to `Black Outside`.
 
 ## Basic Workflow
 
-1. Apply `Tokyo Walking Stabilizer` to a clip.
-2. Keep the default `100%` `Sample Size` for full source detail, or choose a
-   smaller sample before starting analysis when you want a quicker debug pass.
-3. Click `Start Host Analysis`.
-4. Click `Reanalyze Host Analysis` twice within 8 seconds when you explicitly want to
-   ignore the currently loaded persisted analysis and run Host Analysis again.
-5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
-6. Tune the strength controls while watching the preview.
+1. Export the Event or Project from Final Cut Pro as FCPXMLD.
+2. Run the local Stabilizer Event Analyzer in `Stabilizer-Event-Analyzer/` on
+   the exported FCPXMLD. It
+   analyzes the Event media full length and writes the Event-scoped persisted
+   cache.
+3. Import the generated FCPXMLD back into Final Cut Pro.
+4. Apply or keep `Tokyo Walking Stabilizer` on the clip and wait for `Host
+   Analysis Status` to show `Persisted Analysis Loaded` or `Ready (... frames)`.
+5. Tune the strength controls while watching the preview.
 
-`Start Host Analysis` and `Reanalyze Host Analysis` stay pressable so failed or skipped
-starts can report the reason in `Host Analysis Status`. They are the only paths that ask
-Final Cut Pro to analyze the clip. Preview and render callbacks only read completed
-analysis or a validated persisted analysis; they do not start analysis on their own.
-If `Sample Size` changes and no analysis exists for that size, the status reports that the
-selected sample has not been analyzed so `Start Host Analysis` can request that size. FxPlug
-does not expose the original media file duration or URL for a direct source-duration check,
-and Final Cut Pro can report nonzero input starts for synchronized/native-time clips, so new
-analysis first asks for confirmation in `Host Analysis Status`; press Start again only when
-the effect is on the untrimmed full clip. Start/Reanalyze also compare the current input
-range with the effect's hidden baseline range and any saved persisted-analysis identity. If
-a trim/cut changes an existing effect's range, Start/Reanalyze report the trimmed-clip block
-instead of starting Host Analysis.
+New effect instances no longer expose `Sample Size`, `Start Host Analysis`,
+`Clear Host Analysis Cache`, or `Queue` in the Final Cut Pro Inspector. Analysis
+is managed by the local Event Analyzer. Preview and render callbacks only
+read completed analysis or a validated persistent cache; they do not start
+analysis on their own.
 
 ## Optional Final Cut Pro Shortcuts
 
@@ -64,7 +58,6 @@ Actions, or manual `osascript` runs:
 
 ```sh
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
-osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript focus-inspector
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript open-selected-project
@@ -73,9 +66,9 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript select-playhead-clip
 ```
 
 These actions use Final Cut Pro Accessibility UI scripting. Grant Accessibility
-permission to the app that runs the script. `start-analysis` and
-`toggle-debug-overlay` fail visibly if the selected clip does not have
-`Tokyo Walking Stabilizer` applied or the Inspector control is not accessible.
+permission to the app that runs the script. `toggle-debug-overlay` fails visibly
+if the selected clip does not have `Tokyo Walking Stabilizer` applied or the
+Inspector control is not accessible.
 `open-project PROJECT_NAME` opens a named Browser project, `open-selected-project`
 opens the selected Browser project, and `select-playhead-clip` reselects the
 timeline clip under the playhead before analysis. Project open commands select
@@ -84,10 +77,10 @@ repeated AppleScript clicks in Final Cut Pro.
 
 ## Inspector Controls
 
-`Sample Size` is read once when analysis starts. It is always derived from the
-original clip dimensions, with `100%`, `75%`, `50%`, `25%`, and `10%` options.
-The default is `100%`; choose a smaller value only when you want a faster debug pass. Long clips keep
-the requested percentage instead of silently lowering it.
+Analysis sample size is selected in the local Stabilizer Event Analyzer and
+shown in the read-only `Sample Info` row after a cache is loaded. The row uses
+`Sample: <percent or unknown> -> <WxH> | Analysis: <N>f`. The Final Cut Pro
+effect no longer exposes a `Sample Size` control.
 
 `Overall Strength` controls the full automatic transform. Setting it to `0`
 bypasses prepared motion-path sampling, crop-safety motion, and debug overlay
@@ -158,91 +151,45 @@ media, while staying larger than the old compact panel.
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep
 stale saved Inspector strings, `Debug Overlay` is the live render-runtime
-indicator. `Sample Info` combines the accepted `Sample Size`, actual analysis
-sample size, frame count, and schema as
-`Sample: <percent> -> <WxH> | Analysis: <frames>f | Schema: v<N>`.
-`Clip Range` is
-deprecated from the visible Inspector metadata. `Queue`
-uses `#N of M`; repeated Start presses on the same effect instance keep only that
-instance's latest pending request, while other queued clips remain queued. Older
-saved timeline instances may still display stale saved info strings until the
-effect is reapplied.
-During a real Host Analysis pass the status advances as `Analyzing Host Frames
-(N)`. If Final Cut Pro restores an in-progress analysis state while a compatible
-saved persisted analysis exists, the plug-in prefers the saved persisted analysis and keeps the shared
-Ready/persisted-analysis status visible. When an analyzer callback is still the active state,
-`Host Analysis Status` and the split read-only info rows are published from that same
-in-progress analysis store, so the Inspector does not combine `Analyzing Host
-Frames (N)` with stale persisted analysis metadata from another clip.
+indicator. `Sample Info` is built from the structured cache snapshot as
+`Sample: <percent or unknown> -> <WxH> | Analysis: <N>f`; it does not fall back
+to hidden `Sample Size` or parse status strings. `Clip Range` and `Queue` are not
+part of the visible Inspector metadata for new effect instances. Older saved
+timeline instances may still display stale saved info strings until the effect
+is reapplied.
 
 ## Host Analysis
 
-Host Analysis uses Final Cut Pro's FxPlug analysis infrastructure to request GPU
-analysis frames from the host. The plug-in then uses Metal compute to downsample
-luma and run frame-to-frame block matching. If Metal analysis resources are not
-available, the Host Analysis path fails visibly in status/log output instead of
-falling back to CPU analysis.
+Analysis generation now happens in the local Stabilizer Event Analyzer. The
+Final Cut Pro effect is a cache consumer: it validates Event-scoped persisted
+analysis, loads the prepared motion path, and renders from that path. New effect
+instances do not expose `Start Host Analysis`, `Clear Host Analysis Cache`,
+`Sample Size`, or `Queue`, and preview/render callbacks do not auto-start
+analysis.
 
-Each active Host Analysis run owns its own in-progress session store. Different
-clips can be requested while another clip is running, and clips whose selected
-`Sample Size` resolves to different actual pixel dimensions do not share the
-same streaming builder. The process-wide callback registry resolves analyzer
-frames by active session range, owner, source frame, and sample size; if Final
-Cut Pro delivers a callback that matches multiple active sessions, the plug-in
-fails that callback visibly instead of appending the frame to an arbitrary clip.
+The local analyzer uses Metal block matching, writes the same
+`host-analysis-v2.json`, `host-analysis-index-v2.json`, render-offset map, and
+range-specific cache files under the Event `Analysis Files` cache root, and
+keeps sample-size-specific results independent. If the effect cannot find a
+compatible cache it shows `External Analysis Required - Run Event Analyzer`.
+Rejected, unsupported, or incomplete candidates are left on disk and surfaced as
+`Cache Rejected - Run Event Analyzer`,
+`Cache Unsupported - Run Event Analyzer`, or
+`Cache Incomplete - Run Event Analyzer`.
 
-When `Start Host Analysis` is pressed on more than one clip, only one clip is
-handed to Final Cut Pro at a time. Additional presses enter the plug-in's serial
-`Queued Host Analysis` state while another Stabilizer Host Analysis run is active
-or reserved. Pressing `Start Host Analysis` again on the same queued effect instance
-replaces that instance's older queued request, but requests for other clips remain in
-queue order. A completed analysis from an earlier clip does not satisfy a later
-queued clip.
-Analysis callback instances clear process-wide analysis bookkeeping, because
-Final Cut Pro may deliver setup/analyze/cleanup to a different FxPlug instance
-than the Inspector button instance that requested the run. The Inspector start
-path does not use plug-in-local active markers as the blocking authority; it asks
-Final Cut Pro's current analysis state and queues only when the host reports a
-busy/requested state. Final Cut Pro's own analysis state remains the authority
-before any queued request can start. The queue stores the `FxAnalysisAPI` obtained
-when Start was pressed, so retry passes do not drop the request just because the
-API cannot be reacquired from a later callback context.
-When Final Cut Pro cannot provide a writable Event persisted analysis root, completed
-memory-only analyses are retained by analyzed timeline range plus sample/fingerprint
-identity in the plug-in process, so a later queued clip does not discard stabilization
-for an earlier clip or collide with another clip that has the same source-time range
-in the same viewer session.
-Preview/render and plug-in state callbacks check the persisted analysis signature,
-so a queued clip that completes in a different FxPlug process can replace an
-older prepared path and update the hidden render revision without requiring
-another manual start. The hidden render revision uses a process-independent
-small numeric token rather than the local analysis counter, so separate
-analyzer/render processes do not publish the same invalidation value for
-different clips. The plug-in skips setting that hidden parameter when Final Cut
-Pro already has the same value, avoiding repeated preview invalidation during
-effect load.
-Viewer-side render instances also monitor the shared persisted analysis location.
-If an analyzer instance finishes in another FxPlug process, the viewer-side
-instance loads the completed cache and publishes the hidden render revision so
-stale preview frames redraw from the prepared motion path.
-If Final Cut Pro rejects a hidden revision update, the plug-in does not mark it
-as published, so a later monitor tick or callback can retry.
-If Final Cut Pro still reports an older hidden revision value, the runtime also
-republishes the current token instead of assuming the previous publish reached
-the host.
-Analyzer completion and persisted-analysis-monitor ticks publish status/info/render revision
-from the FxPlug main queue, which keeps Final Cut Pro's preview invalidation in
-the same path as ordinary parameter updates.
+Older timeline instances may still contain the now-hidden Host Analysis controls.
+The old Start button only attempts to reload a compatible Event Analyzer cache;
+it no longer asks Final Cut Pro to start a forward Host Analysis pass. The old
+Clear button does not delete Event Analyzer cache files and reports
+`External Cache Managed - Use Event Analyzer`.
 
-The analysis path:
-
-- Streams frame-to-frame motion through Metal.
-- Keeps only the previous luma buffer needed for the next motion search.
-- Does not write per-frame `.luma` scratch files.
-- Prioritizes upper-frame far-field blocks for walking landscape footage.
-- Rejects outlier blocks before building the frame path.
-- Exposes low tracking confidence instead of hiding it behind coarse fallback
-  motion.
+Viewer-side render instances monitor the shared persistent cache location. When
+the local analyzer writes a compatible cache and the FCPXMLD import connects
+it to the timeline clip, the viewer-side instance loads the completed cache and
+publishes the hidden render revision so stale preview frames redraw from the
+prepared motion path. If Final Cut Pro rejects a hidden revision update, the
+plug-in does not mark it as published, so a later monitor tick or callback can
+retry.
 
 Prepared paths are post-processed with a zero-phase jerk limiter before caching.
 The limiter clamps isolated acceleration spikes in X/Y/roll while preserving
@@ -258,40 +205,33 @@ without averaging away the current frame's Footstep Jitter
 impulse. Far-field Warp uses a separate short `0.36` second in-range smoothing
 window so distant ridge-line correction stays responsive without amplifying
 single-frame gate flicker. Render-time frame lookup uses the sorted Host Analysis
-times directly, so long persisted analyses do not require repeated full-analysis scans
+times directly, so long analysis caches do not require repeated full-cache scans
 for every preview frame.
 
-Trimmed clips are handled during render by matching the current render frame fingerprint back
+Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
-prepared motion paths. Start/Reanalyze do not use timeline in-point conversion or source
-input start as trim authorities because Final Cut Pro can report timeline/source absolute
-times there for synchronized/native-time clips. FxPlug cannot read the original media
-duration, so Start shows a whole-clip confirmation before any new Host Analysis is
-requested. A hidden baseline range is sealed on the effect instance and preserved when Final
-Cut Pro copies that effect during trim/cut operations. If the current input range no longer
-matches that baseline, or a persisted analysis identity is range-mismatched, Start/Reanalyze
-report the trimmed block instead of starting a new Host Analysis pass. A validated analysis continues to drive preview/render
+prepared motion paths. A validated analysis continues to drive preview/render
 when Final Cut Pro plays proxy media; proxy media is rejected only for Host
-Analysis input and for validating an unvalidated persisted analysis. When proxy playback uses
-a loaded persisted analysis before original-media validation, the render path uses the active
-range-matched persisted analysis identity even if Final Cut Pro has not yet returned the
-hidden persisted analysis identity parameter. If a stale saved identity points at a different
-range, the same render callback drops it and reloads a compatible saved persisted analysis
+Analysis input and for validating an unvalidated cache. When proxy playback uses
+a loaded cache before original-media validation, the render path uses the active
+range-matched cache identity even if Final Cut Pro has not yet returned the
+hidden cache identity parameter. If a stale saved identity points at a different
+range, the same render callback drops it and reloads a compatible saved cache
 before giving up, then keeps the hidden preview revision, `Host Analysis Status`,
 and split read-only info rows current so Final Cut Pro shows the stabilized proxy preview
 and reports `Original Analysis - Proxy Preview`.
 If Final Cut Pro reports a render/timeline range that differs from the saved
-source analysis range, the render path accepts that active persisted analysis only after the
+source analysis range, the render path accepts that active cache only after the
 current source-frame fingerprint validates against the saved frame set. During
 scaled/proxy playback, where that original-frame validation is not available, a
 range-mismatched cache is used for preview only when its saved start matches the
 current clip and the current render time is inside the saved analysis range.
 When original-media validation has mapped a trimmed timeline render time back to
-the analyzed source time, that offset is saved with the Host Analysis persisted analysis identity
+the analyzed source time, that offset is saved with the Host Analysis cache identity
 so a separate proxy render instance can sample the same prepared motion path.
 Proxy/scaled media is detected when the source pixel transform differs from original
 `1.0x/1.0x` in either direction, so reduced-resolution proxy frames do not get treated as
-ordinary original frames and reject a good saved persisted analysis.
+ordinary original frames and reject a good saved cache.
 If Final Cut Pro is set to proxy playback but the proxy media is missing, the
 host supplies a Missing Proxy placeholder rather than the original footage. The
 effect now reports `Source Media Unavailable - Check FCP Proxy`, keeps the saved
@@ -299,16 +239,16 @@ analysis cache intact, and suppresses debug overlay diagnostics over that
 placeholder. Switch Viewer playback back to Original/Optimized or create proxy
 media to see the stabilized source frame.
 
-## Persisted Analysis Behavior
+## Cache Behavior
 
-Completed Host Analysis is written inside the active Final Cut Pro library bundle, scoped to
+Completed analysis is written inside the active Final Cut Pro library bundle, scoped to
 the Event that owns the current project/media folder. If Final Cut Pro reports a library temp
 folder instead of an Event folder, the runtime uses an unambiguous top-level Event resolver,
 such as the single Event that already has Final Cut Pro `Analysis Files`. If multiple Events
 have `Analysis Files`, the resolver compares the active Host Analysis range against Final Cut
 Pro `Analysis Files/Stabilization` range folder names and only selects a unique match. The
 resolver starts access to the host-provided media folder before inspecting the library bundle,
-then verifies the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` persisted analysis root.
+then verifies the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` cache root.
 If `FxProjectAPI.mediaFolderURL()` reports that the library has no media folder because it
 was saved without Collect Media, the resolver reads Final Cut Pro's active library bookmarks
 from `FFActiveLibraries`, tries security-scoped bookmark resolution first, logs when regular
@@ -321,12 +261,12 @@ selection only when the selection UUIDs match exactly one active library and the
 Event UUID resolves through `CurrentVersion.flexolibrary` metadata to an existing top-level
 Event folder. Stale import-target UUIDs are not used. Multiple active libraries with no
 unique selected Event, unreadable
-active-library state, or an unwritable Event persisted analysis root remain visible failures; ambiguous active libraries surface as
-`Project Persisted Analysis Unavailable - Ambiguous Active Libraries`, and the runtime does not write to a shared fallback. It logs the media folder
+active-library state, or an unwritable Event cache root remain visible failures; ambiguous active libraries surface as
+`Project Bundle Cache Unavailable - Ambiguous Active Libraries`, and the runtime does not write to a shared fallback. It logs the media folder
 URL, `documentID`, active-library bookmark candidates when used, bundle root, Event
 candidates, selected Event, and rejection reason with public `os_log` fields. It fails
-visibly as `Project Persisted Analysis Unavailable - Ambiguous Event` when the Event remains
-ambiguous. The persisted analysis root lives
+visibly as `Project Bundle Cache Unavailable - Ambiguous Event` when the Event remains
+ambiguous. The cache root lives
 under that Event's `Analysis Files` directory so analysis files stay unique to the Event and
 do not appear as top-level library content:
 
@@ -336,88 +276,48 @@ do not appear as top-level library content:
 <active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/caches/
 ```
 
-Older top-level bundle persisted analyses at `<active library>.fcpbundle/TokyoWalkingStabilizerHostAnalysis/`
-and older internal bundle persisted analyses at
+Older top-level bundle caches at `<active library>.fcpbundle/TokyoWalkingStabilizerHostAnalysis/`
+and older internal bundle caches at
 `<active library>.fcpbundle/__.fcpdata.apple.com/TokyoWalkingStabilizerHostAnalysis/` are moved into
-the Event `Analysis Files` persisted analysis root when the effect configures the active Event persisted analysis.
+the Event `Analysis Files` cache root when the effect configures the active Event cache.
 
-If the runtime cannot resolve a writable Event persisted analysis root, the effect shows
-`Project Persisted Analysis Unavailable` instead of falling back to a shared user location or a
-library-wide location. During a live Final Cut Pro Host Analysis callback, the analyzer can
-still finish the current session in memory and show
-`Ready Memory Only - Project Persisted Analysis Unavailable`; that result is usable for the current
-viewer/render session but is not persisted to any shared or out-of-bundle location. If the
-Event persisted analysis root becomes available later, the completed in-memory analysis is saved into that
-Event persisted analysis and the Inspector returns to ordinary `Ready (...)` status.
-Range-specific files under `caches/` include the persisted analysis schema as
-`schema<version>`, a readable clip label when available, analyzed start/end, actual pixel
-size as `pixels<width>x<height>`, frame count, and representative frame fingerprints in the
-filename.
+If the runtime cannot resolve a writable Event cache root, the effect shows
+`Project Bundle Cache Unavailable` instead of falling back to a shared user cache or a
+library-wide cache. The FCP effect does not create an out-of-bundle fallback cache.
+Range-specific files under `caches/` include a readable clip label when available, analyzed
+start/end, actual `sampleWidth`/`sampleHeight`, frame count, and representative frame
+fingerprints in the filename.
 `host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
-persisted analysis.
+cache.
 
-Persisted analysis files store prepared paths, frame timing, blur values, search-radius
+Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, and fingerprints instead of
-every frame's full luma sample. Persisted analysis writing uses the prepared analysis frame
+every frame's full luma sample. Cache writing uses the prepared analysis frame
 set as the authoritative timeline, so a reduced retained source-frame map does
 not prevent a completed prepared path from being saved.
 
-`Start Host Analysis` first tries to reload a saved persisted analysis for the current
-clip range, selected `Sample Size`, and actual analysis pixel size when source dimensions are
-already known. It starts a new host analysis when no compatible persisted analysis with that
-requested sample percentage and pixel size can be loaded, so changing `Sample Size` makes the
-button analysis-runnable again without deleting the existing saved analysis for the previous
-size. `Sample Info` includes the active persisted-analysis schema as
-`Sample: 100% -> 573x302 | Analysis: 10500f | Schema: v15`; older compatible caches show
-their saved schema version. If the button
-callback cannot see `FxProjectAPI`, it still asks Final Cut Pro to start Host
-Analysis and lets the analyzer `setupAnalysis` callback resolve the Event persisted analysis
-root through either the host media folder or Final Cut Pro's active library bookmarks and
-the same Event resolver. If setup
-still cannot resolve a writable Event persisted analysis root, the effect
-finishes the active analyzer pass in memory only and shows `Ready Memory Only -
-Project Persisted Analysis Unavailable` after completion until a later callback can resolve the
-Event persisted analysis root and save the completed result. It must not delete saved persisted analysis files.
-The installed plug-in bundle is signed with sandbox, security-scoped file
-entitlements, and a read-only home-relative exception for Final Cut Pro's preference plist
-so the Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped
-URL when Final Cut Pro provides one, or read the active library bookmark when Final Cut Pro
-reports no media folder. Active library bookmarks are resolved with security scope first,
-then resolved as regular bookmarks with visible logs when Final Cut Pro stored a regular
-bookmark; access is retained only when the resolved URL grants a security-scoped lease.
-The debug-signed bundle also carries explicit read-write entitlements for the shared
-local test fixture libraries so the no-media-folder active-library resolver can inspect
-those fixtures and persist Event-scoped caches during Codex-driven FCP tests.
-For this local editing setup it also carries a read-write exception for `/Volumes/WDBLUE1TB/`
-so regular active-library bookmarks for external libraries can still be inspected and saved
-inside their Event-scoped `.fcpbundle` persisted analysis roots.
-The in-progress Host Analysis session registry is process-wide and contains
-per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
-through different FxPlug instances without losing or mixing the active analysis
-session.
+The installed plug-in bundle is signed with sandbox and security-scoped file
+entitlements so the effect can inspect the Event-scoped cache root that Final Cut Pro exposes
+to the FxPlug runtime. The debug-signed bundle also carries explicit local read-write
+exceptions for the shared test fixture libraries used by Codex-driven FCP tests.
 
-Persisted analysis reuse is based on persisted analysis schema, exact analyzed source range,
-actual analysis pixel size, requested sample percentage, saved frame fingerprints, and current
-source-frame validation, not the visible FxPlug runtime version.
-Render-only version bumps should reuse compatible Host Analysis persisted analyses from the active
+Cache reuse is based on cache schema, exact analyzed source range, sample size, saved frame
+fingerprints, and current source-frame validation, not the visible FxPlug runtime version.
+Render-only version bumps should reuse compatible Host Analysis caches from the active
 `.fcpbundle`.
 
-Rejected persisted analysis candidates are visible in status/log output and are remembered by
-file identity inside the active runtime, so the same invalid candidate is not
-loaded again on the next start. Rejected files remain on disk.
-
-Unsupported schema candidates show `Persisted Analysis Unsupported - Run Host Analysis`
-instead of being silently ignored or deleted. This keeps stale persisted analyses available
-for older builds while the current effect asks for a new analysis. Supported-schema
-persisted analyses with incomplete prepared path arrays or too few frames for the saved analysis range
-show `Persisted Analysis Incomplete - Run Host Analysis` so incomplete analysis is not silently reused.
+Rejected cache candidates are visible in status/log output and remain on disk for the
+local analyzer or older builds. Unsupported schema candidates show
+`Cache Unsupported - Run Event Analyzer` instead of being silently ignored or deleted.
+Supported-schema caches with incomplete prepared path arrays or too few frames for the saved
+analysis range show `Cache Incomplete - Run Event Analyzer` so incomplete analysis is not
+silently reused.
 Those stale unusable states do not block later preview/render consumers from rechecking the
-persisted analysis signature and loading a newly written compatible persisted analysis.
+persistent cache signature and loading a newly written compatible cache.
 
-The active runtime uses a process-wide per-clip store for in-progress Host Analysis and a
-process-wide shared render/persisted-analysis store after analysis completes. Bundle-local persisted analysis files are
-the cross-process reuse path. Preview/render instances with no prepared analysis watch for
-persisted analysis file changes and reload validated candidates on demand.
+The active runtime uses bundle-local persistent cache files as the cross-process reuse path.
+Preview/render instances with no prepared analysis watch for cache file changes and reload
+validated candidates on demand.
 
 ## Diagnostics
 
@@ -469,7 +369,7 @@ hidden minimum confidence floor: zero confidence produces zero correction.
 ## Feedback CLI
 
 Use the local feedback CLI when reviewing notes like `at 5 sec there is a
-notable unremoved shake` against a saved Host Analysis persisted analysis:
+notable unremoved shake` against a saved Host Analysis cache:
 
 ```sh
 fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh \
@@ -488,7 +388,7 @@ requested note time. For bundle-local caches, pass
 `--output-size 1920x1080` when you want pixel estimates scaled to a target preview size.
 
 Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"`
-to list the latest bundle persisted analysis and range-specific persisted analysis files. It reports each file as
+to list the latest bundle cache and range-specific cache files. It reports each file as
 `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing or deleting
 anything.
 
