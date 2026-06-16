@@ -330,9 +330,10 @@ still finish the current session in memory and show
 viewer/render session but is not persisted to any shared or out-of-bundle location. If the
 Event persisted analysis root becomes available later, the completed in-memory analysis is saved into that
 Event persisted analysis and the Inspector returns to ordinary `Ready (...)` status.
-Range-specific files under `caches/` include a readable clip label when available, analyzed
-start/end, actual pixel size as `pixels<width>x<height>`, frame count, and representative
-frame fingerprints in the filename.
+Range-specific files under `caches/` include the persisted analysis schema as
+`schema<version>`, a readable clip label when available, analyzed start/end, actual pixel
+size as `pixels<width>x<height>`, frame count, and representative frame fingerprints in the
+filename.
 `host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
 persisted analysis.
 

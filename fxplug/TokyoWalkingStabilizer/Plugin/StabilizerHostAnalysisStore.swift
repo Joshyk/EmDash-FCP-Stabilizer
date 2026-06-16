@@ -3001,7 +3001,7 @@ final class StabilizerHostAnalysisStore {
         let middle = fingerprints?.middle.prefix(12) ?? "unknown"
         let last = fingerprints?.last.prefix(12) ?? "unknown"
         let clipLabel = safeCacheFileComponent(cache.clipLabel ?? defaultClipLabel)
-        return "host-analysis-v2-\(clipLabel)-start\(timeKey(cache.rangeStartSeconds))-end\(timeKey(rangeEndSeconds(for: cache)))-pixels\(cache.sampleWidth)x\(cache.sampleHeight)-n\(frames.count)-\(first)-\(middle)-\(last).json"
+        return "host-analysis-v2-schema\(cache.schemaVersion)-\(clipLabel)-start\(timeKey(cache.rangeStartSeconds))-end\(timeKey(rangeEndSeconds(for: cache)))-pixels\(cache.sampleWidth)x\(cache.sampleHeight)-n\(frames.count)-\(first)-\(middle)-\(last).json"
     }
 
     private static func persistentCacheIdentity(for cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) -> String? {
