@@ -284,12 +284,118 @@ private struct MetalBlockUniforms {
     let scoreGridHeight: UInt32
 }
 
+private final class MetalMotionWorkspace {
+    let width: Int
+    let height: Int
+    let radius: Int
+    let searchStep: Int
+    let scoreGridWidth: Int
+    let scoreCount: Int
+    let blockCount: Int
+    let uniformBuffer: MTLBuffer
+
+    init(width: Int, height: Int, device: MTLDevice) throws {
+        self.width = width
+        self.height = height
+        let radius = min(24, max(4, min(width, height) / 64))
+        let searchStep = width > 1400 || height > 900 ? 2 : 1
+        let blockWidth = max(32, width / 4)
+        let blockHeight = max(24, height / 5)
+        let sampleStep = max(1, min(blockWidth, blockHeight) / 56)
+        let centers = [
+            (width / 2, max(1, height / 4)),
+            (width / 3, max(1, height / 3)),
+            ((width * 2) / 3, max(1, height / 3)),
+        ]
+        let scoreGridWidth = ((radius * 2) / searchStep) + 1
+        let scoreGridHeight = scoreGridWidth
+        let scoreCount = scoreGridWidth * scoreGridHeight
+        let uniforms = centers.map {
+            MetalBlockUniforms(
+                centerX: UInt32($0.0),
+                centerY: UInt32($0.1),
+                blockWidth: UInt32(blockWidth),
+                blockHeight: UInt32(blockHeight),
+                width: UInt32(width),
+                height: UInt32(height),
+                radius: UInt32(radius),
+                searchStep: UInt32(searchStep),
+                sampleStep: UInt32(sampleStep),
+                scoreGridWidth: UInt32(scoreGridWidth),
+                scoreGridHeight: UInt32(scoreGridHeight)
+            )
+        }
+        guard let uniformBuffer = device.makeBuffer(
+            bytes: uniforms,
+            length: MemoryLayout<MetalBlockUniforms>.stride * uniforms.count,
+            options: .storageModeShared
+        ) else {
+            throw AnalyzerError("could not allocate reusable Metal motion search resources")
+        }
+        self.radius = radius
+        self.searchStep = searchStep
+        self.scoreGridWidth = scoreGridWidth
+        self.scoreCount = scoreCount
+        self.blockCount = uniforms.count
+        self.uniformBuffer = uniformBuffer
+    }
+
+    func resolveMotion(scoreBuffer: MTLBuffer) -> PairMotion {
+        let scores = UnsafeBufferPointer(
+            start: scoreBuffer.contents().assumingMemoryBound(to: Float.self),
+            count: scoreCount * blockCount
+        )
+        var dxValues: [Float] = []
+        var dyValues: [Float] = []
+        var residuals: [Float] = []
+        dxValues.reserveCapacity(blockCount)
+        dyValues.reserveCapacity(blockCount)
+        residuals.reserveCapacity(blockCount)
+        for blockIndex in 0..<blockCount {
+            var bestScore = Float.greatestFiniteMagnitude
+            var bestIndex = 0
+            let blockOffset = blockIndex * scoreCount
+            for scoreIndex in 0..<scoreCount {
+                let score = scores[blockOffset + scoreIndex]
+                if score < bestScore {
+                    bestScore = score
+                    bestIndex = scoreIndex
+                }
+            }
+            let gx = bestIndex % scoreGridWidth
+            let gy = bestIndex / scoreGridWidth
+            dxValues.append(Float(-radius + gx * searchStep))
+            dyValues.append(Float(-radius + gy * searchStep))
+            residuals.append(bestScore)
+        }
+        let dx = dxValues.reduce(0, +) / Float(max(1, dxValues.count))
+        let dy = dyValues.reduce(0, +) / Float(max(1, dyValues.count))
+        let residual = residuals.reduce(0, +) / Float(max(1, residuals.count))
+        let confidence = clamp(1.0 - (residual / 48.0), 0.05, 1.0)
+        return PairMotion(dx: dx, dy: dy, residual: residual, confidence: confidence)
+    }
+}
+
+private struct MetalFrameSlot {
+    let lumaBuffer: MTLBuffer
+    let scoreBuffer: MTLBuffer
+}
+
+private struct MetalEncodedFrame {
+    let commandBuffer: MTLCommandBuffer
+    let texture: CVMetalTexture
+    let outputBuffer: MTLBuffer
+    let scoreBuffer: MTLBuffer?
+    let motionWorkspace: MetalMotionWorkspace?
+}
+
 final class MetalAnalysisContext {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let textureCache: CVMetalTextureCache
     private let lumaPipelineState: MTLComputePipelineState
     private let blockScorePipelineState: MTLComputePipelineState
+    private var motionWorkspace: MetalMotionWorkspace?
 
     var deviceName: String { device.name }
 
@@ -317,14 +423,26 @@ final class MetalAnalysisContext {
         self.blockScorePipelineState = try device.makeComputePipelineState(function: blockScoreFunction)
     }
 
-    func makeLumaOutputBuffer(pixelCount: Int) throws -> MTLBuffer {
-        guard let buffer = device.makeBuffer(length: pixelCount, options: .storageModeShared) else {
-            throw AnalyzerError("could not allocate reusable Metal luma output buffer")
+    fileprivate func makeFrameSlot(pixelCount: Int, width: Int, height: Int) throws -> MetalFrameSlot {
+        let workspace = try workspaceForMotion(width: width, height: height)
+        guard let lumaBuffer = device.makeBuffer(length: pixelCount, options: .storageModeShared),
+              let scoreBuffer = device.makeBuffer(
+                length: MemoryLayout<Float>.stride * workspace.scoreCount * workspace.blockCount,
+                options: .storageModeShared
+              ) else {
+            throw AnalyzerError("could not allocate reusable Metal frame analysis buffers")
         }
-        return buffer
+        return MetalFrameSlot(lumaBuffer: lumaBuffer, scoreBuffer: scoreBuffer)
     }
 
-    func lumaSample(from pixelBuffer: CVPixelBuffer, sampleWidth: Int, sampleHeight: Int, outputBuffer: MTLBuffer) throws -> [UInt8] {
+    fileprivate func encodeFrame(
+        from pixelBuffer: CVPixelBuffer,
+        sampleWidth: Int,
+        sampleHeight: Int,
+        outputBuffer: MTLBuffer,
+        scoreBuffer: MTLBuffer,
+        previousBuffer: MTLBuffer?
+    ) throws -> MetalEncodedFrame {
         let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
         let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
         let pixelCount = sampleWidth * sampleHeight
@@ -365,101 +483,65 @@ final class MetalAnalysisContext {
             threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1)
         )
         encoder.endEncoding()
+
+        let activeMotionWorkspace: MetalMotionWorkspace?
+        if let previousBuffer {
+            let workspace = try workspaceForMotion(width: sampleWidth, height: sampleHeight)
+            guard let motionEncoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw AnalyzerError("could not allocate Metal block motion encoder")
+            }
+            motionEncoder.setComputePipelineState(blockScorePipelineState)
+            motionEncoder.setBuffer(previousBuffer, offset: 0, index: 0)
+            motionEncoder.setBuffer(outputBuffer, offset: 0, index: 1)
+            motionEncoder.setBuffer(scoreBuffer, offset: 0, index: 2)
+            motionEncoder.setBuffer(workspace.uniformBuffer, offset: 0, index: 3)
+            motionEncoder.dispatchThreads(
+                MTLSize(width: workspace.scoreCount, height: workspace.blockCount, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: min(64, workspace.scoreCount), height: 1, depth: 1)
+            )
+            motionEncoder.endEncoding()
+            activeMotionWorkspace = workspace
+        } else {
+            activeMotionWorkspace = nil
+        }
+
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        try Self.validate(commandBuffer: commandBuffer, stage: "luma sampling")
-        let pixels = [UInt8](UnsafeBufferPointer(
-            start: outputBuffer.contents().assumingMemoryBound(to: UInt8.self),
-            count: pixelCount
-        ))
-        return pixels
+        return MetalEncodedFrame(
+            commandBuffer: commandBuffer,
+            texture: cvTexture,
+            outputBuffer: outputBuffer,
+            scoreBuffer: previousBuffer == nil ? nil : scoreBuffer,
+            motionWorkspace: activeMotionWorkspace
+        )
     }
 
-    func estimateMotion(previous: MTLBuffer, current: MTLBuffer, width: Int, height: Int) throws -> PairMotion {
-        let radius = min(24, max(4, min(width, height) / 64))
-        let searchStep = width > 1400 || height > 900 ? 2 : 1
-        let blockWidth = max(32, width / 4)
-        let blockHeight = max(24, height / 5)
-        let sampleStep = max(1, min(blockWidth, blockHeight) / 56)
-        let centers = [
-            (width / 2, max(1, height / 4)),
-            (width / 3, max(1, height / 3)),
-            ((width * 2) / 3, max(1, height / 3)),
-        ]
-        let scoreGridWidth = ((radius * 2) / searchStep) + 1
-        let scoreGridHeight = scoreGridWidth
-        let scoreCount = scoreGridWidth * scoreGridHeight
-        let uniforms = centers.map {
-            MetalBlockUniforms(
-                centerX: UInt32($0.0),
-                centerY: UInt32($0.1),
-                blockWidth: UInt32(blockWidth),
-                blockHeight: UInt32(blockHeight),
-                width: UInt32(width),
-                height: UInt32(height),
-                radius: UInt32(radius),
-                searchStep: UInt32(searchStep),
-                sampleStep: UInt32(sampleStep),
-                scoreGridWidth: UInt32(scoreGridWidth),
-                scoreGridHeight: UInt32(scoreGridHeight)
-            )
+    fileprivate func completeFrame(_ encodedFrame: MetalEncodedFrame, pixelCount: Int) throws -> (pixels: [UInt8], motion: PairMotion?) {
+        encodedFrame.commandBuffer.waitUntilCompleted()
+        CVMetalTextureCacheFlush(textureCache, 0)
+        try Self.validate(commandBuffer: encodedFrame.commandBuffer, stage: encodedFrame.motionWorkspace == nil ? "luma sampling" : "luma sampling and block motion search")
+        let pixels = [UInt8](UnsafeBufferPointer(
+            start: encodedFrame.outputBuffer.contents().assumingMemoryBound(to: UInt8.self),
+            count: pixelCount
+        ))
+        let motion: PairMotion?
+        if let motionWorkspace = encodedFrame.motionWorkspace,
+           let scoreBuffer = encodedFrame.scoreBuffer {
+            motion = motionWorkspace.resolveMotion(scoreBuffer: scoreBuffer)
+        } else {
+            motion = nil
         }
-        guard let uniformBuffer = device.makeBuffer(
-            bytes: uniforms,
-            length: MemoryLayout<MetalBlockUniforms>.stride * uniforms.count,
-            options: .storageModeShared
-        ),
-            let scoreBuffer = device.makeBuffer(
-                length: MemoryLayout<Float>.stride * scoreCount * uniforms.count,
-                options: .storageModeShared
-            ),
-            let commandBuffer = commandQueue.makeCommandBuffer(),
-            let encoder = commandBuffer.makeComputeCommandEncoder() else {
-            throw AnalyzerError("could not allocate Metal block motion resources")
-        }
-        encoder.setComputePipelineState(blockScorePipelineState)
-        encoder.setBuffer(previous, offset: 0, index: 0)
-        encoder.setBuffer(current, offset: 0, index: 1)
-        encoder.setBuffer(scoreBuffer, offset: 0, index: 2)
-        encoder.setBuffer(uniformBuffer, offset: 0, index: 3)
-        encoder.dispatchThreads(
-            MTLSize(width: scoreCount, height: uniforms.count, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: min(64, scoreCount), height: 1, depth: 1)
-        )
-        encoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        try Self.validate(commandBuffer: commandBuffer, stage: "block motion search")
+        return (pixels, motion)
+    }
 
-        let scores = UnsafeBufferPointer(
-            start: scoreBuffer.contents().assumingMemoryBound(to: Float.self),
-            count: scoreCount * uniforms.count
-        )
-        var dxValues: [Float] = []
-        var dyValues: [Float] = []
-        var residuals: [Float] = []
-        for blockIndex in 0..<uniforms.count {
-            var bestScore = Float.greatestFiniteMagnitude
-            var bestIndex = 0
-            let blockOffset = blockIndex * scoreCount
-            for scoreIndex in 0..<scoreCount {
-                let score = scores[blockOffset + scoreIndex]
-                if score < bestScore {
-                    bestScore = score
-                    bestIndex = scoreIndex
-                }
-            }
-            let gx = bestIndex % scoreGridWidth
-            let gy = bestIndex / scoreGridWidth
-            dxValues.append(Float(-radius + gx * searchStep))
-            dyValues.append(Float(-radius + gy * searchStep))
-            residuals.append(bestScore)
+    private func workspaceForMotion(width: Int, height: Int) throws -> MetalMotionWorkspace {
+        if let motionWorkspace,
+           motionWorkspace.width == width,
+           motionWorkspace.height == height {
+            return motionWorkspace
         }
-        let dx = dxValues.reduce(0, +) / Float(max(1, dxValues.count))
-        let dy = dyValues.reduce(0, +) / Float(max(1, dyValues.count))
-        let residual = residuals.reduce(0, +) / Float(max(1, residuals.count))
-        let confidence = clamp(1.0 - (residual / 48.0), 0.05, 1.0)
-        return PairMotion(dx: dx, dy: dy, residual: residual, confidence: confidence)
+        let workspace = try MetalMotionWorkspace(width: width, height: height, device: device)
+        motionWorkspace = workspace
+        return workspace
     }
 
     private static func validate(commandBuffer: MTLCommandBuffer, stage: String) throws {
@@ -632,19 +714,44 @@ func readFrames(
     var frames: [AnalysisFrame] = []
     var motions: [PairMotion] = []
     let pixelCount = sample.width * sample.height
-    let lumaBuffers = [
-        try metalContext.makeLumaOutputBuffer(pixelCount: pixelCount),
-        try metalContext.makeLumaOutputBuffer(pixelCount: pixelCount),
-    ]
-    var currentLumaBufferIndex = 0
+    let inFlightLimit = 8
+    let frameSlots = try (0..<inFlightLimit).map { _ in
+        try metalContext.makeFrameSlot(pixelCount: pixelCount, width: sample.width, height: sample.height)
+    }
+    var currentFrameSlotIndex = 0
     var previousLumaBuffer: MTLBuffer?
     var firstPTS: Double?
+    var pendingFrames: [(encoded: MetalEncodedFrame, time: Double)] = []
+    pendingFrames.reserveCapacity(inFlightLimit)
+
+    func finishOldestPendingFrame() throws {
+        let pending = pendingFrames.removeFirst()
+        let frameAnalysis = try metalContext.completeFrame(pending.encoded, pixelCount: pixelCount)
+        let pixels = frameAnalysis.pixels
+        let frame = AnalysisFrame(
+            time: pending.time,
+            pixels: [],
+            sampleWidth: sample.width,
+            sampleHeight: sample.height,
+            blurAmount: blurAmount(pixels, width: sample.width, height: sample.height),
+            fingerprint: fingerprint(for: pixels)
+        )
+        motions.append(frameAnalysis.motion ?? PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
+        frames.append(frame)
+        if frames.count % 30 == 0 {
+            progress(progressEnabled, "analyzed \(frames.count) frame(s) for \(plan.name)")
+        }
+    }
+
     while reader.status == .reading {
+        if pendingFrames.count >= inFlightLimit {
+            try finishOldestPendingFrame()
+        }
         let shouldContinue = try autoreleasepool {
             guard let sampleBuffer = output.copyNextSampleBuffer() else {
                 return false
             }
-            if let maxFrames, frames.count >= maxFrames {
+            if let maxFrames, frames.count + pendingFrames.count >= maxFrames {
                 return false
             }
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
@@ -658,42 +765,26 @@ func readFrames(
                 firstPTS = pts
             }
             let time = max(0, pts - (firstPTS ?? pts))
-            let currentLumaBuffer = lumaBuffers[currentLumaBufferIndex]
-            let pixels = try metalContext.lumaSample(
+            let currentFrameSlot = frameSlots[currentFrameSlotIndex]
+            let encodedFrame = try metalContext.encodeFrame(
                 from: pixelBuffer,
                 sampleWidth: sample.width,
                 sampleHeight: sample.height,
-                outputBuffer: currentLumaBuffer
+                outputBuffer: currentFrameSlot.lumaBuffer,
+                scoreBuffer: currentFrameSlot.scoreBuffer,
+                previousBuffer: previousLumaBuffer
             )
-            let frame = AnalysisFrame(
-                time: time,
-                pixels: [],
-                sampleWidth: sample.width,
-                sampleHeight: sample.height,
-                blurAmount: blurAmount(pixels, width: sample.width, height: sample.height),
-                fingerprint: fingerprint(for: pixels)
-            )
-            if let previousLumaBuffer {
-                motions.append(try metalContext.estimateMotion(
-                    previous: previousLumaBuffer,
-                    current: currentLumaBuffer,
-                    width: sample.width,
-                    height: sample.height
-                ))
-            } else {
-                motions.append(PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
-            }
-            previousLumaBuffer = currentLumaBuffer
-            currentLumaBufferIndex = (currentLumaBufferIndex + 1) % lumaBuffers.count
-            frames.append(frame)
-            if frames.count % 30 == 0 {
-                progress(progressEnabled, "analyzed \(frames.count) frame(s) for \(plan.name)")
-            }
+            pendingFrames.append((encoded: encodedFrame, time: time))
+            previousLumaBuffer = currentFrameSlot.lumaBuffer
+            currentFrameSlotIndex = (currentFrameSlotIndex + 1) % frameSlots.count
             return true
         }
         if !shouldContinue {
             break
         }
+    }
+    while !pendingFrames.isEmpty {
+        try finishOldestPendingFrame()
     }
     if reader.status == .failed {
         throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed")
