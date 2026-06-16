@@ -313,7 +313,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   using scaled/proxy media, the status stays actionable as
   `Ready (...) - Original Media Required to Start Analysis`. Range mismatches from stale
   persisted analysis candidates show `Persisted Analysis Range Mismatch - Run Host Analysis` and keep `Start Host
-  Analysis` enabled.
+  Analysis` enabled. Start/Update button state is refreshed when the input range changes
+  and periodically from plugin-state/render callbacks, so trim changes do not leave stale
+  button flags behind.
 - `Sample Info`: read-only Inspector row showing the actual analyzed pixel sample size and
   frame count, for example `Sample: 573x302 | Analysis: 10500f`. `Clip Range` is deprecated
   from the visible Inspector metadata. Older saved timeline instances may keep stale saved Inspector strings,

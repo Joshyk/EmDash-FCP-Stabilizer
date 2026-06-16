@@ -253,7 +253,9 @@ Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
 prepared motion paths. A trimmed timeline range does not block `Start Host
 Analysis`; stale range-mismatched persisted analyses show `Persisted Analysis Range Mismatch - Run Host
-Analysis` and can be replaced by running analysis again. A validated analysis continues to drive preview/render
+Analysis` and can be replaced by running analysis again. Start/Update button flags are
+refreshed when the input range changes and periodically from plugin-state/render callbacks,
+so trim and untrim operations do not rely on the original effect-add state. A validated analysis continues to drive preview/render
 when Final Cut Pro plays proxy media; proxy media is rejected only for Host
 Analysis input and for validating an unvalidated persisted analysis. When proxy playback uses
 a loaded persisted analysis before original-media validation, the render path uses the active

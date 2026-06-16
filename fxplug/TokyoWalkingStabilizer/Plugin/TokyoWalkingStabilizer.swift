@@ -43,8 +43,9 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.144"
+private let tokyoWalkingStabilizerVersion = "0.3.145"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
+private let hostAnalysisControlRefreshIntervalSeconds = 0.5
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 private let stabilizerDefaultAutoCropZoomSpeed = 1.0
@@ -213,6 +214,14 @@ struct HostAnalysisExpectedRange {
             && durationSeconds > 0.0
     }
 
+    var interactionSignature: String {
+        String(
+            format: "%.6f|%.6f|%.6f",
+            startSeconds,
+            durationSeconds,
+            frameDurationSeconds
+        )
+    }
 }
 
 private struct ActiveHostAnalysisRoute {
@@ -525,6 +534,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedStartHostAnalysisButtonEnabled: Bool?
     private var lastPublishedUpdatePersistedAnalysisButtonEnabled: Bool?
     private var lastPublishedHostAnalysisCacheIdentity: String?
+    private var lastHostAnalysisControlRangeSignature = ""
+    private var lastHostAnalysisControlRefreshTime = 0.0
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
     private var preferredHostAnalysisCacheIdentity: String?
@@ -861,6 +872,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             state.inputFrameDurationSeconds = inputRange.frameDurationSeconds
         }
         let expectedRange = Self.expectedInputRange(from: state)
+        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "plugin-state")
         if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
                hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
@@ -890,6 +902,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     func startHostAnalysis() {
         os_log("Start Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
         let expectedRange = currentInputRange()
+        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "start-button", force: true)
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
@@ -966,6 +979,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         let expectedRange = currentInputRange()
+        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "update-persisted-button", force: true)
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         os_log(
             "Update Persisted Analysis confirmed for %{public}@.",
@@ -1739,8 +1753,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         canStartHostAnalysisOverride: Bool? = nil
     ) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
-        _ = canStartHostAnalysisOverride
-        let startHostAnalysisButtonEnabled = true
+        let startHostAnalysisButtonEnabled = canStartHostAnalysisOverride ?? hostAnalysisStore.canStartHostAnalysis
         let updatePersistedAnalysisButtonEnabled = hostAnalysisStore.persistedAnalysisUpdateSummary != nil
         statusLock.lock()
         let shouldPublishStatus = force || status != lastPublishedStatus
@@ -1768,6 +1781,40 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if shouldPublishUpdatePersistedAnalysisButton {
             publishUpdatePersistedAnalysisButtonEnabled(updatePersistedAnalysisButtonEnabled, settingAPI: settingAPI)
         }
+    }
+
+    private func refreshHostAnalysisControlState(
+        expectedRange: HostAnalysisExpectedRange?,
+        reason: String,
+        force: Bool = false
+    ) {
+        let rangeSignature = expectedRange?.interactionSignature ?? "range-unavailable"
+        let now = Date.timeIntervalSinceReferenceDate
+        statusLock.lock()
+        let rangeChanged = rangeSignature != lastHostAnalysisControlRangeSignature
+        let intervalElapsed = now - lastHostAnalysisControlRefreshTime >= hostAnalysisControlRefreshIntervalSeconds
+        let shouldRefresh = force || rangeChanged || intervalElapsed
+        if shouldRefresh {
+            lastHostAnalysisControlRefreshTime = now
+        }
+        if rangeChanged {
+            lastHostAnalysisControlRangeSignature = rangeSignature
+            lastPublishedStatus = ""
+            lastPublishedStartHostAnalysisButtonEnabled = nil
+            lastPublishedUpdatePersistedAnalysisButtonEnabled = nil
+        } else if force {
+            lastPublishedStartHostAnalysisButtonEnabled = nil
+            lastPublishedUpdatePersistedAnalysisButtonEnabled = nil
+        }
+        statusLock.unlock()
+
+        guard shouldRefresh else {
+            return
+        }
+        if rangeChanged {
+            NSLog("TokyoWalkingStabilizer: refreshing Host Analysis controls after input range change from \(reason): \(rangeSignature)")
+        }
+        publishHostAnalysisStatus(force: true)
     }
 
     private func publishStartHostAnalysisButtonEnabled(
@@ -3857,6 +3904,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
         var requests: [FxImageTileRequest] = []
+        let state = Self.pluginState(from: pluginState)
+        refreshHostAnalysisControlState(
+            expectedRange: currentInputRange() ?? state.flatMap { Self.expectedInputRange(from: $0) },
+            reason: "schedule-inputs"
+        )
         let sourceRequest = Self.sourceRequestTime(for: renderTime, pluginState: pluginState)
         if sourceRequest.clamped {
             NSLog(
@@ -3894,6 +3946,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard let state = Self.pluginState(from: pluginState) else {
             return
         }
+        let expectedRange = currentRenderExpectedRange(from: state)
+        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "render")
         guard sourceImages.indices.contains(0) else {
             hostAnalysisStore.noteSourceUnavailableForRender(
                 reason: "Final Cut Pro did not provide an effect clip source image for render."
@@ -3948,7 +4002,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let autoTransform: StabilizerAutoTransform
         var activePreparedAnalysis: StabilizerPreparedAnalysis?
         var renderUsesPreparedAnalysis = false
-        let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
         let correctionStrengths = StabilizerCorrectionStrengths(
             microJitterX: state.microJitterXStrength,
