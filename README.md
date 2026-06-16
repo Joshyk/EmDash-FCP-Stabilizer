@@ -47,10 +47,11 @@ starts can report the reason in `Host Analysis Status`. They are the only paths 
 Final Cut Pro to analyze the clip. Preview and render callbacks only read completed
 analysis or a validated persisted analysis; they do not start analysis on their own.
 If `Sample Size` changes and no analysis exists for that size, the status reports that the
-selected sample has not been analyzed so `Start Host Analysis` can request that size. If
-Final Cut Pro reports that the timeline in-point maps after the source clip start, or the current clip
-range differs from a saved or hidden persisted-analysis identity, Start/Reanalyze report the
-trimmed-clip block instead of starting Host Analysis.
+selected sample has not been analyzed so `Start Host Analysis` can request that size. FxPlug
+does not expose the original media file duration or URL for a direct source-duration check,
+so Start/Reanalyze compare the current input range with the effect's hidden baseline range
+and any saved persisted-analysis identity. If a trim/cut changes an existing effect's range,
+Start/Reanalyze report the trimmed-clip block instead of starting Host Analysis.
 
 ## Optional Final Cut Pro Shortcuts
 
@@ -259,11 +260,12 @@ for every preview frame.
 
 Trimmed clips are handled during render by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
-prepared motion paths. A Final Cut Pro-reported nonzero timeline input start blocks `Start Host
-Analysis` and `Reanalyze Host Analysis`; stale range-mismatched persisted analyses show the
-trimmed block instead of starting a new Host Analysis pass. Start/Reanalyze button flags are
-refreshed when the input range changes and periodically from plugin-state/render callbacks,
-so trim and untrim operations do not rely on the original effect-add state. A validated analysis continues to drive preview/render
+prepared motion paths. Start/Reanalyze do not use timeline in-point conversion as a trim
+authority because Final Cut Pro can report timeline/source absolute times there. Instead, a
+hidden baseline range is sealed on the effect instance and preserved when Final Cut Pro
+copies that effect during trim/cut operations. If the current input range no longer matches
+that baseline, or a persisted analysis identity is range-mismatched, Start/Reanalyze report
+the trimmed block instead of starting a new Host Analysis pass. A validated analysis continues to drive preview/render
 when Final Cut Pro plays proxy media; proxy media is rejected only for Host
 Analysis input and for validating an unvalidated persisted analysis. When proxy playback uses
 a loaded persisted analysis before original-media validation, the render path uses the active

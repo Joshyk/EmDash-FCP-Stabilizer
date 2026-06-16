@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.150"
+private let tokyoWalkingStabilizerVersion = "0.3.151"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let hostAnalysisControlRefreshIntervalSeconds = 0.5
 private let reanalysisConfirmationWindowSeconds = 8.0
@@ -254,6 +254,98 @@ struct HostAnalysisExpectedRange {
             durationSeconds,
             frameDurationSeconds
         )
+    }
+}
+
+private struct HostAnalysisRangeSeal {
+    let startKey: Int64
+    let durationKey: Int64
+    let frameDurationKey: Int64
+
+    init(expectedRange: HostAnalysisExpectedRange) {
+        startKey = StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds)
+        durationKey = StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds)
+        frameDurationKey = StabilizerHostAnalysisStore.timeKey(expectedRange.frameDurationSeconds)
+    }
+
+    private init(startKey: Int64, durationKey: Int64, frameDurationKey: Int64) {
+        self.startKey = startKey
+        self.durationKey = durationKey
+        self.frameDurationKey = frameDurationKey
+    }
+
+    var encodedValue: String {
+        "\(startKey),\(durationKey),\(frameDurationKey)"
+    }
+
+    var description: String {
+        "start\(startKey)-duration\(durationKey)-frame\(frameDurationKey)"
+    }
+
+    func matches(_ expectedRange: HostAnalysisExpectedRange?) -> Bool {
+        guard let expectedRange, expectedRange.isValid else {
+            return true
+        }
+        return startKey == StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds)
+            && durationKey == StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds)
+            && frameDurationKey == StabilizerHostAnalysisStore.timeKey(expectedRange.frameDurationSeconds)
+    }
+
+    static func decode(_ value: String) -> HostAnalysisRangeSeal? {
+        let parts = value.split(separator: ",", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              let startKey = Int64(parts[0]),
+              let durationKey = Int64(parts[1]),
+              let frameDurationKey = Int64(parts[2])
+        else {
+            return nil
+        }
+        return HostAnalysisRangeSeal(
+            startKey: startKey,
+            durationKey: durationKey,
+            frameDurationKey: frameDurationKey
+        )
+    }
+}
+
+private struct HostAnalysisHiddenIdentity {
+    let rangeSeal: HostAnalysisRangeSeal?
+    let cacheIdentity: String?
+
+    static func decode(_ rawValue: String?) -> HostAnalysisHiddenIdentity {
+        let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !value.isEmpty else {
+            return HostAnalysisHiddenIdentity(rangeSeal: nil, cacheIdentity: nil)
+        }
+        var rangeSeal: HostAnalysisRangeSeal?
+        var cacheIdentity: String?
+        var sawRecord = false
+        for record in value.split(separator: "|", omittingEmptySubsequences: false).map(String.init) {
+            if let range = record.range(of: "base="), range.lowerBound == record.startIndex {
+                sawRecord = true
+                rangeSeal = HostAnalysisRangeSeal.decode(String(record[range.upperBound...]))
+            } else if let range = record.range(of: "cache="), range.lowerBound == record.startIndex {
+                sawRecord = true
+                let cacheValue = String(record[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                cacheIdentity = cacheValue.isEmpty ? nil : cacheValue
+            }
+        }
+        if !sawRecord {
+            cacheIdentity = value
+        }
+        return HostAnalysisHiddenIdentity(rangeSeal: rangeSeal, cacheIdentity: cacheIdentity)
+    }
+
+    static func encode(rangeSeal: HostAnalysisRangeSeal?, cacheIdentity: String?) -> String {
+        var records: [String] = []
+        if let rangeSeal {
+            records.append("base=\(rangeSeal.encodedValue)")
+        }
+        if let cacheIdentity = cacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !cacheIdentity.isEmpty {
+            records.append("cache=\(cacheIdentity)")
+        }
+        return records.joined(separator: "|")
     }
 }
 
@@ -581,6 +673,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
     private var preferredHostAnalysisCacheIdentity: String?
+    private var sealedHostAnalysisRange: HostAnalysisRangeSeal?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
     private var persistentCacheMonitor: DispatchSourceTimer?
@@ -915,6 +1008,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             state.inputFrameDurationSeconds = inputRange.frameDurationSeconds
         }
         let expectedRange = Self.expectedInputRange(from: state)
+        ensureHostAnalysisRangeSeal(expectedRange: expectedRange)
         let sampleRequirement = currentSampleRequirement(for: expectedRange)
         refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "plugin-state")
         if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
@@ -966,6 +1060,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     func startHostAnalysis() {
         os_log("Start Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
         let expectedRange = currentInputRange()
+        ensureHostAnalysisRangeSeal(expectedRange: expectedRange)
         refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "start-button", force: true)
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
@@ -1043,6 +1138,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     @objc(reanalyzeHostAnalysis)
     func reanalyzeHostAnalysis() {
         let expectedRange = currentInputRange()
+        ensureHostAnalysisRangeSeal(expectedRange: expectedRange)
         refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "reanalyze-button", force: true)
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         os_log("Reanalyze Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
@@ -1090,16 +1186,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return true
         }
-        if let trimmedInputStartSeconds = expectedRange.trimmedInputStartSeconds {
-            markHostAnalysisActionBlockedForTrimmedClip(
-                actionName: actionName,
-                expectedRange: expectedRange,
-                analysisRange: nil,
-                analysisDescription: "current input range",
-                reason: String(format: "timeline in-point maps %.3fs after source clip start", trimmedInputStartSeconds)
-            )
-            return false
-        }
         if let activeRange = hostAnalysisStore.activeExpectedRange,
            !Self.analysisRange(activeRange, matches: expectedRange) {
             markHostAnalysisActionBlockedForTrimmedClip(
@@ -1107,6 +1193,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 expectedRange: expectedRange,
                 analysisRange: activeRange,
                 reason: "active analysis range does not match current input range"
+            )
+            return false
+        }
+        if let rangeSeal = currentHostAnalysisRangeSeal(),
+           !rangeSeal.matches(expectedRange) {
+            markHostAnalysisActionBlockedForTrimmedClip(
+                actionName: actionName,
+                expectedRange: expectedRange,
+                analysisRange: nil,
+                analysisDescription: rangeSeal.description,
+                reason: "effect baseline range does not match current input range"
             )
             return false
         }
@@ -1189,6 +1286,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         actionName: String = "Start"
     ) -> HostAnalysisRequestResult {
         let expectedRange = currentInputRange()
+        ensureHostAnalysisRangeSeal(expectedRange: expectedRange)
         let effectiveActionName = queuedStartRequest && resetStoreBeforeStart ? "Reanalyze" : actionName
         guard canRequestHostAnalysisForCurrentRange(expectedRange, actionName: effectiveActionName) else {
             Self.removeQueuedSerialAnalysis(self)
@@ -2501,9 +2599,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func updatePreferredHostAnalysisCacheIdentity(_ identity: String?) {
-        let trimmedIdentity = identity?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawIdentity = identity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let decodedIdentity = HostAnalysisHiddenIdentity.decode(rawIdentity)
         cacheIdentityLock.lock()
-        preferredHostAnalysisCacheIdentity = trimmedIdentity?.isEmpty == false ? trimmedIdentity : nil
+        preferredHostAnalysisCacheIdentity = decodedIdentity.cacheIdentity
+        if rawIdentity.isEmpty || decodedIdentity.rangeSeal != nil {
+            sealedHostAnalysisRange = decodedIdentity.rangeSeal
+        }
         cacheIdentityLock.unlock()
     }
 
@@ -2514,11 +2616,65 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return identity
     }
 
-    private func publishHostAnalysisCacheIdentity(_ identity: String?, force: Bool = false) {
-        let value = identity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let normalizedIdentity = value.isEmpty ? nil : value
+    private func currentHostAnalysisRangeSeal() -> HostAnalysisRangeSeal? {
         cacheIdentityLock.lock()
-        let shouldPublish = force || lastPublishedHostAnalysisCacheIdentity != normalizedIdentity
+        let rangeSeal = sealedHostAnalysisRange
+        cacheIdentityLock.unlock()
+        return rangeSeal
+    }
+
+    private func ensureHostAnalysisRangeSeal(expectedRange: HostAnalysisExpectedRange?) {
+        guard let expectedRange,
+              expectedRange.isValid
+        else {
+            return
+        }
+
+        let newRangeSeal = HostAnalysisRangeSeal(expectedRange: expectedRange)
+        let cacheIdentityToPublish: String?
+        let didSealRange: Bool
+        let shouldPublishRangeSeal: Bool
+        cacheIdentityLock.lock()
+        if sealedHostAnalysisRange == nil {
+            sealedHostAnalysisRange = newRangeSeal
+            didSealRange = true
+        } else {
+            didSealRange = false
+        }
+        cacheIdentityToPublish = preferredHostAnalysisCacheIdentity
+        let hiddenIdentityValue = HostAnalysisHiddenIdentity.encode(
+            rangeSeal: sealedHostAnalysisRange,
+            cacheIdentity: cacheIdentityToPublish
+        )
+        let normalizedHiddenIdentity = hiddenIdentityValue.isEmpty ? nil : hiddenIdentityValue
+        shouldPublishRangeSeal = lastPublishedHostAnalysisCacheIdentity != normalizedHiddenIdentity
+        cacheIdentityLock.unlock()
+
+        if shouldPublishRangeSeal {
+            publishHostAnalysisCacheIdentity(cacheIdentityToPublish, force: didSealRange)
+        }
+        if didSealRange {
+            os_log(
+                "Sealed Host Analysis baseline range %{public}@ for effect instance.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                newRangeSeal.description
+            )
+            NSLog("TokyoWalkingStabilizer: sealed Host Analysis baseline range \(newRangeSeal.description) for effect instance.")
+        }
+    }
+
+    private func publishHostAnalysisCacheIdentity(_ identity: String?, force: Bool = false) {
+        let cacheValue = identity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedIdentity = cacheValue.isEmpty ? nil : cacheValue
+        cacheIdentityLock.lock()
+        let rangeSeal = sealedHostAnalysisRange
+        let value = HostAnalysisHiddenIdentity.encode(
+            rangeSeal: rangeSeal,
+            cacheIdentity: normalizedIdentity
+        )
+        let normalizedPublishedIdentity = value.isEmpty ? nil : value
+        let shouldPublish = force || lastPublishedHostAnalysisCacheIdentity != normalizedPublishedIdentity
         cacheIdentityLock.unlock()
         guard shouldPublish,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
@@ -2527,7 +2683,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if settingAPI.setStringParameterValue(value, toParameter: ParameterID.hostAnalysisCacheIdentity.rawValue) {
             cacheIdentityLock.lock()
-            lastPublishedHostAnalysisCacheIdentity = normalizedIdentity
+            lastPublishedHostAnalysisCacheIdentity = normalizedPublishedIdentity
             preferredHostAnalysisCacheIdentity = normalizedIdentity
             cacheIdentityLock.unlock()
         } else {
@@ -4437,18 +4593,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             frameDurationSeconds: CMTimeGetSeconds(frameDuration),
             timelineInputStartSeconds: currentTimelineInputStartSeconds()
         )
-        if expectedRange.isValid,
-           let trimmedInputStartSeconds = expectedRange.trimmedInputStartSeconds {
-            let reason = String(format: "timeline in-point maps %.3fs after source clip start", trimmedInputStartSeconds)
+        ensureHostAnalysisRangeSeal(expectedRange: expectedRange.isValid ? expectedRange : nil)
+        if let rangeSeal = currentHostAnalysisRangeSeal(),
+           !rangeSeal.matches(expectedRange.isValid ? expectedRange : nil) {
+            let reason = "effect baseline range does not match current input range"
             Self.releaseHostAnalysisStartReservation()
             markHostAnalysisActionBlockedForTrimmedClip(
                 actionName: "Host Analysis",
                 expectedRange: expectedRange,
                 analysisRange: nil,
-                analysisDescription: "current input range",
+                analysisDescription: rangeSeal.description,
                 reason: reason
             )
-            throw hostAnalysisRoutingError("Host Analysis refused trimmed input range before setup: \(reason).")
+            throw hostAnalysisRoutingError("Host Analysis refused range-mismatched input before setup: \(reason).")
         }
         let configuredProjectCache = configureProjectBundleCacheDirectory(
             expectedRange: expectedRange.isValid ? expectedRange : nil,
