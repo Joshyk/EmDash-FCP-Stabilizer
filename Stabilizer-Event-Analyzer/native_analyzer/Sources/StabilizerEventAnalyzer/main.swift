@@ -972,7 +972,7 @@ private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
     if explicitOnly { return 1 }
     let memoryGB = analyzerPhysicalMemoryGB()
     if memoryGB <= 18 {
-        return 1
+        return max(1, min(4, max(1, offeredProcessorCount / 2)))
     }
     if memoryGB <= 36 {
         return max(1, min(4, max(1, offeredProcessorCount / 2)))
