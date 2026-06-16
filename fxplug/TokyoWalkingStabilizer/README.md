@@ -251,7 +251,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   and asks Final Cut Pro to start a forward GPU analysis when no matching persisted analysis
   can be loaded. Saved persisted analysis files remain available for later reuse, so changing
   `Sample Size` makes the button analysis-runnable again while preserving the previous
-  sample-size result. If the previous persisted analysis was rejected for the current clip,
+  pixel-size result. If the previous persisted analysis was rejected for the current clip,
   the next start skips that rejected file and requests a new analysis. If the button callback cannot see `FxProjectAPI`,
   it still requests Host Analysis and lets analyzer `setupAnalysis` resolve the Event persisted analysis
   root through either the host media folder or, when Collect Media is off, Final Cut Pro's

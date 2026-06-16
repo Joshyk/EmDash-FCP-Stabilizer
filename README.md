@@ -331,8 +331,8 @@ viewer/render session but is not persisted to any shared or out-of-bundle locati
 Event persisted analysis root becomes available later, the completed in-memory analysis is saved into that
 Event persisted analysis and the Inspector returns to ordinary `Ready (...)` status.
 Range-specific files under `caches/` include a readable clip label when available, analyzed
-start/end, actual `sampleWidth`/`sampleHeight`, frame count, and representative frame
-fingerprints in the filename.
+start/end, actual pixel size as `pixels<width>x<height>`, frame count, and representative
+frame fingerprints in the filename.
 `host-analysis-v2.json` is kept as the latest compatibility alias, not as the only retained
 persisted analysis.
 
@@ -373,8 +373,9 @@ per-session stores, so setup, frame analysis, and cleanup callbacks can arrive
 through different FxPlug instances without losing or mixing the active analysis
 session.
 
-Persisted analysis reuse is based on persisted analysis schema, exact analyzed source range, requested sample size, saved frame
-fingerprints, and current source-frame validation, not the visible FxPlug runtime version.
+Persisted analysis reuse is based on persisted analysis schema, exact analyzed source range,
+actual analysis pixel size, requested sample percentage, saved frame fingerprints, and current
+source-frame validation, not the visible FxPlug runtime version.
 Render-only version bumps should reuse compatible Host Analysis persisted analyses from the active
 `.fcpbundle`.
 

@@ -1655,7 +1655,6 @@ private func renderCacheInventoryHuman(_ entries: [CacheInventoryEntry], rootPat
         } else {
             sample = "-"
         }
-        let requestedSample = entry.requestedSampleScalePercent.map(formatPercent) ?? "-"
         let range: String
         if let start = entry.rangeStartSeconds, let duration = entry.rangeDurationSeconds {
             range = "\(formatSeconds(start))+\(formatSeconds(duration))"
@@ -1663,7 +1662,7 @@ private func renderCacheInventoryHuman(_ entries: [CacheInventoryEntry], rootPat
             range = "-"
         }
         let modified = entry.modifiedAt.map { iso8601Formatter.string(from: $0) } ?? "-"
-        print("\(entry.status.uppercased()) schema \(schema) frames \(frames) requested \(requestedSample) sample \(sample) range \(range) modified \(modified)")
+        print("\(entry.status.uppercased()) schema \(schema) frames \(frames) pixels \(sample) range \(range) modified \(modified)")
         print("  \(entry.reason)")
         print("  \(entry.path)")
     }

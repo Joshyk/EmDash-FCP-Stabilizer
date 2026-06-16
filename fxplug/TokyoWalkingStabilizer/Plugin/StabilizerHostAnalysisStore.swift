@@ -545,7 +545,7 @@ final class StabilizerHostAnalysisStore {
         projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
         latestSampleSize = nil
-        analysisInfoText = "Analyzing S\(Self.sampleScaleDescription(requestedSampleScalePercent))"
+        analysisInfoText = "Analyzing \(Self.sampleScaleDescription(requestedSampleScalePercent))"
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
@@ -567,7 +567,7 @@ final class StabilizerHostAnalysisStore {
         if preparedAnalysis == nil && status != .analyzing {
             status = .requested
             activeRequestedSampleScalePercent = requestedSampleScalePercent
-            analysisInfoText = "Requested S\(Self.sampleScaleDescription(requestedSampleScalePercent))"
+            analysisInfoText = "Requested \(Self.sampleScaleDescription(requestedSampleScalePercent))"
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -579,7 +579,7 @@ final class StabilizerHostAnalysisStore {
             status = .queued
             activeRequestedSampleScalePercent = requestedSampleScalePercent
             let queueTotal = max(position, totalCount)
-            analysisInfoText = "Queued #\(position)/\(queueTotal) S\(Self.sampleScaleDescription(requestedSampleScalePercent)): \(Self.compactReason(reason))"
+            analysisInfoText = "Queued #\(position)/\(queueTotal) \(Self.sampleScaleDescription(requestedSampleScalePercent)): \(Self.compactReason(reason))"
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1391,10 +1391,6 @@ final class StabilizerHostAnalysisStore {
             sampleText = "unknown"
         }
         var parts = [Self.compactPrefix(prefix), "\(frameCount)f", sampleText]
-        if let requestedSampleScalePercent,
-           requestedSampleScalePercent.isFinite {
-            parts.append("S\(Self.sampleScaleDescription(requestedSampleScalePercent))")
-        }
         return parts.joined(separator: " ")
     }
 
@@ -1427,13 +1423,6 @@ final class StabilizerHostAnalysisStore {
             return false
         }
         return abs(savedPercent - requestedPercent) <= 0.001
-    }
-
-    private static func sampleScaleFileComponent(_ percent: Double?) -> String {
-        guard let percent, percent.isFinite else {
-            return "Sunknown"
-        }
-        return safeCacheFileComponent("S\(sampleScaleDescription(percent))")
     }
 
     private static func clipRangeDescription(startSeconds: Double?, endSeconds: Double?) -> String? {
@@ -1620,7 +1609,7 @@ final class StabilizerHostAnalysisStore {
             bumpRevisionLocked()
             lock.unlock()
             Self.bumpPersistentCacheGeneration()
-            NSLog("TokyoWalkingStabilizer: saved persisted sample-size Host Analysis \(sampleWidth)x\(sampleHeight) S\(Self.sampleScaleDescription(snapshot.requestedSampleScalePercent)) with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
+            NSLog("TokyoWalkingStabilizer: saved persisted sample-size Host Analysis pixels \(sampleWidth)x\(sampleHeight) with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
             os_log(
                 "Saved Host Analysis Event persisted analysis file %{public}@ for Event %{public}@ identity %{public}@.",
                 log: stabilizerHostAnalysisLog,
@@ -3012,8 +3001,7 @@ final class StabilizerHostAnalysisStore {
         let middle = fingerprints?.middle.prefix(12) ?? "unknown"
         let last = fingerprints?.last.prefix(12) ?? "unknown"
         let clipLabel = safeCacheFileComponent(cache.clipLabel ?? defaultClipLabel)
-        let sampleScale = sampleScaleFileComponent(cache.requestedSampleScalePercent)
-        return "host-analysis-v2-\(clipLabel)-start\(timeKey(cache.rangeStartSeconds))-end\(timeKey(rangeEndSeconds(for: cache)))-sample\(cache.sampleWidth)x\(cache.sampleHeight)-\(sampleScale)-n\(frames.count)-\(first)-\(middle)-\(last).json"
+        return "host-analysis-v2-\(clipLabel)-start\(timeKey(cache.rangeStartSeconds))-end\(timeKey(rangeEndSeconds(for: cache)))-pixels\(cache.sampleWidth)x\(cache.sampleHeight)-n\(frames.count)-\(first)-\(middle)-\(last).json"
     }
 
     private static func persistentCacheIdentity(for cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) -> String? {

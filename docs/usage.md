@@ -491,11 +491,11 @@ Range-specific, sample-size-scoped persisted analysis files are stored under:
 <active library>.fcpbundle/<event>/Analysis Files/TokyoWalkingStabilizerHostAnalysis/caches/
 ```
 
-Those filenames include a readable clip label when available, analyzed start/end, requested
-`Sample Size`, actual `sampleWidth` and `sampleHeight`, frame count, and representative saved
-fingerprints. The persisted analysis index stores the clip label, range start/end, requested
-sample size, fingerprints, and persisted analysis identity, and retains entries independently
-per sample size instead of pruning all sizes through one global bucket.
+Those filenames include a readable clip label when available, analyzed start/end, actual
+pixel size as `pixels<width>x<height>`, frame count, and representative saved fingerprints.
+The persisted analysis index stores the clip label, range start/end, requested sample size,
+actual pixel size, fingerprints, and persisted analysis identity, and retains entries
+independently per sample size instead of pruning all sizes through one global bucket.
 
 On load, the effect validates the current source frame against saved frame fingerprints
 before using a persisted analysis. If a lightweight persisted analysis frame no longer has retained
@@ -511,7 +511,7 @@ persisted analysis changes and loading a newly written compatible persisted anal
 
 New persisted analysis files store prepared motion paths, per-frame timestamps, blur values,
 search-radius edge-hit counts, and fingerprints instead of every frame's full luma sample.
-This keeps bundle-local persisted analysis reuse available without writing long-clip `Sample Size` pixel
+This keeps bundle-local persisted analysis reuse available without writing long-clip pixel
 buffers into JSON.
 
 ## Development
