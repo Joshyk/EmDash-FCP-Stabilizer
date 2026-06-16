@@ -998,6 +998,17 @@ private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int
     return max(2, totalSlotCount / laneCount)
 }
 
+private func analyzerTextureCacheFlushInterval(sourcePixelCount: Int) -> Int {
+    let bytesPerSourceFrame = max(1, sourcePixelCount * 4)
+    let memoryGB = analyzerPhysicalMemoryGB()
+    let textureCacheBudget = Int((memoryGB <= 18 ? 128 : memoryGB <= 36 ? 384 : 768) * 1024 * 1024)
+    return max(1, min(60, textureCacheBudget / bytesPerSourceFrame))
+}
+
+private func textureCacheFlushDescription(interval: Int) -> String {
+    interval <= 1 ? "every completed frame" : "every \(interval) completed frames"
+}
+
 private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCount: Int) -> Bool {
     if maxFrames != nil || workerCount <= 1 {
         return false
@@ -1073,6 +1084,7 @@ private func readFrameChunk(
     url: URL,
     planName: String,
     sample: AnalysisSampleSize,
+    sourcePixelCount: Int,
     chunk: FrameReadChunk,
     basePresentationTimeSeconds: Double?,
     maxFrames: Int?,
@@ -1126,6 +1138,8 @@ private func readFrameChunk(
     let frameTimeEpsilon = 1.0 / 600_000.0
     var pendingFrames: [(encoded: MetalEncodedFrame, time: Double, shouldOutput: Bool)] = []
     pendingFrames.reserveCapacity(inFlightLimit)
+    let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
+    var completedEncodedFrameCount = 0
 
     func pendingOutputFrameCount() -> Int {
         pendingFrames.reduce(0) { count, pending in
@@ -1141,6 +1155,10 @@ private func readFrameChunk(
             sampleWidth: sample.width,
             sampleHeight: sample.height
         )
+        completedEncodedFrameCount += 1
+        if completedEncodedFrameCount % textureCacheFlushInterval == 0 {
+            metalContext.flushTextureCache()
+        }
         guard pending.shouldOutput else {
             return
         }
@@ -1230,6 +1248,7 @@ private func readFramesInParallel(
     url: URL,
     plan: AssetPlan,
     sample: AnalysisSampleSize,
+    sourcePixelCount: Int,
     workerCount: Int,
     progressEnabled: Bool
 ) throws -> PreparedAnalysis {
@@ -1240,7 +1259,8 @@ private func readFramesInParallel(
     )
     let basePTS = try firstPresentationTimeSeconds(url: url)
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: chunks.count)
-    progress(progressEnabled, "using \(chunks.count) GPU-fed media reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each (\(chunks.count * inFlightLimit) total) for \(plan.name)")
+    let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
+    progress(progressEnabled, "using \(chunks.count) GPU-fed media reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each (\(chunks.count * inFlightLimit) total), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
     let progressReporter = AnalyzerFrameProgressReporter(
         enabled: progressEnabled,
         label: plan.name,
@@ -1270,6 +1290,7 @@ private func readFramesInParallel(
                     url: url,
                     planName: plan.name,
                     sample: sample,
+                    sourcePixelCount: sourcePixelCount,
                     chunk: chunk,
                     basePresentationTimeSeconds: basePTS,
                     maxFrames: nil,
@@ -1339,12 +1360,14 @@ func readFrames(
     let sourceHeight = max(1, Int(abs(transformed.height).rounded()))
     let size = sampleSize(sourceWidth: sourceWidth, sourceHeight: sourceHeight, scalePercent: sampleScalePercent)
     let sample = AnalysisSampleSize(width: size.width, height: size.height)
+    let sourcePixelCount = sourceWidth * sourceHeight
     let workerCount = analyzerWorkerCount()
     if allowParallelReaders && shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, workerCount: workerCount) {
         return try readFramesInParallel(
             url: url,
             plan: plan,
             sample: sample,
+            sourcePixelCount: sourcePixelCount,
             workerCount: workerCount,
             progressEnabled: progressEnabled
         )
@@ -1369,7 +1392,8 @@ func readFrames(
         )
     )
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: 1)
-    progress(progressEnabled, "using 1 GPU-fed media reader lane with \(inFlightLimit) in-flight GPU frame slot(s) for \(plan.name)")
+    let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
+    progress(progressEnabled, "using 1 GPU-fed media reader lane with \(inFlightLimit) in-flight GPU frame slot(s), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
     let expectedOutputFrameCount = estimatedFrameCount(
         durationSeconds: plan.durationSeconds,
         frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
@@ -1379,6 +1403,7 @@ func readFrames(
         url: url,
         planName: plan.name,
         sample: sample,
+        sourcePixelCount: sourcePixelCount,
         chunk: serialChunk,
         basePresentationTimeSeconds: nil,
         maxFrames: maxFrames,
