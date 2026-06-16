@@ -981,7 +981,7 @@ private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
     if explicitOnly { return 1 }
     let memoryGB = analyzerPhysicalMemoryGB()
     if memoryGB <= 18 {
-        return max(1, min(2, offeredProcessorCount))
+        return 1
     }
     if memoryGB <= 36 {
         return max(1, min(4, max(1, offeredProcessorCount / 2)))
@@ -1001,7 +1001,7 @@ private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int
        let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
         return max(2, min(memoryLimitedSlotCountPerLane, parsed))
     }
-    let defaultSlotCountPerLane = memoryGB <= 18 ? 4 : 6
+    let defaultSlotCountPerLane = memoryGB <= 18 ? 2 : 6
     let gpuBalancedTotalSlotCount = laneCount * defaultSlotCountPerLane
     let totalSlotCount = min(memoryLimitedTotalSlotCount, gpuBalancedTotalSlotCount)
     return max(2, totalSlotCount / laneCount)
@@ -1084,6 +1084,7 @@ private func readFrameChunk(
     progressEvery: Int,
     progressReporter: AnalyzerFrameProgressReporter?,
     inFlightLimit: Int,
+    expectedOutputFrameCount: Int,
     metalContext: MetalAnalysisContext
 ) throws -> FrameChunkResult {
     let asset = AVURLAsset(url: url)
@@ -1112,6 +1113,8 @@ private func readFrameChunk(
     }
     var frames: [AnalysisFrame] = []
     var motions: [PairMotion] = []
+    frames.reserveCapacity(max(3, expectedOutputFrameCount))
+    motions.reserveCapacity(max(3, expectedOutputFrameCount))
     let pixelCount = sample.width * sample.height
     let frameSlots = try metalContext.makeFrameSlots(count: inFlightLimit, pixelCount: pixelCount, width: sample.width, height: sample.height)
     var currentFrameSlotIndex = 0
@@ -1249,6 +1252,13 @@ private func readFramesInParallel(
     var results = Array<FrameChunkResult?>(repeating: nil, count: chunks.count)
     var firstError: Error?
     for chunk in chunks {
+        let expectedOutputFrameCount = estimatedFrameCount(
+            durationSeconds: max(
+                plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
+                chunk.outputEndSeconds - chunk.outputStartSeconds
+            ),
+            frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
+        )
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
             defer { group.leave() }
@@ -1265,6 +1275,7 @@ private func readFramesInParallel(
                     progressEvery: 0,
                     progressReporter: progressReporter,
                     inFlightLimit: inFlightLimit,
+                    expectedOutputFrameCount: expectedOutputFrameCount,
                     metalContext: context
                 )
                 resultLock.lock()
@@ -1297,6 +1308,7 @@ private func readFramesInParallel(
         }
         combinedFrames.append(contentsOf: result.frames)
         combinedMotions.append(contentsOf: result.motions)
+        results[index] = nil
     }
     guard combinedFrames.count >= 3 else {
         throw AnalyzerError("analysis requires at least 3 frames; got \(combinedFrames.count)")
@@ -1356,6 +1368,11 @@ func readFrames(
     )
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: 1)
     progress(progressEnabled, "using 1 GPU-fed media reader lane with \(inFlightLimit) in-flight GPU frame slot(s) for \(plan.name)")
+    let expectedOutputFrameCount = estimatedFrameCount(
+        durationSeconds: plan.durationSeconds,
+        frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
+        maxFrames: maxFrames
+    )
     let result = try readFrameChunk(
         url: url,
         planName: plan.name,
@@ -1367,6 +1384,7 @@ func readFrames(
         progressEvery: 30,
         progressReporter: progressReporter,
         inFlightLimit: inFlightLimit,
+        expectedOutputFrameCount: expectedOutputFrameCount,
         metalContext: metalContext
     )
     progressReporter.finish()

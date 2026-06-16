@@ -41,9 +41,10 @@ lanes are used to keep the GPU fed without overloading AVFoundation decode,
 source texture retention, or Metal heap allocation. Each active asset defaults
 to a memory-aware reader lane count derived from the Mac's active processor
 count and physical memory instead of blindly using every CPU thread. 16 GB
-machines default to fewer lanes and fewer in-flight source frames so analysis
-avoids swap. GPU in-flight frame slots are budgeted across the active asset's
-reader lanes from the Mac's active processor count and physical memory.
+machines default to one reader lane and two in-flight source frames so analysis
+avoids swap before scaling throughput. GPU in-flight frame slots are budgeted
+across the active asset's reader lanes from the Mac's active processor count
+and physical memory.
 `STABILIZER_ANALYZER_WORKERS` can request an explicit reader lane count, capped
 at the Mac's active processor count. `STABILIZER_ANALYZER_IN_FLIGHT` can tune
 the per-lane GPU frame slot count, capped by the current frame size and
