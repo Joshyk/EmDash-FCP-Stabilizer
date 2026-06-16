@@ -10,6 +10,11 @@ private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
 private let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
+private let analyzerVideoOutputSettings: [String: Any] = [
+    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+    kCVPixelBufferMetalCompatibilityKey as String: true,
+    kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+]
 
 struct AnalysisPlan: Decodable {
     let cacheRoot: String
@@ -313,7 +318,7 @@ private final class MetalMotionWorkspace {
         let sampleStep = max(1, min(blockWidth, blockHeight) / 56)
         let sampleColumns = max(1, (blockWidth / sampleStep) + 1)
         let sampleRows = max(1, (blockHeight / sampleStep) + 1)
-        let chunkCount = max(4, min(32, (sampleColumns * sampleRows + 511) / 512))
+        let chunkCount = max(8, min(128, (sampleColumns * sampleRows + 255) / 256))
         let centers = [
             (width / 2, max(1, height / 4)),
             (width / 3, max(1, height / 3)),
@@ -383,6 +388,8 @@ private final class MetalMotionWorkspace {
 }
 
 private struct MetalFrameSlot {
+    // Retain the heap for the lifetime of buffers allocated from it.
+    let heap: MTLHeap
     let lumaBuffer: MTLBuffer
     let partialSumBuffer: MTLBuffer
     let partialCountBuffer: MTLBuffer
@@ -397,6 +404,33 @@ private struct MetalEncodedFrame {
     let motionWorkspace: MetalMotionWorkspace?
 }
 
+private final class MetalAnalysisSharedState {
+    fileprivate static let sharedResult: Result<MetalAnalysisSharedState, Error> = Result {
+        try MetalAnalysisSharedState()
+    }
+
+    let device: MTLDevice
+    let lumaPipelineState: MTLComputePipelineState
+    let blockScorePartialPipelineState: MTLComputePipelineState
+    let blockScoreResolvePipelineState: MTLComputePipelineState
+
+    private init() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw AnalyzerError("Metal analysis device unavailable; Event analysis requires GPU resources")
+        }
+        let library = try device.makeLibrary(source: MetalAnalysisContext.kernelSource, options: nil)
+        guard let lumaFunction = library.makeFunction(name: "stabilizer_luma_sample"),
+              let blockScorePartialFunction = library.makeFunction(name: "stabilizer_block_score_partials"),
+              let blockScoreResolveFunction = library.makeFunction(name: "stabilizer_block_score_resolve") else {
+            throw AnalyzerError("Metal analysis kernels were not found")
+        }
+        self.device = device
+        self.lumaPipelineState = try device.makeComputePipelineState(function: lumaFunction)
+        self.blockScorePartialPipelineState = try device.makeComputePipelineState(function: blockScorePartialFunction)
+        self.blockScoreResolvePipelineState = try device.makeComputePipelineState(function: blockScoreResolveFunction)
+    }
+}
+
 final class MetalAnalysisContext {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -409,9 +443,8 @@ final class MetalAnalysisContext {
     var deviceName: String { device.name }
 
     init() throws {
-        guard let device = MTLCreateSystemDefaultDevice() else {
-            throw AnalyzerError("Metal analysis device unavailable; Event analysis requires GPU resources")
-        }
+        let sharedState = try MetalAnalysisSharedState.sharedResult.get()
+        let device = sharedState.device
         guard let commandQueue = device.makeCommandQueue() else {
             throw AnalyzerError("Metal analysis command queue unavailable")
         }
@@ -420,43 +453,55 @@ final class MetalAnalysisContext {
         guard textureCacheStatus == kCVReturnSuccess, let textureCache else {
             throw AnalyzerError("Metal analysis texture cache unavailable: CVMetalTextureCacheCreate returned \(textureCacheStatus)")
         }
-        let library = try device.makeLibrary(source: Self.kernelSource, options: nil)
-        guard let lumaFunction = library.makeFunction(name: "stabilizer_luma_sample"),
-              let blockScorePartialFunction = library.makeFunction(name: "stabilizer_block_score_partials"),
-              let blockScoreResolveFunction = library.makeFunction(name: "stabilizer_block_score_resolve") else {
-            throw AnalyzerError("Metal analysis kernels were not found")
-        }
         self.device = device
         self.commandQueue = commandQueue
         self.textureCache = textureCache
-        self.lumaPipelineState = try device.makeComputePipelineState(function: lumaFunction)
-        self.blockScorePartialPipelineState = try device.makeComputePipelineState(function: blockScorePartialFunction)
-        self.blockScoreResolvePipelineState = try device.makeComputePipelineState(function: blockScoreResolveFunction)
+        self.lumaPipelineState = sharedState.lumaPipelineState
+        self.blockScorePartialPipelineState = sharedState.blockScorePartialPipelineState
+        self.blockScoreResolvePipelineState = sharedState.blockScoreResolvePipelineState
     }
 
-    fileprivate func makeFrameSlot(pixelCount: Int, width: Int, height: Int) throws -> MetalFrameSlot {
+    fileprivate func makeFrameSlots(count: Int, pixelCount: Int, width: Int, height: Int) throws -> [MetalFrameSlot] {
         let workspace = try workspaceForMotion(width: width, height: height)
-        guard let lumaBuffer = device.makeBuffer(length: pixelCount, options: .storageModeShared),
-              let partialSumBuffer = device.makeBuffer(
-                length: MemoryLayout<UInt32>.stride * workspace.partialElementCount,
-                options: .storageModeShared
-              ),
-              let partialCountBuffer = device.makeBuffer(
-                length: MemoryLayout<UInt32>.stride * workspace.partialElementCount,
-                options: .storageModeShared
-              ),
-              let resultBuffer = device.makeBuffer(
-                length: MemoryLayout<MetalShiftResult>.stride * workspace.blockCount,
-                options: .storageModeShared
-              ) else {
-            throw AnalyzerError("could not allocate reusable Metal frame analysis buffers")
+        let lumaLength = pixelCount
+        let partialLength = MemoryLayout<UInt32>.stride * workspace.partialElementCount
+        let resultLength = MemoryLayout<MetalShiftResult>.stride * workspace.blockCount
+        let options: MTLResourceOptions = .storageModeShared
+        let slotHeapSize = alignedHeapBufferSize(length: lumaLength, options: options)
+            + alignedHeapBufferSize(length: partialLength, options: options)
+            + alignedHeapBufferSize(length: partialLength, options: options)
+            + alignedHeapBufferSize(length: resultLength, options: options)
+        let heapDescriptor = MTLHeapDescriptor()
+        heapDescriptor.storageMode = .shared
+        heapDescriptor.hazardTrackingMode = .tracked
+        heapDescriptor.size = slotHeapSize * count
+        guard let heap = device.makeHeap(descriptor: heapDescriptor) else {
+            throw AnalyzerError("could not allocate Metal analysis heap for \(count) in-flight frame slots")
         }
-        return MetalFrameSlot(
-            lumaBuffer: lumaBuffer,
-            partialSumBuffer: partialSumBuffer,
-            partialCountBuffer: partialCountBuffer,
-            resultBuffer: resultBuffer
-        )
+        var slots: [MetalFrameSlot] = []
+        slots.reserveCapacity(count)
+        for _ in 0..<count {
+            guard let lumaBuffer = heap.makeBuffer(length: lumaLength, options: options),
+                  let partialSumBuffer = heap.makeBuffer(length: partialLength, options: options),
+                  let partialCountBuffer = heap.makeBuffer(length: partialLength, options: options),
+                  let resultBuffer = heap.makeBuffer(length: resultLength, options: options) else {
+                throw AnalyzerError("could not allocate reusable Metal frame analysis buffers from heap")
+            }
+            slots.append(MetalFrameSlot(
+                heap: heap,
+                lumaBuffer: lumaBuffer,
+                partialSumBuffer: partialSumBuffer,
+                partialCountBuffer: partialCountBuffer,
+                resultBuffer: resultBuffer
+            ))
+        }
+        return slots
+    }
+
+    private func alignedHeapBufferSize(length: Int, options: MTLResourceOptions) -> Int {
+        let sizeAndAlign = device.heapBufferSizeAndAlign(length: length, options: options)
+        let alignment = max(1, sizeAndAlign.align)
+        return ((sizeAndAlign.size + alignment - 1) / alignment) * alignment
     }
 
     fileprivate func encodeFrame(
@@ -593,7 +638,7 @@ final class MetalAnalysisContext {
         }
     }
 
-    private static let kernelSource = """
+    fileprivate static let kernelSource = """
     #include <metal_stdlib>
     using namespace metal;
 
@@ -803,7 +848,15 @@ private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
     }
     if explicitOnly { return 1 }
     let processorCount = ProcessInfo.processInfo.activeProcessorCount
-    return max(1, min(6, processorCount > 2 ? processorCount - 2 : processorCount))
+    return max(1, min(4, processorCount))
+}
+
+private func analyzerInFlightLimit(pixelCount: Int) -> Int {
+    if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_IN_FLIGHT"],
+       let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        return max(4, min(96, parsed))
+    }
+    return 12
 }
 
 private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCount: Int) -> Bool {
@@ -846,7 +899,7 @@ private func firstPresentationTimeSeconds(url: URL) throws -> Double {
     let reader = try AVAssetReader(asset: asset)
     let output = AVAssetReaderTrackOutput(
         track: track,
-        outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        outputSettings: analyzerVideoOutputSettings
     )
     output.alwaysCopiesSampleData = false
     guard reader.canAdd(output) else {
@@ -891,7 +944,7 @@ private func readFrameChunk(
     }
     let output = AVAssetReaderTrackOutput(
         track: track,
-        outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        outputSettings: analyzerVideoOutputSettings
     )
     output.alwaysCopiesSampleData = false
     guard reader.canAdd(output) else {
@@ -904,10 +957,8 @@ private func readFrameChunk(
     var frames: [AnalysisFrame] = []
     var motions: [PairMotion] = []
     let pixelCount = sample.width * sample.height
-    let inFlightLimit = 8
-    let frameSlots = try (0..<inFlightLimit).map { _ in
-        try metalContext.makeFrameSlot(pixelCount: pixelCount, width: sample.width, height: sample.height)
-    }
+    let inFlightLimit = analyzerInFlightLimit(pixelCount: pixelCount)
+    let frameSlots = try metalContext.makeFrameSlots(count: inFlightLimit, pixelCount: pixelCount, width: sample.width, height: sample.height)
     var currentFrameSlotIndex = 0
     var previousLumaBuffer: MTLBuffer?
     var firstPTS = basePresentationTimeSeconds
@@ -1022,7 +1073,8 @@ private func readFramesInParallel(
         workerCount: workerCount
     )
     let basePTS = try firstPresentationTimeSeconds(url: url)
-    progress(progressEnabled, "using \(chunks.count) parallel media reader(s) for \(plan.name)")
+    let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height)
+    progress(progressEnabled, "using \(chunks.count) parallel media reader(s) with \(inFlightLimit) in-flight GPU frame slot(s) each for \(plan.name)")
     let resultLock = NSLock()
     let group = DispatchGroup()
     var results = Array<FrameChunkResult?>(repeating: nil, count: chunks.count)
