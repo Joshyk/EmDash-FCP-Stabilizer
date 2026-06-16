@@ -263,15 +263,9 @@ func blurAmount(_ pixels: [UInt8], width: Int, height: Int) -> Float {
     return Float(total) / Float(count)
 }
 
-struct MetalLumaSample {
-    let pixels: [UInt8]
-    let buffer: MTLBuffer
-}
-
 private struct MetalLumaUniforms {
     let sourceWidth: UInt32
     let sourceHeight: UInt32
-    let bytesPerRow: UInt32
     let sampleWidth: UInt32
     let sampleHeight: UInt32
 }
@@ -293,6 +287,7 @@ private struct MetalBlockUniforms {
 final class MetalAnalysisContext {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
+    private let textureCache: CVMetalTextureCache
     private let lumaPipelineState: MTLComputePipelineState
     private let blockScorePipelineState: MTLComputePipelineState
 
@@ -305,6 +300,11 @@ final class MetalAnalysisContext {
         guard let commandQueue = device.makeCommandQueue() else {
             throw AnalyzerError("Metal analysis command queue unavailable")
         }
+        var textureCache: CVMetalTextureCache?
+        let textureCacheStatus = CVMetalTextureCacheCreate(nil, nil, device, nil, &textureCache)
+        guard textureCacheStatus == kCVReturnSuccess, let textureCache else {
+            throw AnalyzerError("Metal analysis texture cache unavailable: CVMetalTextureCacheCreate returned \(textureCacheStatus)")
+        }
         let library = try device.makeLibrary(source: Self.kernelSource, options: nil)
         guard let lumaFunction = library.makeFunction(name: "stabilizer_luma_sample"),
               let blockScoreFunction = library.makeFunction(name: "stabilizer_block_scores") else {
@@ -312,23 +312,40 @@ final class MetalAnalysisContext {
         }
         self.device = device
         self.commandQueue = commandQueue
+        self.textureCache = textureCache
         self.lumaPipelineState = try device.makeComputePipelineState(function: lumaFunction)
         self.blockScorePipelineState = try device.makeComputePipelineState(function: blockScoreFunction)
     }
 
-    func lumaSample(from pixelBuffer: CVPixelBuffer, sampleWidth: Int, sampleHeight: Int) throws -> MetalLumaSample {
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else {
-            throw AnalyzerError("pixel buffer had no base address")
+    func makeLumaOutputBuffer(pixelCount: Int) throws -> MTLBuffer {
+        guard let buffer = device.makeBuffer(length: pixelCount, options: .storageModeShared) else {
+            throw AnalyzerError("could not allocate reusable Metal luma output buffer")
         }
+        return buffer
+    }
+
+    func lumaSample(from pixelBuffer: CVPixelBuffer, sampleWidth: Int, sampleHeight: Int, outputBuffer: MTLBuffer) throws -> [UInt8] {
         let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
         let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        let sourceLength = bytesPerRow * sourceHeight
         let pixelCount = sampleWidth * sampleHeight
-        guard let sourceBuffer = device.makeBuffer(bytes: base, length: sourceLength, options: .storageModeShared),
-              let outputBuffer = device.makeBuffer(length: pixelCount, options: .storageModeShared),
+        guard outputBuffer.length >= pixelCount else {
+            throw AnalyzerError("reusable Metal luma output buffer was too small")
+        }
+        var cvTexture: CVMetalTexture?
+        let textureStatus = CVMetalTextureCacheCreateTextureFromImage(
+            nil,
+            textureCache,
+            pixelBuffer,
+            nil,
+            .bgra8Unorm,
+            sourceWidth,
+            sourceHeight,
+            0,
+            &cvTexture
+        )
+        guard textureStatus == kCVReturnSuccess,
+              let cvTexture,
+              let sourceTexture = CVMetalTextureGetTexture(cvTexture),
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw AnalyzerError("could not allocate Metal luma sampling resources")
@@ -336,14 +353,13 @@ final class MetalAnalysisContext {
         var uniforms = MetalLumaUniforms(
             sourceWidth: UInt32(sourceWidth),
             sourceHeight: UInt32(sourceHeight),
-            bytesPerRow: UInt32(bytesPerRow),
             sampleWidth: UInt32(sampleWidth),
             sampleHeight: UInt32(sampleHeight)
         )
         encoder.setComputePipelineState(lumaPipelineState)
-        encoder.setBuffer(sourceBuffer, offset: 0, index: 0)
-        encoder.setBuffer(outputBuffer, offset: 0, index: 1)
-        encoder.setBytes(&uniforms, length: MemoryLayout<MetalLumaUniforms>.stride, index: 2)
+        encoder.setTexture(sourceTexture, index: 0)
+        encoder.setBuffer(outputBuffer, offset: 0, index: 0)
+        encoder.setBytes(&uniforms, length: MemoryLayout<MetalLumaUniforms>.stride, index: 1)
         encoder.dispatchThreads(
             MTLSize(width: sampleWidth, height: sampleHeight, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1)
@@ -356,7 +372,7 @@ final class MetalAnalysisContext {
             start: outputBuffer.contents().assumingMemoryBound(to: UInt8.self),
             count: pixelCount
         ))
-        return MetalLumaSample(pixels: pixels, buffer: outputBuffer)
+        return pixels
     }
 
     func estimateMotion(previous: MTLBuffer, current: MTLBuffer, width: Int, height: Int) throws -> PairMotion {
@@ -479,9 +495,9 @@ final class MetalAnalysisContext {
     };
 
     kernel void stabilizer_luma_sample(
-        device const uchar *source [[buffer(0)]],
-        device uchar *output [[buffer(1)]],
-        constant LumaUniforms &uniforms [[buffer(2)]],
+        texture2d<float, access::read> source [[texture(0)]],
+        device uchar *output [[buffer(0)]],
+        constant LumaUniforms &uniforms [[buffer(1)]],
         uint2 gid [[thread_position_in_grid]]
     ) {
         if (gid.x >= uniforms.sampleWidth || gid.y >= uniforms.sampleHeight) {
@@ -489,11 +505,8 @@ final class MetalAnalysisContext {
         }
         uint sx = min(uniforms.sourceWidth - 1, uint((float(gid.x) + 0.5f) * float(uniforms.sourceWidth) / float(uniforms.sampleWidth)));
         uint sy = min(uniforms.sourceHeight - 1, uint((float(gid.y) + 0.5f) * float(uniforms.sourceHeight) / float(uniforms.sampleHeight)));
-        uint offset = (sy * uniforms.bytesPerRow) + (sx * 4);
-        float b = float(source[offset]);
-        float g = float(source[offset + 1]);
-        float r = float(source[offset + 2]);
-        output[(gid.y * uniforms.sampleWidth) + gid.x] = uchar(clamp(int(round((0.299f * r) + (0.587f * g) + (0.114f * b))), 0, 255));
+        float4 color = source.read(uint2(sx, sy));
+        output[(gid.y * uniforms.sampleWidth) + gid.x] = uchar(clamp(int(round(((0.299f * color.b) + (0.587f * color.g) + (0.114f * color.r)) * 255.0f)), 0, 255));
     }
 
     kernel void stabilizer_block_scores(
@@ -618,50 +631,68 @@ func readFrames(
     }
     var frames: [AnalysisFrame] = []
     var motions: [PairMotion] = []
+    let pixelCount = sample.width * sample.height
+    let lumaBuffers = [
+        try metalContext.makeLumaOutputBuffer(pixelCount: pixelCount),
+        try metalContext.makeLumaOutputBuffer(pixelCount: pixelCount),
+    ]
+    var currentLumaBufferIndex = 0
     var previousLumaBuffer: MTLBuffer?
     var firstPTS: Double?
     while reader.status == .reading {
-        guard let sampleBuffer = output.copyNextSampleBuffer() else {
+        let shouldContinue = try autoreleasepool {
+            guard let sampleBuffer = output.copyNextSampleBuffer() else {
+                return false
+            }
+            if let maxFrames, frames.count >= maxFrames {
+                return false
+            }
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                return true
+            }
+            let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+            guard pts.isFinite else {
+                return true
+            }
+            if firstPTS == nil {
+                firstPTS = pts
+            }
+            let time = max(0, pts - (firstPTS ?? pts))
+            let currentLumaBuffer = lumaBuffers[currentLumaBufferIndex]
+            let pixels = try metalContext.lumaSample(
+                from: pixelBuffer,
+                sampleWidth: sample.width,
+                sampleHeight: sample.height,
+                outputBuffer: currentLumaBuffer
+            )
+            let frame = AnalysisFrame(
+                time: time,
+                pixels: [],
+                sampleWidth: sample.width,
+                sampleHeight: sample.height,
+                blurAmount: blurAmount(pixels, width: sample.width, height: sample.height),
+                fingerprint: fingerprint(for: pixels)
+            )
+            if let previousLumaBuffer {
+                motions.append(try metalContext.estimateMotion(
+                    previous: previousLumaBuffer,
+                    current: currentLumaBuffer,
+                    width: sample.width,
+                    height: sample.height
+                ))
+            } else {
+                motions.append(PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
+            }
+            previousLumaBuffer = currentLumaBuffer
+            currentLumaBufferIndex = (currentLumaBufferIndex + 1) % lumaBuffers.count
+            frames.append(frame)
+            if frames.count % 30 == 0 {
+                progress(progressEnabled, "analyzed \(frames.count) frame(s) for \(plan.name)")
+            }
+            return true
+        }
+        if !shouldContinue {
             break
-        }
-        if let maxFrames, frames.count >= maxFrames {
-            break
-        }
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            continue
-        }
-        let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-        guard pts.isFinite else {
-            continue
-        }
-        if firstPTS == nil {
-            firstPTS = pts
-        }
-        let time = max(0, pts - (firstPTS ?? pts))
-        let luma = try metalContext.lumaSample(from: pixelBuffer, sampleWidth: sample.width, sampleHeight: sample.height)
-        let pixels = luma.pixels
-        let frame = AnalysisFrame(
-            time: time,
-            pixels: [],
-            sampleWidth: sample.width,
-            sampleHeight: sample.height,
-            blurAmount: blurAmount(pixels, width: sample.width, height: sample.height),
-            fingerprint: fingerprint(for: pixels)
-        )
-        if let previousLumaBuffer {
-            motions.append(try metalContext.estimateMotion(
-                previous: previousLumaBuffer,
-                current: luma.buffer,
-                width: sample.width,
-                height: sample.height
-            ))
-        } else {
-            motions.append(PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
-        }
-        previousLumaBuffer = luma.buffer
-        frames.append(frame)
-        if frames.count % 30 == 0 {
-            progress(progressEnabled, "analyzed \(frames.count) frame(s) for \(plan.name)")
         }
     }
     if reader.status == .failed {
