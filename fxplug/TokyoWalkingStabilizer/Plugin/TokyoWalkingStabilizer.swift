@@ -212,6 +212,27 @@ struct HostAnalysisExpectedRange {
             && durationSeconds.isFinite
             && durationSeconds > 0.0
     }
+
+    var hasTimelineHeadTrim: Bool {
+        startSeconds > trimDetectionToleranceSeconds
+    }
+
+    var trimmedTimelineAnalysisRejectionReason: String? {
+        guard hasTimelineHeadTrim else {
+            return nil
+        }
+        return String(
+            format: "input starts %.3fs after source start; run Host Analysis from Open Clip or import analysis.",
+            startSeconds
+        )
+    }
+
+    private var trimDetectionToleranceSeconds: Double {
+        if frameDurationSeconds.isFinite, frameDurationSeconds > 0.0 {
+            return max(1.0 / 600.0, frameDurationSeconds * 1.5)
+        }
+        return 1.0 / 600.0
+    }
 }
 
 private struct ActiveHostAnalysisRoute {
@@ -927,7 +948,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
         if !loadedPersistentCache {
-            requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
+            if let rejectionReason = expectedRange?.trimmedTimelineAnalysisRejectionReason {
+                hostAnalysisStore.markTrimmedClipAnalysisUnavailable(reason: rejectionReason)
+                publishHostAnalysisStatus(force: true)
+                publishStabilizerInfo(force: true)
+                publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+            } else {
+                requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
+            }
         }
     }
 

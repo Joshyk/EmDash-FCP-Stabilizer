@@ -20,6 +20,7 @@ private enum HostAnalysisStatus {
     case cacheUnsupported
     case cacheIncomplete
     case cacheCleared
+    case trimmedClip
     case projectCacheUnavailable
     case proxyRejected
     case proxyPreview
@@ -437,6 +438,8 @@ final class StabilizerHostAnalysisStore {
             return "Cache Incomplete - Run Host Analysis"
         case .cacheCleared:
             return "Cache Cleared"
+        case .trimmedClip:
+            return "Trimmed Clip - Use Open Clip Analysis"
         case .projectCacheUnavailable:
             if hasPreparedAnalysis {
                 return "Ready Memory Only - \(unavailableStatusText)"
@@ -544,6 +547,17 @@ final class StabilizerHostAnalysisStore {
             bumpRevisionLocked()
         }
         lock.unlock()
+    }
+
+    func markTrimmedClipAnalysisUnavailable(reason: String) {
+        lock.lock()
+        if preparedAnalysis == nil {
+            status = .trimmedClip
+            analysisInfoText = "Trimmed clip: \(Self.compactReason(reason))"
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+        NSLog("TokyoWalkingStabilizer: refused Host Analysis for trimmed timeline clip: \(reason)")
     }
 
     func markProjectCacheUnavailable(reason: String) {
