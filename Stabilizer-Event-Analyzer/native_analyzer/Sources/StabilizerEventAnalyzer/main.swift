@@ -733,7 +733,6 @@ final class MetalAnalysisContext {
         sampleHeight: Int
     ) throws -> (metrics: FrameMetrics, motion: PairMotion?) {
         encodedFrame.commandBuffer.waitUntilCompleted()
-        CVMetalTextureCacheFlush(textureCache, 0)
         try Self.validate(commandBuffer: encodedFrame.commandBuffer, stage: encodedFrame.motionWorkspace == nil ? "luma sampling" : "luma sampling and block motion search")
         let pixels = encodedFrame.outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
         let metrics = frameMetrics(pixels, byteCount: pixelCount, width: sampleWidth, height: sampleHeight)
@@ -978,18 +977,22 @@ private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
         return max(1, min(offeredProcessorCount, parsed))
     }
     if explicitOnly { return 1 }
-    return offeredProcessorCount
+    return max(1, min(8, max(1, offeredProcessorCount / 2)))
 }
 
-private func analyzerInFlightLimit(pixelCount: Int) -> Int {
+private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int {
+    let laneCount = max(1, readerLaneCount)
     let bytesPerFrameSlot = max(4 * 1024 * 1024, pixelCount * 6)
     let memoryBudget = max(bytesPerFrameSlot * 4, Int(ProcessInfo.processInfo.physicalMemory / 8))
-    let memoryLimitedSlotCount = max(4, memoryBudget / bytesPerFrameSlot)
+    let memoryLimitedTotalSlotCount = max(laneCount * 4, memoryBudget / bytesPerFrameSlot)
+    let memoryLimitedSlotCountPerLane = max(4, memoryLimitedTotalSlotCount / laneCount)
     if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_IN_FLIGHT"],
        let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        return max(4, min(memoryLimitedSlotCount, parsed))
+        return max(4, min(memoryLimitedSlotCountPerLane, parsed))
     }
-    return max(4, min(memoryLimitedSlotCount, analyzerOfferedProcessorCount() * 4))
+    let gpuBalancedTotalSlotCount = max(laneCount * 4, analyzerOfferedProcessorCount() * 6)
+    let totalSlotCount = min(memoryLimitedTotalSlotCount, gpuBalancedTotalSlotCount)
+    return max(4, totalSlotCount / laneCount)
 }
 
 private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCount: Int) -> Bool {
@@ -1068,6 +1071,7 @@ private func readFrameChunk(
     progressEnabled: Bool,
     progressEvery: Int,
     progressReporter: AnalyzerFrameProgressReporter?,
+    inFlightLimit: Int,
     metalContext: MetalAnalysisContext
 ) throws -> FrameChunkResult {
     let asset = AVURLAsset(url: url)
@@ -1097,7 +1101,6 @@ private func readFrameChunk(
     var frames: [AnalysisFrame] = []
     var motions: [PairMotion] = []
     let pixelCount = sample.width * sample.height
-    let inFlightLimit = analyzerInFlightLimit(pixelCount: pixelCount)
     let frameSlots = try metalContext.makeFrameSlots(count: inFlightLimit, pixelCount: pixelCount, width: sample.width, height: sample.height)
     var currentFrameSlotIndex = 0
     var previousLumaBuffer: MTLBuffer?
@@ -1219,8 +1222,8 @@ private func readFramesInParallel(
         workerCount: workerCount
     )
     let basePTS = try firstPresentationTimeSeconds(url: url)
-    let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height)
-    progress(progressEnabled, "using \(chunks.count) intra-asset media reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each for \(plan.name)")
+    let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: chunks.count)
+    progress(progressEnabled, "using \(chunks.count) GPU-fed media reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each (\(chunks.count * inFlightLimit) total) for \(plan.name)")
     let progressReporter = AnalyzerFrameProgressReporter(
         enabled: progressEnabled,
         label: plan.name,
@@ -1249,6 +1252,7 @@ private func readFramesInParallel(
                     progressEnabled: false,
                     progressEvery: 0,
                     progressReporter: progressReporter,
+                    inFlightLimit: inFlightLimit,
                     metalContext: context
                 )
                 resultLock.lock()
@@ -1338,6 +1342,8 @@ func readFrames(
             maxFrames: maxFrames
         )
     )
+    let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: 1)
+    progress(progressEnabled, "using 1 GPU-fed media reader lane with \(inFlightLimit) in-flight GPU frame slot(s) for \(plan.name)")
     let result = try readFrameChunk(
         url: url,
         planName: plan.name,
@@ -1348,6 +1354,7 @@ func readFrames(
         progressEnabled: progressEnabled,
         progressEvery: 30,
         progressReporter: progressReporter,
+        inFlightLimit: inFlightLimit,
         metalContext: metalContext
     )
     progressReporter.finish()
