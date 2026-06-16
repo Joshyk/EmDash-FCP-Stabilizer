@@ -12,7 +12,9 @@ The workflow is:
 4. Use `Imports` for the generated import package and analysis staging cache.
    It defaults to the same folder as the selected export. Use `Select Imports`
    only when you want a different folder.
-5. Run serial analysis for the full media duration of each selected asset.
+5. Run serial analysis for the full media duration of each selected asset. When
+   multiple assets are selected, the native analyzer finishes one asset before
+   starting the next.
 6. Write schema-compatible Tokyo Walking Stabilizer persisted cache files to an
    explicit Imports staging folder.
 7. Build an import FCPXMLD that adds Tokyo Walking Stabilizer filters carrying
@@ -30,9 +32,12 @@ analysis. Direct asset `src` paths that point inside Final Cut Pro `Proxy Media`
 or `High Quality Media` folders are also refused.
 
 The native analyzer requires Metal. Luma sampling and frame-to-frame block
-motion search run through Metal compute kernels; if a Metal device, command
-queue, or kernel dispatch is unavailable, analysis fails visibly instead of
-falling back to CPU motion search.
+motion search run through Metal compute kernels, with multiple in-flight GPU
+frame slots per active asset; if a Metal device, command queue, or kernel
+dispatch is unavailable, analysis fails visibly instead of falling back to CPU
+motion search. Parallel media readers may be used for a single selected asset
+to keep the GPU fed, but they are disabled when multiple assets are selected so
+selected clips remain strictly serial.
 
 ## Run
 

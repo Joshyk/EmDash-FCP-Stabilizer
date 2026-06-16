@@ -79,6 +79,11 @@ struct PairMotion {
     let confidence: Float
 }
 
+private struct FrameMetrics {
+    let blurAmount: Float
+    let fingerprint: String
+}
+
 struct PreparedAnalysis {
     let frames: [AnalysisFrame]
     let residuals: [Float]
@@ -238,15 +243,15 @@ func fingerprintString(hash initialHash: UInt64, byteCount: Int) -> String {
     return String(format: "%016llx", hash)
 }
 
-func fingerprint(for pixels: [UInt8]) -> String {
+func fingerprint(_ pixels: UnsafePointer<UInt8>, byteCount: Int) -> String {
     var hash = fingerprintInitialHash
-    for byte in pixels {
-        combineFingerprintByte(byte, into: &hash)
+    for index in 0..<byteCount {
+        combineFingerprintByte(pixels[index], into: &hash)
     }
-    return fingerprintString(hash: hash, byteCount: pixels.count)
+    return fingerprintString(hash: hash, byteCount: byteCount)
 }
 
-func blurAmount(_ pixels: [UInt8], width: Int, height: Int) -> Float {
+func blurAmount(_ pixels: UnsafePointer<UInt8>, width: Int, height: Int) -> Float {
     guard width > 2, height > 2 else { return 0 }
     var total: Int = 0
     var count: Int = 0
@@ -266,6 +271,13 @@ func blurAmount(_ pixels: [UInt8], width: Int, height: Int) -> Float {
     }
     guard count > 0 else { return 0 }
     return Float(total) / Float(count)
+}
+
+private func frameMetrics(_ pixels: UnsafePointer<UInt8>, byteCount: Int, width: Int, height: Int) -> FrameMetrics {
+    FrameMetrics(
+        blurAmount: blurAmount(pixels, width: width, height: height),
+        fingerprint: fingerprint(pixels, byteCount: byteCount)
+    )
 }
 
 private struct MetalLumaUniforms {
@@ -603,14 +615,17 @@ final class MetalAnalysisContext {
         )
     }
 
-    fileprivate func completeFrame(_ encodedFrame: MetalEncodedFrame, pixelCount: Int) throws -> (pixels: [UInt8], motion: PairMotion?) {
+    fileprivate func completeFrame(
+        _ encodedFrame: MetalEncodedFrame,
+        pixelCount: Int,
+        sampleWidth: Int,
+        sampleHeight: Int
+    ) throws -> (metrics: FrameMetrics, motion: PairMotion?) {
         encodedFrame.commandBuffer.waitUntilCompleted()
         CVMetalTextureCacheFlush(textureCache, 0)
         try Self.validate(commandBuffer: encodedFrame.commandBuffer, stage: encodedFrame.motionWorkspace == nil ? "luma sampling" : "luma sampling and block motion search")
-        let pixels = [UInt8](UnsafeBufferPointer(
-            start: encodedFrame.outputBuffer.contents().assumingMemoryBound(to: UInt8.self),
-            count: pixelCount
-        ))
+        let pixels = encodedFrame.outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
+        let metrics = frameMetrics(pixels, byteCount: pixelCount, width: sampleWidth, height: sampleHeight)
         let motion: PairMotion?
         if let motionWorkspace = encodedFrame.motionWorkspace,
            let resultBuffer = encodedFrame.resultBuffer {
@@ -618,7 +633,7 @@ final class MetalAnalysisContext {
         } else {
             motion = nil
         }
-        return (pixels, motion)
+        return (metrics, motion)
     }
 
     private func workspaceForMotion(width: Int, height: Int) throws -> MetalMotionWorkspace {
@@ -856,7 +871,13 @@ private func analyzerInFlightLimit(pixelCount: Int) -> Int {
        let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
         return max(4, min(96, parsed))
     }
-    return 12
+    if pixelCount >= 8_000_000 {
+        return 12
+    }
+    if pixelCount >= 2_000_000 {
+        return 18
+    }
+    return 24
 }
 
 private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCount: Int) -> Bool {
@@ -975,18 +996,22 @@ private func readFrameChunk(
 
     func finishOldestPendingFrame() throws {
         let pending = pendingFrames.removeFirst()
-        let frameAnalysis = try metalContext.completeFrame(pending.encoded, pixelCount: pixelCount)
+        let frameAnalysis = try metalContext.completeFrame(
+            pending.encoded,
+            pixelCount: pixelCount,
+            sampleWidth: sample.width,
+            sampleHeight: sample.height
+        )
         guard pending.shouldOutput else {
             return
         }
-        let pixels = frameAnalysis.pixels
         let frame = AnalysisFrame(
             time: pending.time,
             pixels: [],
             sampleWidth: sample.width,
             sampleHeight: sample.height,
-            blurAmount: blurAmount(pixels, width: sample.width, height: sample.height),
-            fingerprint: fingerprint(for: pixels)
+            blurAmount: frameAnalysis.metrics.blurAmount,
+            fingerprint: frameAnalysis.metrics.fingerprint
         )
         motions.append(frameAnalysis.motion ?? PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
         frames.append(frame)
@@ -1138,7 +1163,8 @@ func readFrames(
     sampleScalePercent: Double,
     maxFrames: Int?,
     progressEnabled: Bool,
-    metalContext: MetalAnalysisContext
+    metalContext: MetalAnalysisContext,
+    allowParallelReaders: Bool
 ) throws -> PreparedAnalysis {
     guard plan.mediaKind == "original-media" || plan.mediaKind == "asset-src" else {
         throw AnalyzerError("analysis requires original media; got \(plan.mediaKind ?? "unknown") for \(plan.name)")
@@ -1154,7 +1180,7 @@ func readFrames(
     let size = sampleSize(sourceWidth: sourceWidth, sourceHeight: sourceHeight, scalePercent: sampleScalePercent)
     let sample = AnalysisSampleSize(width: size.width, height: size.height)
     let workerCount = analyzerWorkerCount()
-    if shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, workerCount: workerCount) {
+    if allowParallelReaders && shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, workerCount: workerCount) {
         return try readFramesInParallel(
             url: url,
             plan: plan,
@@ -1360,15 +1386,23 @@ func run() throws {
     try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
     let metalContext = try MetalAnalysisContext()
     progress(arguments.progress, "using Metal analyzer device: \(metalContext.deviceName)")
+    let allowParallelReaders = plan.assets.count == 1
+    progress(
+        arguments.progress,
+        allowParallelReaders
+            ? "processing 1 selected asset with Metal GPU analysis; parallel media readers may be used inside that single asset"
+            : "processing \(plan.assets.count) selected assets serially with Metal GPU analysis; parallel media readers disabled for multi-asset runs"
+    )
     var results: [AnalysisResult] = []
-    for asset in plan.assets {
-        progress(arguments.progress, "starting \(asset.name)")
+    for (assetIndex, asset) in plan.assets.enumerated() {
+        progress(arguments.progress, "starting asset \(assetIndex + 1)/\(plan.assets.count): \(asset.name)")
         let prepared = try readFrames(
             asset: asset,
             sampleScalePercent: plan.sampleScalePercent,
             maxFrames: plan.maxFrames,
             progressEnabled: arguments.progress,
-            metalContext: metalContext
+            metalContext: metalContext,
+            allowParallelReaders: allowParallelReaders
         )
         let cache = buildCache(
             asset: asset,

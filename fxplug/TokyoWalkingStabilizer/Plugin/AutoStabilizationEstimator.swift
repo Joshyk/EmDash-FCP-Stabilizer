@@ -1142,6 +1142,7 @@ enum AutoStabilizationEstimator {
         let sampleStep = renderTemporalSmoothingWindowSeconds / denominator
         let sigma = max(1e-6, halfWindow * 0.5)
         var weightedSamples: [(transform: StabilizerAutoTransform, weight: Float, offsetSeconds: Double)] = []
+        weightedSamples.reserveCapacity(sampleCount)
 
         for sampleIndex in 0..<sampleCount {
             let offset = (Double(sampleIndex - centerSample) * sampleStep)
@@ -1154,13 +1155,15 @@ enum AutoStabilizationEstimator {
             guard weight > 0.0001 else {
                 continue
             }
-            let transform = rawEstimate(
-                preparedAnalysis: analysis,
-                renderSeconds: sampleSeconds,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths
-            )
+            let transform = sampleIndex == centerSample
+                ? rawCenterTransform
+                : rawEstimate(
+                    preparedAnalysis: analysis,
+                    renderSeconds: sampleSeconds,
+                    outputSize: outputSize,
+                    panSmoothSeconds: panSmoothSeconds,
+                    strengths: strengths
+                )
             weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
         }
 
@@ -1214,91 +1217,129 @@ enum AutoStabilizationEstimator {
     ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
         let halfWindow = renderFarFieldWarpSmoothingWindowSeconds * 0.5
         let sigma = max(1e-6, halfWindow * 0.5)
-        return samples.compactMap { sample in
-            guard abs(sample.offsetSeconds) <= halfWindow + 1e-9 else {
-                return nil
+        var smoothedSamples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+        smoothedSamples.reserveCapacity(samples.count)
+        for sample in samples {
+            if abs(sample.offsetSeconds) > halfWindow + 1e-9 {
+                continue
             }
             let normalizedDistance = sample.offsetSeconds / sigma
             let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
-            guard weight > 0.0001 else {
-                return nil
+            if weight <= 0.0001 {
+                continue
             }
-            return (transform: sample.transform, weight: weight)
+            smoothedSamples.append((transform: sample.transform, weight: weight))
         }
+        return smoothedSamples
     }
 
     private static func weightedAverageTransform(
         _ samples: [(transform: StabilizerAutoTransform, weight: Float)]
     ) -> StabilizerAutoTransform {
-        let totalWeight = samples.reduce(Float(0.0)) { partial, sample in
-            partial + sample.weight
+        var totalWeight: Float = 0.0
+        var pixelOffset = vector_float2(0.0, 0.0)
+        var macroPixelOffset = vector_float2(0.0, 0.0)
+        var microPixelOffset = vector_float2(0.0, 0.0)
+        var strideWobblePixelOffset = vector_float2(0.0, 0.0)
+        var footstepJitterRotationDegrees: Float = 0.0
+        var strideWobbleRotationDegrees: Float = 0.0
+        var rotationDegrees: Float = 0.0
+        var rawPixelOffset = vector_float2(0.0, 0.0)
+        var rawRotationDegrees: Float = 0.0
+        var temporalSmoothingPixelDelta = vector_float2(0.0, 0.0)
+        var temporalSmoothingRotationDelta: Float = 0.0
+        var effectiveMicroJitterStrength = vector_float3(0.0, 0.0, 0.0)
+        var effectiveStrideWobbleStrength = vector_float3(0.0, 0.0, 0.0)
+        var warpConfidence: Float = 0.0
+        var microConfidence: Float = 0.0
+        var strideConfidence: Float = 0.0
+        var turnConfidence: Float = 0.0
+        var acceptedBlockCount: Float = 0.0
+        var totalBlockCount: Float = 0.0
+        var yawPitchProxy = vector_float2(0.0, 0.0)
+        var shear = vector_float2(0.0, 0.0)
+        var perspective = vector_float2(0.0, 0.0)
+        var blurAmount: Float = 0.0
+        var trackingConfidence: Float = 0.0
+        var walkingTrackingConfidence: Float = 0.0
+        var motionConfidence: Float = 0.0
+        var residual: Float = 0.0
+        var footstepImpulse = vector_float3(0.0, 0.0, 0.0)
+        var searchRadiusHitCount: Float = 0.0
+        var searchRadiusTotalCount: Float = 0.0
+
+        for sample in samples {
+            let transform = sample.transform
+            let weight = sample.weight
+            totalWeight += weight
+            pixelOffset += transform.pixelOffset * weight
+            macroPixelOffset += transform.macroPixelOffset * weight
+            microPixelOffset += transform.microPixelOffset * weight
+            strideWobblePixelOffset += transform.strideWobblePixelOffset * weight
+            footstepJitterRotationDegrees += transform.footstepJitterRotationDegrees * weight
+            strideWobbleRotationDegrees += transform.strideWobbleRotationDegrees * weight
+            rotationDegrees += transform.rotationDegrees * weight
+            rawPixelOffset += transform.rawPixelOffset * weight
+            rawRotationDegrees += transform.rawRotationDegrees * weight
+            temporalSmoothingPixelDelta += transform.temporalSmoothingPixelDelta * weight
+            temporalSmoothingRotationDelta += transform.temporalSmoothingRotationDelta * weight
+            effectiveMicroJitterStrength += transform.effectiveMicroJitterStrength * weight
+            effectiveStrideWobbleStrength += transform.effectiveStrideWobbleStrength * weight
+            warpConfidence += transform.warpConfidence * weight
+            microConfidence += transform.microConfidence * weight
+            strideConfidence += transform.strideConfidence * weight
+            turnConfidence += transform.turnConfidence * weight
+            acceptedBlockCount += Float(transform.acceptedBlockCount) * weight
+            totalBlockCount += Float(transform.totalBlockCount) * weight
+            yawPitchProxy += transform.yawPitchProxy * weight
+            shear += transform.shear * weight
+            perspective += transform.perspective * weight
+            blurAmount += transform.blurAmount * weight
+            trackingConfidence += transform.trackingConfidence * weight
+            walkingTrackingConfidence += transform.walkingTrackingConfidence * weight
+            motionConfidence += transform.motionConfidence * weight
+            residual += transform.residual * weight
+            footstepImpulse += transform.footstepImpulse * weight
+            searchRadiusHitCount += Float(transform.searchRadiusHitCount) * weight
+            searchRadiusTotalCount += Float(transform.searchRadiusTotalCount) * weight
         }
         guard totalWeight > 0.0 else {
             return .identity
         }
 
-        func vectorAverage(_ keyPath: KeyPath<StabilizerAutoTransform, vector_float2>) -> vector_float2 {
-            samples.reduce(vector_float2(0.0, 0.0)) { partial, sample in
-                partial + (sample.transform[keyPath: keyPath] * sample.weight)
-            } / totalWeight
-        }
-
-        func vector3Average(_ keyPath: KeyPath<StabilizerAutoTransform, vector_float3>) -> vector_float3 {
-            samples.reduce(vector_float3(0.0, 0.0, 0.0)) { partial, sample in
-                partial + (sample.transform[keyPath: keyPath] * sample.weight)
-            } / totalWeight
-        }
-
-        func floatAverage(_ keyPath: KeyPath<StabilizerAutoTransform, Float>) -> Float {
-            samples.reduce(Float(0.0)) { partial, sample in
-                partial + (sample.transform[keyPath: keyPath] * sample.weight)
-            } / totalWeight
-        }
-
-        let acceptedBlockCount = samples.reduce(Float(0.0)) { partial, sample in
-            partial + (Float(sample.transform.acceptedBlockCount) * sample.weight)
-        } / totalWeight
-        let totalBlockCount = samples.reduce(Float(0.0)) { partial, sample in
-            partial + (Float(sample.transform.totalBlockCount) * sample.weight)
-        } / totalWeight
-
         return StabilizerAutoTransform(
-            pixelOffset: vectorAverage(\.pixelOffset),
-            macroPixelOffset: vectorAverage(\.macroPixelOffset),
-            microPixelOffset: vectorAverage(\.microPixelOffset),
-            strideWobblePixelOffset: vectorAverage(\.strideWobblePixelOffset),
-            footstepJitterRotationDegrees: floatAverage(\.footstepJitterRotationDegrees),
-            strideWobbleRotationDegrees: floatAverage(\.strideWobbleRotationDegrees),
-            rotationDegrees: floatAverage(\.rotationDegrees),
-            rawPixelOffset: vectorAverage(\.rawPixelOffset),
-            rawRotationDegrees: floatAverage(\.rawRotationDegrees),
-            temporalSmoothingPixelDelta: vectorAverage(\.temporalSmoothingPixelDelta),
-            temporalSmoothingRotationDelta: floatAverage(\.temporalSmoothingRotationDelta),
+            pixelOffset: pixelOffset / totalWeight,
+            macroPixelOffset: macroPixelOffset / totalWeight,
+            microPixelOffset: microPixelOffset / totalWeight,
+            strideWobblePixelOffset: strideWobblePixelOffset / totalWeight,
+            footstepJitterRotationDegrees: footstepJitterRotationDegrees / totalWeight,
+            strideWobbleRotationDegrees: strideWobbleRotationDegrees / totalWeight,
+            rotationDegrees: rotationDegrees / totalWeight,
+            rawPixelOffset: rawPixelOffset / totalWeight,
+            rawRotationDegrees: rawRotationDegrees / totalWeight,
+            temporalSmoothingPixelDelta: temporalSmoothingPixelDelta / totalWeight,
+            temporalSmoothingRotationDelta: temporalSmoothingRotationDelta / totalWeight,
             temporalSmoothingSampleCount: Int32(samples.count),
             temporalSmoothingWindowSeconds: 0.0,
-            effectiveMicroJitterStrength: vector3Average(\.effectiveMicroJitterStrength),
-            effectiveStrideWobbleStrength: vector3Average(\.effectiveStrideWobbleStrength),
-            warpConfidence: floatAverage(\.warpConfidence),
-            microConfidence: floatAverage(\.microConfidence),
-            strideConfidence: floatAverage(\.strideConfidence),
-            turnConfidence: floatAverage(\.turnConfidence),
-            acceptedBlockCount: Int32(acceptedBlockCount.rounded()),
-            totalBlockCount: Int32(totalBlockCount.rounded()),
-            yawPitchProxy: vectorAverage(\.yawPitchProxy),
-            shear: vectorAverage(\.shear),
-            perspective: vectorAverage(\.perspective),
-            blurAmount: floatAverage(\.blurAmount),
-            trackingConfidence: floatAverage(\.trackingConfidence),
-            walkingTrackingConfidence: floatAverage(\.walkingTrackingConfidence),
-            motionConfidence: floatAverage(\.motionConfidence),
-            residual: floatAverage(\.residual),
-            footstepImpulse: vector3Average(\.footstepImpulse),
-            searchRadiusHitCount: Int32(samples.reduce(Float(0.0)) { partial, sample in
-                partial + (Float(sample.transform.searchRadiusHitCount) * sample.weight)
-            } / totalWeight),
-            searchRadiusTotalCount: Int32(samples.reduce(Float(0.0)) { partial, sample in
-                partial + (Float(sample.transform.searchRadiusTotalCount) * sample.weight)
-            } / totalWeight)
+            effectiveMicroJitterStrength: effectiveMicroJitterStrength / totalWeight,
+            effectiveStrideWobbleStrength: effectiveStrideWobbleStrength / totalWeight,
+            warpConfidence: warpConfidence / totalWeight,
+            microConfidence: microConfidence / totalWeight,
+            strideConfidence: strideConfidence / totalWeight,
+            turnConfidence: turnConfidence / totalWeight,
+            acceptedBlockCount: Int32((acceptedBlockCount / totalWeight).rounded()),
+            totalBlockCount: Int32((totalBlockCount / totalWeight).rounded()),
+            yawPitchProxy: yawPitchProxy / totalWeight,
+            shear: shear / totalWeight,
+            perspective: perspective / totalWeight,
+            blurAmount: blurAmount / totalWeight,
+            trackingConfidence: trackingConfidence / totalWeight,
+            walkingTrackingConfidence: walkingTrackingConfidence / totalWeight,
+            motionConfidence: motionConfidence / totalWeight,
+            residual: residual / totalWeight,
+            footstepImpulse: footstepImpulse / totalWeight,
+            searchRadiusHitCount: Int32(searchRadiusHitCount / totalWeight),
+            searchRadiusTotalCount: Int32(searchRadiusTotalCount / totalWeight)
         )
     }
 
@@ -2793,7 +2834,7 @@ enum AutoStabilizationEstimator {
             return values
         }
         var predictedValues = values
-        for index in Set(indices) where values.indices.contains(index) && frames.indices.contains(index) {
+        for index in indices where values.indices.contains(index) && frames.indices.contains(index) {
             predictedValues[index] = outerLinearPrediction(
                 values,
                 frames: frames,
@@ -2868,7 +2909,7 @@ enum AutoStabilizationEstimator {
             return values[indices[0]]
         }
 
-        let sortedIndices = indices.sorted()
+        let sortedIndices = indicesAreStrictlyAscending(indices) ? indices : indices.sorted()
         let windowStart = centerTime - (windowSeconds * 0.5)
         let windowEnd = centerTime + (windowSeconds * 0.5)
         var weightedTotal: Float = 0.0
@@ -2901,6 +2942,20 @@ enum AutoStabilizationEstimator {
         return weightedTotal / Float(totalWeight)
     }
 
+    private static func indicesAreStrictlyAscending(_ indices: [Int]) -> Bool {
+        guard indices.count > 1 else {
+            return true
+        }
+        var previous = indices[0]
+        for index in indices.dropFirst() {
+            if index <= previous {
+                return false
+            }
+            previous = index
+        }
+        return true
+    }
+
     private static func locallyTimeWeightedAveragePath(
         _ values: [Float],
         frames: [StabilizerAnalysisFrame],
@@ -2912,7 +2967,7 @@ enum AutoStabilizationEstimator {
         }
         var smoothedValues = values
         let halfWindowSeconds = max(0.0, windowSeconds * 0.5)
-        for index in Set(targetIndices) where values.indices.contains(index) && frames.indices.contains(index) {
+        for index in targetIndices where values.indices.contains(index) && frames.indices.contains(index) {
             let centerTime = frames[index].time
             let localIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindowSeconds)
             let activeIndices = localIndices.isEmpty ? [index] : Array(localIndices)
