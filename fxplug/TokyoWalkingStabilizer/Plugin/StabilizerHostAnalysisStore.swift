@@ -20,6 +20,7 @@ private enum HostAnalysisStatus {
     case cacheUnsupported
     case cacheIncomplete
     case cacheCleared
+    case trimmedClip
     case projectCacheUnavailable
     case proxyRejected
     case proxyPreview
@@ -32,6 +33,7 @@ private struct PersistedHostAnalysisCache: Codable {
     let schemaVersion: Int
     let createdAt: Double
     let clipLabel: String?
+    let requestedSampleScalePercent: Double?
     let rangeStartSeconds: Double
     let rangeDurationSeconds: Double
     let rangeEndSeconds: Double?
@@ -83,6 +85,7 @@ private struct PersistedHostAnalysisIndexEntry: Codable {
     let cacheFileName: String
     let createdAt: Double
     let clipLabel: String?
+    let requestedSampleScalePercent: Double?
     let rangeStartSeconds: Double
     let rangeDurationSeconds: Double
     let rangeEndSeconds: Double?
@@ -126,7 +129,7 @@ private struct PersistentCacheLoadTiming {
 
 private enum PersistentCacheLoadAttempt {
     case loaded(LoadedPersistentHostAnalysisCache)
-    case unusable(HostAnalysisStatus, String)
+    case unusable(HostAnalysisStatus, String, schemaVersion: Int?)
     case skipped
 }
 
@@ -164,12 +167,21 @@ private struct HostAnalysisTimingAccumulator {
 
 struct StabilizerHostAnalysisInspectorSnapshot {
     let analysisInfoText: String
+    let queueState: StabilizerHostAnalysisQueueState
     let requestedSampleScalePercent: Double?
+    let cacheSchemaVersion: Int?
     let rangeStartSeconds: Double?
     let rangeEndSeconds: Double?
     let sampleWidth: Int?
     let sampleHeight: Int?
     let frameCount: Int?
+}
+
+enum StabilizerHostAnalysisQueueState {
+    case idle
+    case starting
+    case active
+    case queued(position: Int, totalCount: Int, reason: String)
 }
 
 final class StabilizerHostAnalysisStore {
@@ -187,7 +199,9 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo: StabilizerSourceFrameInfo?,
         latestSampleSize: (width: Int, height: Int)?,
         analysisInfoText: String,
-        activePersistentCacheIdentity: String?
+        queueState: StabilizerHostAnalysisQueueState,
+        activePersistentCacheIdentity: String?,
+        activeCacheSchemaVersion: Int?
     )
 
     private struct CompletedMemoryHostAnalysis {
@@ -228,6 +242,7 @@ final class StabilizerHostAnalysisStore {
     private var persistentCacheCandidates: [URL] = []
     private var activePersistentCacheFileName: String?
     private var activePersistentCacheIdentity: String?
+    private var activeCacheSchemaVersion: Int?
     private var rejectedPersistentCacheFileNames = Set<String>()
     private var activeRange: CMTimeRange = .invalid
     private var activeFrameDuration: CMTime = .invalid
@@ -237,6 +252,7 @@ final class StabilizerHostAnalysisStore {
     private var finished = false
     private var validationState: HostAnalysisValidationState = .notRequired
     private var status: HostAnalysisStatus = .needsAnalysis
+    private var currentRenderSourceIsScaledProxy = false
     private var projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
     private var projectCacheUnavailableReason: String?
     private var analysisRevision: UInt64 = 0
@@ -246,6 +262,8 @@ final class StabilizerHostAnalysisStore {
     private var latestSourceFrameInfo: StabilizerSourceFrameInfo?
     private var latestSampleSize: (width: Int, height: Int)?
     private var analysisInfoText = "No Analysis"
+    private var queueState: StabilizerHostAnalysisQueueState = .idle
+    private var actionStatusText: String?
     private var analysisTiming = HostAnalysisTimingAccumulator()
 
     var frameCount: Int {
@@ -322,7 +340,9 @@ final class StabilizerHostAnalysisStore {
 
         return StabilizerHostAnalysisInspectorSnapshot(
             analysisInfoText: analysisInfoText,
+            queueState: queueState,
             requestedSampleScalePercent: activeRequestedSampleScalePercent.isFinite ? activeRequestedSampleScalePercent : nil,
+            cacheSchemaVersion: activeCacheSchemaVersion,
             rangeStartSeconds: rangeSeconds.start,
             rangeEndSeconds: rangeSeconds.end,
             sampleWidth: sampleSize?.width,
@@ -335,6 +355,19 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         defer { lock.unlock() }
         return activePersistentCacheIdentity
+    }
+
+    var persistedAnalysisUpdateSummary: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let activePersistentCacheIdentity,
+              let loadedCache = persistentCachesByIdentity[activePersistentCacheIdentity],
+              loadedCache.cache.schemaVersion < Self.cacheSchemaVersion
+        else {
+            return nil
+        }
+        let sample = Self.sampleDescription(loadedCache.cache)
+        return "schema v\(loadedCache.cache.schemaVersion) -> v\(Self.cacheSchemaVersion), \(sample), \(loadedCache.frames.count)f"
     }
 
     var activeExpectedRange: HostAnalysisExpectedRange? {
@@ -386,7 +419,7 @@ final class StabilizerHostAnalysisStore {
             retainedURL.stopAccessingSecurityScopedResource()
         }
         if hadConfiguredDirectory {
-            NSLog("TokyoWalkingStabilizer: cleared configured Event Host Analysis cache root because \(reason)")
+            NSLog("TokyoWalkingStabilizer: cleared configured Event Host Analysis persisted analysis root because \(reason)")
             bumpPersistentCacheGeneration()
         }
     }
@@ -411,7 +444,23 @@ final class StabilizerHostAnalysisStore {
         let frameCount = framesByTimeKey.count
         let hasPreparedAnalysis = preparedAnalysis != nil
         let unavailableStatusText = projectCacheUnavailableStatusText
+        let renderSourceIsScaledProxy = currentRenderSourceIsScaledProxy
+        let actionStatus = actionStatusText
         lock.unlock()
+
+        if let actionStatus,
+           currentStatus != .requested,
+           currentStatus != .queued,
+           currentStatus != .analyzing {
+            return actionStatus
+        }
+
+        if renderSourceIsScaledProxy {
+            if hasPreparedAnalysis {
+                return "Ready (\(frameCount) frames) - Original Media Required to Start Analysis"
+            }
+            return "Original Media Required to Start Analysis"
+        }
 
         switch currentStatus {
         case .needsAnalysis:
@@ -423,20 +472,22 @@ final class StabilizerHostAnalysisStore {
         case .analyzing:
             return "Analyzing Host Frames (\(frameCount))"
         case .cacheLoaded:
-            return "Cache Loaded (\(frameCount))"
+            return "Persisted Analysis Loaded (\(frameCount))"
         case .ready:
             if hasPreparedAnalysis {
                 return "Ready (\(frameCount) frames)"
             }
             return "Needs Analysis"
         case .cacheRejected:
-            return "Cache Rejected - Run Host Analysis"
+            return "Persisted Analysis Rejected - Run Host Analysis"
         case .cacheUnsupported:
-            return "Cache Unsupported - Run Host Analysis"
+            return "Persisted Analysis Unsupported - Run Host Analysis"
         case .cacheIncomplete:
-            return "Cache Incomplete - Run Host Analysis"
+            return "Persisted Analysis Incomplete - Run Host Analysis"
         case .cacheCleared:
-            return "Cache Cleared"
+            return "Persisted Analysis Cleared"
+        case .trimmedClip:
+            return "Persisted Analysis Range Mismatch - Run Host Analysis"
         case .projectCacheUnavailable:
             if hasPreparedAnalysis {
                 return "Ready Memory Only - \(unavailableStatusText)"
@@ -446,7 +497,7 @@ final class StabilizerHostAnalysisStore {
             return "Proxy Media Rejected - Use Original Media"
         case .proxyPreview:
             if hasPreparedAnalysis {
-                return "Original Analysis - Proxy Preview (\(frameCount) frames)"
+                return "Ready (\(frameCount) frames)"
             }
             return "Needs Analysis"
         case .sourceMetadataUnconfirmedPreview:
@@ -455,9 +506,25 @@ final class StabilizerHostAnalysisStore {
             }
             return "Needs Analysis"
         case .proxyNeedsOriginalValidation:
-            return "Proxy Cache Unvalidated - Use Original Media"
+            return "Original Media Required - Validate Analysis"
         case .sourceUnavailable:
             return "Source Media Unavailable - Check FCP Proxy"
+        }
+    }
+
+    var canStartHostAnalysis: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if currentRenderSourceIsScaledProxy {
+            return false
+        }
+
+        switch status {
+        case .requested, .queued, .analyzing, .proxyRejected, .proxyNeedsOriginalValidation, .sourceUnavailable:
+            return false
+        case .needsAnalysis, .cacheLoaded, .ready, .cacheRejected, .cacheUnsupported, .cacheIncomplete, .cacheCleared, .trimmedClip, .projectCacheUnavailable, .proxyPreview, .sourceMetadataUnconfirmedPreview:
+            return true
         }
     }
 
@@ -465,6 +532,58 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         defer { lock.unlock() }
         return finished && validationState != .rejected && preparedAnalysis != nil
+    }
+
+    func hasCompletedAnalysis(
+        requestedSampleScalePercent: Double,
+        expectedSampleSize: (width: Int, height: Int)?
+    ) -> Bool {
+        lock.lock()
+        let isCompleted = finished && validationState != .rejected && preparedAnalysis != nil
+        let activeRequestedPercent = activeRequestedSampleScalePercent
+        let activeSampleSize = preparedAnalysis?.frames.first.map { (width: $0.sampleWidth, height: $0.sampleHeight) }
+        lock.unlock()
+        return isCompleted
+            && Self.sampleScale(activeRequestedPercent, matches: requestedSampleScalePercent)
+            && Self.sampleSize(activeSampleSize, matches: expectedSampleSize)
+    }
+
+    func expectedSampleSizeForCurrentSource(requestedSampleScalePercent: Double) -> (width: Int, height: Int)? {
+        lock.lock()
+        let sourceInfo = latestSourceFrameInfo
+        lock.unlock()
+        guard let sourceInfo else {
+            return nil
+        }
+        return AutoStabilizationEstimator.sampleSize(
+            sourceWidth: sourceInfo.sourceWidth,
+            sourceHeight: sourceInfo.sourceHeight,
+            scalePercent: requestedSampleScalePercent
+        )
+    }
+
+    func hasCompletedPersistedAnalysis(
+        expectedRange: HostAnalysisExpectedRange?,
+        requestedSampleScalePercent: Double,
+        expectedSampleSize: (width: Int, height: Int)?
+    ) -> Bool {
+        lock.lock()
+        let hasPersistedAnalysis = finished
+            && validationState != .rejected
+            && preparedAnalysis != nil
+        let activeIdentity = activePersistentCacheIdentity
+        let activeRequestedPercent = activeRequestedSampleScalePercent
+        let activeSampleSize = preparedAnalysis?.frames.first.map { (width: $0.sampleWidth, height: $0.sampleHeight) }
+        lock.unlock()
+        guard hasPersistedAnalysis,
+              let activeIdentity,
+              Self.cacheIdentity(activeIdentity, matches: expectedRange),
+              Self.sampleScale(activeRequestedPercent, matches: requestedSampleScalePercent),
+              Self.sampleSize(activeSampleSize, matches: expectedSampleSize)
+        else {
+            return false
+        }
+        return true
     }
 
     var hasRejectedPersistentCache: Bool {
@@ -483,6 +602,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = Self.cacheSchemaVersion
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: true)
         activeRange = range
         activeFrameDuration = frameDuration
@@ -492,11 +612,14 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .validated
         status = .analyzing
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
         latestSampleSize = nil
-        analysisInfoText = "Analyzing S\(Self.sampleScaleDescription(requestedSampleScalePercent))"
+        analysisInfoText = "Analyzing \(Self.sampleScaleDescription(requestedSampleScalePercent))"
+        queueState = .active
+        actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
@@ -518,7 +641,10 @@ final class StabilizerHostAnalysisStore {
         if preparedAnalysis == nil && status != .analyzing {
             status = .requested
             activeRequestedSampleScalePercent = requestedSampleScalePercent
-            analysisInfoText = "Requested S\(Self.sampleScaleDescription(requestedSampleScalePercent))"
+            activeCacheSchemaVersion = Self.cacheSchemaVersion
+            analysisInfoText = "Requested \(Self.sampleScaleDescription(requestedSampleScalePercent))"
+            queueState = .starting
+            actionStatusText = nil
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -529,8 +655,12 @@ final class StabilizerHostAnalysisStore {
         if preparedAnalysis == nil {
             status = .queued
             activeRequestedSampleScalePercent = requestedSampleScalePercent
+            activeCacheSchemaVersion = Self.cacheSchemaVersion
             let queueTotal = max(position, totalCount)
-            analysisInfoText = "Queued #\(position)/\(queueTotal) S\(Self.sampleScaleDescription(requestedSampleScalePercent)): \(Self.compactReason(reason))"
+            let compactReason = Self.compactReason(reason)
+            analysisInfoText = "Queued #\(position)/\(queueTotal) \(Self.sampleScaleDescription(requestedSampleScalePercent)): \(compactReason)"
+            queueState = .queued(position: position, totalCount: queueTotal, reason: compactReason)
+            actionStatusText = nil
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -541,6 +671,36 @@ final class StabilizerHostAnalysisStore {
         if preparedAnalysis == nil {
             status = .needsAnalysis
             analysisInfoText = "Start failed: \(Self.compactReason(reason))"
+        }
+        queueState = .idle
+        actionStatusText = "Host Analysis Not Started - \(Self.compactReason(reason))"
+        bumpRevisionLocked()
+        lock.unlock()
+    }
+
+    func markActionMessage(_ message: String, analysisInfo: String? = nil) {
+        lock.lock()
+        actionStatusText = message
+        if let analysisInfo {
+            analysisInfoText = analysisInfo
+        }
+        queueState = .idle
+        bumpRevisionLocked()
+        lock.unlock()
+    }
+
+    func markRequestedSampleUnavailable(requestedSampleScalePercent: Double) {
+        let percentText = Self.sampleScaleDescription(requestedSampleScalePercent)
+        markActionMessage(
+            "Needs Analysis - Sample Size \(percentText) Not Analyzed",
+            analysisInfo: "Sample size changed: \(percentText) not analyzed"
+        )
+    }
+
+    func clearRequestedSampleUnavailable() {
+        lock.lock()
+        if actionStatusText?.hasPrefix("Needs Analysis - Sample Size ") == true {
+            actionStatusText = nil
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -554,12 +714,13 @@ final class StabilizerHostAnalysisStore {
             status = .projectCacheUnavailable
             projectCacheUnavailableStatusText = statusText
             analysisInfoText = "\(statusText). \(reason)"
+            queueState = .idle
             bumpRevisionLocked()
         } else {
             projectCacheUnavailableStatusText = statusText
         }
         lock.unlock()
-        NSLog("TokyoWalkingStabilizer: project bundle Host Analysis cache unavailable: \(reason)")
+        NSLog("TokyoWalkingStabilizer: project bundle Host Analysis persisted analysis unavailable: \(reason)")
     }
 
     func noteProjectCacheUnavailable(reason: String) {
@@ -567,7 +728,7 @@ final class StabilizerHostAnalysisStore {
         projectCacheUnavailableStatusText = Self.projectCacheUnavailableStatusText(for: reason)
         projectCacheUnavailableReason = reason
         lock.unlock()
-        NSLog("TokyoWalkingStabilizer: noted project bundle Host Analysis cache unavailable for active session: \(reason)")
+        NSLog("TokyoWalkingStabilizer: noted project bundle Host Analysis persisted analysis unavailable for active session: \(reason)")
     }
 
     private static func projectCacheUnavailableStatusText(for reason: String) -> String {
@@ -590,6 +751,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
@@ -598,11 +760,14 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "No Analysis"
+        queueState = .idle
+        actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
@@ -626,6 +791,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: false)
         activeRange = .invalid
         activeFrameDuration = .invalid
@@ -635,17 +801,20 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .cacheCleared
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
         latestSampleSize = nil
-        analysisInfoText = "Cache Cleared"
+        analysisInfoText = "Persisted Analysis Cleared"
+        queueState = .idle
+        actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
         removePersistentCache(logFailures: true)
         Self.bumpPersistentCacheGeneration()
-        NSLog("TokyoWalkingStabilizer: cleared persisted Host Analysis cache set.")
+        NSLog("TokyoWalkingStabilizer: cleared Host Analysis persisted analysis set.")
     }
 
     func rejectProxyAnalysis(reason: String) {
@@ -658,6 +827,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
@@ -666,9 +836,11 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .proxyRejected
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = "Proxy rejected. Use original media."
+        queueState = .idle
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
@@ -818,6 +990,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = snapshot.activePersistentCacheIdentity
+        activeCacheSchemaVersion = snapshot.activeCacheSchemaVersion
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: true)
         activeRange = snapshot.activeRange
         activeFrameDuration = snapshot.activeFrameDuration
@@ -827,11 +1000,13 @@ final class StabilizerHostAnalysisStore {
         finished = snapshot.finished
         validationState = validationStateOverride ?? snapshot.validationState
         status = snapshot.status
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = snapshot.projectCacheUnavailableStatusText
         projectCacheUnavailableReason = snapshot.projectCacheUnavailableReason
         latestSourceFrameInfo = snapshot.latestSourceFrameInfo
         latestSampleSize = snapshot.latestSampleSize
         analysisInfoText = snapshot.analysisInfoText
+        queueState = snapshot.queueState
     }
 
     private func retainCompletedMemoryAnalysisLocked(_ snapshot: CompletedHostAnalysisSnapshot) -> String? {
@@ -908,7 +1083,7 @@ final class StabilizerHostAnalysisStore {
         if let unavailableReason = StabilizerOriginalMediaPolicy.sourceUnavailableReason(for: sourceImage) {
             markSourceUnavailableForRender(reason: unavailableReason)
             os_log(
-                "Render could not validate Host Analysis cache because the source frame is unavailable. reason=%{public}@ expectedRange=%{public}@.",
+                "Render could not validate Host Analysis persisted analysis because the source frame is unavailable. reason=%{public}@ expectedRange=%{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .error,
                 unavailableReason,
@@ -954,7 +1129,7 @@ final class StabilizerHostAnalysisStore {
                             if Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange),
                                Self.renderSeconds(CMTimeGetSeconds(renderTime), isInside: analysis.frames) {
                                 os_log(
-                                    "Using start-matched range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                    "Using start-matched range-mismatched Host Analysis persisted analysis before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
                                     log: stabilizerHostAnalysisLog,
                                     type: .default,
                                     activeIdentity,
@@ -970,7 +1145,7 @@ final class StabilizerHostAnalysisStore {
                                 return analysis
                             }
                             os_log(
-                                "Range-mismatched Host Analysis cache could not be validated against the current source frame. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                "Range-mismatched Host Analysis persisted analysis could not be validated against the current source frame. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
                                 log: stabilizerHostAnalysisLog,
                                 type: .error,
                                 activeIdentity,
@@ -978,7 +1153,7 @@ final class StabilizerHostAnalysisStore {
                                 validationIssue.reason,
                                 rejectionReason
                             )
-                            markProxyNeedsOriginalValidationForRender(reason: validationIssue.reason)
+                            markTrimmedClipInvalidForRender(reason: validationIssue.reason)
                             return nil
                         }
                         rejectPersistentCache(reason: rejectionReason)
@@ -991,10 +1166,11 @@ final class StabilizerHostAnalysisStore {
                     if status != .projectCacheUnavailable {
                         status = .ready
                     }
+                    currentRenderSourceIsScaledProxy = false
                     bumpRevisionLocked()
                     lock.unlock()
                     os_log(
-                        "Accepted range-mismatched Host Analysis cache after source-frame fingerprint validation. identity=%{public}@ expectedRange=%{public}@.",
+                        "Accepted range-mismatched Host Analysis persisted analysis after source-frame fingerprint validation. identity=%{public}@ expectedRange=%{public}@.",
                         log: stabilizerHostAnalysisLog,
                         type: .default,
                         activeIdentity,
@@ -1030,7 +1206,7 @@ final class StabilizerHostAnalysisStore {
                         markSourceMetadataUnconfirmedPreviewForRender(reason: validationIssue.reason)
                     }
                     updateRenderTimeMappingIfNeeded(for: analysis, validating: sourceImage, at: renderTime)
-                    NSLog("TokyoWalkingStabilizer: using range-matched Host Analysis cache before source-frame validation: \(validationIssue.reason)")
+                    NSLog("TokyoWalkingStabilizer: using range-matched Host Analysis persisted analysis before source-frame validation: \(validationIssue.reason)")
                     return analysis
                 }
                 if activeIdentity == nil,
@@ -1079,10 +1255,11 @@ final class StabilizerHostAnalysisStore {
                 if status != .projectCacheUnavailable {
                     status = .ready
                 }
+                currentRenderSourceIsScaledProxy = false
                 bumpRevisionLocked()
             }
             lock.unlock()
-            NSLog("TokyoWalkingStabilizer: validated persisted Host Analysis cache with \(analysis.frames.count) frames.")
+            NSLog("TokyoWalkingStabilizer: validated Host Analysis persisted analysis with \(analysis.frames.count) frames.")
             releaseRetainedAnalysisPixels()
             return analysis
         }
@@ -1114,12 +1291,17 @@ final class StabilizerHostAnalysisStore {
     }
 
     @discardableResult
-    func loadPersistentCache(expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
+    func loadPersistentCache(
+        expectedRange: HostAnalysisExpectedRange? = nil,
+        allowRangeMismatch: Bool = false,
+        requestedSampleScalePercent: Double? = nil,
+        expectedSampleSize: (width: Int, height: Int)? = nil
+    ) -> Bool {
         defer {
             markCurrentPersistentCacheGenerationObserved()
         }
         var candidateURLs = filteredPersistentCacheCandidateURLs()
-        var unusableCacheSummaries: [(status: HostAnalysisStatus, summary: String)] = []
+        var unusableCacheSummaries: [(status: HostAnalysisStatus, summary: String, schemaVersion: Int?)] = []
         while !candidateURLs.isEmpty {
             let activeURL = candidateURLs.removeFirst()
             let candidateStartedAt = CFAbsoluteTimeGetCurrent()
@@ -1132,20 +1314,33 @@ final class StabilizerHostAnalysisStore {
             switch loadAttempt {
             case .loaded(let loadedCandidate):
                 activeCandidate = loadedCandidate
-            case .unusable(let status, let summary):
-                unusableCacheSummaries.append((status, summary))
+            case .unusable(let status, let summary, let schemaVersion):
+                unusableCacheSummaries.append((status, summary, schemaVersion))
                 continue
             case .skipped:
                 continue
             }
             let matchesExpectedRange = Self.cache(activeCandidate.cache, matches: expectedRange)
             guard allowRangeMismatch || matchesExpectedRange else {
-                NSLog("TokyoWalkingStabilizer: skipped Host Analysis cache \(activeCandidate.fileName) because its range does not match the active clip.")
+                NSLog("TokyoWalkingStabilizer: skipped persisted Host Analysis \(activeCandidate.fileName) because its range does not match the active clip.")
+                continue
+            }
+            if !Self.sampleSize(
+                activeCandidate.cache,
+                matchesRequestedSampleScalePercent: requestedSampleScalePercent,
+                expectedSampleSize: expectedSampleSize
+            ) {
+                let savedSample = Self.sampleDescription(activeCandidate.cache)
+                let requestedSample = Self.sampleRequirementDescription(
+                    requestedSampleScalePercent: requestedSampleScalePercent,
+                    expectedSampleSize: expectedSampleSize
+                )
+                NSLog("TokyoWalkingStabilizer: skipped persisted Host Analysis \(activeCandidate.fileName) because saved sample \(savedSample) does not match requested sample \(requestedSample).")
                 continue
             }
             if !matchesExpectedRange {
                 os_log(
-                    "Loaded range-mismatched Host Analysis cache %{public}@ for source-frame fingerprint validation. expectedRange=%{public}@.",
+                    "Loaded range-mismatched Host Analysis persisted analysis %{public}@ for source-frame fingerprint validation. expectedRange=%{public}@.",
                     log: stabilizerHostAnalysisLog,
                     type: .default,
                     activeCandidate.fileName,
@@ -1160,23 +1355,26 @@ final class StabilizerHostAnalysisStore {
                 frameCount: activeCandidate.frames.count,
                 sampleWidth: activeCandidate.cache.sampleWidth,
                 sampleHeight: activeCandidate.cache.sampleHeight,
-                requestedSampleScalePercent: nil,
+                requestedSampleScalePercent: activeCandidate.cache.requestedSampleScalePercent,
                 rangeStartSeconds: activeCandidate.cache.rangeStartSeconds,
                 rangeEndSeconds: Self.rangeEndSeconds(for: activeCandidate.cache),
                 sourceInfo: nil,
-                prefix: "Loaded Cache",
+                prefix: "Loaded Persisted Analysis",
                 eventName: activeCandidate.cache.eventName ?? Self.currentProjectBundleCacheEventName,
                 cacheIdentity: activeCandidate.identity
             )
+            queueState = .idle
             lock.unlock()
-            NSLog("TokyoWalkingStabilizer: loaded persisted Host Analysis cache \(activeCandidate.fileName) with \(activeCandidate.frames.count) frames; \(candidateURLs.count) lazy alternate cache(s) available.")
+            NSLog("TokyoWalkingStabilizer: loaded persisted Host Analysis \(activeCandidate.fileName) with \(activeCandidate.frames.count) frames; \(candidateURLs.count) lazy alternate persisted analysis candidate(s) available.")
             return true
         }
         if let unusableCacheSummary = unusableCacheSummaries.first {
             lock.lock()
             if preparedAnalysis == nil && status != .analyzing {
                 status = unusableCacheSummary.status
+                activeCacheSchemaVersion = unusableCacheSummary.schemaVersion
                 analysisInfoText = unusableCacheSummary.summary
+                queueState = .idle
                 bumpRevisionLocked()
             }
             lock.unlock()
@@ -1184,14 +1382,30 @@ final class StabilizerHostAnalysisStore {
         return false
     }
 
-    func reloadPersistentCacheForConsumerIfNeeded(expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
+    func reloadPersistentCacheForConsumerIfNeeded(
+        expectedRange: HostAnalysisExpectedRange? = nil,
+        allowRangeMismatch: Bool = false,
+        requestedSampleScalePercent: Double? = nil,
+        expectedSampleSize: (width: Int, height: Int)? = nil
+    ) -> Bool {
         guard shouldReloadPersistentCacheForConsumer() else {
             return false
         }
-        return loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: allowRangeMismatch)
+        return loadPersistentCache(
+            expectedRange: expectedRange,
+            allowRangeMismatch: allowRangeMismatch,
+            requestedSampleScalePercent: requestedSampleScalePercent,
+            expectedSampleSize: expectedSampleSize
+        )
     }
 
-    func activatePersistentCache(identity: String, expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
+    func activatePersistentCache(
+        identity: String,
+        expectedRange: HostAnalysisExpectedRange? = nil,
+        allowRangeMismatch: Bool = false,
+        requestedSampleScalePercent: Double? = nil,
+        expectedSampleSize: (width: Int, height: Int)? = nil
+    ) -> Bool {
         let trimmedIdentity = identity.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedIdentity.isEmpty else {
             return false
@@ -1202,15 +1416,25 @@ final class StabilizerHostAnalysisStore {
 
         lock.lock()
         if activePersistentCacheIdentity == trimmedIdentity,
-           preparedAnalysis != nil {
+           preparedAnalysis != nil,
+           Self.sampleScale(activeRequestedSampleScalePercent, matches: requestedSampleScalePercent),
+           Self.sampleSize(
+                preparedAnalysis?.frames.first.map { (width: $0.sampleWidth, height: $0.sampleHeight) },
+                matches: expectedSampleSize
+           ) {
             lock.unlock()
             return true
         }
-        if let cached = persistentCachesByIdentity[trimmedIdentity] {
+        if let cached = persistentCachesByIdentity[trimmedIdentity],
+           Self.sampleSize(
+                cached.cache,
+                matchesRequestedSampleScalePercent: requestedSampleScalePercent,
+                expectedSampleSize: expectedSampleSize
+           ) {
             installPersistentCacheLocked(cached)
             lock.unlock()
             markCurrentPersistentCacheGenerationObserved()
-            NSLog("TokyoWalkingStabilizer: reactivated Host Analysis cache \(cached.fileName) by saved clip identity.")
+            NSLog("TokyoWalkingStabilizer: reactivated persisted Host Analysis \(cached.fileName) by saved clip identity.")
             return true
         }
         lock.unlock()
@@ -1218,7 +1442,12 @@ final class StabilizerHostAnalysisStore {
         for candidateURL in Self.persistentCacheCandidateURLs() {
             guard let candidate = Self.loadPersistentCache(at: candidateURL),
                   candidate.identity == trimmedIdentity,
-                  (allowRangeMismatch || Self.cache(candidate.cache, matches: expectedRange))
+                  (allowRangeMismatch || Self.cache(candidate.cache, matches: expectedRange)),
+                  Self.sampleSize(
+                    candidate.cache,
+                    matchesRequestedSampleScalePercent: requestedSampleScalePercent,
+                    expectedSampleSize: expectedSampleSize
+                  )
             else {
                 continue
             }
@@ -1227,7 +1456,7 @@ final class StabilizerHostAnalysisStore {
             persistentCacheCandidates.removeAll { $0.lastPathComponent == candidate.fileName }
             lock.unlock()
             markCurrentPersistentCacheGenerationObserved()
-            NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache \(candidate.fileName) by saved clip identity.")
+            NSLog("TokyoWalkingStabilizer: loaded persisted Host Analysis \(candidate.fileName) by saved clip identity.")
             return true
         }
         return false
@@ -1294,6 +1523,7 @@ final class StabilizerHostAnalysisStore {
         )
         lock.lock()
         analysisInfoText = info
+        queueState = .idle
         bumpRevisionLocked()
         lock.unlock()
     }
@@ -1317,19 +1547,15 @@ final class StabilizerHostAnalysisStore {
         } else {
             sampleText = "unknown"
         }
-        var parts = [Self.compactPrefix(prefix), "\(frameCount)f", sampleText]
-        if let requestedSampleScalePercent,
-           requestedSampleScalePercent.isFinite {
-            parts.append("S\(Self.sampleScaleDescription(requestedSampleScalePercent))")
-        }
+        let parts = [Self.compactPrefix(prefix), "\(frameCount)f", sampleText]
         return parts.joined(separator: " ")
     }
 
     private static func compactPrefix(_ prefix: String) -> String {
         switch prefix {
-        case "Loaded Cache":
+        case "Loaded Persisted Analysis":
             return "Loaded"
-        case "Saved Cache":
+        case "Saved Persisted Analysis":
             return "Saved"
         default:
             return prefix
@@ -1341,6 +1567,55 @@ final class StabilizerHostAnalysisStore {
             return String(format: "%.0f%%", percent)
         }
         return String(format: "%.2f%%", percent)
+    }
+
+    private static func sampleScale(_ savedPercent: Double?, matches requestedPercent: Double?) -> Bool {
+        guard let requestedPercent else {
+            return true
+        }
+        guard requestedPercent.isFinite,
+              let savedPercent,
+              savedPercent.isFinite
+        else {
+            return false
+        }
+        return abs(savedPercent - requestedPercent) <= 0.001
+    }
+
+    private static func sampleSize(_ savedSize: (width: Int, height: Int)?, matches expectedSize: (width: Int, height: Int)?) -> Bool {
+        guard let expectedSize else {
+            return true
+        }
+        guard let savedSize else {
+            return false
+        }
+        return savedSize.width == expectedSize.width
+            && savedSize.height == expectedSize.height
+    }
+
+    private static func sampleSize(
+        _ cache: PersistedHostAnalysisCache,
+        matchesRequestedSampleScalePercent requestedSampleScalePercent: Double?,
+        expectedSampleSize: (width: Int, height: Int)?
+    ) -> Bool {
+        sampleScale(cache.requestedSampleScalePercent, matches: requestedSampleScalePercent)
+            && sampleSize((width: cache.sampleWidth, height: cache.sampleHeight), matches: expectedSampleSize)
+    }
+
+    private static func sampleDescription(_ cache: PersistedHostAnalysisCache) -> String {
+        let percentText = cache.requestedSampleScalePercent.map(sampleScaleDescription) ?? "unknown"
+        return "\(cache.sampleWidth)x\(cache.sampleHeight) (\(percentText))"
+    }
+
+    private static func sampleRequirementDescription(
+        requestedSampleScalePercent: Double?,
+        expectedSampleSize: (width: Int, height: Int)?
+    ) -> String {
+        let percentText = requestedSampleScalePercent.map(sampleScaleDescription) ?? "any%"
+        if let expectedSampleSize {
+            return "\(expectedSampleSize.width)x\(expectedSampleSize.height) (\(percentText))"
+        }
+        return percentText
     }
 
     private static func clipRangeDescription(startSeconds: Double?, endSeconds: Double?) -> String? {
@@ -1420,11 +1695,12 @@ final class StabilizerHostAnalysisStore {
             lock.lock()
             status = .projectCacheUnavailable
             let statusText = projectCacheUnavailableStatusText
-            let reason = projectCacheUnavailableReason ?? "Host did not provide a writable Event Analysis Files cache root."
+            let reason = projectCacheUnavailableReason ?? "Host did not provide a writable Event Analysis Files persisted analysis root."
             analysisInfoText = "\(statusText): \(Self.compactReason(reason))"
+            queueState = .idle
             bumpRevisionLocked()
             lock.unlock()
-            NSLog("TokyoWalkingStabilizer: failed to save Host Analysis cache because no FCP bundle cache root is configured.")
+            NSLog("TokyoWalkingStabilizer: failed to save Host Analysis persisted analysis because no FCP bundle persisted analysis root is configured.")
             return false
         }
         let framesToPersist = prepared.frames
@@ -1450,6 +1726,7 @@ final class StabilizerHostAnalysisStore {
             schemaVersion: Self.cacheSchemaVersion,
             createdAt: Date().timeIntervalSince1970,
             clipLabel: clipLabel,
+            requestedSampleScalePercent: snapshot.requestedSampleScalePercent.isFinite ? snapshot.requestedSampleScalePercent : nil,
             rangeStartSeconds: rangeStartSeconds,
             rangeDurationSeconds: rangeDurationSeconds,
             rangeEndSeconds: rangeEndSeconds,
@@ -1493,7 +1770,7 @@ final class StabilizerHostAnalysisStore {
             try FileManager.default.createDirectory(at: cacheStorageDirectoryURL, withIntermediateDirectories: true)
             let cacheFileName = Self.persistentCacheFileName(for: cache, frames: framesToPersist)
             guard let cacheIdentity = Self.persistentCacheIdentity(for: cache, frames: framesToPersist) else {
-                NSLog("TokyoWalkingStabilizer: failed to save Host Analysis cache because the prepared frame fingerprints were incomplete.")
+                NSLog("TokyoWalkingStabilizer: failed to save Host Analysis persisted analysis because the prepared frame fingerprints were incomplete.")
                 return false
             }
             let data = try JSONEncoder().encode(cache)
@@ -1506,6 +1783,7 @@ final class StabilizerHostAnalysisStore {
             lock.lock()
             activePersistentCacheFileName = cacheFileName
             activePersistentCacheIdentity = cacheIdentity
+            activeCacheSchemaVersion = cache.schemaVersion
             activeCompletedMemoryAnalysisIdentity = nil
             status = .ready
             projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
@@ -1519,16 +1797,17 @@ final class StabilizerHostAnalysisStore {
                 rangeStartSeconds: cache.rangeStartSeconds,
                 rangeEndSeconds: Self.rangeEndSeconds(for: cache),
                 sourceInfo: snapshot.sourceInfo,
-                prefix: "Saved Cache",
+                prefix: "Saved Persisted Analysis",
                 eventName: eventName,
                 cacheIdentity: cacheIdentity
             )
+            queueState = .idle
             bumpRevisionLocked()
             lock.unlock()
             Self.bumpPersistentCacheGeneration()
-            NSLog("TokyoWalkingStabilizer: saved sample-size Host Analysis cache \(sampleWidth)x\(sampleHeight) with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
+            NSLog("TokyoWalkingStabilizer: saved persisted sample-size Host Analysis pixels \(sampleWidth)x\(sampleHeight) with \(framesToPersist.count) prepared frames to \(cacheURL.path).")
             os_log(
-                "Saved Host Analysis Event cache file %{public}@ for Event %{public}@ identity %{public}@.",
+                "Saved Host Analysis Event persisted analysis file %{public}@ for Event %{public}@ identity %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 cacheURL.lastPathComponent,
@@ -1537,8 +1816,8 @@ final class StabilizerHostAnalysisStore {
             )
             return true
         } catch {
-            NSLog("TokyoWalkingStabilizer: failed to save Host Analysis cache: \(error.localizedDescription)")
-            os_log("Failed to save Host Analysis Event cache: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
+            NSLog("TokyoWalkingStabilizer: failed to save Host Analysis persisted analysis: \(error.localizedDescription)")
+            os_log("Failed to save Host Analysis Event persisted analysis: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
             return false
         }
     }
@@ -1568,6 +1847,7 @@ final class StabilizerHostAnalysisStore {
         if markFinished {
             activePersistentCacheFileName = nil
             activePersistentCacheIdentity = nil
+            activeCacheSchemaVersion = prepared == nil ? nil : Self.cacheSchemaVersion
             streamingAnalysisBuilder = nil
         }
         if markFinished {
@@ -1633,7 +1913,9 @@ final class StabilizerHostAnalysisStore {
             latestSourceFrameInfo: latestSourceFrameInfo,
             latestSampleSize: latestSampleSize,
             analysisInfoText: analysisInfoText,
-            activePersistentCacheIdentity: activePersistentCacheIdentity
+            queueState: queueState,
+            activePersistentCacheIdentity: activePersistentCacheIdentity,
+            activeCacheSchemaVersion: activeCacheSchemaVersion
         )
         lock.unlock()
         return snapshot
@@ -1676,9 +1958,14 @@ final class StabilizerHostAnalysisStore {
 
     private func markReadyAfterOriginalMediaReturnedIfNeeded() {
         lock.lock()
+        let wasScaledProxyPreview = currentRenderSourceIsScaledProxy
         if (status == .proxyRejected || status == .proxyPreview || status == .sourceMetadataUnconfirmedPreview || status == .proxyNeedsOriginalValidation || status == .sourceUnavailable),
            preparedAnalysis != nil {
             status = .ready
+            currentRenderSourceIsScaledProxy = false
+            bumpRevisionLocked()
+        } else if wasScaledProxyPreview {
+            currentRenderSourceIsScaledProxy = false
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1686,16 +1973,15 @@ final class StabilizerHostAnalysisStore {
 
     private func markProxyPreviewForRender(reason: String) {
         lock.lock()
-        let shouldMarkProxyPreview = preparedAnalysis != nil
-            && status != .proxyPreview
-        if shouldMarkProxyPreview {
-            status = .proxyPreview
-            analysisInfoText = "Original analysis; proxy preview."
+        let shouldMarkScaledProxy = preparedAnalysis != nil
+            && !currentRenderSourceIsScaledProxy
+        if shouldMarkScaledProxy {
+            currentRenderSourceIsScaledProxy = true
             bumpRevisionLocked()
         }
         lock.unlock()
-        if shouldMarkProxyPreview {
-            NSLog("TokyoWalkingStabilizer: keeping prepared Host Analysis active for proxy preview before original-media validation: \(reason)")
+        if shouldMarkScaledProxy {
+            NSLog("TokyoWalkingStabilizer: keeping prepared original-media Host Analysis active while preview source is scaled/proxy: \(reason)")
         }
     }
 
@@ -1706,6 +1992,7 @@ final class StabilizerHostAnalysisStore {
         if shouldMark {
             status = .sourceMetadataUnconfirmedPreview
             analysisInfoText = "Original analysis; validation deferred."
+            queueState = .idle
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1719,12 +2006,30 @@ final class StabilizerHostAnalysisStore {
         let shouldMark = status != .proxyNeedsOriginalValidation
         if shouldMark {
             status = .proxyNeedsOriginalValidation
+            currentRenderSourceIsScaledProxy = true
             analysisInfoText = "Needs original validation."
+            queueState = .idle
             bumpRevisionLocked()
         }
         lock.unlock()
         if shouldMark {
-            NSLog("TokyoWalkingStabilizer: refused unvalidated proxy Host Analysis cache selection: \(reason)")
+            NSLog("TokyoWalkingStabilizer: refused unvalidated proxy Host Analysis persisted analysis selection: \(reason)")
+        }
+    }
+
+    private func markTrimmedClipInvalidForRender(reason: String) {
+        lock.lock()
+        let shouldMark = status != .trimmedClip
+        if shouldMark {
+            status = .trimmedClip
+            currentRenderSourceIsScaledProxy = false
+            analysisInfoText = "Invalid trimmed clip cache."
+            queueState = .idle
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+        if shouldMark {
+            NSLog("TokyoWalkingStabilizer: refused range-mismatched Host Analysis persisted analysis for trimmed clip: \(reason)")
         }
     }
 
@@ -1733,7 +2038,9 @@ final class StabilizerHostAnalysisStore {
         let shouldMarkSourceUnavailable = status != .sourceUnavailable
         if shouldMarkSourceUnavailable {
             status = .sourceUnavailable
+            currentRenderSourceIsScaledProxy = false
             analysisInfoText = "Source unavailable. Check FCP proxy."
+            queueState = .idle
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1752,6 +2059,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         renderToAnalysisOffsetSeconds = nil
@@ -1759,11 +2067,13 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .rejected
         status = .cacheRejected
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
+        queueState = .idle
         bumpRevisionLocked()
         lock.unlock()
-        NSLog("TokyoWalkingStabilizer: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(reason).")
+        NSLog("TokyoWalkingStabilizer: rejected Host Analysis persisted analysis \(rejectedFileName ?? "<unknown>"): \(reason).")
     }
 
     private func rejectActiveInMemoryAnalysis(reason: String) {
@@ -1778,14 +2088,17 @@ final class StabilizerHostAnalysisStore {
         activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         finished = false
         validationState = .rejected
         status = .cacheRejected
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = "Memory analysis mismatch. Run again."
+        queueState = .idle
         bumpRevisionLocked()
         lock.unlock()
         NSLog("TokyoWalkingStabilizer: rejected in-memory Host Analysis \(rejectedIdentity ?? "<unknown>"): \(reason).")
@@ -1804,17 +2117,17 @@ final class StabilizerHostAnalysisStore {
                 sampleHeight: sampleHeight
             )
         } catch {
-            return "could not validate the persisted cache against the current source frame: \(error.localizedDescription)"
+            return "could not validate the persisted analysis against the current source frame: \(error.localizedDescription)"
         }
         guard let matchedFrame = matchedAnalysisFrame(for: currentFrame, in: analysis.frames) else {
-            return "persisted cache had no comparable frame"
+            return "persisted analysis had no comparable frame"
         }
         updateRenderTimeMapping(renderTime: renderTime, matchedAnalysisFrame: matchedFrame)
 
         if matchedFrame.pixels.isEmpty {
             if matchedFrame.fingerprint != currentFrame.fingerprint {
                 NSLog(
-                    "TokyoWalkingStabilizer: accepted persisted Host Analysis cache by time proximity because retained validation pixels were not available; current fingerprint %@, cached fingerprint %@.",
+                    "TokyoWalkingStabilizer: accepted Host Analysis persisted analysis by time proximity because retained validation pixels were not available; current fingerprint %@, cached fingerprint %@.",
                     currentFrame.fingerprint,
                     matchedFrame.fingerprint
                 )
@@ -1824,7 +2137,7 @@ final class StabilizerHostAnalysisStore {
 
         let meanDifference = Self.meanAbsoluteDifference(currentFrame.pixels, matchedFrame.pixels)
         guard meanDifference <= Self.cacheValidationMeanDifferenceThreshold else {
-            return String(format: "current frame did not match the persisted cache (mean luma difference %.2f)", meanDifference)
+            return String(format: "current frame did not match the persisted analysis (mean luma difference %.2f)", meanDifference)
         }
         return nil
     }
@@ -1914,6 +2227,7 @@ final class StabilizerHostAnalysisStore {
         activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         renderToAnalysisOffsetSeconds = nil
@@ -1921,11 +2235,12 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
-        analysisInfoText = "No matching cache for clip range."
+        currentRenderSourceIsScaledProxy = false
+        analysisInfoText = "No matching persisted analysis for clip range."
         bumpRevisionLocked()
         lock.unlock()
         if let oldFileName {
-            NSLog("TokyoWalkingStabilizer: deactivated Host Analysis cache \(oldFileName) because its range does not match the active clip.")
+            NSLog("TokyoWalkingStabilizer: deactivated Host Analysis persisted analysis \(oldFileName) because its range does not match the active clip.")
         }
     }
 
@@ -1951,6 +2266,7 @@ final class StabilizerHostAnalysisStore {
         activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         renderToAnalysisOffsetSeconds = nil
@@ -1958,6 +2274,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
+        currentRenderSourceIsScaledProxy = false
         analysisInfoText = "No matching memory analysis."
         bumpRevisionLocked()
         lock.unlock()
@@ -2023,26 +2340,41 @@ final class StabilizerHostAnalysisStore {
             guard !persistentCacheCandidates.isEmpty else {
                 lock.unlock()
                 if let rejectionReason {
-                    NSLog("TokyoWalkingStabilizer: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(rejectionReason).")
+                    NSLog("TokyoWalkingStabilizer: rejected Host Analysis persisted analysis \(rejectedFileName ?? "<unknown>"): \(rejectionReason).")
                 }
                 return false
             }
             let nextURL = persistentCacheCandidates.removeFirst()
             let remainingURLCount = persistentCacheCandidates.count
+            let requestedSampleScalePercent = activeRequestedSampleScalePercent.isFinite ? activeRequestedSampleScalePercent : nil
+            let expectedSampleSize = preparedAnalysis?.frames.first.map { (width: $0.sampleWidth, height: $0.sampleHeight) }
             lock.unlock()
 
             guard let nextCandidate = Self.loadPersistentCache(at: nextURL) else {
-                NSLog("TokyoWalkingStabilizer: skipped unavailable Host Analysis cache candidate \(nextURL.lastPathComponent); \(remainingURLCount) lazy alternate cache(s) remain.")
+                NSLog("TokyoWalkingStabilizer: skipped unavailable Host Analysis persisted analysis candidate \(nextURL.lastPathComponent); \(remainingURLCount) lazy alternate cache(s) remain.")
                 continue
             }
             let matchesExpectedRange = Self.cache(nextCandidate.cache, matches: expectedRange)
             guard allowRangeMismatch || matchesExpectedRange else {
-                NSLog("TokyoWalkingStabilizer: skipped Host Analysis cache candidate \(nextCandidate.fileName) because its range does not match the active clip.")
+                NSLog("TokyoWalkingStabilizer: skipped Host Analysis persisted analysis candidate \(nextCandidate.fileName) because its range does not match the active clip.")
+                continue
+            }
+            guard Self.sampleSize(
+                nextCandidate.cache,
+                matchesRequestedSampleScalePercent: requestedSampleScalePercent,
+                expectedSampleSize: expectedSampleSize
+            ) else {
+                let savedSample = Self.sampleDescription(nextCandidate.cache)
+                let activeSample = Self.sampleRequirementDescription(
+                    requestedSampleScalePercent: requestedSampleScalePercent,
+                    expectedSampleSize: expectedSampleSize
+                )
+                NSLog("TokyoWalkingStabilizer: skipped Host Analysis persisted analysis candidate \(nextCandidate.fileName) because saved sample \(savedSample) does not match active sample \(activeSample).")
                 continue
             }
             if !matchesExpectedRange {
                 os_log(
-                    "Activated range-mismatched Host Analysis cache candidate %{public}@ for source-frame fingerprint validation. expectedRange=%{public}@.",
+                    "Activated range-mismatched Host Analysis persisted analysis candidate %{public}@ for source-frame fingerprint validation. expectedRange=%{public}@.",
                     log: stabilizerHostAnalysisLog,
                     type: .default,
                     nextCandidate.fileName,
@@ -2057,12 +2389,12 @@ final class StabilizerHostAnalysisStore {
             markCurrentPersistentCacheGenerationObserved()
 
             if let rejectionReason {
-                NSLog("TokyoWalkingStabilizer: rejected persisted Host Analysis cache \(rejectedFileName ?? "<unknown>"): \(rejectionReason); trying \(nextCandidate.fileName).")
+                NSLog("TokyoWalkingStabilizer: rejected Host Analysis persisted analysis \(rejectedFileName ?? "<unknown>"): \(rejectionReason); trying \(nextCandidate.fileName).")
             } else {
-                NSLog("TokyoWalkingStabilizer: activating persisted Host Analysis cache \(nextCandidate.fileName).")
+                NSLog("TokyoWalkingStabilizer: activating Host Analysis persisted analysis \(nextCandidate.fileName).")
             }
             if remainingCount > 0 {
-                NSLog("TokyoWalkingStabilizer: \(remainingCount) lazy alternate Host Analysis cache(s) remain available.")
+                NSLog("TokyoWalkingStabilizer: \(remainingCount) lazy alternate Host Analysis persisted analysis(s) remain available.")
             }
             return true
         }
@@ -2075,11 +2407,13 @@ final class StabilizerHostAnalysisStore {
         activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = loadedCache.fileName
         activePersistentCacheIdentity = loadedCache.identity
+        activeCacheSchemaVersion = loadedCache.cache.schemaVersion
         activeRange = CMTimeRange(
             start: CMTime(seconds: loadedCache.cache.rangeStartSeconds, preferredTimescale: 600),
             duration: CMTime(seconds: loadedCache.cache.rangeDurationSeconds, preferredTimescale: 600)
         )
         activeFrameDuration = CMTime(seconds: loadedCache.cache.frameDurationSeconds, preferredTimescale: 600)
+        activeRequestedSampleScalePercent = loadedCache.cache.requestedSampleScalePercent ?? .nan
         if let savedOffset = Self.savedRenderTimeOffset(for: loadedCache.identity) {
             renderToAnalysisOffsetSeconds = savedOffset
             renderToAnalysisOffsetProbeAttempted = true
@@ -2090,6 +2424,7 @@ final class StabilizerHostAnalysisStore {
         finished = true
         validationState = .pending
         status = .cacheLoaded
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = Self.infoText(
@@ -2097,14 +2432,15 @@ final class StabilizerHostAnalysisStore {
             frameCount: loadedCache.frames.count,
             sampleWidth: loadedCache.cache.sampleWidth,
             sampleHeight: loadedCache.cache.sampleHeight,
-            requestedSampleScalePercent: nil,
+            requestedSampleScalePercent: loadedCache.cache.requestedSampleScalePercent,
             rangeStartSeconds: loadedCache.cache.rangeStartSeconds,
             rangeEndSeconds: Self.rangeEndSeconds(for: loadedCache.cache),
             sourceInfo: nil,
-            prefix: "Loaded Cache",
+            prefix: "Loaded Persisted Analysis",
             eventName: loadedCache.cache.eventName ?? Self.currentProjectBundleCacheEventName,
             cacheIdentity: loadedCache.identity
         )
+        queueState = .idle
         observedPersistentCacheGeneration = Self.currentPersistentCacheGeneration()
         bumpRevisionLocked()
     }
@@ -2120,7 +2456,7 @@ final class StabilizerHostAnalysisStore {
         let filteredURLs = candidateURLs.filter { !rejectedFileNames.contains($0.lastPathComponent) }
         let skippedCount = candidateURLs.count - filteredURLs.count
         if skippedCount > 0 {
-            NSLog("TokyoWalkingStabilizer: skipped \(skippedCount) rejected Host Analysis cache candidate(s) before loading persistent cache.")
+            NSLog("TokyoWalkingStabilizer: skipped \(skippedCount) rejected Host Analysis persisted analysis candidate(s) before loading persisted analysis.")
         }
         return filteredURLs
     }
@@ -2242,7 +2578,7 @@ final class StabilizerHostAnalysisStore {
                 try FileManager.default.removeItem(at: url)
             } catch {
                 if logFailures {
-                    NSLog("TokyoWalkingStabilizer: failed to remove Host Analysis cache \(url.path): \(error.localizedDescription)")
+                    NSLog("TokyoWalkingStabilizer: failed to remove Host Analysis persisted analysis \(url.path): \(error.localizedDescription)")
                 }
             }
         }
@@ -2479,14 +2815,14 @@ final class StabilizerHostAnalysisStore {
             throw NSError(
                 domain: "com.justadev.TokyoWalkingStabilizer",
                 code: Int(kFxError_AnalysisError),
-                userInfo: [NSLocalizedDescriptionKey: "persisted Host Analysis cache frame coverage is incomplete: \(coverageReason)"]
+                userInfo: [NSLocalizedDescriptionKey: "Host Analysis persisted analysis frame coverage is incomplete: \(coverageReason)"]
             )
         }
         if let mismatchReason = preparedPathArrayMismatchReason(for: cache, frameCount: frames.count) {
             throw NSError(
                 domain: "com.justadev.TokyoWalkingStabilizer",
                 code: Int(kFxError_AnalysisError),
-                userInfo: [NSLocalizedDescriptionKey: "persisted Host Analysis cache prepared paths are incomplete: \(mismatchReason)"]
+                userInfo: [NSLocalizedDescriptionKey: "Host Analysis persisted analysis prepared paths are incomplete: \(mismatchReason)"]
             )
         }
         let floatArrays = [
@@ -2565,7 +2901,7 @@ final class StabilizerHostAnalysisStore {
         throw NSError(
             domain: "com.justadev.TokyoWalkingStabilizer",
             code: Int(kFxError_AnalysisError),
-            userInfo: [NSLocalizedDescriptionKey: "persisted Host Analysis cache was missing prepared Metal motion paths"]
+            userInfo: [NSLocalizedDescriptionKey: "Host Analysis persisted analysis was missing prepared Metal motion paths"]
         )
     }
 
@@ -2635,14 +2971,14 @@ final class StabilizerHostAnalysisStore {
                     let data = try Data(contentsOf: directoryCacheIndexURL)
                     let index = try JSONDecoder().decode(PersistedHostAnalysisIndex.self, from: data)
                     if !supportedCacheSchemaVersions.contains(index.schemaVersion) {
-                        NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache index with unsupported schema \(index.schemaVersion) at \(directoryCacheIndexURL.path).")
+                        NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis index with unsupported schema \(index.schemaVersion) at \(directoryCacheIndexURL.path).")
                     } else {
                         for entry in index.entries {
                             appendCandidateURL(directoryCacheStorageURL.appendingPathComponent(entry.cacheFileName, isDirectory: false))
                         }
                     }
                 } catch {
-                    NSLog("TokyoWalkingStabilizer: failed to load Host Analysis cache index \(directoryCacheIndexURL.path): \(error.localizedDescription)")
+                    NSLog("TokyoWalkingStabilizer: failed to load Host Analysis persisted analysis index \(directoryCacheIndexURL.path): \(error.localizedDescription)")
                 }
             }
 
@@ -2678,19 +3014,19 @@ final class StabilizerHostAnalysisStore {
 
     private static func unsupportedPersistentCacheSummary(schemaVersion: Int, fileName: String) -> String {
         let expectedSchema = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ",")
-        return "Cache Unsupported (schema \(schemaVersion), need \(expectedSchema)) | \(fileName)"
+        return "Persisted Analysis Unsupported (schema \(schemaVersion), need \(expectedSchema)) | \(fileName)"
     }
 
     private static func incompletePersistentCacheSummary(for cache: PersistedHostAnalysisCache, fileName: String) -> String? {
         let frameCount = cache.frames.count
         guard frameCount >= 3 else {
-            return "Cache Incomplete (only \(frameCount) frames) | \(fileName)"
+            return "Persisted Analysis Incomplete (only \(frameCount) frames) | \(fileName)"
         }
         if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frameCount) {
-            return "Cache Incomplete (\(coverageReason)) | \(fileName)"
+            return "Persisted Analysis Incomplete (\(coverageReason)) | \(fileName)"
         }
         if let mismatchReason = preparedPathArrayMismatchReason(for: cache, frameCount: frameCount) {
-            return "Cache Incomplete (\(mismatchReason)) | \(fileName)"
+            return "Persisted Analysis Incomplete (\(mismatchReason)) | \(fileName)"
         }
         return nil
     }
@@ -2699,7 +3035,7 @@ final class StabilizerHostAnalysisStore {
         do {
             if let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                fileSize > maxPersistentCacheReadBytes {
-                NSLog("TokyoWalkingStabilizer: ignoring oversized Host Analysis cache at \(url.path) (\(fileSize) bytes).")
+                NSLog("TokyoWalkingStabilizer: ignoring oversized Host Analysis persisted analysis at \(url.path) (\(fileSize) bytes).")
                 return .skipped
             }
             let data = try Data(contentsOf: url)
@@ -2710,27 +3046,28 @@ final class StabilizerHostAnalysisStore {
                 if let header = try? JSONDecoder().decode(PersistedHostAnalysisSchemaHeader.self, from: data),
                    !supportedCacheSchemaVersions.contains(header.schemaVersion) {
                     let summary = unsupportedPersistentCacheSummary(schemaVersion: header.schemaVersion, fileName: url.lastPathComponent)
-                    NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache with unsupported schema \(header.schemaVersion) at \(url.path).")
-                    return .unusable(.cacheUnsupported, summary)
+                    NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis with unsupported schema \(header.schemaVersion) at \(url.path).")
+                    return .unusable(.cacheUnsupported, summary, schemaVersion: header.schemaVersion)
                 }
-                NSLog("TokyoWalkingStabilizer: failed to load Host Analysis cache \(url.path): \(error.localizedDescription)")
+                NSLog("TokyoWalkingStabilizer: failed to load Host Analysis persisted analysis \(url.path): \(error.localizedDescription)")
                 return .skipped
             }
             guard supportedCacheSchemaVersions.contains(cache.schemaVersion) else {
-                NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache with unsupported schema \(cache.schemaVersion) at \(url.path).")
+                NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis with unsupported schema \(cache.schemaVersion) at \(url.path).")
                 return .unusable(
                     .cacheUnsupported,
-                    unsupportedPersistentCacheSummary(schemaVersion: cache.schemaVersion, fileName: url.lastPathComponent)
+                    unsupportedPersistentCacheSummary(schemaVersion: cache.schemaVersion, fileName: url.lastPathComponent),
+                    schemaVersion: cache.schemaVersion
                 )
             }
             if let maximumFrameCount = plausiblePersistedFrameCountLimit(for: cache),
                cache.frames.count > maximumFrameCount {
-                NSLog("TokyoWalkingStabilizer: ignoring oversized Host Analysis cache at \(url.path): \(cache.frames.count) frames exceeded expected limit \(maximumFrameCount).")
+                NSLog("TokyoWalkingStabilizer: ignoring oversized Host Analysis persisted analysis at \(url.path): \(cache.frames.count) frames exceeded expected limit \(maximumFrameCount).")
                 return .skipped
             }
             if let incompleteSummary = incompletePersistentCacheSummary(for: cache, fileName: url.lastPathComponent) {
-                NSLog("TokyoWalkingStabilizer: ignoring incomplete Host Analysis cache at \(url.path): \(incompleteSummary).")
-                return .unusable(.cacheIncomplete, incompleteSummary)
+                NSLog("TokyoWalkingStabilizer: ignoring incomplete Host Analysis persisted analysis at \(url.path): \(incompleteSummary).")
+                return .unusable(.cacheIncomplete, incompleteSummary, schemaVersion: cache.schemaVersion)
             }
             let frames = cache.frames.compactMap { persistedFrame -> StabilizerAnalysisFrame? in
                 let pixels = persistedFrame.pixels.map { [UInt8]($0) } ?? []
@@ -2751,11 +3088,11 @@ final class StabilizerHostAnalysisStore {
                 )
             }
             guard frames.count >= 3 else {
-                NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache with too few frames at \(url.path).")
-                return .unusable(.cacheIncomplete, "Cache Incomplete (only \(frames.count) readable frames) | \(url.lastPathComponent)")
+                NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis with too few frames at \(url.path).")
+                return .unusable(.cacheIncomplete, "Persisted Analysis Incomplete (only \(frames.count) readable frames) | \(url.lastPathComponent)", schemaVersion: cache.schemaVersion)
             }
             guard let cacheIdentity = persistentCacheIdentity(for: cache, frames: frames) else {
-                NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache with incomplete fingerprints at \(url.path).")
+                NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis with incomplete fingerprints at \(url.path).")
                 return .skipped
             }
             let prepared = try preparedAnalysis(from: cache, frames: frames)
@@ -2763,6 +3100,7 @@ final class StabilizerHostAnalysisStore {
                 schemaVersion: cache.schemaVersion,
                 createdAt: cache.createdAt,
                 clipLabel: cache.clipLabel,
+                requestedSampleScalePercent: cache.requestedSampleScalePercent,
                 rangeStartSeconds: cache.rangeStartSeconds,
                 rangeDurationSeconds: cache.rangeDurationSeconds,
                 rangeEndSeconds: cache.rangeEndSeconds,
@@ -2804,7 +3142,7 @@ final class StabilizerHostAnalysisStore {
                 )
             )
         } catch {
-            NSLog("TokyoWalkingStabilizer: failed to load Host Analysis cache \(url.path): \(error.localizedDescription)")
+            NSLog("TokyoWalkingStabilizer: failed to load Host Analysis persisted analysis \(url.path): \(error.localizedDescription)")
             return .skipped
         }
     }
@@ -2826,7 +3164,7 @@ final class StabilizerHostAnalysisStore {
                     entries = index.entries
                 }
             } catch {
-                NSLog("TokyoWalkingStabilizer: rebuilding Host Analysis cache index after load failure: \(error.localizedDescription)")
+                NSLog("TokyoWalkingStabilizer: rebuilding Host Analysis persisted analysis index after load failure: \(error.localizedDescription)")
             }
         }
 
@@ -2868,6 +3206,7 @@ final class StabilizerHostAnalysisStore {
             cacheFileName: fileName,
             createdAt: cache.createdAt,
             clipLabel: cache.clipLabel,
+            requestedSampleScalePercent: cache.requestedSampleScalePercent,
             rangeStartSeconds: cache.rangeStartSeconds,
             rangeDurationSeconds: cache.rangeDurationSeconds,
             rangeEndSeconds: Self.rangeEndSeconds(for: cache),
@@ -2889,7 +3228,7 @@ final class StabilizerHostAnalysisStore {
         let middle = fingerprints?.middle.prefix(12) ?? "unknown"
         let last = fingerprints?.last.prefix(12) ?? "unknown"
         let clipLabel = safeCacheFileComponent(cache.clipLabel ?? defaultClipLabel)
-        return "host-analysis-v2-\(clipLabel)-start\(timeKey(cache.rangeStartSeconds))-end\(timeKey(rangeEndSeconds(for: cache)))-sample\(cache.sampleWidth)x\(cache.sampleHeight)-n\(frames.count)-\(first)-\(middle)-\(last).json"
+        return "host-analysis-v2-schema\(cache.schemaVersion)-\(clipLabel)-start\(timeKey(cache.rangeStartSeconds))-end\(timeKey(rangeEndSeconds(for: cache)))-pixels\(cache.sampleWidth)x\(cache.sampleHeight)-n\(frames.count)-\(first)-\(middle)-\(last).json"
     }
 
     private static func persistentCacheIdentity(for cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) -> String? {
