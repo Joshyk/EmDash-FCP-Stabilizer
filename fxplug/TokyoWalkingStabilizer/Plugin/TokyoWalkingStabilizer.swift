@@ -776,7 +776,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addStringParameter(
             withName: "Sample Info",
             parameterID: ParameterID.sampleInfo.rawValue,
-            defaultValue: "Sample: - | Setting: 100% | Analysis: -",
+            defaultValue: "Sample: - | Analysis: -",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
@@ -1821,10 +1821,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func stabilizerInfoFields(inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot, state: StabilizerPluginState?) -> StabilizerInfoFields {
         let analysisInfo = inspectorSnapshot.analysisInfoText
-        let acceptedSample = inspectorSnapshot.requestedSampleScalePercent.map(samplePercentDescription)
-            ?? acceptedSampleDescription(from: analysisInfo)
-            ?? state.map { StabilizerSampleScale.scale(for: $0.sampleScale).displayName }
-            ?? "-"
         let sampleSize: String
         let analysisFrameCount: String
         if let sampleWidth = inspectorSnapshot.sampleWidth,
@@ -1847,24 +1843,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             analysisFrameCount = analysisFrameCountDescription(from: analysisInfo) ?? "-"
         }
         return StabilizerInfoFields(
-            sample: "Sample: \(sampleSize) | Setting: \(acceptedSample) | Analysis: \(analysisFrameCount)",
+            sample: "Sample: \(sampleSize) | Analysis: \(analysisFrameCount)",
             queue: queueDescription(from: analysisInfo)
         )
-    }
-
-    private static func samplePercentDescription(_ percent: Double) -> String {
-        if percent.rounded() == percent {
-            return String(format: "%.0f%%", percent)
-        }
-        return String(format: "%.2f%%", percent)
-    }
-
-    private static func acceptedSampleDescription(from analysisInfo: String) -> String? {
-        analysisInfo.split(separator: " ").first { token in
-            token.hasPrefix("S") && token.hasSuffix("%")
-        }.map { token in
-            String(token.dropFirst())
-        }
     }
 
     private static func analysisSampleDescription(from analysisInfo: String) -> String? {

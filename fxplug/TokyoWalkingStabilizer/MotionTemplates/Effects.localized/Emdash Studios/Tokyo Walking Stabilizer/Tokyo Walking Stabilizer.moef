@@ -298,7 +298,7 @@
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901904"/>
 					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.143" value="Needs Analysis | FxPlug 0.3.143"/>
-					<parameter name="Sample Info" id="32" flags="12884901909" default="Sample: - | Setting: 100% | Analysis: -" value="Sample: - | Setting: 100% | Analysis: -"/>
+					<parameter name="Sample Info" id="32" flags="12884901909" default="Sample: - | Analysis: -" value="Sample: - | Analysis: -"/>
 					<parameter name="Queue" id="36" flags="12884901909" default="Queue: -" value="Queue: -"/>
 				<parameter name="Host Analysis Cache Identity" id="33" flags="12884901906" default="" value=""/>
 				<parameter name="Render Revision" id="20" flags="12884901906" default="0" value="0"/>
