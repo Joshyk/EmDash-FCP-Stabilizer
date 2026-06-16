@@ -218,7 +218,7 @@ function runJsonProcess(command, args, options = {}) {
 
 function progressLineHandler(jobIdValue) {
   return (text) => {
-    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const lines = text.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean);
     if (!lines.length) return;
     updateJob(jobIdValue, {
       stage: "analyzing",

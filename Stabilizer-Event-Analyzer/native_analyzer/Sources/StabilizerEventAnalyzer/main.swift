@@ -184,6 +184,10 @@ struct Arguments {
     let progress: Bool
 }
 
+private let progressOutputLock = NSLock()
+private var progressLineActive = false
+private var progressLineWidth = 0
+
 func parseArguments() throws -> Arguments {
     let args = Array(CommandLine.arguments.dropFirst())
     var planPath: URL?
@@ -210,8 +214,53 @@ func parseArguments() throws -> Arguments {
 }
 
 func progress(_ enabled: Bool, _ message: String) {
-    if enabled {
-        FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
+    guard enabled else {
+        return
+    }
+    progressOutputLock.lock()
+    defer {
+        progressOutputLock.unlock()
+    }
+    clearProgressLineLocked()
+    FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
+}
+
+func progressUpdate(_ enabled: Bool, _ message: String) {
+    guard enabled else {
+        return
+    }
+    progressOutputLock.lock()
+    defer {
+        progressOutputLock.unlock()
+    }
+    let paddingCount = max(0, progressLineWidth - message.count)
+    let paddedMessage = message + String(repeating: " ", count: paddingCount)
+    FileHandle.standardError.write(("\r" + paddedMessage).data(using: .utf8)!)
+    progressLineActive = true
+    progressLineWidth = max(progressLineWidth, message.count)
+}
+
+func finishProgressLine(_ enabled: Bool) {
+    guard enabled else {
+        return
+    }
+    progressOutputLock.lock()
+    defer {
+        progressOutputLock.unlock()
+    }
+    if progressLineActive {
+        FileHandle.standardError.write("\n".data(using: .utf8)!)
+        progressLineActive = false
+        progressLineWidth = 0
+    }
+}
+
+private func clearProgressLineLocked() {
+    if progressLineActive {
+        let clearText = "\r" + String(repeating: " ", count: progressLineWidth) + "\r"
+        FileHandle.standardError.write(clearText.data(using: .utf8)!)
+        progressLineActive = false
+        progressLineWidth = 0
     }
 }
 
@@ -1016,7 +1065,7 @@ private func readFrameChunk(
         motions.append(frameAnalysis.motion ?? PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
         frames.append(frame)
         if progressEvery > 0 && frames.count % progressEvery == 0 {
-            progress(progressEnabled, "analyzed \(frames.count) frame(s) for \(planName)")
+            progressUpdate(progressEnabled, "progress \(planName): \(frames.count) frame(s)")
         }
     }
 
@@ -1099,7 +1148,7 @@ private func readFramesInParallel(
     )
     let basePTS = try firstPresentationTimeSeconds(url: url)
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height)
-    progress(progressEnabled, "using \(chunks.count) parallel media reader(s) with \(inFlightLimit) in-flight GPU frame slot(s) each for \(plan.name)")
+    progress(progressEnabled, "using \(chunks.count) intra-asset media reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each for \(plan.name)")
     let resultLock = NSLock()
     let group = DispatchGroup()
     var results = Array<FrameChunkResult?>(repeating: nil, count: chunks.count)
@@ -1124,7 +1173,7 @@ private func readFramesInParallel(
                 resultLock.lock()
                 results[chunk.index] = result
                 resultLock.unlock()
-                progress(progressEnabled, "analyzed chunk \(chunk.index + 1)/\(chunk.totalCount) for \(plan.name) (\(result.frames.count) frame(s))")
+                progressUpdate(progressEnabled, "progress \(plan.name): chunk \(chunk.index + 1)/\(chunk.totalCount) complete")
             } catch {
                 resultLock.lock()
                 if firstError == nil {
@@ -1390,7 +1439,7 @@ func run() throws {
     progress(
         arguments.progress,
         allowParallelReaders
-            ? "processing 1 selected asset with Metal GPU analysis; parallel media readers may be used inside that single asset"
+            ? "processing 1 selected asset with Metal GPU analysis; intra-asset reader lanes may be used inside that single asset"
             : "processing \(plan.assets.count) selected assets serially with Metal GPU analysis; parallel media readers disabled for multi-asset runs"
     )
     var results: [AnalysisResult] = []
@@ -1421,6 +1470,7 @@ func run() throws {
         progress(arguments.progress, "saved \(result.cacheFileName)")
         results.append(result)
     }
+    finishProgressLine(arguments.progress)
     let output = ToolOutput(schemaVersion: toolSchemaVersion, status: "ok", results: results)
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1431,6 +1481,7 @@ func run() throws {
 do {
     try run()
 } catch {
+    finishProgressLine(true)
     let message = (error as? AnalyzerError)?.description ?? error.localizedDescription
     FileHandle.standardError.write(("StabilizerEventAnalyzer: \(message)\n").data(using: .utf8)!)
     exit(1)

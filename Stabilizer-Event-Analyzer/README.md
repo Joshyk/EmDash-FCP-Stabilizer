@@ -37,7 +37,12 @@ frame slots per active asset; if a Metal device, command queue, or kernel
 dispatch is unavailable, analysis fails visibly instead of falling back to CPU
 motion search. Parallel media readers may be used for a single selected asset
 to keep the GPU fed, but they are disabled when multiple assets are selected so
-selected clips remain strictly serial.
+selected clips remain strictly serial. The default intra-asset reader lane count
+is capped at `4`; `STABILIZER_ANALYZER_WORKERS` can explicitly request up to
+`12` reader lanes for a single selected asset.
+
+When `--progress` is enabled, frame and chunk progress updates rewrite one
+stderr line instead of printing a new `progress ...` line for every update.
 
 ## Run
 
