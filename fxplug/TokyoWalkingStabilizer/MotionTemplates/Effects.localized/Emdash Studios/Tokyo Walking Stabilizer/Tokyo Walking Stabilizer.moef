@@ -297,7 +297,7 @@
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901904"/>
 				<parameter name="Reanalyze Host Analysis" id="21" flags="12884901904"/>
-					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.148" value="Needs Analysis | FxPlug 0.3.148"/>
+					<parameter name="Host Analysis Status" id="15" flags="12884901909" default="Needs Analysis | FxPlug 0.3.149" value="Needs Analysis | FxPlug 0.3.149"/>
 				<parameter name="Sample Info" id="32" flags="12884901909" default="Sample: 100% -> - | Analysis: - | Schema: -" value="Sample: 100% -> - | Analysis: - | Schema: -"/>
 					<parameter name="Queue" id="36" flags="12884901909" default="Queue: -" value="Queue: -"/>
 				<parameter name="Host Analysis Cache Identity" id="33" flags="12884901906" default="" value=""/>

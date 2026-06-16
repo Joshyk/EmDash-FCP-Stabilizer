@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.148"
+private let tokyoWalkingStabilizerVersion = "0.3.149"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let hostAnalysisControlRefreshIntervalSeconds = 0.5
 private let reanalysisConfirmationWindowSeconds = 8.0
