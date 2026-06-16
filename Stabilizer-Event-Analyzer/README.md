@@ -39,6 +39,10 @@ npm start
 
 Then open `http://127.0.0.1:3091`.
 
+`Debug Preset` reloads the last used FCPXMLD/Info.fcpxml path and reselects the
+same Event media clips from browser-local storage. It does not open the macOS
+file picker and does not write any shared fallback cache.
+
 ## Cache Root
 
 Use `Select Event Folder` in the Web UI and choose either the Event folder,

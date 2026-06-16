@@ -1,10 +1,14 @@
 "use strict";
 
+const DEBUG_PRESET_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.debugPreset.v1";
+
 const state = {
   config: null,
   sourcePath: "",
+  exportItems: [],
   assets: [],
   selectedAssetIds: new Set(),
+  pendingPresetAssetIds: null,
   currentJobId: "",
   lastResult: null,
 };
@@ -13,6 +17,7 @@ const el = {
   configText: document.getElementById("configText"),
   versionText: document.getElementById("versionText"),
   selectExportFilesButton: document.getElementById("selectExportFilesButton"),
+  debugPresetButton: document.getElementById("debugPresetButton"),
   exportsList: document.getElementById("exportsList"),
   sourcePathInput: document.getElementById("sourcePathInput"),
   loadAssetsButton: document.getElementById("loadAssetsButton"),
@@ -58,6 +63,66 @@ function setStatus(message, kind = "") {
   el.statusBox.textContent = message;
 }
 
+function readDebugPreset() {
+  try {
+    const text = window.localStorage.getItem(DEBUG_PRESET_STORAGE_KEY);
+    if (!text) return null;
+    const preset = JSON.parse(text);
+    if (!preset || preset.version !== 1 || !preset.sourcePath) return null;
+    return preset;
+  } catch {
+    return null;
+  }
+}
+
+function updateDebugPresetState() {
+  const preset = readDebugPreset();
+  el.debugPresetButton.disabled = !preset;
+  el.debugPresetButton.title = preset
+    ? `Load ${preset.sourcePath}`
+    : "Run or select clips once to create a debug preset";
+}
+
+function exportKindForPath(sourcePath) {
+  return sourcePath.endsWith(".fcpxmld") ? "fcpxmld" : "fcpxml";
+}
+
+function exportNameForPath(sourcePath) {
+  const parts = sourcePath.split("/");
+  return parts[parts.length - 1] || sourcePath;
+}
+
+function currentExportItem(sourcePath) {
+  return state.exportItems.find((item) => item.path === sourcePath) || {
+    name: exportNameForPath(sourcePath),
+    path: sourcePath,
+    kind: exportKindForPath(sourcePath),
+    mtimeMs: Date.now(),
+  };
+}
+
+function saveDebugPreset() {
+  const sourcePath = state.sourcePath || el.sourcePathInput.value.trim();
+  const assetIds = Array.from(state.selectedAssetIds);
+  if (!sourcePath || !assetIds.length) return;
+  const preset = {
+    version: 1,
+    sourcePath,
+    sourceItem: currentExportItem(sourcePath),
+    assetIds,
+    cacheRoot: el.cacheRootInput.value.trim(),
+    sampleScalePercent: Number(el.sampleScaleInput.value),
+    maxFrames: el.maxFramesInput.value ? Number(el.maxFramesInput.value) : null,
+    savedAt: Date.now(),
+  };
+  try {
+    window.localStorage.setItem(DEBUG_PRESET_STORAGE_KEY, JSON.stringify(preset));
+    updateDebugPresetState();
+  } catch {
+    setStatus("Debug preset could not be saved in this browser.", "error");
+  }
+}
+
 function formatMtime(ms) {
   return new Date(ms).toLocaleString();
 }
@@ -69,6 +134,7 @@ function formatDuration(asset) {
 }
 
 function renderExports(items) {
+  state.exportItems = items;
   el.exportsList.textContent = "";
   if (!items.length) {
     const empty = document.createElement("div");
@@ -129,6 +195,7 @@ function renderAssets() {
         state.selectedAssetIds.delete(asset.assetId);
       }
       renderAssets();
+      saveDebugPreset();
     });
     row.addEventListener("click", (event) => {
       if (event.target !== checkbox && asset.supported) {
@@ -138,6 +205,7 @@ function renderAssets() {
           state.selectedAssetIds.add(asset.assetId);
         }
         renderAssets();
+        saveDebugPreset();
       }
     });
     el.assetsBody.appendChild(row);
@@ -158,6 +226,7 @@ async function loadConfig() {
   el.sampleScaleInput.value = String(state.config.defaultSampleScalePercent || 100);
   el.configText.textContent = `Imports: ${state.config.outputDir}`;
   renderExports([]);
+  updateDebugPresetState();
   updateRunState();
 }
 
@@ -201,8 +270,17 @@ async function loadAssets() {
     });
     state.assets = payload.assets || [];
     el.sourceText.textContent = payload.packagePath || payload.infoPath || state.sourcePath;
-    for (const asset of state.assets) {
-      if (asset.supported) state.selectedAssetIds.add(asset.assetId);
+    if (state.pendingPresetAssetIds) {
+      for (const asset of state.assets) {
+        if (asset.supported && state.pendingPresetAssetIds.has(asset.assetId)) {
+          state.selectedAssetIds.add(asset.assetId);
+        }
+      }
+      state.pendingPresetAssetIds = null;
+    } else {
+      for (const asset of state.assets) {
+        if (asset.supported) state.selectedAssetIds.add(asset.assetId);
+      }
     }
     renderAssets();
     setStatus(`Loaded ${state.assets.length} Event media asset(s).`, "ok");
@@ -210,6 +288,43 @@ async function loadAssets() {
     renderAssets();
     setStatus(error.message, "error");
   }
+}
+
+async function applyDebugPreset() {
+  const preset = readDebugPreset();
+  if (!preset || !preset.sourcePath) {
+    setStatus("No debug preset saved yet.", "error");
+    updateDebugPresetState();
+    return;
+  }
+  const assetIds = Array.isArray(preset.assetIds) ? preset.assetIds.filter(Boolean) : [];
+  if (!assetIds.length) {
+    setStatus("Debug preset has no saved clip selection.", "error");
+    return;
+  }
+  const savedItem = preset.sourceItem && preset.sourceItem.path === preset.sourcePath
+    ? preset.sourceItem
+    : currentExportItem(preset.sourcePath);
+  state.sourcePath = preset.sourcePath;
+  el.sourcePathInput.value = preset.sourcePath;
+  const nextItems = [
+    savedItem,
+    ...state.exportItems.filter((item) => item.path !== preset.sourcePath),
+  ];
+  renderExports(nextItems);
+  state.pendingPresetAssetIds = new Set(assetIds);
+  if (preset.cacheRoot) el.cacheRootInput.value = preset.cacheRoot;
+  if (preset.sampleScalePercent) el.sampleScaleInput.value = String(preset.sampleScalePercent);
+  el.maxFramesInput.value = preset.maxFrames ? String(preset.maxFrames) : "";
+  setStatus("Loading debug preset...");
+  await loadAssets();
+  const selectedCount = state.selectedAssetIds.size;
+  if (selectedCount === 0) {
+    setStatus("Debug preset loaded, but none of the saved clips matched this export.", "error");
+    return;
+  }
+  setStatus(`Debug preset loaded: ${selectedCount} clip(s) selected.`, "ok");
+  saveDebugPreset();
 }
 
 async function selectCacheRoot() {
@@ -237,6 +352,7 @@ function runBody() {
 }
 
 async function runAnalysis() {
+  saveDebugPreset();
   setStatus("Queueing serial analysis...");
   el.resultActions.classList.add("hidden");
   const payload = await api("/api/run", { method: "POST", body: runBody() });
@@ -291,6 +407,7 @@ async function openPath(pathValue) {
 }
 
 el.selectExportFilesButton.addEventListener("click", () => selectExportFiles().catch((error) => setStatus(error.message, "error")));
+el.debugPresetButton.addEventListener("click", () => applyDebugPreset().catch((error) => setStatus(error.message, "error")));
 el.selectCacheRootButton.addEventListener("click", () => selectCacheRoot().catch((error) => setStatus(error.message, "error")));
 el.loadAssetsButton.addEventListener("click", loadAssets);
 el.selectAllButton.addEventListener("click", () => {
@@ -298,6 +415,7 @@ el.selectAllButton.addEventListener("click", () => {
     if (asset.supported) state.selectedAssetIds.add(asset.assetId);
   }
   renderAssets();
+  saveDebugPreset();
 });
 el.clearSelectionButton.addEventListener("click", () => {
   state.selectedAssetIds.clear();
