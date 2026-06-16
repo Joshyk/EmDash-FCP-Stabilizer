@@ -491,28 +491,24 @@ private final class MetalMotionWorkspace {
             start: resultBuffer.contents().assumingMemoryBound(to: MetalShiftResult.self),
             count: blockCount
         )
-        var dxValues: [Float] = []
-        var dyValues: [Float] = []
-        var residuals: [Float] = []
-        dxValues.reserveCapacity(blockCount)
-        dyValues.reserveCapacity(blockCount)
-        residuals.reserveCapacity(blockCount)
+        var dxTotal: Float = 0
+        var dyTotal: Float = 0
+        var residualTotal: Float = 0
         for result in results {
-            dxValues.append(result.dx)
-            dyValues.append(result.dy)
-            residuals.append(result.score)
+            dxTotal += result.dx
+            dyTotal += result.dy
+            residualTotal += result.score
         }
-        let dx = dxValues.reduce(0, +) / Float(max(1, dxValues.count))
-        let dy = dyValues.reduce(0, +) / Float(max(1, dyValues.count))
-        let residual = residuals.reduce(0, +) / Float(max(1, residuals.count))
+        let divisor = Float(max(1, results.count))
+        let dx = dxTotal / divisor
+        let dy = dyTotal / divisor
+        let residual = residualTotal / divisor
         let confidence = clamp(1.0 - (residual / 48.0), 0.05, 1.0)
         return PairMotion(dx: dx, dy: dy, residual: residual, confidence: confidence)
     }
 }
 
 private struct MetalFrameSlot {
-    // Retain the heap for the lifetime of buffers allocated from it.
-    let heap: MTLHeap
     let lumaBuffer: MTLBuffer
     let partialSumBuffer: MTLBuffer
     let partialCountBuffer: MTLBuffer
@@ -588,29 +584,18 @@ final class MetalAnalysisContext {
         let lumaLength = pixelCount
         let partialLength = MemoryLayout<UInt32>.stride * workspace.partialElementCount
         let resultLength = MemoryLayout<MetalShiftResult>.stride * workspace.blockCount
-        let options: MTLResourceOptions = .storageModeShared
-        let slotHeapSize = alignedHeapBufferSize(length: lumaLength, options: options)
-            + alignedHeapBufferSize(length: partialLength, options: options)
-            + alignedHeapBufferSize(length: partialLength, options: options)
-            + alignedHeapBufferSize(length: resultLength, options: options)
-        let heapDescriptor = MTLHeapDescriptor()
-        heapDescriptor.storageMode = .shared
-        heapDescriptor.hazardTrackingMode = .tracked
-        heapDescriptor.size = slotHeapSize * count
-        guard let heap = device.makeHeap(descriptor: heapDescriptor) else {
-            throw AnalyzerError("could not allocate Metal analysis heap for \(count) in-flight frame slots")
-        }
+        let sharedOptions: MTLResourceOptions = .storageModeShared
+        let gpuOnlyOptions: MTLResourceOptions = .storageModePrivate
         var slots: [MetalFrameSlot] = []
         slots.reserveCapacity(count)
         for _ in 0..<count {
-            guard let lumaBuffer = heap.makeBuffer(length: lumaLength, options: options),
-                  let partialSumBuffer = heap.makeBuffer(length: partialLength, options: options),
-                  let partialCountBuffer = heap.makeBuffer(length: partialLength, options: options),
-                  let resultBuffer = heap.makeBuffer(length: resultLength, options: options) else {
-                throw AnalyzerError("could not allocate reusable Metal frame analysis buffers from heap")
+            guard let lumaBuffer = device.makeBuffer(length: lumaLength, options: sharedOptions),
+                  let partialSumBuffer = device.makeBuffer(length: partialLength, options: gpuOnlyOptions),
+                  let partialCountBuffer = device.makeBuffer(length: partialLength, options: gpuOnlyOptions),
+                  let resultBuffer = device.makeBuffer(length: resultLength, options: sharedOptions) else {
+                throw AnalyzerError("could not allocate reusable Metal frame analysis buffers")
             }
             slots.append(MetalFrameSlot(
-                heap: heap,
                 lumaBuffer: lumaBuffer,
                 partialSumBuffer: partialSumBuffer,
                 partialCountBuffer: partialCountBuffer,
@@ -618,12 +603,6 @@ final class MetalAnalysisContext {
             ))
         }
         return slots
-    }
-
-    private func alignedHeapBufferSize(length: Int, options: MTLResourceOptions) -> Int {
-        let sizeAndAlign = device.heapBufferSizeAndAlign(length: length, options: options)
-        let alignment = max(1, sizeAndAlign.align)
-        return ((sizeAndAlign.size + alignment - 1) / alignment) * alignment
     }
 
     fileprivate func encodeFrame(
