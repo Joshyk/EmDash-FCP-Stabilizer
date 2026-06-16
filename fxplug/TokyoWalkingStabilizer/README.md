@@ -10,7 +10,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Adds an FxPlug 4 tileable effect named `Tokyo Walking Stabilizer`.
 - Uses Metal to render a transformed source texture.
 - Exposes auto stabilization controls without manual transform trim parameters.
-- Renders from prepared analysis written by the external Stabilizer Event Analyzer. New
+- Renders from prepared analysis written by the local Stabilizer Event Analyzer support tool. New
   effect instances do not expose `Sample Size`, `Start Host Analysis`,
   `Clear Host Analysis Cache`, or `Queue`, and render callbacks do not auto-start analysis.
 - Reads completed analysis frame sets from the active Final Cut Pro `.fcpbundle`, scoped to
@@ -51,7 +51,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Updates a hidden render revision parameter when persisted cache state changes so Final
   Cut Pro refreshes the preview from the prepared motion paths.
 - Monitors the bundle-local persistent cache location from render/preview instances and
-  publishes that hidden revision when the external analyzer writes a compatible cache.
+  publishes that hidden revision when the local analyzer writes a compatible cache.
 - Publishes cache-monitor status/info/render revision updates from
   the FxPlug main queue so Final Cut Pro invalidates stale preview frames.
 - Keeps rejected cache candidates on disk for other clips.
@@ -220,7 +220,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   Original/Optimized or create proxy media to inspect the stabilized image.
 - `Edge Display Mode`: defaults to `Black Outside` and chooses whether transformed pixels
   outside the source image stretch edge pixels or draw black.
-- The effect uses prepared analysis from the external Event Analyzer. Incomplete or missing
+- The effect uses prepared analysis from the local Event Analyzer support tool. Incomplete or missing
   persisted analysis renders identity for that source instead of silently switching modes.
   Proxy media is rejected for unvalidated persisted-cache validation, but a validated
   analysis continues to render during proxy playback.

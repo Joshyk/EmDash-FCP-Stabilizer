@@ -5,7 +5,8 @@
 1. Build the FxPlug wrapper app.
 2. Open Final Cut Pro after the install step completes.
 3. Export the Event or Project as FCPXMLD.
-4. Run the external Stabilizer Event Analyzer on the exported FCPXMLD.
+4. Run the local Stabilizer Event Analyzer in `Stabilizer-Event-Analyzer/` on
+   the exported FCPXMLD.
 5. Import the generated FCPXMLD and apply or keep `Tokyo Walking Stabilizer`
    from the `Emdash Studios` effects group.
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
@@ -241,7 +242,7 @@ FxPlug.
   proxy, and perspective/distort trim. This warp path is intentionally low because close
   foreground detail can otherwise swim or distort.
 - It does not apply Z correction or zoom; render scale stays fixed at 1.0.
-- The effect renders from prepared analysis written by the external Stabilizer Event
+- The effect renders from prepared analysis written by the local Stabilizer Event
   Analyzer. New effect instances do not ask Final Cut Pro to start Host Analysis from the
   Inspector, and preview/render callbacks do not auto-start analysis.
 - The Event Analyzer chooses the analysis sample size, performs Metal block matching, and
@@ -319,7 +320,7 @@ FxPlug.
   unsupported and require a new Event Analyzer run.
 - Persisted cache state changes update a hidden render revision parameter. Viewer-side
   instances also monitor saved cache changes so Final Cut Pro invalidates cached preview
-  frames and redraws from the prepared motion path after the external analyzer writes a
+  frames and redraws from the prepared motion path after the local analyzer writes a
   compatible cache.
   The hidden render revision is a process-independent small numeric token, not a local
   analysis counter, so analyzer and render processes cannot publish the same invalidation

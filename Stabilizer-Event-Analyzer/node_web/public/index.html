@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Stabilizer Event Analyzer</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Stabilizer Event Analyzer</h1>
+          <p id="configText"></p>
+        </div>
+        <span id="versionText" class="version-badge"></span>
+      </header>
+
+      <main class="layout">
+        <section class="panel side-panel">
+          <div class="panel-header">
+            <h2>Exports</h2>
+          </div>
+          <div class="button-row">
+            <button id="selectExportFilesButton" type="button">Select Export Files</button>
+          </div>
+          <div id="exportsList" class="exports-list"></div>
+        </section>
+
+        <section class="panel main-panel">
+          <div class="panel-header">
+            <h2>Event Media</h2>
+            <span id="sourceText" class="muted"></span>
+          </div>
+          <label class="field">
+            <span>FCPXMLD or Info.fcpxml path</span>
+            <input id="sourcePathInput" type="text" autocomplete="off">
+          </label>
+          <div class="button-row">
+            <button id="loadAssetsButton" type="button">Load Event Media</button>
+            <button id="selectAllButton" type="button">Select All Supported</button>
+            <button id="clearSelectionButton" type="button">Clear</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Name</th>
+                  <th>Duration</th>
+                  <th>Format</th>
+                  <th>Media</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="assetsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel run-panel">
+          <div class="panel-header">
+            <h2>Run</h2>
+            <span id="selectedText" class="muted">No media selected</span>
+          </div>
+          <label class="field">
+            <span>Event cache root or Event folder</span>
+            <input id="cacheRootInput" type="text" autocomplete="off" readonly>
+          </label>
+          <div class="button-row">
+            <button id="selectCacheRootButton" type="button">Select Event Folder</button>
+          </div>
+          <div class="grid-fields">
+            <label class="field">
+              <span>Sample size</span>
+              <select id="sampleScaleInput">
+                <option value="100" selected>100%</option>
+                <option value="75">75%</option>
+                <option value="50">50%</option>
+                <option value="25">25%</option>
+                <option value="10">10%</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Debug max frames</span>
+              <input id="maxFramesInput" type="number" min="3" step="1" placeholder="empty">
+            </label>
+          </div>
+          <div class="button-row">
+            <button id="runButton" class="primary-button" type="button" disabled>Run Serial Analysis</button>
+            <button id="cancelButton" type="button" class="hidden">Cancel</button>
+          </div>
+          <div id="statusBox" class="status-box"></div>
+          <div id="resultActions" class="button-row hidden">
+            <button id="revealCacheButton" type="button">Reveal Cache</button>
+            <button id="revealImportButton" type="button">Reveal Import</button>
+            <button id="openImportButton" type="button">Open Import</button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/version.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

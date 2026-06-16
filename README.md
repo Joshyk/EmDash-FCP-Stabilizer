@@ -3,8 +3,9 @@
 Native FxPlug 4 effect for Final Cut Pro and Motion, tuned for walking footage
 shot on a gimbal.
 
-This repo is FxPlug-only. It does not contain or support a CommandPost runtime,
-standalone estimator, cache generator, or Transform-keyframe writer.
+This repo contains the FxPlug effect plus the local Stabilizer Event Analyzer
+support tool. The FxPlug target remains native FxPlug/Metal code and does not
+contain a CommandPost runtime or Transform-keyframe writer.
 
 ## What It Does
 
@@ -34,7 +35,8 @@ black outside-source pixels. `Edge Display Mode` defaults to `Black Outside`.
 ## Basic Workflow
 
 1. Export the Event or Project from Final Cut Pro as FCPXMLD.
-2. Run the external Stabilizer Event Analyzer on the exported FCPXMLD. It
+2. Run the local Stabilizer Event Analyzer in `Stabilizer-Event-Analyzer/` on
+   the exported FCPXMLD. It
    analyzes the Event media full length and writes the Event-scoped persisted
    cache.
 3. Import the generated FCPXMLD back into Final Cut Pro.
@@ -44,7 +46,7 @@ black outside-source pixels. `Edge Display Mode` defaults to `Black Outside`.
 
 New effect instances no longer expose `Sample Size`, `Start Host Analysis`,
 `Clear Host Analysis Cache`, or `Queue` in the Final Cut Pro Inspector. Analysis
-is managed by the external Event Analyzer. Preview and render callbacks only
+is managed by the local Event Analyzer. Preview and render callbacks only
 read completed analysis or a validated persistent cache; they do not start
 analysis on their own.
 
@@ -75,7 +77,7 @@ repeated AppleScript clicks in Final Cut Pro.
 
 ## Inspector Controls
 
-Analysis sample size is selected in the external Stabilizer Event Analyzer and
+Analysis sample size is selected in the local Stabilizer Event Analyzer and
 shown in the read-only `Sample Info` row after a cache is loaded. The row uses
 `Sample: <percent or unknown> -> <WxH> | Analysis: <N>f`. The Final Cut Pro
 effect no longer exposes a `Sample Size` control.
@@ -158,14 +160,14 @@ is reapplied.
 
 ## Host Analysis
 
-Analysis generation now happens in the external Stabilizer Event Analyzer. The
+Analysis generation now happens in the local Stabilizer Event Analyzer. The
 Final Cut Pro effect is a cache consumer: it validates Event-scoped persisted
 analysis, loads the prepared motion path, and renders from that path. New effect
 instances do not expose `Start Host Analysis`, `Clear Host Analysis Cache`,
 `Sample Size`, or `Queue`, and preview/render callbacks do not auto-start
 analysis.
 
-The external analyzer uses Metal block matching, writes the same
+The local analyzer uses Metal block matching, writes the same
 `host-analysis-v2.json`, `host-analysis-index-v2.json`, render-offset map, and
 range-specific cache files under the Event `Analysis Files` cache root, and
 keeps sample-size-specific results independent. If the effect cannot find a
@@ -182,7 +184,7 @@ Clear button does not delete Event Analyzer cache files and reports
 `External Cache Managed - Use Event Analyzer`.
 
 Viewer-side render instances monitor the shared persistent cache location. When
-the external analyzer writes a compatible cache and the FCPXMLD import connects
+the local analyzer writes a compatible cache and the FCPXMLD import connects
 it to the timeline clip, the viewer-side instance loads the completed cache and
 publishes the hidden render revision so stale preview frames redraw from the
 prepared motion path. If Final Cut Pro rejects a hidden revision update, the
@@ -305,7 +307,7 @@ Render-only version bumps should reuse compatible Host Analysis caches from the 
 `.fcpbundle`.
 
 Rejected cache candidates are visible in status/log output and remain on disk for the
-external analyzer or older builds. Unsupported schema candidates show
+local analyzer or older builds. Unsupported schema candidates show
 `Cache Unsupported - Run Event Analyzer` instead of being silently ignored or deleted.
 Supported-schema caches with incomplete prepared path arrays or too few frames for the saved
 analysis range show `Cache Incomplete - Run Event Analyzer` so incomplete analysis is not
