@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.143"
+private let tokyoWalkingStabilizerVersion = "0.3.144"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -715,12 +715,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             delta: 0.01,
             parameterFlags: flags
         )
+        let hiddenAnalysisControlFlags = FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
         paramAPI.addPopupMenu(
             withName: "Sample Size",
             parameterID: ParameterID.sampleScale.rawValue,
             defaultValue: UInt32(StabilizerSampleScale.defaultScale.rawValue),
             menuEntries: StabilizerSampleScale.menuEntries,
-            parameterFlags: flags
+            parameterFlags: hiddenAnalysisControlFlags
         )
         paramAPI.addPopupMenu(
             withName: "Edge Display Mode",
@@ -733,18 +734,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             withName: "Start Host Analysis",
             parameterID: ParameterID.startHostAnalysis.rawValue,
             selector: #selector(startHostAnalysis),
-            parameterFlags: flags
+            parameterFlags: hiddenAnalysisControlFlags
         )
         paramAPI.addPushButton(
             withName: "Clear Host Analysis Cache",
             parameterID: ParameterID.clearHostAnalysisCache.rawValue,
             selector: #selector(clearHostAnalysisCache),
-            parameterFlags: flags
+            parameterFlags: hiddenAnalysisControlFlags
         )
         paramAPI.addStringParameter(
             withName: "Host Analysis Status",
             parameterID: ParameterID.hostAnalysisStatus.rawValue,
-            defaultValue: "Needs Analysis",
+            defaultValue: "External Analysis Required - Run Event Analyzer",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
@@ -757,7 +758,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             withName: "Queue",
             parameterID: ParameterID.queueInfo.rawValue,
             defaultValue: "Queue: -",
-            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
+            parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE | kFxParameterFlag_HIDDEN)
         )
         paramAPI.addFloatSlider(
             withName: "Render Revision",
@@ -877,7 +878,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
         publishHostAnalysisStatus()
-        publishStabilizerInfo(state: state)
+        publishStabilizerInfo()
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, currentParameterValue: state.renderRevision)
 
         pluginState?.pointee = NSData(bytes: &state, length: MemoryLayout<StabilizerPluginState>.size)
@@ -885,11 +886,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     @objc(startHostAnalysis)
     func startHostAnalysis() {
-        os_log("Start Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
-        publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
+        os_log("Deprecated Start Host Analysis pressed in FxPlug %{public}@; reloading external Event Analyzer cache only.", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
+        publishHostAnalysisStatus(force: true, statusOverride: "Reloading Event Analyzer Cache")
         publishStabilizerInfo(force: true)
         let expectedRange = currentInputRange()
-        let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         if hostAnalysisStore.hasCompletedAnalysis,
            let activeIdentity = hostAnalysisStore.activeCacheIdentity,
            StabilizerHostAnalysisStore.cacheIdentity(activeIdentity, matches: expectedRange) {
@@ -917,30 +917,27 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             }
         } else {
             loadedPersistentCache = false
-            os_log("Start preflight could not resolve Event cache root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
-            NSLog("TokyoWalkingStabilizer: Start Host Analysis could not preflight the Event cache root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
+            os_log("Deprecated Start Host Analysis could not resolve Event cache root; external Event Analyzer is required.", log: stabilizerHostAnalysisLog, type: .default)
+            NSLog("TokyoWalkingStabilizer: deprecated Start Host Analysis could not resolve the Event cache root; run the Stabilizer Event Analyzer and import its FCPXMLD output.")
         }
         if loadedPersistentCache {
             publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: true)
+        } else {
+            hostAnalysisStore.markExternalAnalysisRequired(
+                reason: "No compatible Event Analyzer cache was found for this clip. Export Event FCPXMLD, run the Stabilizer Event Analyzer, then import the generated FCPXMLD."
+            )
         }
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-        if !loadedPersistentCache {
-            requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
-        }
     }
 
     @objc(clearHostAnalysisCache)
     func clearHostAnalysisCache() {
         Self.removeQueuedSerialAnalysis(self)
-        guard configureProjectBundleCacheDirectory(expectedRange: currentInputRange(), forceRefresh: true) else {
-            publishHostAnalysisStatus(force: true)
-            publishStabilizerInfo(force: true)
-            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-            return
-        }
-        hostAnalysisStore.clearPersistentCache()
+        hostAnalysisStore.markExternalCacheManaged(
+            reason: "Persisted caches are now created and managed by the Stabilizer Event Analyzer. Delete or rebuild them from the external tool instead of the FCP effect."
+        )
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -1714,11 +1711,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private func publishStabilizerInfo(
         force: Bool = false,
-        state: StabilizerPluginState? = nil,
         inspectorSnapshotOverride: StabilizerHostAnalysisInspectorSnapshot? = nil
     ) {
         let inspectorSnapshot = inspectorSnapshotOverride ?? hostAnalysisStore.inspectorSnapshot
-        let info = Self.stabilizerInfoFields(inspectorSnapshot: inspectorSnapshot, state: state)
+        let info = Self.stabilizerInfoFields(inspectorSnapshot: inspectorSnapshot)
         statusLock.lock()
         let shouldPublish = force
             || info.sample != lastPublishedSampleInfo
@@ -1743,32 +1739,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func stabilizerInfoFields(inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot, state: StabilizerPluginState?) -> StabilizerInfoFields {
+    private static func stabilizerInfoFields(inspectorSnapshot: StabilizerHostAnalysisInspectorSnapshot) -> StabilizerInfoFields {
         let analysisInfo = inspectorSnapshot.analysisInfoText
         let acceptedSample = inspectorSnapshot.requestedSampleScalePercent.map(samplePercentDescription)
-            ?? acceptedSampleDescription(from: analysisInfo)
-            ?? state.map { StabilizerSampleScale.scale(for: $0.sampleScale).displayName }
-            ?? "-"
-        let analysisSample: String
+            ?? "unknown"
+        let sampleSize: String
         if let sampleWidth = inspectorSnapshot.sampleWidth,
            let sampleHeight = inspectorSnapshot.sampleHeight {
-            let sample = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
-            if let frameCount = inspectorSnapshot.frameCount {
-                analysisSample = "Analysis: \(sample) \(frameCount)f"
-            } else {
-                analysisSample = "Analysis: \(sample)"
-            }
-        } else if let sample = analysisSampleDescription(from: analysisInfo) {
-            if let frames = analysisFrameCountDescription(from: analysisInfo) {
-                analysisSample = "Analysis: \(sample) \(frames)"
-            } else {
-                analysisSample = "Analysis: \(sample)"
-            }
+            sampleSize = AutoStabilizationEstimator.sampleSizeDescription(width: sampleWidth, height: sampleHeight)
         } else {
-            analysisSample = "Analysis: -"
+            sampleSize = "-"
         }
+        let frameCount = inspectorSnapshot.frameCount.map { "\($0)f" } ?? "-"
         return StabilizerInfoFields(
-            sample: "Sample: \(acceptedSample) | \(analysisSample)",
+            sample: "Sample: \(acceptedSample) -> \(sampleSize) | Analysis: \(frameCount)",
             queue: queueDescription(from: analysisInfo)
         )
     }
@@ -1778,30 +1762,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return String(format: "%.0f%%", percent)
         }
         return String(format: "%.2f%%", percent)
-    }
-
-    private static func acceptedSampleDescription(from analysisInfo: String) -> String? {
-        analysisInfo.split(separator: " ").first { token in
-            token.hasPrefix("S") && token.hasSuffix("%")
-        }.map { token in
-            String(token.dropFirst())
-        }
-    }
-
-    private static func analysisSampleDescription(from analysisInfo: String) -> String? {
-        analysisInfo.split(separator: " ").first { token in
-            let parts = token.split(separator: "x")
-            guard parts.count == 2 else {
-                return false
-            }
-            return parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
-        }.map(String.init)
-    }
-
-    private static func analysisFrameCountDescription(from analysisInfo: String) -> String? {
-        analysisInfo.split(separator: " ").first { token in
-            token.hasSuffix("f") && token.dropLast().allSatisfy(\.isNumber)
-        }.map(String.init)
     }
 
     private static func queueDescription(from analysisInfo: String) -> String {

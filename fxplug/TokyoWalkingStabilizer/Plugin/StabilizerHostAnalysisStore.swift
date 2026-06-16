@@ -11,6 +11,8 @@ private enum HostAnalysisValidationState {
 
 private enum HostAnalysisStatus {
     case needsAnalysis
+    case externalAnalysisRequired
+    case externalCacheManaged
     case requested
     case queued
     case analyzing
@@ -416,6 +418,10 @@ final class StabilizerHostAnalysisStore {
         switch currentStatus {
         case .needsAnalysis:
             return "Needs Analysis"
+        case .externalAnalysisRequired:
+            return "External Analysis Required - Run Event Analyzer"
+        case .externalCacheManaged:
+            return "External Cache Managed - Use Event Analyzer"
         case .requested:
             return "Host Analysis Requested"
         case .queued:
@@ -430,11 +436,11 @@ final class StabilizerHostAnalysisStore {
             }
             return "Needs Analysis"
         case .cacheRejected:
-            return "Cache Rejected - Run Host Analysis"
+            return "Cache Rejected - Run Event Analyzer"
         case .cacheUnsupported:
-            return "Cache Unsupported - Run Host Analysis"
+            return "Cache Unsupported - Run Event Analyzer"
         case .cacheIncomplete:
-            return "Cache Incomplete - Run Host Analysis"
+            return "Cache Incomplete - Run Event Analyzer"
         case .cacheCleared:
             return "Cache Cleared"
         case .projectCacheUnavailable:
@@ -543,6 +549,24 @@ final class StabilizerHostAnalysisStore {
             analysisInfoText = "Start failed: \(Self.compactReason(reason))"
             bumpRevisionLocked()
         }
+        lock.unlock()
+    }
+
+    func markExternalAnalysisRequired(reason: String) {
+        lock.lock()
+        if preparedAnalysis == nil {
+            status = .externalAnalysisRequired
+            analysisInfoText = "Run Event Analyzer: \(Self.compactReason(reason))"
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+    }
+
+    func markExternalCacheManaged(reason: String) {
+        lock.lock()
+        status = .externalCacheManaged
+        analysisInfoText = "Use Event Analyzer: \(Self.compactReason(reason))"
+        bumpRevisionLocked()
         lock.unlock()
     }
 

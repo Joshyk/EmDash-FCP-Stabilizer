@@ -10,27 +10,19 @@ estimators, or Transform-keyframe writers back into this target.
 - Adds an FxPlug 4 tileable effect named `Tokyo Walking Stabilizer`.
 - Uses Metal to render a transformed source texture.
 - Exposes auto stabilization controls without manual transform trim parameters.
-- Always uses Final Cut Pro's FxPlug Host Analysis infrastructure, requesting a
-  forward GPU analysis, then using Metal compute in the plug-in runtime to downsample luma
-  samples and run frame-to-frame block matching while preparing the motion paths. Metal
-  analysis failures are reported as Host Analysis failures instead of silently falling back
-  to CPU analysis.
-- Persists completed Host Analysis frame sets inside the active Final Cut Pro `.fcpbundle`,
-  scoped to the Event that owns the current project/media folder. The cache lives under
-  `Analysis Files/TokyoWalkingStabilizerHostAnalysis/` so analysis files are unique to that Event
-  and are not exposed as top-level library content. If the host reports a library temp folder,
-  the resolver uses a single Event with `Analysis Files`, or a unique Final Cut Pro
+- Renders from prepared analysis written by the external Stabilizer Event Analyzer. New
+  effect instances do not expose `Sample Size`, `Start Host Analysis`,
+  `Clear Host Analysis Cache`, or `Queue`, and render callbacks do not auto-start analysis.
+- Reads completed analysis frame sets from the active Final Cut Pro `.fcpbundle`, scoped to
+  the Event that owns the current project/media folder. The cache lives under
+  `Analysis Files/TokyoWalkingStabilizerHostAnalysis/` so analysis files are unique to that
+  Event and are not exposed as top-level library content. If the host reports a library temp
+  folder, the resolver uses a single Event with `Analysis Files`, or a unique Final Cut Pro
   `Analysis Files/Stabilization` range match when multiple Events are candidates.
-- Reuses saved Host Analysis across FxPlug runtime version updates when the cache schema,
+- Reuses saved analysis across FxPlug runtime version updates when the cache schema,
   exact analyzed source range, sample size, saved fingerprints, and current source-frame
   validation still match. Unsupported schema candidates are reported in the Inspector and
   left on disk.
-- Streams in-progress Host Analysis motion directly through Metal and keeps only the
-  previous luma buffer needed for the next frame-to-frame motion search. It does not write
-  per-frame `.luma` scratch files.
-- Isolates concurrent in-progress Host Analysis callbacks with a process-wide session
-  registry, so different clips and actual sample sizes do not share a streaming builder.
-  Ambiguous callbacks fail visibly instead of being appended to an arbitrary active clip.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
@@ -41,10 +33,8 @@ estimators, or Transform-keyframe writers back into this target.
   If Final Cut Pro reports a render/timeline range that differs from the saved source
   analysis range, render accepts the active cache only after that source-frame fingerprint
   validation succeeds.
-- Refuses proxy-scaled frames for Host Analysis and render-time cache validation. If the
-  host supplies proxy media, `Host Analysis Status` shows
-  `Proxy Media Rejected - Use Original Media`; switch Final Cut Pro back to original media
-  and rerun Host Analysis.
+- Refuses proxy-scaled frames for unvalidated persisted-cache validation. Once original-media
+  validation succeeds, proxy playback can render from the prepared analysis path.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
 - Combines per-frame Footstep Jitter, fixed-window Stride Wobble, Far-field Warp, and
   broader Turn Smoothing bands so walking-gimbal shake is separated by
@@ -58,29 +48,23 @@ estimators, or Transform-keyframe writers back into this target.
   `Edge Display Mode` directly switches preview edges between stretched source edges and
   black outside-source pixels. New effect instances default `Edge Display Mode` to
   `Black Outside`.
-- Updates a hidden render revision parameter when Host Analysis/cache state changes so Final
+- Updates a hidden render revision parameter when persisted cache state changes so Final
   Cut Pro refreshes the preview from the prepared motion paths.
 - Monitors the bundle-local persistent cache location from render/preview instances and
-  publishes that hidden revision when an analyzer instance in another process finishes a
-  compatible cache.
-- Publishes analyzer-completion and cache-monitor status/info/render revision updates from
+  publishes that hidden revision when the external analyzer writes a compatible cache.
+- Publishes cache-monitor status/info/render revision updates from
   the FxPlug main queue so Final Cut Pro invalidates stale preview frames.
-- Shares the in-process Host Analysis store across FxPlug analyzer/render instances so a
-  completed analysis can drive smoothing in playback.
 - Keeps rejected cache candidates on disk for other clips.
 - Requests only the current render frame through `scheduleInputs`; stabilization is driven
-  by prepared Host Analysis paths.
+  by prepared analysis paths.
 - Shows `Project Bundle Cache Unavailable` instead of falling back to a shared user cache
-  when the runtime cannot resolve a writable Event `Analysis Files` cache root. A live Final
-  Cut Pro Host Analysis pass may still complete in memory as `Ready Memory Only - Project
-  Bundle Cache Unavailable`; that result can drive the current viewer/render session, but it
-  is only persisted later if the Event cache root becomes available. If Final Cut Pro reports
-  a library temp folder instead of an Event folder, the runtime uses an unambiguous top-level
-  Event resolver. If Final Cut Pro reports no media folder for a library saved without
-  Collect Media, the runtime can use Final Cut Pro's active library bookmarks, try
-  security-scoped resolution first, log regular-bookmark resolution when needed, start
-  security-scoped access when the resolved URL grants it, and then run that same Event
-  resolver. When multiple libraries are active, existing Final Cut Pro
+  when the runtime cannot resolve a writable Event `Analysis Files` cache root. If Final Cut
+  Pro reports a library temp folder instead of an Event folder, the runtime uses an
+  unambiguous top-level Event resolver. If Final Cut Pro reports no media folder for a
+  library saved without Collect Media, the runtime can use Final Cut Pro's active library
+  bookmarks, try security-scoped resolution first, log regular-bookmark resolution when
+  needed, start security-scoped access when the resolved URL grants it, and then run that same
+  Event resolver. When multiple libraries are active, existing Final Cut Pro
   `Analysis Files/Stabilization` range names may disambiguate the Event only when the active
   Host Analysis range matches exactly one Event across active libraries. If no range match
   exists, the runtime may use Final Cut Pro's `FFSidebarModuleLibrary` media sidebar selection
@@ -93,9 +77,9 @@ estimators, or Transform-keyframe writers back into this target.
   roll, and optional small-clamp Far-field Warp while keeping render scale fixed at 1.0.
 - Includes a minimal wrapper app source/resource set under `WrapperApp/`.
 
-The current implementation reads host frames as Metal textures, performs analysis
-downsampling and shift scoring on Metal, and keeps CPU work limited to orchestration, small
-result reduction, smoothing math, validation, and cache JSON I/O.
+The current effect implementation reads current render frames as Metal textures, validates
+persisted analysis when original frames are available, and keeps CPU work limited to
+orchestration, smoothing math, validation, and cache JSON I/O.
 
 ## Local SDK
 
@@ -209,11 +193,6 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
   motion paths. The UI value is used as the TURN window, and the UI minimum is the fixed
   `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
-- `Sample Size`: analysis image size as a percentage of the original clip dimensions.
-  Options are `100%`, `75%`, `50%`, `25%`, and `10%`; the default is `100%` for full source
-  detail. Choose a smaller value only when you want a faster debug pass. Host Analysis reads
-  this value once when the analysis pass starts. The actual pixel size and frame count are
-  shown in `Sample Info`.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available. The render
@@ -241,81 +220,33 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   Original/Optimized or create proxy media to inspect the stabilized image.
 - `Edge Display Mode`: defaults to `Black Outside` and chooses whether transformed pixels
   outside the source image stretch edge pixels or draw black.
-- Host Analysis is always used. It requests GPU analysis frames from the host. Incomplete
-  host analysis renders identity for that source instead of silently switching modes.
-  Proxy media is rejected for Host Analysis input and for unvalidated persisted-cache
-  validation, but a validated analysis continues to render during proxy playback.
-  Completed cache writes use the prepared analysis frame set as the authoritative timeline,
-  so a reduced retained source-frame map does not block persistence.
+- The effect uses prepared analysis from the external Event Analyzer. Incomplete or missing
+  persisted analysis renders identity for that source instead of silently switching modes.
+  Proxy media is rejected for unvalidated persisted-cache validation, but a validated
+  analysis continues to render during proxy playback.
 - `Debug Overlay` shows labeled top-left diagnostics while checking runtime behavior.
-- `Start Host Analysis`: clears the current in-memory host-analysis frames, reloads a saved
-  persistent cache if one exists, and only asks Final Cut Pro to start a forward GPU
-  analysis when no saved cache can be loaded. Saved cache files remain available for later
-  reuse. If the previous cache was rejected for the current clip, the next start skips that
-  rejected cache and requests a new analysis. If the button callback cannot see `FxProjectAPI`,
-  it still requests Host Analysis and lets analyzer `setupAnalysis` resolve the Event cache
-  root through either the host media folder or, when Collect Media is off, Final Cut Pro's
-  active library bookmarks and the same Event resolver. If setup still cannot resolve a writable Event cache root,
-  the analyzer finishes the active pass in memory only and the Inspector shows `Ready Memory
-  Only - Project Bundle Cache Unavailable` after completion until a later callback can
-  resolve the Event cache root and save the completed result. The installed plug-in bundle is
-  signed with sandbox, security-scoped file entitlements, and a read-only home-relative
-  exception for Final Cut Pro's preference plist so the Host Analysis runtime can open the
-  `FxProjectAPI.mediaFolderURL()` security-scoped URL when Final Cut Pro provides one, or
-  read the active library bookmark when Final Cut Pro reports no media folder. Active library
-  bookmarks are resolved with security scope first, then resolved as regular bookmarks with
-  visible logs when Final Cut Pro stored a regular bookmark; access is retained only when the
-  resolved URL grants a security-scoped lease. The debug-signed bundle also carries explicit
-  read-write entitlements for the shared local test fixture libraries so Codex-driven FCP tests
-  can persist Event-scoped caches when Final Cut Pro exposes only a regular active-library
-  bookmark. For this local editing setup, it also carries a read-write exception for
-  `/Volumes/WDBLUE1TB/` so regular active-library bookmarks for external libraries can still
-  be inspected and saved inside their Event-scoped `.fcpbundle` cache roots. The in-progress
-  Host Analysis
-  session registry is process-wide and contains per-session stores, so setup, frame
-  analysis, and cleanup callbacks can arrive through different FxPlug instances without
-  losing or mixing the active analysis session. If a saved cache uses an unsupported schema,
-  the Inspector shows `Cache Unsupported - Run Host Analysis`; if a supported-schema cache has
-  incomplete prepared paths or too few frames for its saved analysis range, it shows
-  `Cache Incomplete - Run Host Analysis`. The file remains on disk and the next start
-  requests new analysis for the current build. Those stale unusable states do not block later
-  preview/render consumers from rechecking the persistent cache signature and loading a newly
-  written compatible cache. If another Stabilizer Host Analysis run is active or reserved in
-  the plug-in process, the request is kept in `Queued Host Analysis` until that run's cleanup
-  callback finishes and a retry pass can hand the next queued request to Final Cut Pro.
-  Pressing `Start Host Analysis` again on the same queued effect instance replaces that
-  instance's older queued request, while requests for other effect instances stay queued.
-  The queue keeps the
-  `FxAnalysisAPI` obtained when Start was pressed, so retry drain does not need to reacquire
-  it from a later callback context. If the Event cache root is unavailable and
-  analysis completes memory-only, completed memory-only analyses are retained by analyzed
-  timeline range plus sample/fingerprint identity for the current process so another queued
-  clip does not discard the earlier clip's viewer result or collide with another clip that
-  has the same source-time range.
-- `Clear Host Analysis Cache`: deletes the saved Host Analysis cache set and shows
-  `Cache Cleared` in `Host Analysis Status`.
+- Existing timeline instances from older builds may still contain hidden `Start Host
+  Analysis`, `Clear Host Analysis Cache`, `Sample Size`, or `Queue` parameters. New effect
+  instances do not publish them. The old Start button only reloads a compatible persisted
+  cache; it does not request a new Final Cut Pro Host Analysis run. The old Clear button does
+  not delete Event Analyzer cache files and reports `External Cache Managed - Use Event
+  Analyzer`.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing so stabilized
   frames avoid outside-source pixels. Turn it off to bypass Auto Crop render-time
   sampling and binary-search framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
-  runtime version when Final Cut Pro accepts status parameter updates. During a real analysis
-  run, the status advances as `Analyzing Host Frames (N)`. If Final Cut Pro restores an
-  in-progress analysis state while a compatible saved cache is already present, the plug-in
-  prefers the saved cache and keeps the shared Ready/cache status visible instead of letting
-  transient analyzer callback status mask it. When the analyzer callback is the active
-  state, `Host Analysis Status`, `Sample Info`, and `Queue` come from that same in-progress
-  analysis store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata
-  from another clip.
-- `Sample Info`: read-only Inspector row combining the `Sample Size` accepted when Host
-  Analysis was requested, queued, or started with the actual analyzed pixel sample size and
-  frame count when analysis is available. `Clip Range` is deprecated from the visible
-  Inspector metadata. Older saved timeline instances may keep stale saved Inspector strings,
-  so use the compact runtime/source row in `Debug Overlay` to confirm the active render
-  runtime.
-- `Queue`: read-only Inspector row showing the serial queue position as `#N of M` and
-  compact queue reason while this clip is waiting. Repeated starts on the same effect
-  instance keep only that instance's latest pending request.
+  runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
+  Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.
+  Missing or unusable caches show `External Analysis Required - Run Event Analyzer`,
+  `Cache Unsupported - Run Event Analyzer`, `Cache Incomplete - Run Event Analyzer`, or
+  `Cache Rejected - Run Event Analyzer`.
+- `Sample Info`: read-only Inspector row built from the structured cache snapshot as
+  `Sample: <percent or unknown> -> <WxH> | Analysis: <N>f`. It does not fall back to hidden
+  `Sample Size` or parse status strings. `Clip Range` and `Queue` are deprecated from the
+  visible Inspector metadata. Older saved timeline instances may keep stale saved Inspector
+  strings, so use the compact runtime/source row in `Debug Overlay` to confirm the active
+  render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
