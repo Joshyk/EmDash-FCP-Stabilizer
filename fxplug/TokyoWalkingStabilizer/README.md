@@ -41,10 +41,8 @@ estimators, or Transform-keyframe writers back into this target.
   If Final Cut Pro reports a render/timeline range that differs from the saved source
   analysis range, render accepts the active cache only after that source-frame fingerprint
   validation succeeds.
-- Refuses proxy-scaled frames for Host Analysis and render-time cache validation. If the
-  host supplies proxy media, `Host Analysis Status` shows
-  `Proxy Media Rejected - Use Original Media`; switch Final Cut Pro back to original media
-  and rerun Host Analysis.
+- Refuses proxy-scaled frames for Host Analysis. Analysis is always based on original
+  media; switch Final Cut Pro back to original media before starting Host Analysis.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
 - Combines per-frame Footstep Jitter, fixed-window Stride Wobble, Far-field Warp, and
   broader Turn Smoothing bands so walking-gimbal shake is separated by
@@ -221,8 +219,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   returns the hidden cache identity parameter. If a stale saved identity points at a different
   range, render drops it and reloads a compatible saved cache in the same callback before
   giving up, then keeps the hidden preview revision, `Host Analysis Status`, and `Stabilizer
-  Info` current so Final Cut Pro shows the stabilized proxy preview and reports
-  `Original Analysis - Proxy Preview` without switching back to original media first. If
+  Info` current so Final Cut Pro shows the stabilized proxy preview while continuing to
+  report the original-media analysis as ordinary ready/cache-loaded analysis. If
   Final Cut Pro still reports an older hidden revision value, the runtime retries publishing
   the current token instead of treating a plug-in-local publish record as enough.
   When original-media validation maps a trimmed timeline render time back to the analyzed
@@ -306,7 +304,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   transient analyzer callback status mask it. When the analyzer callback is the active
   state, `Host Analysis Status`, `Sample Info`, and `Queue` come from that same in-progress
   analysis store instead of mixing `Analyzing Host Frames (N)` with stale cache metadata
-  from another clip.
+  from another clip. When `Start Host Analysis` is disabled because the viewer is currently
+  using scaled/proxy media, the status stays actionable as
+  `Ready (...) - Original Media Required to Start Analysis`.
 - `Sample Info`: read-only Inspector row showing the actual analyzed pixel sample size and
   frame count, for example `Sample: 573x302 | Analysis: 10500f`. `Clip Range` is deprecated
   from the visible Inspector metadata. Older saved timeline instances may keep stale saved Inspector strings,

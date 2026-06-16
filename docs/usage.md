@@ -237,7 +237,9 @@ fallbacks.
   status visible instead of letting transient analyzer callback status mask it. When the
   analyzer callback is the active state, `Host Analysis Status`, `Sample Info`, and
   `Queue` come from that same in-progress analysis store instead of mixing
-  `Analyzing Host Frames (N)` with stale cache metadata from another clip.
+  `Analyzing Host Frames (N)` with stale cache metadata from another clip. When `Start Host
+  Analysis` is disabled because the viewer is currently using scaled/proxy media, the status
+  stays actionable as `Ready (...) - Original Media Required to Start Analysis`.
 - `Sample Info`: read-only Inspector row showing the actual analyzed pixel sample size and
   frame count, for example `Sample: 573x302 | Analysis: 10500f`. `Clip Range` is deprecated
   from the visible Inspector metadata.
@@ -331,10 +333,10 @@ FxPlug.
   requested percentage of the original clip size and streams frame-to-frame motion directly
   through Metal while retaining only the previous luma buffer needed for the next motion
   search. It does not write per-frame `.luma` scratch files.
-- Host Analysis refuses proxy-scaled frames. If Final Cut Pro supplies proxy media, the
-  Inspector shows `Proxy Media Rejected - Use Original Media`; switch playback/media back
-  to original media and run Host Analysis again. After analysis has been validated, playback
-  can use proxy media while rendering from the prepared original-media motion path.
+- Host Analysis refuses proxy-scaled frames. Analysis is always based on original media, so
+  switch playback/media back to original media before starting Host Analysis. After analysis
+  has been validated, playback can use proxy media while rendering from the prepared
+  original-media motion path.
 - If Metal analysis resources are unavailable, Host Analysis fails visibly instead of
   falling back to CPU analysis.
 - Host Analysis uses Metal block matching across multiple regions and prioritizes upper-frame
@@ -367,8 +369,8 @@ FxPlug.
   returns the hidden cache identity parameter. If a stale saved identity points at a different
   range, render drops it and reloads a compatible saved cache in the same callback before
   giving up, then keeps the hidden preview revision, `Host Analysis Status`, and `Stabilizer
-  Info` current so the stabilized proxy preview appears and reports
-  `Original Analysis - Proxy Preview` without switching back to original media first. If
+  Info` current so the stabilized proxy preview appears while the Inspector keeps reporting
+  the original-media analysis as ordinary ready/cache-loaded analysis. If
   Final Cut Pro still reports an older hidden revision value, the runtime retries publishing
   the current token instead of assuming a previous publish was accepted.
   When original-media validation maps a trimmed timeline render time back to the analyzed

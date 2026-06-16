@@ -238,6 +238,7 @@ final class StabilizerHostAnalysisStore {
     private var finished = false
     private var validationState: HostAnalysisValidationState = .notRequired
     private var status: HostAnalysisStatus = .needsAnalysis
+    private var currentRenderSourceIsScaledProxy = false
     private var projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
     private var projectCacheUnavailableReason: String?
     private var analysisRevision: UInt64 = 0
@@ -412,7 +413,15 @@ final class StabilizerHostAnalysisStore {
         let frameCount = framesByTimeKey.count
         let hasPreparedAnalysis = preparedAnalysis != nil
         let unavailableStatusText = projectCacheUnavailableStatusText
+        let renderSourceIsScaledProxy = currentRenderSourceIsScaledProxy
         lock.unlock()
+
+        if renderSourceIsScaledProxy {
+            if hasPreparedAnalysis {
+                return "Ready (\(frameCount) frames) - Original Media Required to Start Analysis"
+            }
+            return "Original Media Required to Start Analysis"
+        }
 
         switch currentStatus {
         case .needsAnalysis:
@@ -449,7 +458,7 @@ final class StabilizerHostAnalysisStore {
             return "Proxy Media Rejected - Use Original Media"
         case .proxyPreview:
             if hasPreparedAnalysis {
-                return "Original Analysis - Proxy Preview (\(frameCount) frames)"
+                return "Ready (\(frameCount) frames)"
             }
             return "Needs Analysis"
         case .sourceMetadataUnconfirmedPreview:
@@ -458,7 +467,7 @@ final class StabilizerHostAnalysisStore {
             }
             return "Needs Analysis"
         case .proxyNeedsOriginalValidation:
-            return "Proxy Cache Unvalidated - Use Original Media"
+            return "Original Media Required - Validate Analysis"
         case .sourceUnavailable:
             return "Source Media Unavailable - Check FCP Proxy"
         }
@@ -467,6 +476,10 @@ final class StabilizerHostAnalysisStore {
     var canStartHostAnalysis: Bool {
         lock.lock()
         defer { lock.unlock() }
+
+        if currentRenderSourceIsScaledProxy {
+            return false
+        }
 
         switch status {
         case .requested, .queued, .analyzing, .trimmedClip, .proxyRejected, .proxyNeedsOriginalValidation, .sourceUnavailable:
@@ -507,6 +520,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .validated
         status = .analyzing
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
@@ -624,6 +638,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
@@ -661,6 +676,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .cacheCleared
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         latestSourceFrameInfo = nil
@@ -692,6 +708,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .proxyRejected
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = "Proxy rejected. Use original media."
@@ -853,6 +870,7 @@ final class StabilizerHostAnalysisStore {
         finished = snapshot.finished
         validationState = validationStateOverride ?? snapshot.validationState
         status = snapshot.status
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = snapshot.projectCacheUnavailableStatusText
         projectCacheUnavailableReason = snapshot.projectCacheUnavailableReason
         latestSourceFrameInfo = snapshot.latestSourceFrameInfo
@@ -1017,6 +1035,7 @@ final class StabilizerHostAnalysisStore {
                     if status != .projectCacheUnavailable {
                         status = .ready
                     }
+                    currentRenderSourceIsScaledProxy = false
                     bumpRevisionLocked()
                     lock.unlock()
                     os_log(
@@ -1105,6 +1124,7 @@ final class StabilizerHostAnalysisStore {
                 if status != .projectCacheUnavailable {
                     status = .ready
                 }
+                currentRenderSourceIsScaledProxy = false
                 bumpRevisionLocked()
             }
             lock.unlock()
@@ -1702,9 +1722,14 @@ final class StabilizerHostAnalysisStore {
 
     private func markReadyAfterOriginalMediaReturnedIfNeeded() {
         lock.lock()
+        let wasScaledProxyPreview = currentRenderSourceIsScaledProxy
         if (status == .proxyRejected || status == .proxyPreview || status == .sourceMetadataUnconfirmedPreview || status == .proxyNeedsOriginalValidation || status == .sourceUnavailable),
            preparedAnalysis != nil {
             status = .ready
+            currentRenderSourceIsScaledProxy = false
+            bumpRevisionLocked()
+        } else if wasScaledProxyPreview {
+            currentRenderSourceIsScaledProxy = false
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -1712,16 +1737,15 @@ final class StabilizerHostAnalysisStore {
 
     private func markProxyPreviewForRender(reason: String) {
         lock.lock()
-        let shouldMarkProxyPreview = preparedAnalysis != nil
-            && status != .proxyPreview
-        if shouldMarkProxyPreview {
-            status = .proxyPreview
-            analysisInfoText = "Original analysis; proxy preview."
+        let shouldMarkScaledProxy = preparedAnalysis != nil
+            && !currentRenderSourceIsScaledProxy
+        if shouldMarkScaledProxy {
+            currentRenderSourceIsScaledProxy = true
             bumpRevisionLocked()
         }
         lock.unlock()
-        if shouldMarkProxyPreview {
-            NSLog("TokyoWalkingStabilizer: keeping prepared Host Analysis active for proxy preview before original-media validation: \(reason)")
+        if shouldMarkScaledProxy {
+            NSLog("TokyoWalkingStabilizer: keeping prepared original-media Host Analysis active while preview source is scaled/proxy: \(reason)")
         }
     }
 
@@ -1745,6 +1769,7 @@ final class StabilizerHostAnalysisStore {
         let shouldMark = status != .proxyNeedsOriginalValidation
         if shouldMark {
             status = .proxyNeedsOriginalValidation
+            currentRenderSourceIsScaledProxy = true
             analysisInfoText = "Needs original validation."
             bumpRevisionLocked()
         }
@@ -1759,6 +1784,7 @@ final class StabilizerHostAnalysisStore {
         let shouldMark = status != .trimmedClip
         if shouldMark {
             status = .trimmedClip
+            currentRenderSourceIsScaledProxy = false
             analysisInfoText = "Invalid trimmed clip cache."
             bumpRevisionLocked()
         }
@@ -1773,6 +1799,7 @@ final class StabilizerHostAnalysisStore {
         let shouldMarkSourceUnavailable = status != .sourceUnavailable
         if shouldMarkSourceUnavailable {
             status = .sourceUnavailable
+            currentRenderSourceIsScaledProxy = false
             analysisInfoText = "Source unavailable. Check FCP proxy."
             bumpRevisionLocked()
         }
@@ -1799,6 +1826,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .rejected
         status = .cacheRejected
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         bumpRevisionLocked()
@@ -1823,6 +1851,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .rejected
         status = .cacheRejected
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = "Memory analysis mismatch. Run again."
@@ -1961,6 +1990,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
+        currentRenderSourceIsScaledProxy = false
         analysisInfoText = "No matching cache for clip range."
         bumpRevisionLocked()
         lock.unlock()
@@ -1998,6 +2028,7 @@ final class StabilizerHostAnalysisStore {
         finished = false
         validationState = .notRequired
         status = .needsAnalysis
+        currentRenderSourceIsScaledProxy = false
         analysisInfoText = "No matching memory analysis."
         bumpRevisionLocked()
         lock.unlock()
@@ -2130,6 +2161,7 @@ final class StabilizerHostAnalysisStore {
         finished = true
         validationState = .pending
         status = .cacheLoaded
+        currentRenderSourceIsScaledProxy = false
         projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
         projectCacheUnavailableReason = nil
         analysisInfoText = Self.infoText(
