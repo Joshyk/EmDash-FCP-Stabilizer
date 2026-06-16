@@ -204,6 +204,19 @@ struct HostAnalysisExpectedRange {
     let startSeconds: Double
     let durationSeconds: Double
     let frameDurationSeconds: Double
+    let effectStartSeconds: Double?
+
+    init(
+        startSeconds: Double,
+        durationSeconds: Double,
+        frameDurationSeconds: Double,
+        effectStartSeconds: Double? = nil
+    ) {
+        self.startSeconds = startSeconds
+        self.durationSeconds = durationSeconds
+        self.frameDurationSeconds = frameDurationSeconds
+        self.effectStartSeconds = effectStartSeconds
+    }
 
     var endSeconds: Double {
         startSeconds + durationSeconds
@@ -215,7 +228,7 @@ struct HostAnalysisExpectedRange {
             && durationSeconds > 0.0
     }
 
-    var inputStartTrimToleranceSeconds: Double {
+    var trimStartToleranceSeconds: Double {
         guard frameDurationSeconds.isFinite,
               frameDurationSeconds > 0.0
         else {
@@ -224,8 +237,14 @@ struct HostAnalysisExpectedRange {
         return max(0.001, frameDurationSeconds * 0.5)
     }
 
-    var startsAfterNativeClipStart: Bool {
-        startSeconds > inputStartTrimToleranceSeconds
+    var trimmedEffectStartSeconds: Double? {
+        guard let effectStartSeconds,
+              effectStartSeconds.isFinite,
+              effectStartSeconds > trimStartToleranceSeconds
+        else {
+            return nil
+        }
+        return effectStartSeconds
     }
 
     var interactionSignature: String {
@@ -1071,13 +1090,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return true
         }
-        if expectedRange.startsAfterNativeClipStart {
+        if let trimmedEffectStartSeconds = expectedRange.trimmedEffectStartSeconds {
             markHostAnalysisActionBlockedForTrimmedClip(
                 actionName: actionName,
                 expectedRange: expectedRange,
                 analysisRange: nil,
                 analysisDescription: "current input range",
-                reason: String(format: "input starts %.3fs after native clip start", expectedRange.startSeconds)
+                reason: String(format: "effect starts %.3fs after native clip start", trimmedEffectStartSeconds)
             )
             return false
         }
@@ -2562,9 +2581,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let range = HostAnalysisExpectedRange(
             startSeconds: CMTimeGetSeconds(start),
             durationSeconds: CMTimeGetSeconds(duration),
-            frameDurationSeconds: CMTimeGetSeconds(frameDuration)
+            frameDurationSeconds: CMTimeGetSeconds(frameDuration),
+            effectStartSeconds: currentEffectStartSeconds(using: timingAPI)
         )
         return range.isValid ? range : nil
+    }
+
+    private func currentEffectStartSeconds(using timingAPI: FxTimingAPI_v4? = nil) -> Double? {
+        let resolvedTimingAPI: FxTimingAPI_v4?
+        if let timingAPI {
+            resolvedTimingAPI = timingAPI
+        } else {
+            resolvedTimingAPI = apiManager.api(for: FxTimingAPI_v4.self) as? FxTimingAPI_v4
+        }
+        guard let resolvedTimingAPI else {
+            return nil
+        }
+        var effectStart = CMTime.invalid
+        resolvedTimingAPI.startTime(forEffect: &effectStart)
+        let seconds = CMTimeGetSeconds(effectStart)
+        return seconds.isFinite ? seconds : nil
     }
 
     private func currentCacheResolutionExpectedRange() -> HostAnalysisExpectedRange? {
@@ -4382,11 +4418,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let expectedRange = HostAnalysisExpectedRange(
             startSeconds: CMTimeGetSeconds(analysisRange.start),
             durationSeconds: CMTimeGetSeconds(analysisRange.duration),
-            frameDurationSeconds: CMTimeGetSeconds(frameDuration)
+            frameDurationSeconds: CMTimeGetSeconds(frameDuration),
+            effectStartSeconds: currentEffectStartSeconds()
         )
         if expectedRange.isValid,
-           expectedRange.startsAfterNativeClipStart {
-            let reason = String(format: "input starts %.3fs after native clip start", expectedRange.startSeconds)
+           let trimmedEffectStartSeconds = expectedRange.trimmedEffectStartSeconds {
+            let reason = String(format: "effect starts %.3fs after native clip start", trimmedEffectStartSeconds)
             Self.releaseHostAnalysisStartReservation()
             markHostAnalysisActionBlockedForTrimmedClip(
                 actionName: "Host Analysis",
