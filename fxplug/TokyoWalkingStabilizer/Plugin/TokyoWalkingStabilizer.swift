@@ -775,7 +775,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addStringParameter(
             withName: "Sample Info",
             parameterID: ParameterID.sampleInfo.rawValue,
-            defaultValue: "Sample: 100% -> - | Analysis: -",
+            defaultValue: "Sample: 100% -> - | Analysis: - | Schema: -",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_DISABLED | kFxParameterFlag_DONT_SAVE)
         )
         paramAPI.addStringParameter(
@@ -1059,19 +1059,33 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if let activeRange = hostAnalysisStore.activeExpectedRange,
            !Self.analysisRange(activeRange, matches: expectedRange) {
-            NSLog(
-                "TokyoWalkingStabilizer: \(actionName) Host Analysis ignored stale active analysis range. current=\(Self.expectedRangeDescription(expectedRange)) active=\(Self.expectedRangeDescription(activeRange))"
-            )
+            markHostAnalysisActionBlockedForTrimmedClip(actionName: actionName, expectedRange: expectedRange, analysisRange: activeRange)
+            return false
         }
         if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
            !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            updatePreferredHostAnalysisCacheIdentity(nil)
-            publishHostAnalysisCacheIdentity(nil, force: true)
-            NSLog(
-                "TokyoWalkingStabilizer: \(actionName) Host Analysis cleared stale persisted identity before resolving the current clip. current=\(Self.expectedRangeDescription(expectedRange)) identity=\(preferredIdentity)"
-            )
+            markHostAnalysisActionBlockedForTrimmedClip(actionName: actionName, expectedRange: expectedRange, analysisRange: nil)
+            return false
         }
         return true
+    }
+
+    private func markHostAnalysisActionBlockedForTrimmedClip(
+        actionName: String,
+        expectedRange: HostAnalysisExpectedRange,
+        analysisRange: HostAnalysisExpectedRange?
+    ) {
+        let message = "\(actionName) Not Started - Trimmed Clip"
+        let current = Self.expectedRangeDescription(expectedRange)
+        let existing = analysisRange.map(Self.expectedRangeDescription) ?? "saved analysis identity"
+        hostAnalysisStore.markActionMessage(
+            message,
+            analysisInfo: "Trimmed clip blocked: current \(current), analysis \(existing)"
+        )
+        publishHostAnalysisStatus(force: true)
+        publishStabilizerInfo(force: true)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+        NSLog("TokyoWalkingStabilizer: \(actionName) Host Analysis blocked because the current clip range is trimmed or range-mismatched. current=\(current) analysis=\(existing)")
     }
 
     private func consumeReanalysisConfirmation(
@@ -2008,8 +2022,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             analysisFrameCount = "-"
         }
+        let schemaDescription = inspectorSnapshot.cacheSchemaVersion.map { "v\($0)" } ?? "-"
         return StabilizerInfoFields(
-            sample: "Sample: \(samplePercent) -> \(sampleSize) | Analysis: \(analysisFrameCount)",
+            sample: "Sample: \(samplePercent) -> \(sampleSize) | Analysis: \(analysisFrameCount) | Schema: \(schemaDescription)",
             queue: queueDescription(from: inspectorSnapshot.queueState)
         )
     }

@@ -228,8 +228,8 @@ fallbacks.
   `Reanalyze Host Analysis` stay pressable so skipped or failed starts report their reason
   in `Host Analysis Status`; they are the only paths that request Host Analysis from Final Cut Pro.
   A selected `Sample Size` without a matching completed analysis is reported as needing
-  analysis for that sample, while a trimmed/range-mismatched persisted analysis is ignored
-  for the current clip and replaced by the current clip's Start/Reanalyze request. Concurrent analyzer callbacks
+  analysis for that sample, while a trimmed/range-mismatched persisted analysis reports the
+  trimmed block and does not start or reanalyze. Concurrent analyzer callbacks
   are routed through a process-wide session registry with per-clip in-progress stores; if a
   callback cannot be assigned unambiguously, the plug-in fails visibly instead of mixing
   frames between clips.
@@ -249,12 +249,14 @@ fallbacks.
   Analysis` is disabled because the viewer is currently using scaled/proxy media, the status
   stays actionable as `Ready (...) - Original Media Required to Start Analysis`. Range
   mismatches from stale persisted analysis candidates show `Persisted Analysis Range Mismatch - Run Host Analysis`;
-  this does not disable `Start Host Analysis`. Start/Reanalyze button state is refreshed when
+  this does not disable `Start Host Analysis`, but pressing Start/Reanalyze reports the
+  trimmed block and does not request Host Analysis. Start/Reanalyze button state is refreshed when
   the input range changes and periodically from plugin-state/render callbacks, so trimming
   or expanding the timeline clip does not leave stale button flags behind.
 - `Sample Info`: read-only Inspector row showing the accepted sample percentage, actual
-  analyzed pixel sample size, and frame count, for example
-  `Sample: 100% -> 573x302 | Analysis: 10500f`. `Clip Range` is deprecated from the
+  analyzed pixel sample size, frame count, and active persisted-analysis schema, for example
+  `Sample: 100% -> 573x302 | Analysis: 10500f | Schema: v15`. Older compatible persisted
+  analyses show their saved schema version. `Clip Range` is deprecated from the
   visible Inspector metadata.
 - `Queue`: read-only Inspector row showing the serial queue position as `#N of M` and
   compact queue reason while this clip is waiting. Repeated starts on the same effect
@@ -433,13 +435,14 @@ FxPlug.
   later persisted analysis monitor tick or callback can retry. Analyzer completion and persisted-analysis-monitor
   ticks dispatch that status/info/render revision publication onto the FxPlug main queue
   before calling Final Cut Pro's parameter-setting API.
-- Trimmed clips are supported by matching the current render frame fingerprint against the
+- Trimmed clips are supported during render by matching the current render frame fingerprint against the
   analyzed Host Analysis frame set. If Final Cut Pro reports render time in a different time
   domain than analysis time, the effect applies that offset before reading the prepared
   motion paths. If Final Cut Pro reports a render/timeline range that differs from the saved
   source analysis range, the effect accepts that active persisted analysis only after the current
   source-frame fingerprint validates against the saved frame set. A trimmed timeline range
-  is not a Host Analysis start blocker.
+  blocks `Start Host Analysis` and `Reanalyze Host Analysis` so analysis is not started for
+  the wrong duration.
 
 ## Host Analysis Persisted Analysis
 

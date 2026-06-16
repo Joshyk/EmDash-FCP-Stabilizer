@@ -129,7 +129,7 @@ private struct PersistentCacheLoadTiming {
 
 private enum PersistentCacheLoadAttempt {
     case loaded(LoadedPersistentHostAnalysisCache)
-    case unusable(HostAnalysisStatus, String)
+    case unusable(HostAnalysisStatus, String, schemaVersion: Int?)
     case skipped
 }
 
@@ -169,6 +169,7 @@ struct StabilizerHostAnalysisInspectorSnapshot {
     let analysisInfoText: String
     let queueState: StabilizerHostAnalysisQueueState
     let requestedSampleScalePercent: Double?
+    let cacheSchemaVersion: Int?
     let rangeStartSeconds: Double?
     let rangeEndSeconds: Double?
     let sampleWidth: Int?
@@ -199,7 +200,8 @@ final class StabilizerHostAnalysisStore {
         latestSampleSize: (width: Int, height: Int)?,
         analysisInfoText: String,
         queueState: StabilizerHostAnalysisQueueState,
-        activePersistentCacheIdentity: String?
+        activePersistentCacheIdentity: String?,
+        activeCacheSchemaVersion: Int?
     )
 
     private struct CompletedMemoryHostAnalysis {
@@ -240,6 +242,7 @@ final class StabilizerHostAnalysisStore {
     private var persistentCacheCandidates: [URL] = []
     private var activePersistentCacheFileName: String?
     private var activePersistentCacheIdentity: String?
+    private var activeCacheSchemaVersion: Int?
     private var rejectedPersistentCacheFileNames = Set<String>()
     private var activeRange: CMTimeRange = .invalid
     private var activeFrameDuration: CMTime = .invalid
@@ -339,6 +342,7 @@ final class StabilizerHostAnalysisStore {
             analysisInfoText: analysisInfoText,
             queueState: queueState,
             requestedSampleScalePercent: activeRequestedSampleScalePercent.isFinite ? activeRequestedSampleScalePercent : nil,
+            cacheSchemaVersion: activeCacheSchemaVersion,
             rangeStartSeconds: rangeSeconds.start,
             rangeEndSeconds: rangeSeconds.end,
             sampleWidth: sampleSize?.width,
@@ -598,6 +602,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = Self.cacheSchemaVersion
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: true)
         activeRange = range
         activeFrameDuration = frameDuration
@@ -636,6 +641,7 @@ final class StabilizerHostAnalysisStore {
         if preparedAnalysis == nil && status != .analyzing {
             status = .requested
             activeRequestedSampleScalePercent = requestedSampleScalePercent
+            activeCacheSchemaVersion = Self.cacheSchemaVersion
             analysisInfoText = "Requested \(Self.sampleScaleDescription(requestedSampleScalePercent))"
             queueState = .starting
             actionStatusText = nil
@@ -649,6 +655,7 @@ final class StabilizerHostAnalysisStore {
         if preparedAnalysis == nil {
             status = .queued
             activeRequestedSampleScalePercent = requestedSampleScalePercent
+            activeCacheSchemaVersion = Self.cacheSchemaVersion
             let queueTotal = max(position, totalCount)
             let compactReason = Self.compactReason(reason)
             analysisInfoText = "Queued #\(position)/\(queueTotal) \(Self.sampleScaleDescription(requestedSampleScalePercent)): \(compactReason)"
@@ -744,6 +751,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
@@ -783,6 +791,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: false)
         activeRange = .invalid
         activeFrameDuration = .invalid
@@ -818,6 +827,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         activeRequestedSampleScalePercent = StabilizerSampleScale.defaultScale.percent
@@ -980,6 +990,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = snapshot.activePersistentCacheIdentity
+        activeCacheSchemaVersion = snapshot.activeCacheSchemaVersion
         rejectedPersistentCacheFileNames.removeAll(keepingCapacity: true)
         activeRange = snapshot.activeRange
         activeFrameDuration = snapshot.activeFrameDuration
@@ -1290,7 +1301,7 @@ final class StabilizerHostAnalysisStore {
             markCurrentPersistentCacheGenerationObserved()
         }
         var candidateURLs = filteredPersistentCacheCandidateURLs()
-        var unusableCacheSummaries: [(status: HostAnalysisStatus, summary: String)] = []
+        var unusableCacheSummaries: [(status: HostAnalysisStatus, summary: String, schemaVersion: Int?)] = []
         while !candidateURLs.isEmpty {
             let activeURL = candidateURLs.removeFirst()
             let candidateStartedAt = CFAbsoluteTimeGetCurrent()
@@ -1303,8 +1314,8 @@ final class StabilizerHostAnalysisStore {
             switch loadAttempt {
             case .loaded(let loadedCandidate):
                 activeCandidate = loadedCandidate
-            case .unusable(let status, let summary):
-                unusableCacheSummaries.append((status, summary))
+            case .unusable(let status, let summary, let schemaVersion):
+                unusableCacheSummaries.append((status, summary, schemaVersion))
                 continue
             case .skipped:
                 continue
@@ -1361,6 +1372,7 @@ final class StabilizerHostAnalysisStore {
             lock.lock()
             if preparedAnalysis == nil && status != .analyzing {
                 status = unusableCacheSummary.status
+                activeCacheSchemaVersion = unusableCacheSummary.schemaVersion
                 analysisInfoText = unusableCacheSummary.summary
                 queueState = .idle
                 bumpRevisionLocked()
@@ -1771,6 +1783,7 @@ final class StabilizerHostAnalysisStore {
             lock.lock()
             activePersistentCacheFileName = cacheFileName
             activePersistentCacheIdentity = cacheIdentity
+            activeCacheSchemaVersion = cache.schemaVersion
             activeCompletedMemoryAnalysisIdentity = nil
             status = .ready
             projectCacheUnavailableStatusText = stabilizerProjectCacheUnavailableMessage
@@ -1834,6 +1847,7 @@ final class StabilizerHostAnalysisStore {
         if markFinished {
             activePersistentCacheFileName = nil
             activePersistentCacheIdentity = nil
+            activeCacheSchemaVersion = prepared == nil ? nil : Self.cacheSchemaVersion
             streamingAnalysisBuilder = nil
         }
         if markFinished {
@@ -1900,7 +1914,8 @@ final class StabilizerHostAnalysisStore {
             latestSampleSize: latestSampleSize,
             analysisInfoText: analysisInfoText,
             queueState: queueState,
-            activePersistentCacheIdentity: activePersistentCacheIdentity
+            activePersistentCacheIdentity: activePersistentCacheIdentity,
+            activeCacheSchemaVersion: activeCacheSchemaVersion
         )
         lock.unlock()
         return snapshot
@@ -2044,6 +2059,7 @@ final class StabilizerHostAnalysisStore {
         persistentCacheCandidates.removeAll(keepingCapacity: false)
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         renderToAnalysisOffsetSeconds = nil
@@ -2072,6 +2088,7 @@ final class StabilizerHostAnalysisStore {
         activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         finished = false
@@ -2210,6 +2227,7 @@ final class StabilizerHostAnalysisStore {
         activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         renderToAnalysisOffsetSeconds = nil
@@ -2248,6 +2266,7 @@ final class StabilizerHostAnalysisStore {
         activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = nil
         activePersistentCacheIdentity = nil
+        activeCacheSchemaVersion = nil
         activeRange = .invalid
         activeFrameDuration = .invalid
         renderToAnalysisOffsetSeconds = nil
@@ -2388,6 +2407,7 @@ final class StabilizerHostAnalysisStore {
         activeCompletedMemoryAnalysisIdentity = nil
         activePersistentCacheFileName = loadedCache.fileName
         activePersistentCacheIdentity = loadedCache.identity
+        activeCacheSchemaVersion = loadedCache.cache.schemaVersion
         activeRange = CMTimeRange(
             start: CMTime(seconds: loadedCache.cache.rangeStartSeconds, preferredTimescale: 600),
             duration: CMTime(seconds: loadedCache.cache.rangeDurationSeconds, preferredTimescale: 600)
@@ -3027,7 +3047,7 @@ final class StabilizerHostAnalysisStore {
                    !supportedCacheSchemaVersions.contains(header.schemaVersion) {
                     let summary = unsupportedPersistentCacheSummary(schemaVersion: header.schemaVersion, fileName: url.lastPathComponent)
                     NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis with unsupported schema \(header.schemaVersion) at \(url.path).")
-                    return .unusable(.cacheUnsupported, summary)
+                    return .unusable(.cacheUnsupported, summary, schemaVersion: header.schemaVersion)
                 }
                 NSLog("TokyoWalkingStabilizer: failed to load Host Analysis persisted analysis \(url.path): \(error.localizedDescription)")
                 return .skipped
@@ -3036,7 +3056,8 @@ final class StabilizerHostAnalysisStore {
                 NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis with unsupported schema \(cache.schemaVersion) at \(url.path).")
                 return .unusable(
                     .cacheUnsupported,
-                    unsupportedPersistentCacheSummary(schemaVersion: cache.schemaVersion, fileName: url.lastPathComponent)
+                    unsupportedPersistentCacheSummary(schemaVersion: cache.schemaVersion, fileName: url.lastPathComponent),
+                    schemaVersion: cache.schemaVersion
                 )
             }
             if let maximumFrameCount = plausiblePersistedFrameCountLimit(for: cache),
@@ -3046,7 +3067,7 @@ final class StabilizerHostAnalysisStore {
             }
             if let incompleteSummary = incompletePersistentCacheSummary(for: cache, fileName: url.lastPathComponent) {
                 NSLog("TokyoWalkingStabilizer: ignoring incomplete Host Analysis persisted analysis at \(url.path): \(incompleteSummary).")
-                return .unusable(.cacheIncomplete, incompleteSummary)
+                return .unusable(.cacheIncomplete, incompleteSummary, schemaVersion: cache.schemaVersion)
             }
             let frames = cache.frames.compactMap { persistedFrame -> StabilizerAnalysisFrame? in
                 let pixels = persistedFrame.pixels.map { [UInt8]($0) } ?? []
@@ -3068,7 +3089,7 @@ final class StabilizerHostAnalysisStore {
             }
             guard frames.count >= 3 else {
                 NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis with too few frames at \(url.path).")
-                return .unusable(.cacheIncomplete, "Persisted Analysis Incomplete (only \(frames.count) readable frames) | \(url.lastPathComponent)")
+                return .unusable(.cacheIncomplete, "Persisted Analysis Incomplete (only \(frames.count) readable frames) | \(url.lastPathComponent)", schemaVersion: cache.schemaVersion)
             }
             guard let cacheIdentity = persistentCacheIdentity(for: cache, frames: frames) else {
                 NSLog("TokyoWalkingStabilizer: ignoring Host Analysis persisted analysis with incomplete fingerprints at \(url.path).")

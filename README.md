@@ -49,8 +49,7 @@ analysis or a validated persisted analysis; they do not start analysis on their 
 If `Sample Size` changes and no analysis exists for that size, the status reports that the
 selected sample has not been analyzed so `Start Host Analysis` can request that size. If
 the current clip range differs from a saved or hidden persisted-analysis identity, Start/Reanalyze
-ignore that stale identity and resolve persisted analysis for the current clip before requesting
-new Host Analysis.
+report the trimmed-clip block instead of starting Host Analysis.
 
 ## Optional Final Cut Pro Shortcuts
 
@@ -155,7 +154,8 @@ media, while staying larger than the old compact panel.
 accepts status parameter updates. For existing timeline instances that keep
 stale saved Inspector strings, `Debug Overlay` is the live render-runtime
 indicator. `Sample Info` combines the accepted `Sample Size`, actual analysis
-sample size, and frame count as `Sample: <percent> -> <WxH> | Analysis: <frames>f`.
+sample size, frame count, and schema as
+`Sample: <percent> -> <WxH> | Analysis: <frames>f | Schema: v<N>`.
 `Clip Range` is
 deprecated from the visible Inspector metadata. `Queue`
 uses `#N of M`; repeated Start presses on the same effect instance keep only that
@@ -256,11 +256,11 @@ single-frame gate flicker. Render-time frame lookup uses the sorted Host Analysi
 times directly, so long persisted analyses do not require repeated full-analysis scans
 for every preview frame.
 
-Trimmed clips are handled by matching the current render frame fingerprint back
+Trimmed clips are handled during render by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
-prepared motion paths. A trimmed timeline range does not block `Start Host
-Analysis`; stale range-mismatched persisted analyses show `Persisted Analysis Range Mismatch - Run Host
-Analysis` and can be replaced by running analysis again. Start/Reanalyze button flags are
+prepared motion paths. A trimmed timeline range blocks `Start Host Analysis` and
+`Reanalyze Host Analysis`; stale range-mismatched persisted analyses show the trimmed block
+instead of starting a new Host Analysis pass. Start/Reanalyze button flags are
 refreshed when the input range changes and periodically from plugin-state/render callbacks,
 so trim and untrim operations do not rely on the original effect-add state. A validated analysis continues to drive preview/render
 when Final Cut Pro plays proxy media; proxy media is rejected only for Host
@@ -359,7 +359,9 @@ clip range, selected `Sample Size`, and actual analysis pixel size when source d
 already known. It starts a new host analysis when no compatible persisted analysis with that
 requested sample percentage and pixel size can be loaded, so changing `Sample Size` makes the
 button analysis-runnable again without deleting the existing saved analysis for the previous
-size. If the button
+size. `Sample Info` includes the active persisted-analysis schema as
+`Sample: 100% -> 573x302 | Analysis: 10500f | Schema: v15`; older compatible caches show
+their saved schema version. If the button
 callback cannot see `FxProjectAPI`, it still asks Final Cut Pro to start Host
 Analysis and lets the analyzer `setupAnalysis` callback resolve the Event persisted analysis
 root through either the host media folder or Final Cut Pro's active library bookmarks and
