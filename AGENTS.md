@@ -21,10 +21,24 @@ macOS `display notification` だけではユーザーが気づかないので、
 
 ## Project
 
-This directory hosts the native `Tokyo Walking Stabilizer` FxPlug project for Final Cut Pro and
-Motion. The project is FxPlug-only. Do not add non-FxPlug runtime files, standalone
-estimators, timeline automation actions, legacy cache models, or app reload workflows back
-into this repo.
+This repository hosts `Tokyo Walking Stabilizer` and its local support tools. The
+FxPlug target itself must stay native FxPlug/Metal code for Final Cut Pro and Motion,
+but the repository may also contain the external Stabilizer Event Analyzer web UI,
+FCPXMLD parsing/import builders, and native analysis helper code used to generate
+Event-scoped persisted analysis caches.
+
+Keep the boundary explicit:
+- Do not put web frontend files, Node servers, Python scripts, standalone helper
+  binaries, or FCPXMLD import builders inside the FxPlug bundle, Motion Template,
+  or `fxplug/TokyoWalkingStabilizer/Plugin/` runtime path.
+- Do keep external analyzer code in a clearly named local support-tool directory
+  such as `Stabilizer-Event-Analyzer/`, `event_analyzer/`, `node_web/`, `scripts/`,
+  or `native_analyzer/` when that is the implementation being worked on.
+- Do not reintroduce CommandPost/legacy timeline automation or hidden shared-cache
+  fallback workflows unless the user explicitly asks for that separate integration.
+- Event Analyzer output must still write to an explicit Event cache root selected by
+  the user or resolved from the selected Event; it must not silently write to a
+  shared Application Support fallback.
 
 The effect intentionally avoids Final Cut Pro's built-in `Stabilization`, because that
 effect applies its own internal crop/scale. The native effect renders a transformed source
