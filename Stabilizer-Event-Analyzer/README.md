@@ -35,11 +35,15 @@ The native analyzer requires Metal. Luma sampling and frame-to-frame block
 motion search run through Metal compute kernels, with multiple in-flight GPU
 frame slots per active asset; if a Metal device, command queue, or kernel
 dispatch is unavailable, analysis fails visibly instead of falling back to CPU
-motion search. Parallel media readers may be used for a single selected asset
-to keep the GPU fed, but they are disabled when multiple assets are selected so
-selected clips remain strictly serial. The default intra-asset reader lane count
-is capped at `4`; `STABILIZER_ANALYZER_WORKERS` can explicitly request up to
-`12` reader lanes for a single selected asset.
+motion search. Selected assets remain strictly serial: the analyzer finishes
+one asset before starting the next. Inside that one active asset, media reader
+lanes are used to keep the GPU fed. Each active asset uses the Mac's active
+processor count as its default intra-asset reader lane count. GPU in-flight
+frame slots are sized from the Mac's active processor count and physical memory.
+`STABILIZER_ANALYZER_WORKERS` can request an explicit reader lane count, capped
+at the Mac's active processor count. `STABILIZER_ANALYZER_IN_FLIGHT` can tune
+the GPU frame slot count, capped by the current frame size and available memory.
+The reported lane and slot counts show the effective limits in use.
 
 When `--progress` is enabled, frame and chunk progress updates rewrite one
 stderr line instead of printing a new `progress ...` line for every update.

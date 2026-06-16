@@ -905,43 +905,42 @@ private struct FrameChunkResult {
     let motions: [PairMotion]
 }
 
+private func analyzerOfferedProcessorCount() -> Int {
+    max(1, ProcessInfo.processInfo.activeProcessorCount)
+}
+
 private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
+    let offeredProcessorCount = analyzerOfferedProcessorCount()
     if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_WORKERS"],
        let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        return max(1, min(12, parsed))
+        return max(1, min(offeredProcessorCount, parsed))
     }
     if explicitOnly { return 1 }
-    let processorCount = ProcessInfo.processInfo.activeProcessorCount
-    return max(1, min(4, processorCount))
+    return offeredProcessorCount
 }
 
 private func analyzerInFlightLimit(pixelCount: Int) -> Int {
+    let bytesPerFrameSlot = max(4 * 1024 * 1024, pixelCount * 6)
+    let memoryBudget = max(bytesPerFrameSlot * 4, Int(ProcessInfo.processInfo.physicalMemory / 8))
+    let memoryLimitedSlotCount = max(4, memoryBudget / bytesPerFrameSlot)
     if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_IN_FLIGHT"],
        let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        return max(4, min(96, parsed))
+        return max(4, min(memoryLimitedSlotCount, parsed))
     }
-    if pixelCount >= 8_000_000 {
-        return 12
-    }
-    if pixelCount >= 2_000_000 {
-        return 18
-    }
-    return 24
+    return max(4, min(memoryLimitedSlotCount, analyzerOfferedProcessorCount() * 4))
 }
 
 private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCount: Int) -> Bool {
     if maxFrames != nil || workerCount <= 1 {
         return false
     }
-    if ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_WORKERS"] != nil {
-        return plan.durationSeconds > max(0.5, plan.frameDurationSeconds * 4.0)
-    }
-    return plan.durationSeconds >= 12.0
+    return plan.durationSeconds > max(0.10, plan.frameDurationSeconds * 4.0)
 }
 
 private func makeFrameReadChunks(durationSeconds: Double, frameDurationSeconds: Double, workerCount: Int) -> [FrameReadChunk] {
     let boundedDuration = max(frameDurationSeconds, durationSeconds)
-    let chunkCount = max(1, workerCount)
+    let estimatedFrameCount = max(1, Int((boundedDuration / max(1e-9, frameDurationSeconds)).rounded(.up)))
+    let chunkCount = max(1, min(workerCount, estimatedFrameCount))
     let chunkDuration = boundedDuration / Double(chunkCount)
     let overlapSeconds = max(frameDurationSeconds * 4.0, 0.12)
     return (0..<chunkCount).map { index in
@@ -1435,12 +1434,9 @@ func run() throws {
     try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
     let metalContext = try MetalAnalysisContext()
     progress(arguments.progress, "using Metal analyzer device: \(metalContext.deviceName)")
-    let allowParallelReaders = plan.assets.count == 1
     progress(
         arguments.progress,
-        allowParallelReaders
-            ? "processing 1 selected asset with Metal GPU analysis; intra-asset reader lanes may be used inside that single asset"
-            : "processing \(plan.assets.count) selected assets serially with Metal GPU analysis; parallel media readers disabled for multi-asset runs"
+        "processing \(plan.assets.count) selected asset(s) serially with Metal GPU analysis; each active asset may use all offered CPU reader lanes"
     )
     var results: [AnalysisResult] = []
     for (assetIndex, asset) in plan.assets.enumerated() {
@@ -1451,7 +1447,7 @@ func run() throws {
             maxFrames: plan.maxFrames,
             progressEnabled: arguments.progress,
             metalContext: metalContext,
-            allowParallelReaders: allowParallelReaders
+            allowParallelReaders: true
         )
         let cache = buildCache(
             asset: asset,
