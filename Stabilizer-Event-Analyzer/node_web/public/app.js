@@ -244,7 +244,7 @@ function renderAssets() {
 function updateRunState() {
   const count = state.selectedAssetIds.size;
   el.selectedText.textContent = count ? `${count} media selected` : "No media selected";
-  el.runButton.disabled = !state.sourcePath || count === 0 || !el.cacheRootInput.value.trim();
+  el.runButton.disabled = Boolean(state.currentJobId) || !state.sourcePath || count === 0 || !el.cacheRootInput.value.trim();
 }
 
 async function loadConfig() {
@@ -393,6 +393,7 @@ async function runAnalysis() {
   saveLastAnalysisSettings(body);
   state.currentJobId = payload.job.id;
   el.runButton.disabled = true;
+  el.cancelButton.disabled = false;
   el.cancelButton.classList.remove("hidden");
   pollJob();
 }
@@ -406,27 +407,34 @@ async function pollJob() {
     if (job.status === "done") {
       state.lastResult = job.result;
       setStatus(`Done: ${job.result.resultCount} cache(s), ${job.result.insertedFilters} filter insertion(s).`, "ok");
+      state.currentJobId = "";
       el.cancelButton.classList.add("hidden");
+      el.cancelButton.disabled = false;
       el.resultActions.classList.remove("hidden");
       updateRunState();
       return;
     }
     if (job.status === "error" || job.status === "cancelled") {
       setStatus(job.error || job.message || job.status, "error");
+      state.currentJobId = "";
       el.cancelButton.classList.add("hidden");
+      el.cancelButton.disabled = false;
       updateRunState();
       return;
     }
     setTimeout(pollJob, 1200);
   } catch (error) {
     setStatus(error.message, "error");
+    state.currentJobId = "";
     el.cancelButton.classList.add("hidden");
+    el.cancelButton.disabled = false;
     updateRunState();
   }
 }
 
 async function cancelJob() {
   if (!state.currentJobId) return;
+  el.cancelButton.disabled = true;
   await api("/api/cancel", { method: "POST", body: { id: state.currentJobId } });
   setStatus("Cancelling...");
 }

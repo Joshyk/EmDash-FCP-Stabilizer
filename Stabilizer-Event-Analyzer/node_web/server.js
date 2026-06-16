@@ -113,6 +113,45 @@ function assertNotCancelled(jobIdValue) {
   }
 }
 
+function signalProcessGroup(child, signal) {
+  if (!child || !child.pid) return null;
+  try {
+    process.kill(-child.pid, signal);
+    return null;
+  } catch (groupError) {
+    try {
+      child.kill(signal);
+      return null;
+    } catch {
+      return groupError.code === "ESRCH" ? null : groupError;
+    }
+  }
+}
+
+function terminateJobProcess(id, child) {
+  if (!child || !child.pid || child.exitCode !== null || child.killed) return null;
+  const signalError = signalProcessGroup(child, "SIGTERM");
+  if (signalError) {
+    updateJob(id, {
+      error: `Failed to signal analyzer process group: ${signalError.message}`,
+      message: `Failed to signal analyzer process group: ${signalError.message}`,
+    });
+    return null;
+  }
+  return setTimeout(() => {
+    const job = jobs.get(id);
+    if (job && job.currentProcess === child) {
+      const killError = signalProcessGroup(child, "SIGKILL");
+      if (killError) {
+        updateJob(id, {
+          error: `Failed to force-kill analyzer process group: ${killError.message}`,
+          message: `Failed to force-kill analyzer process group: ${killError.message}`,
+        });
+      }
+    }
+  }, 3000);
+}
+
 function runJsonProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     let child;
@@ -123,6 +162,7 @@ function runJsonProcess(command, args, options = {}) {
         cwd: REPO_ROOT,
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, PYTHONUNBUFFERED: "1" },
+        detached: true,
       });
     } catch (error) {
       reject(error);
@@ -130,6 +170,11 @@ function runJsonProcess(command, args, options = {}) {
     }
     if (options.jobId) {
       updateJob(options.jobId, { currentProcess: child });
+      const job = jobs.get(options.jobId);
+      if (job && job.cancelRequested) {
+        const killTimer = terminateJobProcess(options.jobId, child);
+        updateJob(options.jobId, { killTimer });
+      }
     }
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -142,15 +187,24 @@ function runJsonProcess(command, args, options = {}) {
       }
     });
     child.on("error", reject);
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
+      let wasCancelled = false;
       if (options.jobId) {
         const job = jobs.get(options.jobId);
+        wasCancelled = Boolean(job && job.cancelRequested);
+        if (job && job.killTimer) {
+          clearTimeout(job.killTimer);
+        }
         if (job && job.currentProcess === child) {
-          updateJob(options.jobId, { currentProcess: null });
+          updateJob(options.jobId, { currentProcess: null, killTimer: null });
         }
       }
+      if (wasCancelled) {
+        reject(new CancelledError());
+        return;
+      }
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `${command} exited with ${code}`));
+        reject(new Error(stderr.trim() || `${command} exited with ${code}${signal ? ` (${signal})` : ""}`));
         return;
       }
       try {
@@ -410,7 +464,13 @@ function cancelJob(id) {
   if (!job) throw new Error("job was not found");
   updateJob(id, { status: "cancelling", cancelRequested: true, message: "Cancelling job." });
   if (job.currentProcess) {
-    job.currentProcess.kill("SIGTERM");
+    const killTimer = terminateJobProcess(id, job.currentProcess);
+    updateJob(id, {
+      killTimer,
+      message: killTimer
+        ? "Cancelling job; sent SIGTERM to analyzer process group."
+        : "Cancelling job; analyzer process already exited.",
+    });
   }
   return publicJob(jobs.get(id));
 }
