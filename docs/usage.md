@@ -8,7 +8,10 @@
 4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis`,
    `Persisted Analysis Rejected - Run Host Analysis`, `Persisted Analysis Unsupported - Run Host Analysis`, or
    `Persisted Analysis Incomplete - Run Host Analysis`.
-5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
+5. If `Update Persisted Analysis` is enabled, press it only when you want to replace the
+   loaded older-schema persisted analysis with a newly analyzed file. The button shows a
+   confirmation alert before Host Analysis starts.
+6. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
 `Start Host Analysis` requests the active effect clip from Final Cut Pro. If another
 Stabilizer Host Analysis run is active or reserved in the plug-in process, the selected clip

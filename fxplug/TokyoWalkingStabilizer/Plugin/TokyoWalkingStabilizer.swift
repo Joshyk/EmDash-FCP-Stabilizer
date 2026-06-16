@@ -19,6 +19,7 @@ private enum ParameterID: UInt32 {
     case yStrength = 18
     case sampleScale = 19
     case renderRevision = 20
+    case updatePersistedAnalysis = 21
     case panStabilizationStrength = 23
     case edgeDisplayMode = 27
     case farFieldWarpStrength = 28
@@ -522,6 +523,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedQueueInfo = ""
     private var lastPublishedRenderRevision: Double?
     private var lastPublishedStartHostAnalysisButtonEnabled: Bool?
+    private var lastPublishedUpdatePersistedAnalysisButtonEnabled: Bool?
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
@@ -736,6 +738,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             selector: #selector(startHostAnalysis),
             parameterFlags: flags
         )
+        paramAPI.addPushButton(
+            withName: "Update Persisted Analysis",
+            parameterID: ParameterID.updatePersistedAnalysis.rawValue,
+            selector: #selector(updatePersistedAnalysis),
+            parameterFlags: FxParameterFlags(kFxParameterFlag_DEFAULT | kFxParameterFlag_DISABLED)
+        )
         paramAPI.addStringParameter(
             withName: "Host Analysis Status",
             parameterID: ParameterID.hostAnalysisStatus.rawValue,
@@ -942,6 +950,40 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if !loadedPersistentCache {
             requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
         }
+    }
+
+    @objc(updatePersistedAnalysis)
+    func updatePersistedAnalysis() {
+        guard let updateSummary = hostAnalysisStore.persistedAnalysisUpdateSummary else {
+            os_log("Update Persisted Analysis pressed without an active older persisted analysis.", log: stabilizerHostAnalysisLog, type: .default)
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            return
+        }
+        guard confirmPersistedAnalysisUpdate(summary: updateSummary) else {
+            os_log("Update Persisted Analysis cancelled by user.", log: stabilizerHostAnalysisLog, type: .default)
+            return
+        }
+
+        let expectedRange = currentInputRange()
+        let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
+        os_log(
+            "Update Persisted Analysis confirmed for %{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            updateSummary
+        )
+        NSLog("TokyoWalkingStabilizer: Update Persisted Analysis confirmed for \(updateSummary).")
+        publishHostAnalysisCacheIdentity(nil, force: true)
+        hostAnalysisStore.reset()
+        publishHostAnalysisStatus(force: true, statusOverride: "Update Requested")
+        publishStabilizerInfo(force: true)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+        if !configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
+            os_log("Update preflight could not resolve Event persisted analysis root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
+            NSLog("TokyoWalkingStabilizer: Update Persisted Analysis could not preflight the Event persisted analysis root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
+        }
+        requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
     }
 
     @discardableResult
@@ -1698,12 +1740,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     ) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
         let startHostAnalysisButtonEnabled = canStartHostAnalysisOverride ?? hostAnalysisStore.canStartHostAnalysis
+        let updatePersistedAnalysisButtonEnabled = hostAnalysisStore.persistedAnalysisUpdateSummary != nil
         statusLock.lock()
         let shouldPublishStatus = force || status != lastPublishedStatus
         let shouldPublishStartHostAnalysisButton = force
             || lastPublishedStartHostAnalysisButtonEnabled != startHostAnalysisButtonEnabled
+        let shouldPublishUpdatePersistedAnalysisButton = force
+            || lastPublishedUpdatePersistedAnalysisButtonEnabled != updatePersistedAnalysisButtonEnabled
         statusLock.unlock()
-        guard shouldPublishStatus || shouldPublishStartHostAnalysisButton,
+        guard shouldPublishStatus || shouldPublishStartHostAnalysisButton || shouldPublishUpdatePersistedAnalysisButton,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
@@ -1718,6 +1763,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if shouldPublishStartHostAnalysisButton {
             publishStartHostAnalysisButtonEnabled(startHostAnalysisButtonEnabled, settingAPI: settingAPI)
+        }
+        if shouldPublishUpdatePersistedAnalysisButton {
+            publishUpdatePersistedAnalysisButtonEnabled(updatePersistedAnalysisButtonEnabled, settingAPI: settingAPI)
         }
     }
 
@@ -1735,6 +1783,37 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             NSLog("TokyoWalkingStabilizer: failed to update Start Host Analysis enabled state to \(enabled).")
         }
+    }
+
+    private func publishUpdatePersistedAnalysisButtonEnabled(
+        _ enabled: Bool,
+        settingAPI: FxParameterSettingAPI_v5
+    ) {
+        let flags = enabled
+            ? FxParameterFlags(kFxParameterFlag_DEFAULT)
+            : FxParameterFlags(kFxParameterFlag_DEFAULT | kFxParameterFlag_DISABLED)
+        if settingAPI.setParameterFlags(flags, toParameter: ParameterID.updatePersistedAnalysis.rawValue) {
+            statusLock.lock()
+            lastPublishedUpdatePersistedAnalysisButtonEnabled = enabled
+            statusLock.unlock()
+        } else {
+            NSLog("TokyoWalkingStabilizer: failed to update Update Persisted Analysis enabled state to \(enabled).")
+        }
+    }
+
+    private func confirmPersistedAnalysisUpdate(summary: String) -> Bool {
+        if !Thread.isMainThread {
+            return DispatchQueue.main.sync {
+                confirmPersistedAnalysisUpdate(summary: summary)
+            }
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Update Persisted Analysis?"
+        alert.informativeText = "This will run Host Analysis again and save a new persisted analysis using the current schema. The older persisted analysis file will remain on disk.\n\n\(summary)"
+        alert.addButton(withTitle: "Update")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func publishStabilizerInfo(

@@ -37,8 +37,10 @@ black outside-source pixels. `Edge Display Mode` defaults to `Black Outside`.
 2. Keep the default `100%` `Sample Size` for full source detail, or choose a
    smaller sample before starting analysis when you want a quicker debug pass.
 3. Click `Start Host Analysis`.
-4. Wait for `Host Analysis Status` to show `Ready (... frames)`.
-5. Tune the strength controls while watching the preview.
+4. If `Update Persisted Analysis` is enabled for a loaded older-schema file, confirm the
+   alert only when you want to re-run analysis and save a new persisted analysis.
+5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
+6. Tune the strength controls while watching the preview.
 
 `Start Host Analysis` is the only path that asks Final Cut Pro to analyze the
 clip. Preview and render callbacks only read completed analysis or a validated

@@ -293,6 +293,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   timeline range plus sample/fingerprint identity for the current process so another queued
   clip does not discard the earlier clip's viewer result or collide with another clip that
   has the same source-time range.
+- `Update Persisted Analysis`: enabled only when the current clip has loaded a persisted
+  analysis file with an older supported schema than the schema this build writes. Pressing it
+  shows a confirmation alert before analysis starts. Confirming runs Host Analysis again using
+  the current `Sample Size` and writes a new persisted analysis; the older file remains on disk.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing so stabilized
   frames avoid outside-source pixels. Turn it off to bypass Auto Crop render-time
   sampling and binary-search framing while checking playback cost; `Edge Display Mode`

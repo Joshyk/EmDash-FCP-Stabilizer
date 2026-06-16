@@ -341,6 +341,19 @@ final class StabilizerHostAnalysisStore {
         return activePersistentCacheIdentity
     }
 
+    var persistedAnalysisUpdateSummary: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let activePersistentCacheIdentity,
+              let loadedCache = persistentCachesByIdentity[activePersistentCacheIdentity],
+              loadedCache.cache.schemaVersion < Self.cacheSchemaVersion
+        else {
+            return nil
+        }
+        let sample = Self.sampleDescription(loadedCache.cache)
+        return "schema v\(loadedCache.cache.schemaVersion) -> v\(Self.cacheSchemaVersion), \(sample), \(loadedCache.frames.count)f"
+    }
+
     var activeExpectedRange: HostAnalysisExpectedRange? {
         lock.lock()
         let range = activeRange
@@ -1431,7 +1444,7 @@ final class StabilizerHostAnalysisStore {
         } else {
             sampleText = "unknown"
         }
-        var parts = [Self.compactPrefix(prefix), "\(frameCount)f", sampleText]
+        let parts = [Self.compactPrefix(prefix), "\(frameCount)f", sampleText]
         return parts.joined(separator: " ")
     }
 
