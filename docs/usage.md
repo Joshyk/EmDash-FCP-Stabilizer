@@ -8,8 +8,8 @@
 4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis`,
    `Persisted Analysis Rejected - Run Host Analysis`, `Persisted Analysis Unsupported - Run Host Analysis`, or
    `Persisted Analysis Incomplete - Run Host Analysis`.
-5. Click `Reanalyze Host Analysis` when you explicitly want to ignore the currently loaded
-   persisted analysis and run Host Analysis again.
+5. Click `Reanalyze Host Analysis` twice within 8 seconds when you explicitly want to
+   ignore the currently loaded persisted analysis and run Host Analysis again.
 6. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
 `Start Host Analysis` requests the active effect clip from Final Cut Pro. If another
@@ -225,7 +225,8 @@ fallbacks.
   reload candidates and update the hidden render revision without starting Host Analysis.
   A persisted analysis whose fingerprints do not match the current source frame is
   rejected instead of being accepted by time proximity alone. `Start Host Analysis` and
-  `Reanalyze Host Analysis` are the only paths that request Host Analysis from Final Cut Pro. Concurrent analyzer callbacks
+  `Reanalyze Host Analysis` stay pressable so skipped or failed starts report their reason
+  in `Host Analysis Status`; they are the only paths that request Host Analysis from Final Cut Pro. Concurrent analyzer callbacks
   are routed through a process-wide session registry with per-clip in-progress stores; if a
   callback cannot be assigned unambiguously, the plug-in fails visibly instead of mixing
   frames between clips.

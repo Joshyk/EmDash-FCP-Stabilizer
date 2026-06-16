@@ -293,14 +293,16 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   timeline range plus sample/fingerprint identity for the current process so another queued
   clip does not discard the earlier clip's viewer result or collide with another clip that
   has the same source-time range.
-- `Reanalyze Host Analysis`: explicitly ignores the currently loaded persisted analysis and
-  requests a fresh Host Analysis using the current `Sample Size`. Existing persisted analysis
-  files remain on disk; the newly completed analysis is saved as a new candidate.
+- `Reanalyze Host Analysis`: press once to confirm, then press again within 8 seconds to
+  ignore the currently loaded persisted analysis and request fresh Host Analysis using the
+  current `Sample Size`. Existing persisted analysis files remain on disk; the newly
+  completed analysis is saved as a new candidate.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing so stabilized
   frames avoid outside-source pixels. Turn it off to bypass Auto Crop render-time
   sampling and binary-search framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
-- `Host Analysis Status`: read-only analysis/persisted-analysis state. It appends the current FxPlug
+- `Host Analysis Status`: read-only analysis/persisted-analysis state. It also reports why a
+  pressable Start/Reanalyze button did not start a new analysis. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. During a real analysis
   run, the status advances as `Analyzing Host Frames (N)`. If Final Cut Pro restores an
   in-progress analysis state while a compatible saved persisted analysis is already present, the plug-in

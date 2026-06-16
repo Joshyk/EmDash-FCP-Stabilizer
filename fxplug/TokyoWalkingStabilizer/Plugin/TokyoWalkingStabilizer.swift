@@ -43,9 +43,10 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.146"
+private let tokyoWalkingStabilizerVersion = "0.3.147"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let hostAnalysisControlRefreshIntervalSeconds = 0.5
+private let reanalysisConfirmationWindowSeconds = 8.0
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 private let stabilizerDefaultAutoCropZoomSpeed = 1.0
@@ -486,17 +487,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let analysisAPI: FxAnalysisAPI
         let requestedSampleScalePercent: Double
         let reason: String
+        let resetStoreBeforeStart: Bool
 
         init(
             plugin: TokyoWalkingStabilizerPlugIn,
             analysisAPI: FxAnalysisAPI,
             requestedSampleScalePercent: Double,
-            reason: String
+            reason: String,
+            resetStoreBeforeStart: Bool
         ) {
             self.plugin = plugin
             self.analysisAPI = analysisAPI
             self.requestedSampleScalePercent = requestedSampleScalePercent
             self.reason = reason
+            self.resetStoreBeforeStart = resetStoreBeforeStart
         }
     }
 
@@ -511,6 +515,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let totalCount: Int
         let reason: String
         let requestedSampleScalePercent: Double
+    }
+
+    private struct PendingReanalysisConfirmation {
+        let rangeSignature: String
+        let requestedSampleScalePercent: Double
+        let expiresAt: Double
     }
 
     private static let serialAnalysisQueueLock = NSLock()
@@ -542,6 +552,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
     private var persistentCacheMonitor: DispatchSourceTimer?
+    private var pendingReanalysisConfirmation: PendingReanalysisConfirmation?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
     }
@@ -924,6 +935,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
             NSLog("TokyoWalkingStabilizer: Start Host Analysis reused active persisted analysis \(activeIdentity) without reset or disk reload.")
             publishHostAnalysisCacheIdentity(activeIdentity, force: true)
+            hostAnalysisStore.markActionMessage(
+                "Host Analysis Not Started - Persisted analysis already ready",
+                analysisInfo: "Start skipped: persisted analysis already ready"
+            )
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
             publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -956,6 +971,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if loadedPersistentCache {
             publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: true)
+            hostAnalysisStore.markActionMessage(
+                "Host Analysis Not Started - Persisted analysis loaded",
+                analysisInfo: "Start skipped: persisted analysis loaded"
+            )
         }
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
@@ -972,8 +991,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         os_log("Reanalyze Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
         NSLog("TokyoWalkingStabilizer: Reanalyze Host Analysis requested.")
-        publishHostAnalysisCacheIdentity(nil, force: true)
-        hostAnalysisStore.reset()
+
+        guard consumeReanalysisConfirmation(
+            expectedRange: expectedRange,
+            requestedSampleScalePercent: requestedSamplePercent
+        ) else {
+            let message = "Press Reanalyze again within \(Int(reanalysisConfirmationWindowSeconds))s to start fresh analysis"
+            hostAnalysisStore.markActionMessage(
+                message,
+                analysisInfo: "Reanalysis confirmation required"
+            )
+            publishHostAnalysisStatus(force: true)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+            return
+        }
+
         publishHostAnalysisStatus(force: true, statusOverride: "Reanalysis Requested")
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
@@ -981,7 +1014,36 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             os_log("Reanalysis preflight could not resolve Event persisted analysis root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
             NSLog("TokyoWalkingStabilizer: Reanalyze Host Analysis could not preflight the Event persisted analysis root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
         }
-        requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
+        requestHostAnalysisIfNeeded(
+            force: true,
+            acceptedSampleScalePercentOverride: requestedSamplePercent,
+            resetStoreBeforeStart: true
+        )
+    }
+
+    private func consumeReanalysisConfirmation(
+        expectedRange: HostAnalysisExpectedRange?,
+        requestedSampleScalePercent: Double
+    ) -> Bool {
+        let now = Date.timeIntervalSinceReferenceDate
+        let rangeSignature = expectedRange?.interactionSignature ?? "range-unavailable"
+        statusLock.lock()
+        defer { statusLock.unlock() }
+
+        if let pendingReanalysisConfirmation,
+           pendingReanalysisConfirmation.rangeSignature == rangeSignature,
+           abs(pendingReanalysisConfirmation.requestedSampleScalePercent - requestedSampleScalePercent) <= 0.001,
+           pendingReanalysisConfirmation.expiresAt >= now {
+            self.pendingReanalysisConfirmation = nil
+            return true
+        }
+
+        pendingReanalysisConfirmation = PendingReanalysisConfirmation(
+            rangeSignature: rangeSignature,
+            requestedSampleScalePercent: requestedSampleScalePercent,
+            expiresAt: now + reanalysisConfirmationWindowSeconds
+        )
+        return false
     }
 
     @discardableResult
@@ -990,7 +1052,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         allowSerialQueue: Bool = true,
         queuedStartRequest: Bool = false,
         queuedAnalysisAPI: FxAnalysisAPI? = nil,
-        acceptedSampleScalePercentOverride: Double? = nil
+        acceptedSampleScalePercentOverride: Double? = nil,
+        resetStoreBeforeStart: Bool = false
     ) -> HostAnalysisRequestResult {
         let acceptedSampleScalePercent = acceptedSampleScalePercentOverride ?? requestedSampleScalePercent(for: currentInputRange())
         let isQueuedRequest = queuedStartRequest || Self.isQueuedSerialAnalysis(self)
@@ -1037,7 +1100,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     self,
                     analysisAPI: analysisAPI,
                     requestedSampleScalePercent: acceptedSampleScalePercent,
-                    reason: reason
+                    reason: reason,
+                    resetStoreBeforeStart: resetStoreBeforeStart
                 )
                 hostAnalysisStore.markQueued(
                     position: queuePosition.position,
@@ -1085,7 +1149,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     self,
                     analysisAPI: analysisAPI,
                     requestedSampleScalePercent: acceptedSampleScalePercent,
-                    reason: reason
+                    reason: reason,
+                    resetStoreBeforeStart: resetStoreBeforeStart
                 )
                 hostAnalysisStore.markQueued(
                     position: queuePosition.position,
@@ -1113,6 +1178,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             hostAnalysisStore.reset()
             os_log(
                 "Serial Host Analysis queue reset the shared render store before starting the queued clip.",
+                log: stabilizerHostAnalysisLog,
+                type: .default
+            )
+        } else if resetStoreBeforeStart {
+            publishHostAnalysisCacheIdentity(nil, force: true)
+            hostAnalysisStore.reset()
+            os_log(
+                "Reanalyze Host Analysis reset the shared render store immediately before requesting a fresh Host Analysis pass.",
                 log: stabilizerHostAnalysisLog,
                 type: .default
             )
@@ -1145,7 +1218,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         _ plugin: TokyoWalkingStabilizerPlugIn,
         analysisAPI: FxAnalysisAPI,
         requestedSampleScalePercent: Double,
-        reason: String
+        reason: String,
+        resetStoreBeforeStart: Bool = false
     ) -> SerialHostAnalysisQueuePosition {
         serialAnalysisQueueLock.lock()
         let originalCount = serialAnalysisQueue.count
@@ -1155,7 +1229,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             plugin: plugin,
             analysisAPI: analysisAPI,
             requestedSampleScalePercent: requestedSampleScalePercent,
-            reason: reason
+            reason: reason,
+            resetStoreBeforeStart: resetStoreBeforeStart
         ))
         let position = serialAnalysisQueue.count
         let totalCount = serialAnalysisQueue.count
@@ -1269,7 +1344,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 allowSerialQueue: true,
                 queuedStartRequest: true,
                 queuedAnalysisAPI: nextRequest.analysisAPI,
-                acceptedSampleScalePercentOverride: nextRequest.requestedSampleScalePercent
+                acceptedSampleScalePercentOverride: nextRequest.requestedSampleScalePercent,
+                resetStoreBeforeStart: nextRequest.resetStoreBeforeStart
             )
             switch result {
             case .started, .queued:
@@ -1733,12 +1809,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private func publishHostAnalysisStatus(
         force: Bool = false,
-        statusOverride: String? = nil,
-        canStartHostAnalysisOverride: Bool? = nil
+        statusOverride: String? = nil
     ) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
-        let startHostAnalysisButtonEnabled = canStartHostAnalysisOverride ?? hostAnalysisStore.canStartHostAnalysis
-        let reanalyzeHostAnalysisButtonEnabled = startHostAnalysisButtonEnabled
+        let startHostAnalysisButtonEnabled = true
+        let reanalyzeHostAnalysisButtonEnabled = true
         statusLock.lock()
         let shouldPublishStatus = force || status != lastPublishedStatus
         let shouldPublishStartHostAnalysisButton = force

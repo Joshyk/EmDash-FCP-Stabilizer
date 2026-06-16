@@ -250,6 +250,7 @@ final class StabilizerHostAnalysisStore {
     private var latestSourceFrameInfo: StabilizerSourceFrameInfo?
     private var latestSampleSize: (width: Int, height: Int)?
     private var analysisInfoText = "No Analysis"
+    private var actionStatusText: String?
     private var analysisTiming = HostAnalysisTimingAccumulator()
 
     var frameCount: Int {
@@ -429,7 +430,15 @@ final class StabilizerHostAnalysisStore {
         let hasPreparedAnalysis = preparedAnalysis != nil
         let unavailableStatusText = projectCacheUnavailableStatusText
         let renderSourceIsScaledProxy = currentRenderSourceIsScaledProxy
+        let actionStatus = actionStatusText
         lock.unlock()
+
+        if let actionStatus,
+           currentStatus != .requested,
+           currentStatus != .queued,
+           currentStatus != .analyzing {
+            return actionStatus
+        }
 
         if renderSourceIsScaledProxy {
             if hasPreparedAnalysis {
@@ -579,6 +588,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Analyzing \(Self.sampleScaleDescription(requestedSampleScalePercent))"
+        actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
@@ -601,6 +611,7 @@ final class StabilizerHostAnalysisStore {
             status = .requested
             activeRequestedSampleScalePercent = requestedSampleScalePercent
             analysisInfoText = "Requested \(Self.sampleScaleDescription(requestedSampleScalePercent))"
+            actionStatusText = nil
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -613,6 +624,7 @@ final class StabilizerHostAnalysisStore {
             activeRequestedSampleScalePercent = requestedSampleScalePercent
             let queueTotal = max(position, totalCount)
             analysisInfoText = "Queued #\(position)/\(queueTotal) \(Self.sampleScaleDescription(requestedSampleScalePercent)): \(Self.compactReason(reason))"
+            actionStatusText = nil
             bumpRevisionLocked()
         }
         lock.unlock()
@@ -623,8 +635,19 @@ final class StabilizerHostAnalysisStore {
         if preparedAnalysis == nil {
             status = .needsAnalysis
             analysisInfoText = "Start failed: \(Self.compactReason(reason))"
-            bumpRevisionLocked()
         }
+        actionStatusText = "Host Analysis Not Started - \(Self.compactReason(reason))"
+        bumpRevisionLocked()
+        lock.unlock()
+    }
+
+    func markActionMessage(_ message: String, analysisInfo: String? = nil) {
+        lock.lock()
+        actionStatusText = message
+        if let analysisInfo {
+            analysisInfoText = analysisInfo
+        }
+        bumpRevisionLocked()
         lock.unlock()
     }
 
@@ -686,6 +709,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "No Analysis"
+        actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
@@ -724,6 +748,7 @@ final class StabilizerHostAnalysisStore {
         latestSourceFrameInfo = nil
         latestSampleSize = nil
         analysisInfoText = "Persisted Analysis Cleared"
+        actionStatusText = nil
         analysisTiming = HostAnalysisTimingAccumulator()
         bumpRevisionLocked()
         lock.unlock()
