@@ -227,11 +227,15 @@ struct HostAnalysisExpectedRange {
         )
     }
 
+    var trimmedTimelineAnalysisStatusText: String? {
+        hasTimelineHeadTrim ? "Trimmed Clip - Use Open Clip Analysis" : nil
+    }
+
     private var trimDetectionToleranceSeconds: Double {
         if frameDurationSeconds.isFinite, frameDurationSeconds > 0.0 {
-            return max(1.0 / 600.0, frameDurationSeconds * 1.5)
+            return max(0.000001, min(1.0 / 600.0, frameDurationSeconds * 0.25))
         }
-        return 1.0 / 600.0
+        return 0.000001
     }
 }
 
@@ -879,12 +883,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             state.inputFrameDurationSeconds = inputRange.frameDurationSeconds
         }
         let expectedRange = Self.expectedInputRange(from: state)
+        let trimmedStatusOverride = expectedRange?.trimmedTimelineAnalysisStatusText
         if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
                hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
             } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true) {
-                publishHostAnalysisStatus(force: true)
+                publishHostAnalysisStatus(force: true, statusOverride: trimmedStatusOverride)
                 publishStabilizerInfo(force: true)
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
                 publishRenderRevision(
@@ -897,7 +902,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
-        publishHostAnalysisStatus()
+        publishHostAnalysisStatus(statusOverride: trimmedStatusOverride)
         publishStabilizerInfo(state: state)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, currentParameterValue: state.renderRevision)
 
