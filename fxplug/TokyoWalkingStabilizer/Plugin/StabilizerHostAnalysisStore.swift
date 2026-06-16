@@ -439,7 +439,7 @@ final class StabilizerHostAnalysisStore {
         case .cacheCleared:
             return "Cache Cleared"
         case .trimmedClip:
-            return "Trimmed Clip - Use Open Clip Analysis"
+            return "Invalid - Trimmed Clip"
         case .projectCacheUnavailable:
             if hasPreparedAnalysis {
                 return "Ready Memory Only - \(unavailableStatusText)"
@@ -992,7 +992,7 @@ final class StabilizerHostAnalysisStore {
                                 validationIssue.reason,
                                 rejectionReason
                             )
-                            markProxyNeedsOriginalValidationForRender(reason: validationIssue.reason)
+                            markTrimmedClipInvalidForRender(reason: validationIssue.reason)
                             return nil
                         }
                         rejectPersistentCache(reason: rejectionReason)
@@ -1739,6 +1739,20 @@ final class StabilizerHostAnalysisStore {
         lock.unlock()
         if shouldMark {
             NSLog("TokyoWalkingStabilizer: refused unvalidated proxy Host Analysis cache selection: \(reason)")
+        }
+    }
+
+    private func markTrimmedClipInvalidForRender(reason: String) {
+        lock.lock()
+        let shouldMark = status != .trimmedClip
+        if shouldMark {
+            status = .trimmedClip
+            analysisInfoText = "Invalid trimmed clip cache."
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+        if shouldMark {
+            NSLog("TokyoWalkingStabilizer: refused range-mismatched Host Analysis cache for trimmed clip: \(reason)")
         }
     }
 
