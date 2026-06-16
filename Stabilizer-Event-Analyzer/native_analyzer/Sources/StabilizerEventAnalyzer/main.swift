@@ -63,13 +63,28 @@ struct ToolOutput: Encodable {
     let results: [AnalysisResult]
 }
 
-struct AnalysisFrame {
+struct AnalysisFrame: Encodable {
     let time: Double
     let pixels: [UInt8]
     let sampleWidth: Int
     let sampleHeight: Int
     let blurAmount: Float
     let fingerprint: String
+
+    private enum CodingKeys: String, CodingKey {
+        case time
+        case pixels
+        case blurAmount
+        case fingerprint
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(time, forKey: .time)
+        try container.encodeNil(forKey: .pixels)
+        try container.encode(blurAmount, forKey: .blurAmount)
+        try container.encode(fingerprint, forKey: .fingerprint)
+    }
 }
 
 struct PairMotion {
@@ -109,7 +124,7 @@ struct PreparedAnalysis {
     let searchRadiusTotalCounts: [Int32]
 }
 
-struct PersistedHostAnalysisCache: Codable {
+struct PersistedHostAnalysisCache: Encodable {
     let schemaVersion: Int
     let createdAt: Double
     let clipLabel: String?
@@ -120,7 +135,7 @@ struct PersistedHostAnalysisCache: Codable {
     let sampleWidth: Int
     let sampleHeight: Int
     let eventName: String?
-    let frames: [PersistedHostAnalysisFrame]
+    let frames: [AnalysisFrame]
     let residuals: [Float]?
     let rollMotion: [Float]?
     let pathX: [Float]?
@@ -142,13 +157,6 @@ struct PersistedHostAnalysisCache: Codable {
     let blurAmounts: [Float]?
     let searchRadiusHitCounts: [Int32]?
     let searchRadiusTotalCounts: [Int32]?
-}
-
-struct PersistedHostAnalysisFrame: Codable {
-    let time: Double
-    let pixels: Data?
-    let blurAmount: Float
-    let fingerprint: String?
 }
 
 struct PersistedHostAnalysisIndex: Codable {
@@ -1456,9 +1464,7 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         sampleWidth: sampleWidth,
         sampleHeight: sampleHeight,
         eventName: eventName,
-        frames: prepared.frames.map {
-            PersistedHostAnalysisFrame(time: $0.time, pixels: nil, blurAmount: $0.blurAmount, fingerprint: $0.fingerprint)
-        },
+        frames: prepared.frames,
         residuals: prepared.residuals,
         rollMotion: prepared.rollMotion,
         pathX: prepared.pathX,
