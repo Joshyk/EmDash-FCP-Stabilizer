@@ -885,9 +885,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
+        let expectedSampleSize = hostAnalysisStore.expectedSampleSizeForCurrentSource(
+            requestedSampleScalePercent: requestedSamplePercent
+        )
         if hostAnalysisStore.hasCompletedPersistedAnalysis(
             expectedRange: expectedRange,
-            requestedSampleScalePercent: requestedSamplePercent
+            requestedSampleScalePercent: requestedSamplePercent,
+            expectedSampleSize: expectedSampleSize
         ),
            let activeIdentity = hostAnalysisStore.activeCacheIdentity,
            StabilizerHostAnalysisStore.cacheIdentity(activeIdentity, matches: expectedRange) {
@@ -912,14 +916,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     identity: preferredIdentity,
                     expectedRange: expectedRange,
                     allowRangeMismatch: true,
-                    requestedSampleScalePercent: requestedSamplePercent
+                    requestedSampleScalePercent: requestedSamplePercent,
+                    expectedSampleSize: expectedSampleSize
                ) {
                 loadedPersistentCache = true
             } else {
                 loadedPersistentCache = hostAnalysisStore.loadPersistentCache(
                     expectedRange: expectedRange,
                     allowRangeMismatch: true,
-                    requestedSampleScalePercent: requestedSamplePercent
+                    requestedSampleScalePercent: requestedSamplePercent,
+                    expectedSampleSize: expectedSampleSize
                 )
             }
         } else {

@@ -344,10 +344,11 @@ set as the authoritative timeline, so a reduced retained source-frame map does
 not prevent a completed prepared path from being saved.
 
 `Start Host Analysis` first tries to reload a saved persisted analysis for the current
-clip range and selected `Sample Size`. It starts a new host analysis when no compatible
-persisted analysis with that requested sample percentage can be loaded, so changing
-`Sample Size` makes the button analysis-runnable again without deleting the existing saved
-analysis for the previous size. If the button
+clip range, selected `Sample Size`, and actual analysis pixel size when source dimensions are
+already known. It starts a new host analysis when no compatible persisted analysis with that
+requested sample percentage and pixel size can be loaded, so changing `Sample Size` makes the
+button analysis-runnable again without deleting the existing saved analysis for the previous
+size. If the button
 callback cannot see `FxProjectAPI`, it still asks Final Cut Pro to start Host
 Analysis and lets the analyzer `setupAnalysis` callback resolve the Event persisted analysis
 root through either the host media folder or Final Cut Pro's active library bookmarks and

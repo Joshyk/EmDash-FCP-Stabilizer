@@ -497,18 +497,38 @@ final class StabilizerHostAnalysisStore {
         return finished && validationState != .rejected && preparedAnalysis != nil
     }
 
-    func hasCompletedPersistedAnalysis(expectedRange: HostAnalysisExpectedRange?, requestedSampleScalePercent: Double) -> Bool {
+    func expectedSampleSizeForCurrentSource(requestedSampleScalePercent: Double) -> (width: Int, height: Int)? {
+        lock.lock()
+        let sourceInfo = latestSourceFrameInfo
+        lock.unlock()
+        guard let sourceInfo else {
+            return nil
+        }
+        return AutoStabilizationEstimator.sampleSize(
+            sourceWidth: sourceInfo.sourceWidth,
+            sourceHeight: sourceInfo.sourceHeight,
+            scalePercent: requestedSampleScalePercent
+        )
+    }
+
+    func hasCompletedPersistedAnalysis(
+        expectedRange: HostAnalysisExpectedRange?,
+        requestedSampleScalePercent: Double,
+        expectedSampleSize: (width: Int, height: Int)?
+    ) -> Bool {
         lock.lock()
         let hasPersistedAnalysis = finished
             && validationState != .rejected
             && preparedAnalysis != nil
         let activeIdentity = activePersistentCacheIdentity
         let activeRequestedPercent = activeRequestedSampleScalePercent
+        let activeSampleSize = preparedAnalysis?.frames.first.map { (width: $0.sampleWidth, height: $0.sampleHeight) }
         lock.unlock()
         guard hasPersistedAnalysis,
               let activeIdentity,
               Self.cacheIdentity(activeIdentity, matches: expectedRange),
-              Self.sampleScale(activeRequestedPercent, matches: requestedSampleScalePercent)
+              Self.sampleScale(activeRequestedPercent, matches: requestedSampleScalePercent),
+              Self.sampleSize(activeSampleSize, matches: expectedSampleSize)
         else {
             return false
         }
@@ -1172,7 +1192,8 @@ final class StabilizerHostAnalysisStore {
     func loadPersistentCache(
         expectedRange: HostAnalysisExpectedRange? = nil,
         allowRangeMismatch: Bool = false,
-        requestedSampleScalePercent: Double? = nil
+        requestedSampleScalePercent: Double? = nil,
+        expectedSampleSize: (width: Int, height: Int)? = nil
     ) -> Bool {
         defer {
             markCurrentPersistentCacheGenerationObserved()
@@ -1202,10 +1223,17 @@ final class StabilizerHostAnalysisStore {
                 NSLog("TokyoWalkingStabilizer: skipped persisted Host Analysis \(activeCandidate.fileName) because its range does not match the active clip.")
                 continue
             }
-            if let requestedSampleScalePercent,
-               !Self.sampleScale(activeCandidate.cache.requestedSampleScalePercent, matches: requestedSampleScalePercent) {
-                let savedSampleText = activeCandidate.cache.requestedSampleScalePercent.map(Self.sampleScaleDescription) ?? "unknown"
-                NSLog("TokyoWalkingStabilizer: skipped persisted Host Analysis \(activeCandidate.fileName) because saved Sample Size \(savedSampleText) does not match requested Sample Size \(Self.sampleScaleDescription(requestedSampleScalePercent)).")
+            if !Self.sampleSize(
+                activeCandidate.cache,
+                matchesRequestedSampleScalePercent: requestedSampleScalePercent,
+                expectedSampleSize: expectedSampleSize
+            ) {
+                let savedSample = Self.sampleDescription(activeCandidate.cache)
+                let requestedSample = Self.sampleRequirementDescription(
+                    requestedSampleScalePercent: requestedSampleScalePercent,
+                    expectedSampleSize: expectedSampleSize
+                )
+                NSLog("TokyoWalkingStabilizer: skipped persisted Host Analysis \(activeCandidate.fileName) because saved sample \(savedSample) does not match requested sample \(requestedSample).")
                 continue
             }
             if !matchesExpectedRange {
@@ -1260,7 +1288,8 @@ final class StabilizerHostAnalysisStore {
         identity: String,
         expectedRange: HostAnalysisExpectedRange? = nil,
         allowRangeMismatch: Bool = false,
-        requestedSampleScalePercent: Double? = nil
+        requestedSampleScalePercent: Double? = nil,
+        expectedSampleSize: (width: Int, height: Int)? = nil
     ) -> Bool {
         let trimmedIdentity = identity.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedIdentity.isEmpty else {
@@ -1273,12 +1302,20 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         if activePersistentCacheIdentity == trimmedIdentity,
            preparedAnalysis != nil,
-           Self.sampleScale(activeRequestedSampleScalePercent, matches: requestedSampleScalePercent) {
+           Self.sampleScale(activeRequestedSampleScalePercent, matches: requestedSampleScalePercent),
+           Self.sampleSize(
+                preparedAnalysis?.frames.first.map { (width: $0.sampleWidth, height: $0.sampleHeight) },
+                matches: expectedSampleSize
+           ) {
             lock.unlock()
             return true
         }
         if let cached = persistentCachesByIdentity[trimmedIdentity],
-           Self.sampleScale(cached.cache.requestedSampleScalePercent, matches: requestedSampleScalePercent) {
+           Self.sampleSize(
+                cached.cache,
+                matchesRequestedSampleScalePercent: requestedSampleScalePercent,
+                expectedSampleSize: expectedSampleSize
+           ) {
             installPersistentCacheLocked(cached)
             lock.unlock()
             markCurrentPersistentCacheGenerationObserved()
@@ -1291,7 +1328,11 @@ final class StabilizerHostAnalysisStore {
             guard let candidate = Self.loadPersistentCache(at: candidateURL),
                   candidate.identity == trimmedIdentity,
                   (allowRangeMismatch || Self.cache(candidate.cache, matches: expectedRange)),
-                  Self.sampleScale(candidate.cache.requestedSampleScalePercent, matches: requestedSampleScalePercent)
+                  Self.sampleSize(
+                    candidate.cache,
+                    matchesRequestedSampleScalePercent: requestedSampleScalePercent,
+                    expectedSampleSize: expectedSampleSize
+                  )
             else {
                 continue
             }
@@ -1423,6 +1464,42 @@ final class StabilizerHostAnalysisStore {
             return false
         }
         return abs(savedPercent - requestedPercent) <= 0.001
+    }
+
+    private static func sampleSize(_ savedSize: (width: Int, height: Int)?, matches expectedSize: (width: Int, height: Int)?) -> Bool {
+        guard let expectedSize else {
+            return true
+        }
+        guard let savedSize else {
+            return false
+        }
+        return savedSize.width == expectedSize.width
+            && savedSize.height == expectedSize.height
+    }
+
+    private static func sampleSize(
+        _ cache: PersistedHostAnalysisCache,
+        matchesRequestedSampleScalePercent requestedSampleScalePercent: Double?,
+        expectedSampleSize: (width: Int, height: Int)?
+    ) -> Bool {
+        sampleScale(cache.requestedSampleScalePercent, matches: requestedSampleScalePercent)
+            && sampleSize((width: cache.sampleWidth, height: cache.sampleHeight), matches: expectedSampleSize)
+    }
+
+    private static func sampleDescription(_ cache: PersistedHostAnalysisCache) -> String {
+        let percentText = cache.requestedSampleScalePercent.map(sampleScaleDescription) ?? "unknown"
+        return "\(cache.sampleWidth)x\(cache.sampleHeight) (\(percentText))"
+    }
+
+    private static func sampleRequirementDescription(
+        requestedSampleScalePercent: Double?,
+        expectedSampleSize: (width: Int, height: Int)?
+    ) -> String {
+        let percentText = requestedSampleScalePercent.map(sampleScaleDescription) ?? "any%"
+        if let expectedSampleSize {
+            return "\(expectedSampleSize.width)x\(expectedSampleSize.height) (\(percentText))"
+        }
+        return percentText
     }
 
     private static func clipRangeDescription(startSeconds: Double?, endSeconds: Double?) -> String? {
@@ -2137,6 +2214,8 @@ final class StabilizerHostAnalysisStore {
             }
             let nextURL = persistentCacheCandidates.removeFirst()
             let remainingURLCount = persistentCacheCandidates.count
+            let requestedSampleScalePercent = activeRequestedSampleScalePercent.isFinite ? activeRequestedSampleScalePercent : nil
+            let expectedSampleSize = preparedAnalysis?.frames.first.map { (width: $0.sampleWidth, height: $0.sampleHeight) }
             lock.unlock()
 
             guard let nextCandidate = Self.loadPersistentCache(at: nextURL) else {
@@ -2146,6 +2225,19 @@ final class StabilizerHostAnalysisStore {
             let matchesExpectedRange = Self.cache(nextCandidate.cache, matches: expectedRange)
             guard allowRangeMismatch || matchesExpectedRange else {
                 NSLog("TokyoWalkingStabilizer: skipped Host Analysis persisted analysis candidate \(nextCandidate.fileName) because its range does not match the active clip.")
+                continue
+            }
+            guard Self.sampleSize(
+                nextCandidate.cache,
+                matchesRequestedSampleScalePercent: requestedSampleScalePercent,
+                expectedSampleSize: expectedSampleSize
+            ) else {
+                let savedSample = Self.sampleDescription(nextCandidate.cache)
+                let activeSample = Self.sampleRequirementDescription(
+                    requestedSampleScalePercent: requestedSampleScalePercent,
+                    expectedSampleSize: expectedSampleSize
+                )
+                NSLog("TokyoWalkingStabilizer: skipped Host Analysis persisted analysis candidate \(nextCandidate.fileName) because saved sample \(savedSample) does not match active sample \(activeSample).")
                 continue
             }
             if !matchesExpectedRange {

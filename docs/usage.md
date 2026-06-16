@@ -152,11 +152,12 @@ fallbacks.
   pixels black so the viewer shows how far stabilization is moving the image. New effect
   instances default to `Black Outside`.
 - `Start Host Analysis`: resets the current in-memory host-analysis frames, reloads a saved
-  persisted analysis only when it matches the current clip range and selected `Sample Size`,
-  and asks Final Cut Pro to start a forward GPU analysis when no matching persisted analysis
-  can be loaded. Saved persisted analysis files remain available for later reuse, so changing
-  `Sample Size` makes the button analysis-runnable again while preserving the previous
-  sample-size result. If the previous persisted analysis was rejected for the current clip,
+  persisted analysis only when it matches the current clip range, selected `Sample Size`, and
+  actual analysis pixel size when source dimensions are already known, and asks Final Cut Pro
+  to start a forward GPU analysis when no matching persisted analysis can be loaded. Saved
+  persisted analysis files remain available for later reuse, so changing `Sample Size` makes
+  the button analysis-runnable again while preserving the previous pixel-size result. If the
+  previous persisted analysis was rejected for the current clip,
   the next start skips that rejected file and requests a new analysis. Rejected persisted analysis file names are remembered in
   the active FxPlug runtime so the same invalid candidate is not immediately reloaded again.
   If the button callback cannot see `FxProjectAPI`, the button still requests Host Analysis
