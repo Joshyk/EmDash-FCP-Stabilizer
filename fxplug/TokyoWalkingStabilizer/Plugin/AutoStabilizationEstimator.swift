@@ -733,27 +733,31 @@ enum AutoStabilizationEstimator {
 
         let effectiveStrideWobbleWindowSeconds = strideWobbleWindowSeconds
         let smoothWindowSeconds = max(effectiveStrideWobbleWindowSeconds, panSmoothSeconds)
-        let centerIndex = closestFrameIndex(to: renderSeconds, in: frames)
-        let frameInterpolation = frameInterpolation(at: renderSeconds, in: frames)
+        let frameLookup = frameLookup(at: renderSeconds, in: frames)
+        let centerIndex = frameLookup.centerIndex
+        let frameInterpolation = frameLookup.interpolation
         let windowIndices = indicesWithinTimeRadius(
             frames,
             centerTime: renderSeconds,
             radiusSeconds: smoothWindowSeconds * 0.5
         )
-        let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : Array(windowIndices)
+        let activeIndices = windowIndices.isEmpty ? Array(frames.indices) : windowIndices
         let strideWobbleWindowIndices = indicesWithinTimeRadius(
             frames,
             centerTime: renderSeconds,
             radiusSeconds: effectiveStrideWobbleWindowSeconds * 0.5
         )
-        let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : Array(strideWobbleWindowIndices)
+        let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : strideWobbleWindowIndices
         let farFieldWarpGateWindowIndices = indicesWithinTimeRadius(
             frames,
             centerTime: renderSeconds,
             radiusSeconds: farFieldWarpOuterWindowSeconds * 0.5
         )
-        let farFieldWarpGateActiveIndices = farFieldWarpGateWindowIndices.isEmpty ? [centerIndex] : Array(farFieldWarpGateWindowIndices)
-        let sampledIndices = activeIndices + strideWobbleActiveIndices + [centerIndex] + frameInterpolation.indices
+        let farFieldWarpGateActiveIndices = farFieldWarpGateWindowIndices.isEmpty ? [centerIndex] : farFieldWarpGateWindowIndices
+        let sampledIndices = uniqueSortedIndices(
+            activeIndices + strideWobbleActiveIndices + [centerIndex] + frameInterpolation.indices,
+            validCount: frames.count
+        )
         let footstepBaselineXPath = outerLinearPredictionPath(
             analysis.footstepPathX,
             frames: frames,
@@ -2508,23 +2512,6 @@ enum AutoStabilizationEstimator {
         return limited
     }
 
-    private static func closestFrameIndex(to time: Double, in frames: [StabilizerAnalysisFrame]) -> Int {
-        guard !frames.isEmpty else {
-            return 0
-        }
-        let nextIndex = lowerBoundFrameIndex(frames, time: time)
-        guard nextIndex > frames.startIndex else {
-            return frames.startIndex
-        }
-        guard nextIndex < frames.endIndex else {
-            return frames.index(before: frames.endIndex)
-        }
-        let previousIndex = nextIndex - 1
-        let previousDistance = abs(frames[previousIndex].time - time)
-        let nextDistance = abs(frames[nextIndex].time - time)
-        return previousDistance <= nextDistance ? previousIndex : nextIndex
-    }
-
     private struct FrameInterpolation {
         let lowerIndex: Int
         let upperIndex: Int
@@ -2535,33 +2522,56 @@ enum AutoStabilizationEstimator {
         }
     }
 
-    private static func frameInterpolation(at time: Double, in frames: [StabilizerAnalysisFrame]) -> FrameInterpolation {
+    private struct FrameLookup {
+        let centerIndex: Int
+        let interpolation: FrameInterpolation
+    }
+
+    private static func frameLookup(at time: Double, in frames: [StabilizerAnalysisFrame]) -> FrameLookup {
         guard !frames.isEmpty else {
-            return FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0)
+            return FrameLookup(centerIndex: 0, interpolation: FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0))
         }
         guard frames.count > 1 else {
-            return FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0)
+            return FrameLookup(centerIndex: 0, interpolation: FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0))
         }
         if time <= frames[0].time {
-            return FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0)
+            return FrameLookup(centerIndex: 0, interpolation: FrameInterpolation(lowerIndex: 0, upperIndex: 0, fraction: 0.0))
         }
         let lastIndex = frames.count - 1
         if time >= frames[lastIndex].time {
-            return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
+            return FrameLookup(centerIndex: lastIndex, interpolation: FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0))
         }
-        let upperIndex = upperBoundFrameIndex(frames, time: time)
+        let lowerBoundIndex = lowerBoundFrameIndex(frames, time: time)
+        let centerIndex: Int
+        if lowerBoundIndex <= frames.startIndex {
+            centerIndex = frames.startIndex
+        } else if lowerBoundIndex >= frames.endIndex {
+            centerIndex = lastIndex
+        } else {
+            let previousIndex = lowerBoundIndex - 1
+            let previousDistance = abs(frames[previousIndex].time - time)
+            let nextDistance = abs(frames[lowerBoundIndex].time - time)
+            centerIndex = previousDistance <= nextDistance ? previousIndex : lowerBoundIndex
+        }
+
+        let upperIndex: Int
+        if lowerBoundIndex < frames.endIndex && frames[lowerBoundIndex].time == time {
+            upperIndex = upperBoundFrameIndex(frames, time: time)
+        } else {
+            upperIndex = lowerBoundIndex
+        }
         guard upperIndex > frames.startIndex, upperIndex < frames.endIndex else {
-            return FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
+            return FrameLookup(centerIndex: centerIndex, interpolation: FrameInterpolation(lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0))
         }
         let lowerIndex = upperIndex - 1
         let lowerTime = frames[lowerIndex].time
         let upperTime = frames[upperIndex].time
         let duration = upperTime - lowerTime
         guard duration > 1e-9 else {
-            return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: 0.0)
+            return FrameLookup(centerIndex: centerIndex, interpolation: FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: 0.0))
         }
         let fraction = clamp(Float((time - lowerTime) / duration), min: 0.0, max: 1.0)
-        return FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction)
+        return FrameLookup(centerIndex: centerIndex, interpolation: FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction))
     }
 
     private static func interpolatedValue(_ values: [Float], using interpolation: FrameInterpolation) -> Float {
@@ -2658,6 +2668,22 @@ enum AutoStabilizationEstimator {
             return []
         }
         return Array(lowerIndex..<upperIndex)
+    }
+
+    private static func uniqueSortedIndices(_ indices: [Int], validCount: Int) -> [Int] {
+        guard validCount > 0, !indices.isEmpty else {
+            return []
+        }
+        var seen = Set<Int>()
+        var unique: [Int] = []
+        unique.reserveCapacity(indices.count)
+        for index in indices where index >= 0 && index < validCount {
+            guard seen.insert(index).inserted else {
+                continue
+            }
+            unique.append(index)
+        }
+        return unique.sorted()
     }
 
     private static func lowerBoundFrameIndex(_ frames: [StabilizerAnalysisFrame], time: Double) -> Int {
