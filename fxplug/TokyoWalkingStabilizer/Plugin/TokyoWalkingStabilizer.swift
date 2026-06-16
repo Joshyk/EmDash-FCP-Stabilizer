@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.149"
+private let tokyoWalkingStabilizerVersion = "0.3.150"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let hostAnalysisControlRefreshIntervalSeconds = 0.5
 private let reanalysisConfirmationWindowSeconds = 8.0
@@ -204,18 +204,18 @@ struct HostAnalysisExpectedRange {
     let startSeconds: Double
     let durationSeconds: Double
     let frameDurationSeconds: Double
-    let effectStartSeconds: Double?
+    let timelineInputStartSeconds: Double?
 
     init(
         startSeconds: Double,
         durationSeconds: Double,
         frameDurationSeconds: Double,
-        effectStartSeconds: Double? = nil
+        timelineInputStartSeconds: Double? = nil
     ) {
         self.startSeconds = startSeconds
         self.durationSeconds = durationSeconds
         self.frameDurationSeconds = frameDurationSeconds
-        self.effectStartSeconds = effectStartSeconds
+        self.timelineInputStartSeconds = timelineInputStartSeconds
     }
 
     var endSeconds: Double {
@@ -237,14 +237,14 @@ struct HostAnalysisExpectedRange {
         return max(0.001, frameDurationSeconds * 0.5)
     }
 
-    var trimmedEffectStartSeconds: Double? {
-        guard let effectStartSeconds,
-              effectStartSeconds.isFinite,
-              effectStartSeconds > trimStartToleranceSeconds
+    var trimmedInputStartSeconds: Double? {
+        guard let timelineInputStartSeconds,
+              timelineInputStartSeconds.isFinite,
+              timelineInputStartSeconds > trimStartToleranceSeconds
         else {
             return nil
         }
-        return effectStartSeconds
+        return timelineInputStartSeconds
     }
 
     var interactionSignature: String {
@@ -1090,13 +1090,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return true
         }
-        if let trimmedEffectStartSeconds = expectedRange.trimmedEffectStartSeconds {
+        if let trimmedInputStartSeconds = expectedRange.trimmedInputStartSeconds {
             markHostAnalysisActionBlockedForTrimmedClip(
                 actionName: actionName,
                 expectedRange: expectedRange,
                 analysisRange: nil,
                 analysisDescription: "current input range",
-                reason: String(format: "effect starts %.3fs after native clip start", trimmedEffectStartSeconds)
+                reason: String(format: "timeline in-point maps %.3fs after source clip start", trimmedInputStartSeconds)
             )
             return false
         }
@@ -1141,6 +1141,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishHostAnalysisStatus(force: true)
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+        os_log(
+            "%{public}@ Host Analysis blocked before start. reason=%{public}@ current=%{public}@ analysis=%{public}@",
+            log: stabilizerHostAnalysisLog,
+            type: .error,
+            actionName,
+            reason,
+            current,
+            existing
+        )
         NSLog("TokyoWalkingStabilizer: \(actionName) Host Analysis blocked because the current clip range is trimmed or range-mismatched. reason=\(reason) current=\(current) analysis=\(existing)")
     }
 
@@ -2582,12 +2591,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             startSeconds: CMTimeGetSeconds(start),
             durationSeconds: CMTimeGetSeconds(duration),
             frameDurationSeconds: CMTimeGetSeconds(frameDuration),
-            effectStartSeconds: currentEffectStartSeconds(using: timingAPI)
+            timelineInputStartSeconds: currentTimelineInputStartSeconds(using: timingAPI)
         )
         return range.isValid ? range : nil
     }
 
-    private func currentEffectStartSeconds(using timingAPI: FxTimingAPI_v4? = nil) -> Double? {
+    private func currentTimelineInputStartSeconds(using timingAPI: FxTimingAPI_v4? = nil) -> Double? {
         let resolvedTimingAPI: FxTimingAPI_v4?
         if let timingAPI {
             resolvedTimingAPI = timingAPI
@@ -2597,9 +2606,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard let resolvedTimingAPI else {
             return nil
         }
-        var effectStart = CMTime.invalid
-        resolvedTimingAPI.startTime(forEffect: &effectStart)
-        let seconds = CMTimeGetSeconds(effectStart)
+        var timelineInPoint = CMTime.invalid
+        resolvedTimingAPI.inPointTimeOfTimeline(forEffect: &timelineInPoint)
+        var inputStart = CMTime.invalid
+        resolvedTimingAPI.inputTime(&inputStart, fromTimelineTime: timelineInPoint)
+        let seconds = CMTimeGetSeconds(inputStart)
         return seconds.isFinite ? seconds : nil
     }
 
@@ -3902,7 +3913,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard let expectedRange, expectedRange.isValid else {
             return "none"
         }
-        return "start\(StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds))-end\(StabilizerHostAnalysisStore.timeKey(expectedRange.endSeconds))-duration\(StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds))"
+        var description = "start\(StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds))-end\(StabilizerHostAnalysisStore.timeKey(expectedRange.endSeconds))-duration\(StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds))"
+        if let timelineInputStartSeconds = expectedRange.timelineInputStartSeconds,
+           timelineInputStartSeconds.isFinite {
+            description += "-inputStart\(StabilizerHostAnalysisStore.timeKey(timelineInputStartSeconds))"
+        }
+        return description
     }
 
     private static func analysisRange(_ lhs: HostAnalysisExpectedRange, matches rhs: HostAnalysisExpectedRange) -> Bool {
@@ -4419,11 +4435,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             startSeconds: CMTimeGetSeconds(analysisRange.start),
             durationSeconds: CMTimeGetSeconds(analysisRange.duration),
             frameDurationSeconds: CMTimeGetSeconds(frameDuration),
-            effectStartSeconds: currentEffectStartSeconds()
+            timelineInputStartSeconds: currentTimelineInputStartSeconds()
         )
         if expectedRange.isValid,
-           let trimmedEffectStartSeconds = expectedRange.trimmedEffectStartSeconds {
-            let reason = String(format: "effect starts %.3fs after native clip start", trimmedEffectStartSeconds)
+           let trimmedInputStartSeconds = expectedRange.trimmedInputStartSeconds {
+            let reason = String(format: "timeline in-point maps %.3fs after source clip start", trimmedInputStartSeconds)
             Self.releaseHostAnalysisStartReservation()
             markHostAnalysisActionBlockedForTrimmedClip(
                 actionName: "Host Analysis",

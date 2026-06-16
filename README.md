@@ -48,7 +48,7 @@ Final Cut Pro to analyze the clip. Preview and render callbacks only read comple
 analysis or a validated persisted analysis; they do not start analysis on their own.
 If `Sample Size` changes and no analysis exists for that size, the status reports that the
 selected sample has not been analyzed so `Start Host Analysis` can request that size. If
-Final Cut Pro reports that the effect starts after the native clip start, or the current clip
+Final Cut Pro reports that the timeline in-point maps after the source clip start, or the current clip
 range differs from a saved or hidden persisted-analysis identity, Start/Reanalyze report the
 trimmed-clip block instead of starting Host Analysis.
 
@@ -259,7 +259,7 @@ for every preview frame.
 
 Trimmed clips are handled during render by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
-prepared motion paths. A Final Cut Pro-reported nonzero effect start blocks `Start Host
+prepared motion paths. A Final Cut Pro-reported nonzero timeline input start blocks `Start Host
 Analysis` and `Reanalyze Host Analysis`; stale range-mismatched persisted analyses show the
 trimmed block instead of starting a new Host Analysis pass. Start/Reanalyze button flags are
 refreshed when the input range changes and periodically from plugin-state/render callbacks,
