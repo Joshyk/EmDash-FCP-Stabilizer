@@ -282,6 +282,14 @@ private struct MetalBlockUniforms {
     let sampleStep: UInt32
     let scoreGridWidth: UInt32
     let scoreGridHeight: UInt32
+    let chunkCount: UInt32
+}
+
+private struct MetalShiftResult {
+    let dx: Float
+    let dy: Float
+    let score: Float
+    let bestIndex: UInt32
 }
 
 private final class MetalMotionWorkspace {
@@ -292,6 +300,7 @@ private final class MetalMotionWorkspace {
     let scoreGridWidth: Int
     let scoreCount: Int
     let blockCount: Int
+    let chunkCount: Int
     let uniformBuffer: MTLBuffer
 
     init(width: Int, height: Int, device: MTLDevice) throws {
@@ -302,6 +311,9 @@ private final class MetalMotionWorkspace {
         let blockWidth = max(32, width / 4)
         let blockHeight = max(24, height / 5)
         let sampleStep = max(1, min(blockWidth, blockHeight) / 56)
+        let sampleColumns = max(1, (blockWidth / sampleStep) + 1)
+        let sampleRows = max(1, (blockHeight / sampleStep) + 1)
+        let chunkCount = max(4, min(32, (sampleColumns * sampleRows + 511) / 512))
         let centers = [
             (width / 2, max(1, height / 4)),
             (width / 3, max(1, height / 3)),
@@ -322,7 +334,8 @@ private final class MetalMotionWorkspace {
                 searchStep: UInt32(searchStep),
                 sampleStep: UInt32(sampleStep),
                 scoreGridWidth: UInt32(scoreGridWidth),
-                scoreGridHeight: UInt32(scoreGridHeight)
+                scoreGridHeight: UInt32(scoreGridHeight),
+                chunkCount: UInt32(chunkCount)
             )
         }
         guard let uniformBuffer = device.makeBuffer(
@@ -337,13 +350,18 @@ private final class MetalMotionWorkspace {
         self.scoreGridWidth = scoreGridWidth
         self.scoreCount = scoreCount
         self.blockCount = uniforms.count
+        self.chunkCount = chunkCount
         self.uniformBuffer = uniformBuffer
     }
 
-    func resolveMotion(scoreBuffer: MTLBuffer) -> PairMotion {
-        let scores = UnsafeBufferPointer(
-            start: scoreBuffer.contents().assumingMemoryBound(to: Float.self),
-            count: scoreCount * blockCount
+    var partialElementCount: Int {
+        scoreCount * blockCount * chunkCount
+    }
+
+    func resolveMotion(resultBuffer: MTLBuffer) -> PairMotion {
+        let results = UnsafeBufferPointer(
+            start: resultBuffer.contents().assumingMemoryBound(to: MetalShiftResult.self),
+            count: blockCount
         )
         var dxValues: [Float] = []
         var dyValues: [Float] = []
@@ -351,22 +369,10 @@ private final class MetalMotionWorkspace {
         dxValues.reserveCapacity(blockCount)
         dyValues.reserveCapacity(blockCount)
         residuals.reserveCapacity(blockCount)
-        for blockIndex in 0..<blockCount {
-            var bestScore = Float.greatestFiniteMagnitude
-            var bestIndex = 0
-            let blockOffset = blockIndex * scoreCount
-            for scoreIndex in 0..<scoreCount {
-                let score = scores[blockOffset + scoreIndex]
-                if score < bestScore {
-                    bestScore = score
-                    bestIndex = scoreIndex
-                }
-            }
-            let gx = bestIndex % scoreGridWidth
-            let gy = bestIndex / scoreGridWidth
-            dxValues.append(Float(-radius + gx * searchStep))
-            dyValues.append(Float(-radius + gy * searchStep))
-            residuals.append(bestScore)
+        for result in results {
+            dxValues.append(result.dx)
+            dyValues.append(result.dy)
+            residuals.append(result.score)
         }
         let dx = dxValues.reduce(0, +) / Float(max(1, dxValues.count))
         let dy = dyValues.reduce(0, +) / Float(max(1, dyValues.count))
@@ -378,14 +384,16 @@ private final class MetalMotionWorkspace {
 
 private struct MetalFrameSlot {
     let lumaBuffer: MTLBuffer
-    let scoreBuffer: MTLBuffer
+    let partialSumBuffer: MTLBuffer
+    let partialCountBuffer: MTLBuffer
+    let resultBuffer: MTLBuffer
 }
 
 private struct MetalEncodedFrame {
     let commandBuffer: MTLCommandBuffer
     let texture: CVMetalTexture
     let outputBuffer: MTLBuffer
-    let scoreBuffer: MTLBuffer?
+    let resultBuffer: MTLBuffer?
     let motionWorkspace: MetalMotionWorkspace?
 }
 
@@ -394,7 +402,8 @@ final class MetalAnalysisContext {
     private let commandQueue: MTLCommandQueue
     private let textureCache: CVMetalTextureCache
     private let lumaPipelineState: MTLComputePipelineState
-    private let blockScorePipelineState: MTLComputePipelineState
+    private let blockScorePartialPipelineState: MTLComputePipelineState
+    private let blockScoreResolvePipelineState: MTLComputePipelineState
     private var motionWorkspace: MetalMotionWorkspace?
 
     var deviceName: String { device.name }
@@ -413,26 +422,41 @@ final class MetalAnalysisContext {
         }
         let library = try device.makeLibrary(source: Self.kernelSource, options: nil)
         guard let lumaFunction = library.makeFunction(name: "stabilizer_luma_sample"),
-              let blockScoreFunction = library.makeFunction(name: "stabilizer_block_scores") else {
+              let blockScorePartialFunction = library.makeFunction(name: "stabilizer_block_score_partials"),
+              let blockScoreResolveFunction = library.makeFunction(name: "stabilizer_block_score_resolve") else {
             throw AnalyzerError("Metal analysis kernels were not found")
         }
         self.device = device
         self.commandQueue = commandQueue
         self.textureCache = textureCache
         self.lumaPipelineState = try device.makeComputePipelineState(function: lumaFunction)
-        self.blockScorePipelineState = try device.makeComputePipelineState(function: blockScoreFunction)
+        self.blockScorePartialPipelineState = try device.makeComputePipelineState(function: blockScorePartialFunction)
+        self.blockScoreResolvePipelineState = try device.makeComputePipelineState(function: blockScoreResolveFunction)
     }
 
     fileprivate func makeFrameSlot(pixelCount: Int, width: Int, height: Int) throws -> MetalFrameSlot {
         let workspace = try workspaceForMotion(width: width, height: height)
         guard let lumaBuffer = device.makeBuffer(length: pixelCount, options: .storageModeShared),
-              let scoreBuffer = device.makeBuffer(
-                length: MemoryLayout<Float>.stride * workspace.scoreCount * workspace.blockCount,
+              let partialSumBuffer = device.makeBuffer(
+                length: MemoryLayout<UInt32>.stride * workspace.partialElementCount,
+                options: .storageModeShared
+              ),
+              let partialCountBuffer = device.makeBuffer(
+                length: MemoryLayout<UInt32>.stride * workspace.partialElementCount,
+                options: .storageModeShared
+              ),
+              let resultBuffer = device.makeBuffer(
+                length: MemoryLayout<MetalShiftResult>.stride * workspace.blockCount,
                 options: .storageModeShared
               ) else {
             throw AnalyzerError("could not allocate reusable Metal frame analysis buffers")
         }
-        return MetalFrameSlot(lumaBuffer: lumaBuffer, scoreBuffer: scoreBuffer)
+        return MetalFrameSlot(
+            lumaBuffer: lumaBuffer,
+            partialSumBuffer: partialSumBuffer,
+            partialCountBuffer: partialCountBuffer,
+            resultBuffer: resultBuffer
+        )
     }
 
     fileprivate func encodeFrame(
@@ -440,7 +464,9 @@ final class MetalAnalysisContext {
         sampleWidth: Int,
         sampleHeight: Int,
         outputBuffer: MTLBuffer,
-        scoreBuffer: MTLBuffer,
+        partialSumBuffer: MTLBuffer,
+        partialCountBuffer: MTLBuffer,
+        resultBuffer: MTLBuffer,
         previousBuffer: MTLBuffer?
     ) throws -> MetalEncodedFrame {
         let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
@@ -490,16 +516,33 @@ final class MetalAnalysisContext {
             guard let motionEncoder = commandBuffer.makeComputeCommandEncoder() else {
                 throw AnalyzerError("could not allocate Metal block motion encoder")
             }
-            motionEncoder.setComputePipelineState(blockScorePipelineState)
+            motionEncoder.setComputePipelineState(blockScorePartialPipelineState)
             motionEncoder.setBuffer(previousBuffer, offset: 0, index: 0)
             motionEncoder.setBuffer(outputBuffer, offset: 0, index: 1)
-            motionEncoder.setBuffer(scoreBuffer, offset: 0, index: 2)
-            motionEncoder.setBuffer(workspace.uniformBuffer, offset: 0, index: 3)
+            motionEncoder.setBuffer(partialSumBuffer, offset: 0, index: 2)
+            motionEncoder.setBuffer(partialCountBuffer, offset: 0, index: 3)
+            motionEncoder.setBuffer(workspace.uniformBuffer, offset: 0, index: 4)
             motionEncoder.dispatchThreads(
-                MTLSize(width: workspace.scoreCount, height: workspace.blockCount, depth: 1),
+                MTLSize(width: workspace.scoreCount, height: workspace.blockCount, depth: workspace.chunkCount),
                 threadsPerThreadgroup: MTLSize(width: min(64, workspace.scoreCount), height: 1, depth: 1)
             )
             motionEncoder.endEncoding()
+
+            guard let resolveEncoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw AnalyzerError("could not allocate Metal block motion resolve encoder")
+            }
+            var chunkCount = UInt32(workspace.chunkCount)
+            resolveEncoder.setComputePipelineState(blockScoreResolvePipelineState)
+            resolveEncoder.setBuffer(partialSumBuffer, offset: 0, index: 0)
+            resolveEncoder.setBuffer(partialCountBuffer, offset: 0, index: 1)
+            resolveEncoder.setBuffer(resultBuffer, offset: 0, index: 2)
+            resolveEncoder.setBuffer(workspace.uniformBuffer, offset: 0, index: 3)
+            resolveEncoder.setBytes(&chunkCount, length: MemoryLayout<UInt32>.stride, index: 4)
+            resolveEncoder.dispatchThreads(
+                MTLSize(width: workspace.blockCount, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: min(32, workspace.blockCount), height: 1, depth: 1)
+            )
+            resolveEncoder.endEncoding()
             activeMotionWorkspace = workspace
         } else {
             activeMotionWorkspace = nil
@@ -510,7 +553,7 @@ final class MetalAnalysisContext {
             commandBuffer: commandBuffer,
             texture: cvTexture,
             outputBuffer: outputBuffer,
-            scoreBuffer: previousBuffer == nil ? nil : scoreBuffer,
+            resultBuffer: previousBuffer == nil ? nil : resultBuffer,
             motionWorkspace: activeMotionWorkspace
         )
     }
@@ -525,8 +568,8 @@ final class MetalAnalysisContext {
         ))
         let motion: PairMotion?
         if let motionWorkspace = encodedFrame.motionWorkspace,
-           let scoreBuffer = encodedFrame.scoreBuffer {
-            motion = motionWorkspace.resolveMotion(scoreBuffer: scoreBuffer)
+           let resultBuffer = encodedFrame.resultBuffer {
+            motion = motionWorkspace.resolveMotion(resultBuffer: resultBuffer)
         } else {
             motion = nil
         }
@@ -574,6 +617,14 @@ final class MetalAnalysisContext {
         uint sampleStep;
         uint scoreGridWidth;
         uint scoreGridHeight;
+        uint chunkCount;
+    };
+
+    struct ShiftResult {
+        float dx;
+        float dy;
+        float score;
+        uint bestIndex;
     };
 
     kernel void stabilizer_luma_sample(
@@ -591,12 +642,13 @@ final class MetalAnalysisContext {
         output[(gid.y * uniforms.sampleWidth) + gid.x] = uchar(clamp(int(round(((0.299f * color.b) + (0.587f * color.g) + (0.114f * color.r)) * 255.0f)), 0, 255));
     }
 
-    kernel void stabilizer_block_scores(
+    kernel void stabilizer_block_score_partials(
         device const uchar *previous [[buffer(0)]],
         device const uchar *current [[buffer(1)]],
-        device float *scores [[buffer(2)]],
-        device const BlockUniforms *uniformsList [[buffer(3)]],
-        uint2 gid [[thread_position_in_grid]]
+        device uint *partialSums [[buffer(2)]],
+        device uint *partialCounts [[buffer(3)]],
+        device const BlockUniforms *uniformsList [[buffer(4)]],
+        uint3 gid [[thread_position_in_grid]]
     ) {
         BlockUniforms uniforms = uniformsList[gid.y];
         uint scoreCount = uniforms.scoreGridWidth * uniforms.scoreGridHeight;
@@ -613,25 +665,70 @@ final class MetalAnalysisContext {
         int y0 = max(0, int(uniforms.centerY) - halfH);
         int x1 = min(int(uniforms.width) - 1, int(uniforms.centerX) + halfW);
         int y1 = min(int(uniforms.height) - 1, int(uniforms.centerY) + halfH);
-        float total = 0.0f;
+        uint xSamples = uint(max(0, x1 - x0) / int(uniforms.sampleStep)) + 1;
+        uint ySamples = uint(max(0, y1 - y0) / int(uniforms.sampleStep)) + 1;
+        uint sampleCount = xSamples * ySamples;
+        uint chunkCount = uniforms.chunkCount;
+        uint startIndex = (sampleCount * gid.z) / chunkCount;
+        uint endIndex = (sampleCount * (gid.z + 1)) / chunkCount;
+        uint total = 0;
         uint count = 0;
-        for (int y = y0; y <= y1; y += int(uniforms.sampleStep)) {
+        for (uint sampleIndex = startIndex; sampleIndex < endIndex; sampleIndex += 1) {
+            int x = x0 + int(sampleIndex % xSamples) * int(uniforms.sampleStep);
+            int y = y0 + int(sampleIndex / xSamples) * int(uniforms.sampleStep);
             int cy = y + dy;
             if (cy < 0 || cy >= int(uniforms.height)) {
                 continue;
             }
-            for (int x = x0; x <= x1; x += int(uniforms.sampleStep)) {
-                int cx = x + dx;
-                if (cx < 0 || cx >= int(uniforms.width)) {
-                    continue;
-                }
-                uint previousIndex = uint(y) * uniforms.width + uint(x);
-                uint currentIndex = uint(cy) * uniforms.width + uint(cx);
-                total += float(abs(int(previous[previousIndex]) - int(current[currentIndex])));
-                count += 1;
+            int cx = x + dx;
+            if (cx < 0 || cx >= int(uniforms.width)) {
+                continue;
+            }
+            uint previousIndex = uint(y) * uniforms.width + uint(x);
+            uint currentIndex = uint(cy) * uniforms.width + uint(cx);
+            total += uint(abs(int(previous[previousIndex]) - int(current[currentIndex])));
+            count += 1;
+        }
+        uint partialIndex = ((gid.y * scoreCount) + gid.x) * chunkCount + gid.z;
+        partialSums[partialIndex] = total;
+        partialCounts[partialIndex] = count;
+    }
+
+    kernel void stabilizer_block_score_resolve(
+        device const uint *partialSums [[buffer(0)]],
+        device const uint *partialCounts [[buffer(1)]],
+        device ShiftResult *results [[buffer(2)]],
+        device const BlockUniforms *uniformsList [[buffer(3)]],
+        constant uint &chunkCount [[buffer(4)]],
+        uint gid [[thread_position_in_grid]]
+    ) {
+        if (gid >= 3) {
+            return;
+        }
+        BlockUniforms uniforms = uniformsList[gid];
+        uint scoreCount = uniforms.scoreGridWidth * uniforms.scoreGridHeight;
+        float bestScore = FLT_MAX;
+        uint bestIndex = 0;
+        for (uint scoreIndex = 0; scoreIndex < scoreCount; scoreIndex += 1) {
+            uint total = 0;
+            uint count = 0;
+            uint base = ((gid * scoreCount) + scoreIndex) * chunkCount;
+            for (uint chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+                total += partialSums[base + chunkIndex];
+                count += partialCounts[base + chunkIndex];
+            }
+            float score = count > 0 ? float(total) / float(count) : FLT_MAX;
+            if (score < bestScore) {
+                bestScore = score;
+                bestIndex = scoreIndex;
             }
         }
-        scores[(gid.y * scoreCount) + gid.x] = count > 0 ? total / float(count) : FLT_MAX;
+        uint gx = bestIndex % uniforms.scoreGridWidth;
+        uint gy = bestIndex / uniforms.scoreGridWidth;
+        results[gid].dx = float(-int(uniforms.radius) + int(gx * uniforms.searchStep));
+        results[gid].dy = float(-int(uniforms.radius) + int(gy * uniforms.searchStep));
+        results[gid].score = bestScore;
+        results[gid].bestIndex = bestIndex;
     }
     """
 }
@@ -771,7 +868,9 @@ func readFrames(
                 sampleWidth: sample.width,
                 sampleHeight: sample.height,
                 outputBuffer: currentFrameSlot.lumaBuffer,
-                scoreBuffer: currentFrameSlot.scoreBuffer,
+                partialSumBuffer: currentFrameSlot.partialSumBuffer,
+                partialCountBuffer: currentFrameSlot.partialCountBuffer,
+                resultBuffer: currentFrameSlot.resultBuffer,
                 previousBuffer: previousLumaBuffer
             )
             pendingFrames.append((encoded: encodedFrame, time: time))
