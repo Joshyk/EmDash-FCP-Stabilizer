@@ -774,31 +774,124 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     )
 }
 
-func readFrames(
-    asset plan: AssetPlan,
-    sampleScalePercent: Double,
-    maxFrames: Int?,
-    progressEnabled: Bool,
-    metalContext: MetalAnalysisContext
-) throws -> PreparedAnalysis {
-    guard plan.mediaKind == "original-media" || plan.mediaKind == "asset-src" else {
-        throw AnalyzerError("analysis requires original media; got \(plan.mediaKind ?? "unknown") for \(plan.name)")
+private struct AnalysisSampleSize {
+    let width: Int
+    let height: Int
+}
+
+private struct FrameReadChunk {
+    let index: Int
+    let totalCount: Int
+    let readStartSeconds: Double?
+    let readEndSeconds: Double?
+    let outputStartSeconds: Double
+    let outputEndSeconds: Double
+    let requiresPreviousFrame: Bool
+    let isLast: Bool
+}
+
+private struct FrameChunkResult {
+    let index: Int
+    let frames: [AnalysisFrame]
+    let motions: [PairMotion]
+}
+
+private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
+    if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_WORKERS"],
+       let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        return max(1, min(12, parsed))
     }
-    let url = URL(fileURLWithPath: plan.mediaPath)
+    if explicitOnly { return 1 }
+    let processorCount = ProcessInfo.processInfo.activeProcessorCount
+    return max(1, min(6, processorCount > 2 ? processorCount - 2 : processorCount))
+}
+
+private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCount: Int) -> Bool {
+    if maxFrames != nil || workerCount <= 1 {
+        return false
+    }
+    if ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_WORKERS"] != nil {
+        return plan.durationSeconds > max(0.5, plan.frameDurationSeconds * 4.0)
+    }
+    return plan.durationSeconds >= 12.0
+}
+
+private func makeFrameReadChunks(durationSeconds: Double, frameDurationSeconds: Double, workerCount: Int) -> [FrameReadChunk] {
+    let boundedDuration = max(frameDurationSeconds, durationSeconds)
+    let chunkCount = max(1, workerCount)
+    let chunkDuration = boundedDuration / Double(chunkCount)
+    let overlapSeconds = max(frameDurationSeconds * 4.0, 0.12)
+    return (0..<chunkCount).map { index in
+        let outputStart = Double(index) * chunkDuration
+        let outputEnd = index == chunkCount - 1 ? boundedDuration : Double(index + 1) * chunkDuration
+        let readStart = index == 0 ? outputStart : max(0.0, outputStart - overlapSeconds)
+        return FrameReadChunk(
+            index: index,
+            totalCount: chunkCount,
+            readStartSeconds: readStart,
+            readEndSeconds: outputEnd,
+            outputStartSeconds: outputStart,
+            outputEndSeconds: outputEnd,
+            requiresPreviousFrame: index > 0,
+            isLast: index == chunkCount - 1
+        )
+    }
+}
+
+private func firstPresentationTimeSeconds(url: URL) throws -> Double {
     let asset = AVURLAsset(url: url)
     guard let track = asset.tracks(withMediaType: .video).first else {
-        throw AnalyzerError("asset had no video track: \(plan.mediaPath)")
+        throw AnalyzerError("asset had no video track: \(url.path)")
     }
-    let transformed = track.naturalSize.applying(track.preferredTransform)
-    let sourceWidth = max(1, Int(abs(transformed.width).rounded()))
-    let sourceHeight = max(1, Int(abs(transformed.height).rounded()))
-    let sample = sampleSize(sourceWidth: sourceWidth, sourceHeight: sourceHeight, scalePercent: sampleScalePercent)
     let reader = try AVAssetReader(asset: asset)
     let output = AVAssetReaderTrackOutput(
         track: track,
-        outputSettings: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-        ]
+        outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+    )
+    output.alwaysCopiesSampleData = false
+    guard reader.canAdd(output) else {
+        throw AnalyzerError("could not add AVAssetReaderTrackOutput")
+    }
+    reader.add(output)
+    guard reader.startReading() else {
+        throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed to start")
+    }
+    guard let sampleBuffer = output.copyNextSampleBuffer() else {
+        throw AnalyzerError("asset had no readable video frames: \(url.path)")
+    }
+    let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+    guard pts.isFinite else {
+        throw AnalyzerError("asset first video frame had non-finite presentation time: \(url.path)")
+    }
+    return pts
+}
+
+private func readFrameChunk(
+    url: URL,
+    planName: String,
+    sample: AnalysisSampleSize,
+    chunk: FrameReadChunk,
+    basePresentationTimeSeconds: Double?,
+    maxFrames: Int?,
+    progressEnabled: Bool,
+    progressEvery: Int,
+    metalContext: MetalAnalysisContext
+) throws -> FrameChunkResult {
+    let asset = AVURLAsset(url: url)
+    guard let track = asset.tracks(withMediaType: .video).first else {
+        throw AnalyzerError("asset had no video track: \(url.path)")
+    }
+    let reader = try AVAssetReader(asset: asset)
+    if let readStartSeconds = chunk.readStartSeconds,
+       let readEndSeconds = chunk.readEndSeconds {
+        let baseSeconds = basePresentationTimeSeconds ?? 0.0
+        let start = CMTime(seconds: baseSeconds + readStartSeconds, preferredTimescale: 600_000)
+        let duration = CMTime(seconds: max(0.0, readEndSeconds - readStartSeconds), preferredTimescale: 600_000)
+        reader.timeRange = CMTimeRange(start: start, duration: duration)
+    }
+    let output = AVAssetReaderTrackOutput(
+        track: track,
+        outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
     )
     output.alwaysCopiesSampleData = false
     guard reader.canAdd(output) else {
@@ -817,13 +910,24 @@ func readFrames(
     }
     var currentFrameSlotIndex = 0
     var previousLumaBuffer: MTLBuffer?
-    var firstPTS: Double?
-    var pendingFrames: [(encoded: MetalEncodedFrame, time: Double)] = []
+    var firstPTS = basePresentationTimeSeconds
+    var sawOutputFrame = false
+    let frameTimeEpsilon = 1.0 / 600_000.0
+    var pendingFrames: [(encoded: MetalEncodedFrame, time: Double, shouldOutput: Bool)] = []
     pendingFrames.reserveCapacity(inFlightLimit)
+
+    func pendingOutputFrameCount() -> Int {
+        pendingFrames.reduce(0) { count, pending in
+            count + (pending.shouldOutput ? 1 : 0)
+        }
+    }
 
     func finishOldestPendingFrame() throws {
         let pending = pendingFrames.removeFirst()
         let frameAnalysis = try metalContext.completeFrame(pending.encoded, pixelCount: pixelCount)
+        guard pending.shouldOutput else {
+            return
+        }
         let pixels = frameAnalysis.pixels
         let frame = AnalysisFrame(
             time: pending.time,
@@ -835,8 +939,8 @@ func readFrames(
         )
         motions.append(frameAnalysis.motion ?? PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
         frames.append(frame)
-        if frames.count % 30 == 0 {
-            progress(progressEnabled, "analyzed \(frames.count) frame(s) for \(plan.name)")
+        if progressEvery > 0 && frames.count % progressEvery == 0 {
+            progress(progressEnabled, "analyzed \(frames.count) frame(s) for \(planName)")
         }
     }
 
@@ -848,7 +952,7 @@ func readFrames(
             guard let sampleBuffer = output.copyNextSampleBuffer() else {
                 return false
             }
-            if let maxFrames, frames.count + pendingFrames.count >= maxFrames {
+            if let maxFrames, frames.count + pendingOutputFrameCount() >= maxFrames {
                 return false
             }
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
@@ -862,6 +966,14 @@ func readFrames(
                 firstPTS = pts
             }
             let time = max(0, pts - (firstPTS ?? pts))
+            if !chunk.isLast && time >= chunk.outputEndSeconds - frameTimeEpsilon {
+                return false
+            }
+            let shouldOutput = time + frameTimeEpsilon >= chunk.outputStartSeconds
+                && (chunk.isLast || time < chunk.outputEndSeconds - frameTimeEpsilon)
+            if shouldOutput && chunk.requiresPreviousFrame && !sawOutputFrame && previousLumaBuffer == nil {
+                throw AnalyzerError("parallel reader chunk \(chunk.index + 1) for \(planName) did not receive the required overlap frame")
+            }
             let currentFrameSlot = frameSlots[currentFrameSlotIndex]
             let encodedFrame = try metalContext.encodeFrame(
                 from: pixelBuffer,
@@ -871,14 +983,20 @@ func readFrames(
                 partialSumBuffer: currentFrameSlot.partialSumBuffer,
                 partialCountBuffer: currentFrameSlot.partialCountBuffer,
                 resultBuffer: currentFrameSlot.resultBuffer,
-                previousBuffer: previousLumaBuffer
+                previousBuffer: shouldOutput ? previousLumaBuffer : nil
             )
-            pendingFrames.append((encoded: encodedFrame, time: time))
+            pendingFrames.append((encoded: encodedFrame, time: time, shouldOutput: shouldOutput))
             previousLumaBuffer = currentFrameSlot.lumaBuffer
             currentFrameSlotIndex = (currentFrameSlotIndex + 1) % frameSlots.count
+            if shouldOutput {
+                sawOutputFrame = true
+            }
             return true
         }
         if !shouldContinue {
+            break
+        }
+        if let maxFrames, frames.count + pendingOutputFrameCount() >= maxFrames {
             break
         }
     }
@@ -888,10 +1006,136 @@ func readFrames(
     if reader.status == .failed {
         throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed")
     }
+    return FrameChunkResult(index: chunk.index, frames: frames, motions: motions)
+}
+
+private func readFramesInParallel(
+    url: URL,
+    plan: AssetPlan,
+    sample: AnalysisSampleSize,
+    workerCount: Int,
+    progressEnabled: Bool
+) throws -> PreparedAnalysis {
+    let chunks = makeFrameReadChunks(
+        durationSeconds: plan.durationSeconds,
+        frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
+        workerCount: workerCount
+    )
+    let basePTS = try firstPresentationTimeSeconds(url: url)
+    progress(progressEnabled, "using \(chunks.count) parallel media reader(s) for \(plan.name)")
+    let resultLock = NSLock()
+    let group = DispatchGroup()
+    var results = Array<FrameChunkResult?>(repeating: nil, count: chunks.count)
+    var firstError: Error?
+    for chunk in chunks {
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            do {
+                let context = try MetalAnalysisContext()
+                let result = try readFrameChunk(
+                    url: url,
+                    planName: plan.name,
+                    sample: sample,
+                    chunk: chunk,
+                    basePresentationTimeSeconds: basePTS,
+                    maxFrames: nil,
+                    progressEnabled: false,
+                    progressEvery: 0,
+                    metalContext: context
+                )
+                resultLock.lock()
+                results[chunk.index] = result
+                resultLock.unlock()
+                progress(progressEnabled, "analyzed chunk \(chunk.index + 1)/\(chunk.totalCount) for \(plan.name) (\(result.frames.count) frame(s))")
+            } catch {
+                resultLock.lock()
+                if firstError == nil {
+                    firstError = error
+                }
+                resultLock.unlock()
+            }
+        }
+    }
+    group.wait()
+    if let firstError {
+        throw firstError
+    }
+    var combinedFrames: [AnalysisFrame] = []
+    var combinedMotions: [PairMotion] = []
+    for index in 0..<results.count {
+        guard let result = results[index] else {
+            throw AnalyzerError("parallel reader chunk \(index + 1) did not produce a result")
+        }
+        combinedFrames.append(contentsOf: result.frames)
+        combinedMotions.append(contentsOf: result.motions)
+    }
+    let ordered = zip(combinedFrames, combinedMotions).sorted { lhs, rhs in
+        lhs.0.time < rhs.0.time
+    }
+    let frames = ordered.map(\.0)
+    let motions = ordered.map(\.1)
     guard frames.count >= 3 else {
         throw AnalyzerError("analysis requires at least 3 frames; got \(frames.count)")
     }
     return try prepare(frames: frames, motions: motions)
+}
+
+func readFrames(
+    asset plan: AssetPlan,
+    sampleScalePercent: Double,
+    maxFrames: Int?,
+    progressEnabled: Bool,
+    metalContext: MetalAnalysisContext
+) throws -> PreparedAnalysis {
+    guard plan.mediaKind == "original-media" || plan.mediaKind == "asset-src" else {
+        throw AnalyzerError("analysis requires original media; got \(plan.mediaKind ?? "unknown") for \(plan.name)")
+    }
+    let url = URL(fileURLWithPath: plan.mediaPath)
+    let asset = AVURLAsset(url: url)
+    guard let track = asset.tracks(withMediaType: .video).first else {
+        throw AnalyzerError("asset had no video track: \(plan.mediaPath)")
+    }
+    let transformed = track.naturalSize.applying(track.preferredTransform)
+    let sourceWidth = max(1, Int(abs(transformed.width).rounded()))
+    let sourceHeight = max(1, Int(abs(transformed.height).rounded()))
+    let size = sampleSize(sourceWidth: sourceWidth, sourceHeight: sourceHeight, scalePercent: sampleScalePercent)
+    let sample = AnalysisSampleSize(width: size.width, height: size.height)
+    let workerCount = analyzerWorkerCount()
+    if shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, workerCount: workerCount) {
+        return try readFramesInParallel(
+            url: url,
+            plan: plan,
+            sample: sample,
+            workerCount: workerCount,
+            progressEnabled: progressEnabled
+        )
+    }
+    let serialChunk = FrameReadChunk(
+        index: 0,
+        totalCount: 1,
+        readStartSeconds: nil,
+        readEndSeconds: nil,
+        outputStartSeconds: 0.0,
+        outputEndSeconds: Double.greatestFiniteMagnitude,
+        requiresPreviousFrame: false,
+        isLast: true
+    )
+    let result = try readFrameChunk(
+        url: url,
+        planName: plan.name,
+        sample: sample,
+        chunk: serialChunk,
+        basePresentationTimeSeconds: nil,
+        maxFrames: maxFrames,
+        progressEnabled: progressEnabled,
+        progressEvery: 30,
+        metalContext: metalContext
+    )
+    guard result.frames.count >= 3 else {
+        throw AnalyzerError("analysis requires at least 3 frames; got \(result.frames.count)")
+    }
+    return try prepare(frames: result.frames, motions: result.motions)
 }
 
 func timeKey(_ seconds: Double) -> Int64 {
