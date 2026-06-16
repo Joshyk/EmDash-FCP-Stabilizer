@@ -37,11 +37,13 @@ frame slots per active asset; if a Metal device, command queue, or kernel
 dispatch is unavailable, analysis fails visibly instead of falling back to CPU
 motion search. Selected assets remain strictly serial: the analyzer finishes
 one asset before starting the next. Inside that one active asset, media reader
-lanes are used to keep the GPU fed without overloading AVFoundation decode or
-Metal heap allocation. Each active asset defaults to a balanced reader lane
-count derived from the Mac's active processor count instead of blindly using
-every CPU thread. GPU in-flight frame slots are budgeted across the active
-asset's reader lanes from the Mac's active processor count and physical memory.
+lanes are used to keep the GPU fed without overloading AVFoundation decode,
+source texture retention, or Metal heap allocation. Each active asset defaults
+to a memory-aware reader lane count derived from the Mac's active processor
+count and physical memory instead of blindly using every CPU thread. 16 GB
+machines default to fewer lanes and fewer in-flight source frames so analysis
+avoids swap. GPU in-flight frame slots are budgeted across the active asset's
+reader lanes from the Mac's active processor count and physical memory.
 `STABILIZER_ANALYZER_WORKERS` can request an explicit reader lane count, capped
 at the Mac's active processor count. `STABILIZER_ANALYZER_IN_FLIGHT` can tune
 the per-lane GPU frame slot count, capped by the current frame size and

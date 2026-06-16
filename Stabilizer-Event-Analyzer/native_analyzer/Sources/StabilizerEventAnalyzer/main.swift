@@ -521,7 +521,6 @@ private struct MetalFrameSlot {
 
 private struct MetalEncodedFrame {
     let commandBuffer: MTLCommandBuffer
-    let texture: CVMetalTexture
     let outputBuffer: MTLBuffer
     let resultBuffer: MTLBuffer?
     let motionWorkspace: MetalMotionWorkspace?
@@ -719,7 +718,6 @@ final class MetalAnalysisContext {
         commandBuffer.commit()
         return MetalEncodedFrame(
             commandBuffer: commandBuffer,
-            texture: cvTexture,
             outputBuffer: outputBuffer,
             resultBuffer: previousBuffer == nil ? nil : resultBuffer,
             motionWorkspace: activeMotionWorkspace
@@ -970,6 +968,10 @@ private func analyzerOfferedProcessorCount() -> Int {
     max(1, ProcessInfo.processInfo.activeProcessorCount)
 }
 
+private func analyzerPhysicalMemoryGB() -> UInt64 {
+    max(1, ProcessInfo.processInfo.physicalMemory / 1_073_741_824)
+}
+
 private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
     let offeredProcessorCount = analyzerOfferedProcessorCount()
     if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_WORKERS"],
@@ -977,22 +979,32 @@ private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
         return max(1, min(offeredProcessorCount, parsed))
     }
     if explicitOnly { return 1 }
-    return max(1, min(8, max(1, offeredProcessorCount / 2)))
+    let memoryGB = analyzerPhysicalMemoryGB()
+    if memoryGB <= 18 {
+        return max(1, min(2, offeredProcessorCount))
+    }
+    if memoryGB <= 36 {
+        return max(1, min(4, max(1, offeredProcessorCount / 2)))
+    }
+    return max(1, min(6, max(1, offeredProcessorCount / 2)))
 }
 
 private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int {
     let laneCount = max(1, readerLaneCount)
     let bytesPerFrameSlot = max(4 * 1024 * 1024, pixelCount * 6)
-    let memoryBudget = max(bytesPerFrameSlot * 4, Int(ProcessInfo.processInfo.physicalMemory / 8))
-    let memoryLimitedTotalSlotCount = max(laneCount * 4, memoryBudget / bytesPerFrameSlot)
-    let memoryLimitedSlotCountPerLane = max(4, memoryLimitedTotalSlotCount / laneCount)
+    let memoryGB = analyzerPhysicalMemoryGB()
+    let memoryDivisor: UInt64 = memoryGB <= 18 ? 24 : 16
+    let memoryBudget = max(bytesPerFrameSlot * laneCount * 2, Int(ProcessInfo.processInfo.physicalMemory / memoryDivisor))
+    let memoryLimitedTotalSlotCount = max(laneCount * 2, memoryBudget / bytesPerFrameSlot)
+    let memoryLimitedSlotCountPerLane = max(2, memoryLimitedTotalSlotCount / laneCount)
     if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_IN_FLIGHT"],
        let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        return max(4, min(memoryLimitedSlotCountPerLane, parsed))
+        return max(2, min(memoryLimitedSlotCountPerLane, parsed))
     }
-    let gpuBalancedTotalSlotCount = max(laneCount * 4, analyzerOfferedProcessorCount() * 6)
+    let defaultSlotCountPerLane = memoryGB <= 18 ? 4 : 6
+    let gpuBalancedTotalSlotCount = laneCount * defaultSlotCountPerLane
     let totalSlotCount = min(memoryLimitedTotalSlotCount, gpuBalancedTotalSlotCount)
-    return max(4, totalSlotCount / laneCount)
+    return max(2, totalSlotCount / laneCount)
 }
 
 private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCount: Int) -> Bool {
@@ -1274,6 +1286,11 @@ private func readFramesInParallel(
     progressReporter.finish()
     var combinedFrames: [AnalysisFrame] = []
     var combinedMotions: [PairMotion] = []
+    let combinedCapacity = results.reduce(0) { total, result in
+        total + (result?.frames.count ?? 0)
+    }
+    combinedFrames.reserveCapacity(combinedCapacity)
+    combinedMotions.reserveCapacity(combinedCapacity)
     for index in 0..<results.count {
         guard let result = results[index] else {
             throw AnalyzerError("parallel reader chunk \(index + 1) did not produce a result")
@@ -1281,15 +1298,10 @@ private func readFramesInParallel(
         combinedFrames.append(contentsOf: result.frames)
         combinedMotions.append(contentsOf: result.motions)
     }
-    let ordered = zip(combinedFrames, combinedMotions).sorted { lhs, rhs in
-        lhs.0.time < rhs.0.time
+    guard combinedFrames.count >= 3 else {
+        throw AnalyzerError("analysis requires at least 3 frames; got \(combinedFrames.count)")
     }
-    let frames = ordered.map(\.0)
-    let motions = ordered.map(\.1)
-    guard frames.count >= 3 else {
-        throw AnalyzerError("analysis requires at least 3 frames; got \(frames.count)")
-    }
-    return try prepare(frames: frames, motions: motions)
+    return try prepare(frames: combinedFrames, motions: combinedMotions)
 }
 
 func readFrames(
