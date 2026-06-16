@@ -228,14 +228,14 @@ fallbacks.
   `Reanalyze Host Analysis` stay pressable so skipped or failed starts report their reason
   in `Host Analysis Status`; they are the only paths that request Host Analysis from Final Cut Pro.
   A selected `Sample Size` without a matching completed analysis is reported as needing
-  analysis for that sample, while a source-relative nonzero input start, an effect-baseline
-  range mismatch, or a range-mismatched persisted analysis reports the trimmed block and
-  does not start or reanalyze. FxPlug does not expose the original media file duration or
-  URL for a direct tail/source-duration check, so a new analysis with no reusable persisted
-  analysis first shows `Start Not Started - Confirm Whole Clip`; press Start again only
-  when the effect is on the untrimmed full clip. An existing effect seals its first observed
-  non-head-trimmed input range in hidden parameter `33`; FCP copies that hidden baseline
-  when the effect is trimmed or cut. Concurrent analyzer callbacks
+  analysis for that sample, while an effect-baseline range mismatch or a range-mismatched
+  persisted analysis reports the trimmed block and does not start or reanalyze. FxPlug does
+  not expose the original media file duration or URL for a direct source-duration check,
+  and Final Cut Pro can report nonzero input starts for synchronized/native-time clips, so
+  a new analysis with no reusable persisted analysis first shows `Start Not Started -
+  Confirm Whole Clip`; press Start again only when the effect is on the untrimmed full
+  clip. An existing effect seals its first observed input range in hidden parameter `33`;
+  FCP copies that hidden baseline when the effect is trimmed or cut. Concurrent analyzer callbacks
   are routed through a process-wide session registry with per-clip in-progress stores; if a
   callback cannot be assigned unambiguously, the plug-in fails visibly instead of mixing
   frames between clips.
@@ -256,9 +256,8 @@ fallbacks.
   stays actionable as `Ready (...) - Original Media Required to Start Analysis`. Range
   mismatches from stale persisted analysis candidates show `Persisted Analysis Range Mismatch - Run Host Analysis`;
   this does not disable `Start Host Analysis`, but pressing Start/Reanalyze reports the
-  trimmed block and does not request Host Analysis. The same source-relative start and
-  hidden baseline range checks also run before analyzer setup accepts a Host Analysis
-  session. Start/Reanalyze button state is refreshed when
+  trimmed block and does not request Host Analysis. The same hidden baseline range check
+  also runs before analyzer setup accepts a Host Analysis session. Start/Reanalyze button state is refreshed when
   the input range changes and periodically from plugin-state/render callbacks, so trimming
   or expanding the timeline clip does not leave stale button flags behind.
 - `Sample Info`: read-only Inspector row showing the accepted sample percentage, actual
@@ -449,11 +448,11 @@ FxPlug.
   motion paths. If Final Cut Pro reports a render/timeline range that differs from the saved
   source analysis range, the effect accepts that active persisted analysis only after the current
   source-frame fingerprint validates against the saved frame set. Start/Reanalyze refuse a
-  source-relative nonzero input start, or a changed duration/source range when it differs
-  from the effect's hidden baseline range or saved persisted-analysis identity, so analysis
-  is not started for the wrong duration after an already-applied effect is trimmed or cut.
-  Tail-only first-use cases are handled by the whole-clip confirmation UX because FxPlug
-  does not expose the source duration needed for a direct comparison.
+  changed duration/source range when it differs from the effect's hidden baseline range or
+  saved persisted-analysis identity, so analysis is not started for the wrong duration after
+  an already-applied effect is trimmed or cut. First-use trim uncertainty is handled by the
+  whole-clip confirmation UX because FxPlug does not expose the source duration needed for a
+  direct comparison.
 
 ## Host Analysis Persisted Analysis
 

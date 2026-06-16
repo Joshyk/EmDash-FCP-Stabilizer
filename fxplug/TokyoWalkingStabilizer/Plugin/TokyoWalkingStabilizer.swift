@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.152"
+private let tokyoWalkingStabilizerVersion = "0.3.153"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let hostAnalysisControlRefreshIntervalSeconds = 0.5
 private let hostAnalysisStartConfirmationWindowSeconds = 8.0
@@ -227,24 +227,6 @@ struct HostAnalysisExpectedRange {
         startSeconds.isFinite
             && durationSeconds.isFinite
             && durationSeconds > 0.0
-    }
-
-    var trimStartToleranceSeconds: Double {
-        guard frameDurationSeconds.isFinite,
-              frameDurationSeconds > 0.0
-        else {
-            return 0.001
-        }
-        return max(0.001, frameDurationSeconds * 0.5)
-    }
-
-    var trimmedInputStartSeconds: Double? {
-        guard startSeconds.isFinite,
-              startSeconds > trimStartToleranceSeconds
-        else {
-            return nil
-        }
-        return startSeconds
     }
 
     var interactionSignature: String {
@@ -1205,16 +1187,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
               expectedRange.isValid
         else {
             return true
-        }
-        if let trimmedInputStartSeconds = expectedRange.trimmedInputStartSeconds {
-            markHostAnalysisActionBlockedForTrimmedClip(
-                actionName: actionName,
-                expectedRange: expectedRange,
-                analysisRange: nil,
-                analysisDescription: "current input range",
-                reason: String(format: "input range starts %.3fs after source clip start", trimmedInputStartSeconds)
-            )
-            return false
         }
         if let activeRange = hostAnalysisStore.activeExpectedRange,
            !Self.analysisRange(activeRange, matches: expectedRange) {
@@ -2684,10 +2656,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return
         }
-        guard expectedRange.trimmedInputStartSeconds == nil else {
-            return
-        }
-
         let newRangeSeal = HostAnalysisRangeSeal(expectedRange: expectedRange)
         let cacheIdentityToPublish: String?
         let didSealRange: Bool
@@ -4651,19 +4619,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             frameDurationSeconds: CMTimeGetSeconds(frameDuration),
             timelineInputStartSeconds: currentTimelineInputStartSeconds()
         )
-        if expectedRange.isValid,
-           let trimmedInputStartSeconds = expectedRange.trimmedInputStartSeconds {
-            let reason = String(format: "input range starts %.3fs after source clip start", trimmedInputStartSeconds)
-            Self.releaseHostAnalysisStartReservation()
-            markHostAnalysisActionBlockedForTrimmedClip(
-                actionName: "Host Analysis",
-                expectedRange: expectedRange,
-                analysisRange: nil,
-                analysisDescription: "current input range",
-                reason: reason
-            )
-            throw hostAnalysisRoutingError("Host Analysis refused trimmed input range before setup: \(reason).")
-        }
         ensureHostAnalysisRangeSeal(expectedRange: expectedRange.isValid ? expectedRange : nil)
         if let rangeSeal = currentHostAnalysisRangeSeal(),
            !rangeSeal.matches(expectedRange.isValid ? expectedRange : nil) {
