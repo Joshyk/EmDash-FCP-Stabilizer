@@ -40,9 +40,10 @@ npm start
 
 Then open `http://127.0.0.1:3091`.
 
-`Debug Preset` reloads the last used FCPXMLD/Info.fcpxml path and reselects the
-same Event media clips from browser-local storage. It does not open the macOS
-file picker and does not write any shared fallback cache.
+`Last Analysis` reloads the exact FCPXMLD/Info.fcpxml path, selected Event media
+clips, Imports folder, sample size, and debug frame limit from the most recent
+analysis run. It does not open the macOS file picker and does not write any
+shared fallback cache.
 
 ## Imports
 

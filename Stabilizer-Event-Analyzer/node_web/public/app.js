@@ -1,6 +1,6 @@
 "use strict";
 
-const DEBUG_PRESET_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.debugPreset.v1";
+const LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v1";
 
 const state = {
   config: null,
@@ -17,7 +17,7 @@ const el = {
   configText: document.getElementById("configText"),
   versionText: document.getElementById("versionText"),
   selectExportFilesButton: document.getElementById("selectExportFilesButton"),
-  debugPresetButton: document.getElementById("debugPresetButton"),
+  lastAnalysisButton: document.getElementById("lastAnalysisButton"),
   exportsList: document.getElementById("exportsList"),
   sourcePathInput: document.getElementById("sourcePathInput"),
   loadAssetsButton: document.getElementById("loadAssetsButton"),
@@ -63,9 +63,9 @@ function setStatus(message, kind = "") {
   el.statusBox.textContent = message;
 }
 
-function readDebugPreset() {
+function readLastAnalysisSettings() {
   try {
-    const text = window.localStorage.getItem(DEBUG_PRESET_STORAGE_KEY);
+    const text = window.localStorage.getItem(LAST_ANALYSIS_STORAGE_KEY);
     if (!text) return null;
     const preset = JSON.parse(text);
     if (!preset || preset.version !== 1 || !preset.sourcePath) return null;
@@ -75,12 +75,12 @@ function readDebugPreset() {
   }
 }
 
-function updateDebugPresetState() {
-  const preset = readDebugPreset();
-  el.debugPresetButton.disabled = !preset;
-  el.debugPresetButton.title = preset
+function updateLastAnalysisState() {
+  const preset = readLastAnalysisSettings();
+  el.lastAnalysisButton.disabled = !preset;
+  el.lastAnalysisButton.title = preset
     ? `Load ${preset.sourcePath}`
-    : "Run or select clips once to create a debug preset";
+    : "Run analysis once to create a Last Analysis setting";
 }
 
 function exportKindForPath(sourcePath) {
@@ -126,10 +126,12 @@ function setImportsDirForSource(sourcePath, sourceItem = null) {
   updateRunState();
 }
 
-function saveDebugPreset() {
-  const sourcePath = state.sourcePath || el.sourcePathInput.value.trim();
-  const assetIds = Array.from(state.selectedAssetIds);
-  const importsDir = el.cacheRootInput.value.trim();
+function saveLastAnalysisSettings(settings = null) {
+  const sourcePath = (settings && settings.sourcePath) || state.sourcePath || el.sourcePathInput.value.trim();
+  const assetIds = settings && Array.isArray(settings.assetIds)
+    ? settings.assetIds
+    : Array.from(state.selectedAssetIds);
+  const importsDir = (settings && settings.importsDir) || el.cacheRootInput.value.trim();
   if (!sourcePath || !assetIds.length) return;
   const preset = {
     version: 1,
@@ -138,15 +140,15 @@ function saveDebugPreset() {
     assetIds,
     importsDir,
     cacheRoot: importsDir,
-    sampleScalePercent: Number(el.sampleScaleInput.value),
-    maxFrames: el.maxFramesInput.value ? Number(el.maxFramesInput.value) : null,
+    sampleScalePercent: settings ? settings.sampleScalePercent : Number(el.sampleScaleInput.value),
+    maxFrames: settings ? settings.maxFrames : (el.maxFramesInput.value ? Number(el.maxFramesInput.value) : null),
     savedAt: Date.now(),
   };
   try {
-    window.localStorage.setItem(DEBUG_PRESET_STORAGE_KEY, JSON.stringify(preset));
-    updateDebugPresetState();
+    window.localStorage.setItem(LAST_ANALYSIS_STORAGE_KEY, JSON.stringify(preset));
+    updateLastAnalysisState();
   } catch {
-    setStatus("Debug preset could not be saved in this browser.", "error");
+    setStatus("Last analysis could not be saved in this browser.", "error");
   }
 }
 
@@ -223,7 +225,6 @@ function renderAssets() {
         state.selectedAssetIds.delete(asset.assetId);
       }
       renderAssets();
-      saveDebugPreset();
     });
     row.addEventListener("click", (event) => {
       if (event.target !== checkbox && asset.supported) {
@@ -233,7 +234,6 @@ function renderAssets() {
           state.selectedAssetIds.add(asset.assetId);
         }
         renderAssets();
-        saveDebugPreset();
       }
     });
     el.assetsBody.appendChild(row);
@@ -254,7 +254,7 @@ async function loadConfig() {
   el.sampleScaleInput.value = String(state.config.defaultSampleScalePercent || 100);
   el.configText.textContent = "Imports: same folder as selected export";
   renderExports([]);
-  updateDebugPresetState();
+  updateLastAnalysisState();
   updateRunState();
 }
 
@@ -322,16 +322,16 @@ async function loadAssets() {
   }
 }
 
-async function applyDebugPreset() {
-  const preset = readDebugPreset();
+async function applyLastAnalysis() {
+  const preset = readLastAnalysisSettings();
   if (!preset || !preset.sourcePath) {
-    setStatus("No debug preset saved yet.", "error");
-    updateDebugPresetState();
+    setStatus("No last analysis saved yet.", "error");
+    updateLastAnalysisState();
     return;
   }
   const assetIds = Array.isArray(preset.assetIds) ? preset.assetIds.filter(Boolean) : [];
   if (!assetIds.length) {
-    setStatus("Debug preset has no saved clip selection.", "error");
+    setStatus("Last analysis has no saved clip selection.", "error");
     return;
   }
   const savedItem = preset.sourceItem && preset.sourceItem.path === preset.sourcePath
@@ -348,15 +348,14 @@ async function applyDebugPreset() {
   el.cacheRootInput.value = preset.importsDir || preset.cacheRoot || defaultImportsDirForSource(preset.sourcePath);
   if (preset.sampleScalePercent) el.sampleScaleInput.value = String(preset.sampleScalePercent);
   el.maxFramesInput.value = preset.maxFrames ? String(preset.maxFrames) : "";
-  setStatus("Loading debug preset...");
+  setStatus("Loading last analysis...");
   await loadAssets();
   const selectedCount = state.selectedAssetIds.size;
   if (selectedCount === 0) {
-    setStatus("Debug preset loaded, but none of the saved clips matched this export.", "error");
+    setStatus("Last analysis loaded, but none of the saved clips matched this export.", "error");
     return;
   }
-  setStatus(`Debug preset loaded: ${selectedCount} clip(s) selected.`, "ok");
-  saveDebugPreset();
+  setStatus(`Last analysis loaded: ${selectedCount} clip(s) selected.`, "ok");
 }
 
 async function selectCacheRoot() {
@@ -365,7 +364,7 @@ async function selectCacheRoot() {
     method: "POST",
   });
   if (!payload.item) {
-    setStatus("No Event folder selected.");
+    setStatus("No Imports folder selected.");
     return;
   }
   el.cacheRootInput.value = payload.item.path;
@@ -387,10 +386,11 @@ function runBody() {
 }
 
 async function runAnalysis() {
-  saveDebugPreset();
+  const body = runBody();
   setStatus("Queueing serial analysis...");
   el.resultActions.classList.add("hidden");
-  const payload = await api("/api/run", { method: "POST", body: runBody() });
+  const payload = await api("/api/run", { method: "POST", body });
+  saveLastAnalysisSettings(body);
   state.currentJobId = payload.job.id;
   el.runButton.disabled = true;
   el.cancelButton.classList.remove("hidden");
@@ -442,7 +442,7 @@ async function openPath(pathValue) {
 }
 
 el.selectExportFilesButton.addEventListener("click", () => selectExportFiles().catch((error) => setStatus(error.message, "error")));
-el.debugPresetButton.addEventListener("click", () => applyDebugPreset().catch((error) => setStatus(error.message, "error")));
+el.lastAnalysisButton.addEventListener("click", () => applyLastAnalysis().catch((error) => setStatus(error.message, "error")));
 el.selectCacheRootButton.addEventListener("click", () => selectCacheRoot().catch((error) => setStatus(error.message, "error")));
 el.loadAssetsButton.addEventListener("click", loadAssets);
 el.selectAllButton.addEventListener("click", () => {
@@ -450,7 +450,6 @@ el.selectAllButton.addEventListener("click", () => {
     if (asset.supported) state.selectedAssetIds.add(asset.assetId);
   }
   renderAssets();
-  saveDebugPreset();
 });
 el.clearSelectionButton.addEventListener("click", () => {
   state.selectedAssetIds.clear();
