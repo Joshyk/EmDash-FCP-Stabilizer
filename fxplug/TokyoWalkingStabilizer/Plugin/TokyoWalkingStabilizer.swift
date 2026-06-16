@@ -19,7 +19,7 @@ private enum ParameterID: UInt32 {
     case yStrength = 18
     case sampleScale = 19
     case renderRevision = 20
-    case updatePersistedAnalysis = 21
+    case reanalyzeHostAnalysis = 21
     case panStabilizationStrength = 23
     case edgeDisplayMode = 27
     case farFieldWarpStrength = 28
@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.145"
+private let tokyoWalkingStabilizerVersion = "0.3.146"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let hostAnalysisControlRefreshIntervalSeconds = 0.5
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
@@ -532,7 +532,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedQueueInfo = ""
     private var lastPublishedRenderRevision: Double?
     private var lastPublishedStartHostAnalysisButtonEnabled: Bool?
-    private var lastPublishedUpdatePersistedAnalysisButtonEnabled: Bool?
+    private var lastPublishedReanalyzeHostAnalysisButtonEnabled: Bool?
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastHostAnalysisControlRangeSignature = ""
     private var lastHostAnalysisControlRefreshTime = 0.0
@@ -750,10 +750,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         paramAPI.addPushButton(
-            withName: "Update Persisted Analysis",
-            parameterID: ParameterID.updatePersistedAnalysis.rawValue,
-            selector: #selector(updatePersistedAnalysis),
-            parameterFlags: FxParameterFlags(kFxParameterFlag_DEFAULT | kFxParameterFlag_DISABLED)
+            withName: "Reanalyze Host Analysis",
+            parameterID: ParameterID.reanalyzeHostAnalysis.rawValue,
+            selector: #selector(reanalyzeHostAnalysis),
+            parameterFlags: flags
         )
         paramAPI.addStringParameter(
             withName: "Host Analysis Status",
@@ -965,37 +965,21 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    @objc(updatePersistedAnalysis)
-    func updatePersistedAnalysis() {
-        guard let updateSummary = hostAnalysisStore.persistedAnalysisUpdateSummary else {
-            os_log("Update Persisted Analysis pressed without an active older persisted analysis.", log: stabilizerHostAnalysisLog, type: .default)
-            publishHostAnalysisStatus(force: true)
-            publishStabilizerInfo(force: true)
-            return
-        }
-        guard confirmPersistedAnalysisUpdate(summary: updateSummary) else {
-            os_log("Update Persisted Analysis cancelled by user.", log: stabilizerHostAnalysisLog, type: .default)
-            return
-        }
-
+    @objc(reanalyzeHostAnalysis)
+    func reanalyzeHostAnalysis() {
         let expectedRange = currentInputRange()
-        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "update-persisted-button", force: true)
+        refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "reanalyze-button", force: true)
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
-        os_log(
-            "Update Persisted Analysis confirmed for %{public}@.",
-            log: stabilizerHostAnalysisLog,
-            type: .default,
-            updateSummary
-        )
-        NSLog("TokyoWalkingStabilizer: Update Persisted Analysis confirmed for \(updateSummary).")
+        os_log("Reanalyze Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
+        NSLog("TokyoWalkingStabilizer: Reanalyze Host Analysis requested.")
         publishHostAnalysisCacheIdentity(nil, force: true)
         hostAnalysisStore.reset()
-        publishHostAnalysisStatus(force: true, statusOverride: "Update Requested")
+        publishHostAnalysisStatus(force: true, statusOverride: "Reanalysis Requested")
         publishStabilizerInfo(force: true)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
-        if !configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
-            os_log("Update preflight could not resolve Event persisted analysis root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
-            NSLog("TokyoWalkingStabilizer: Update Persisted Analysis could not preflight the Event persisted analysis root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
+        if !configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange) {
+            os_log("Reanalysis preflight could not resolve Event persisted analysis root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
+            NSLog("TokyoWalkingStabilizer: Reanalyze Host Analysis could not preflight the Event persisted analysis root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
         }
         requestHostAnalysisIfNeeded(force: true, acceptedSampleScalePercentOverride: requestedSamplePercent)
     }
@@ -1754,15 +1738,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     ) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
         let startHostAnalysisButtonEnabled = canStartHostAnalysisOverride ?? hostAnalysisStore.canStartHostAnalysis
-        let updatePersistedAnalysisButtonEnabled = hostAnalysisStore.persistedAnalysisUpdateSummary != nil
+        let reanalyzeHostAnalysisButtonEnabled = startHostAnalysisButtonEnabled
         statusLock.lock()
         let shouldPublishStatus = force || status != lastPublishedStatus
         let shouldPublishStartHostAnalysisButton = force
             || lastPublishedStartHostAnalysisButtonEnabled != startHostAnalysisButtonEnabled
-        let shouldPublishUpdatePersistedAnalysisButton = force
-            || lastPublishedUpdatePersistedAnalysisButtonEnabled != updatePersistedAnalysisButtonEnabled
+        let shouldPublishReanalyzeHostAnalysisButton = force
+            || lastPublishedReanalyzeHostAnalysisButtonEnabled != reanalyzeHostAnalysisButtonEnabled
         statusLock.unlock()
-        guard shouldPublishStatus || shouldPublishStartHostAnalysisButton || shouldPublishUpdatePersistedAnalysisButton,
+        guard shouldPublishStatus || shouldPublishStartHostAnalysisButton || shouldPublishReanalyzeHostAnalysisButton,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
@@ -1778,8 +1762,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if shouldPublishStartHostAnalysisButton {
             publishStartHostAnalysisButtonEnabled(startHostAnalysisButtonEnabled, settingAPI: settingAPI)
         }
-        if shouldPublishUpdatePersistedAnalysisButton {
-            publishUpdatePersistedAnalysisButtonEnabled(updatePersistedAnalysisButtonEnabled, settingAPI: settingAPI)
+        if shouldPublishReanalyzeHostAnalysisButton {
+            publishReanalyzeHostAnalysisButtonEnabled(reanalyzeHostAnalysisButtonEnabled, settingAPI: settingAPI)
         }
     }
 
@@ -1801,10 +1785,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             lastHostAnalysisControlRangeSignature = rangeSignature
             lastPublishedStatus = ""
             lastPublishedStartHostAnalysisButtonEnabled = nil
-            lastPublishedUpdatePersistedAnalysisButtonEnabled = nil
+            lastPublishedReanalyzeHostAnalysisButtonEnabled = nil
         } else if force {
             lastPublishedStartHostAnalysisButtonEnabled = nil
-            lastPublishedUpdatePersistedAnalysisButtonEnabled = nil
+            lastPublishedReanalyzeHostAnalysisButtonEnabled = nil
         }
         statusLock.unlock()
 
@@ -1833,35 +1817,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private func publishUpdatePersistedAnalysisButtonEnabled(
+    private func publishReanalyzeHostAnalysisButtonEnabled(
         _ enabled: Bool,
         settingAPI: FxParameterSettingAPI_v5
     ) {
         let flags = enabled
             ? FxParameterFlags(kFxParameterFlag_DEFAULT)
             : FxParameterFlags(kFxParameterFlag_DEFAULT | kFxParameterFlag_DISABLED)
-        if settingAPI.setParameterFlags(flags, toParameter: ParameterID.updatePersistedAnalysis.rawValue) {
+        if settingAPI.setParameterFlags(flags, toParameter: ParameterID.reanalyzeHostAnalysis.rawValue) {
             statusLock.lock()
-            lastPublishedUpdatePersistedAnalysisButtonEnabled = enabled
+            lastPublishedReanalyzeHostAnalysisButtonEnabled = enabled
             statusLock.unlock()
         } else {
-            NSLog("TokyoWalkingStabilizer: failed to update Update Persisted Analysis enabled state to \(enabled).")
+            NSLog("TokyoWalkingStabilizer: failed to update Reanalyze Host Analysis enabled state to \(enabled).")
         }
-    }
-
-    private func confirmPersistedAnalysisUpdate(summary: String) -> Bool {
-        if !Thread.isMainThread {
-            return DispatchQueue.main.sync {
-                confirmPersistedAnalysisUpdate(summary: summary)
-            }
-        }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Update Persisted Analysis?"
-        alert.informativeText = "This will run Host Analysis again and save a new persisted analysis using the current schema. The older persisted analysis file will remain on disk.\n\n\(summary)"
-        alert.addButton(withTitle: "Update")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func publishStabilizerInfo(

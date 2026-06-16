@@ -37,12 +37,12 @@ black outside-source pixels. `Edge Display Mode` defaults to `Black Outside`.
 2. Keep the default `100%` `Sample Size` for full source detail, or choose a
    smaller sample before starting analysis when you want a quicker debug pass.
 3. Click `Start Host Analysis`.
-4. If `Update Persisted Analysis` is enabled for a loaded older-schema file, confirm the
-   alert only when you want to re-run analysis and save a new persisted analysis.
+4. Click `Reanalyze Host Analysis` when you explicitly want to ignore the currently loaded
+   persisted analysis and run Host Analysis again.
 5. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 6. Tune the strength controls while watching the preview.
 
-`Start Host Analysis` is the only path that asks Final Cut Pro to analyze the
+`Start Host Analysis` and `Reanalyze Host Analysis` are the only paths that ask Final Cut Pro to analyze the
 clip. Preview and render callbacks only read completed analysis or a validated
 persisted analysis; they do not start analysis on their own.
 
@@ -253,7 +253,7 @@ Trimmed clips are handled by matching the current render frame fingerprint back
 to the analyzed frame set and applying that time offset before sampling the
 prepared motion paths. A trimmed timeline range does not block `Start Host
 Analysis`; stale range-mismatched persisted analyses show `Persisted Analysis Range Mismatch - Run Host
-Analysis` and can be replaced by running analysis again. Start/Update button flags are
+Analysis` and can be replaced by running analysis again. Start/Reanalyze button flags are
 refreshed when the input range changes and periodically from plugin-state/render callbacks,
 so trim and untrim operations do not rely on the original effect-add state. A validated analysis continues to drive preview/render
 when Final Cut Pro plays proxy media; proxy media is rejected only for Host

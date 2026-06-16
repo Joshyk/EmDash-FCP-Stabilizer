@@ -8,9 +8,8 @@
 4. Click `Start Host Analysis` if the Inspector status says `Needs Analysis`,
    `Persisted Analysis Rejected - Run Host Analysis`, `Persisted Analysis Unsupported - Run Host Analysis`, or
    `Persisted Analysis Incomplete - Run Host Analysis`.
-5. If `Update Persisted Analysis` is enabled, press it only when you want to replace the
-   loaded older-schema persisted analysis with a newly analyzed file. The button shows a
-   confirmation alert before Host Analysis starts.
+5. Click `Reanalyze Host Analysis` when you explicitly want to ignore the currently loaded
+   persisted analysis and run Host Analysis again.
 6. Wait for `Host Analysis Status` to show `Ready (... frames)`.
 
 `Start Host Analysis` requests the active effect clip from Final Cut Pro. If another
@@ -225,8 +224,8 @@ fallbacks.
   detect persisted analysis file changes even when they already hold an older prepared analysis, then
   reload candidates and update the hidden render revision without starting Host Analysis.
   A persisted analysis whose fingerprints do not match the current source frame is
-  rejected instead of being accepted by time proximity alone. `Start Host Analysis` is the
-  only path that requests Host Analysis from Final Cut Pro. Concurrent analyzer callbacks
+  rejected instead of being accepted by time proximity alone. `Start Host Analysis` and
+  `Reanalyze Host Analysis` are the only paths that request Host Analysis from Final Cut Pro. Concurrent analyzer callbacks
   are routed through a process-wide session registry with per-clip in-progress stores; if a
   callback cannot be assigned unambiguously, the plug-in fails visibly instead of mixing
   frames between clips.
@@ -246,7 +245,7 @@ fallbacks.
   Analysis` is disabled because the viewer is currently using scaled/proxy media, the status
   stays actionable as `Ready (...) - Original Media Required to Start Analysis`. Range
   mismatches from stale persisted analysis candidates show `Persisted Analysis Range Mismatch - Run Host Analysis`;
-  this does not disable `Start Host Analysis`. Start/Update button state is refreshed when
+  this does not disable `Start Host Analysis`. Start/Reanalyze button state is refreshed when
   the input range changes and periodically from plugin-state/render callbacks, so trimming
   or expanding the timeline clip does not leave stale button flags behind.
 - `Sample Info`: read-only Inspector row showing the actual analyzed pixel sample size and

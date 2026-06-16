@@ -293,10 +293,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   timeline range plus sample/fingerprint identity for the current process so another queued
   clip does not discard the earlier clip's viewer result or collide with another clip that
   has the same source-time range.
-- `Update Persisted Analysis`: enabled only when the current clip has loaded a persisted
-  analysis file with an older supported schema than the schema this build writes. Pressing it
-  shows a confirmation alert before analysis starts. Confirming runs Host Analysis again using
-  the current `Sample Size` and writes a new persisted analysis; the older file remains on disk.
+- `Reanalyze Host Analysis`: explicitly ignores the currently loaded persisted analysis and
+  requests a fresh Host Analysis using the current `Sample Size`. Existing persisted analysis
+  files remain on disk; the newly completed analysis is saved as a new candidate.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing so stabilized
   frames avoid outside-source pixels. Turn it off to bypass Auto Crop render-time
   sampling and binary-search framing while checking playback cost; `Edge Display Mode`
@@ -313,7 +312,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   using scaled/proxy media, the status stays actionable as
   `Ready (...) - Original Media Required to Start Analysis`. Range mismatches from stale
   persisted analysis candidates show `Persisted Analysis Range Mismatch - Run Host Analysis` and keep `Start Host
-  Analysis` enabled. Start/Update button state is refreshed when the input range changes
+  Analysis` enabled. Start/Reanalyze button state is refreshed when the input range changes
   and periodically from plugin-state/render callbacks, so trim changes do not leave stale
   button flags behind.
 - `Sample Info`: read-only Inspector row showing the actual analyzed pixel sample size and
