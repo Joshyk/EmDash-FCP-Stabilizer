@@ -29,6 +29,11 @@ media source are shown as unsupported in the Web UI and are not selectable for
 analysis. Direct asset `src` paths that point inside Final Cut Pro `Proxy Media`
 or `High Quality Media` folders are also refused.
 
+The native analyzer requires Metal. Luma sampling and frame-to-frame block
+motion search run through Metal compute kernels; if a Metal device, command
+queue, or kernel dispatch is unavailable, analysis fails visibly instead of
+falling back to CPU motion search.
+
 ## Run
 
 From the repository root:

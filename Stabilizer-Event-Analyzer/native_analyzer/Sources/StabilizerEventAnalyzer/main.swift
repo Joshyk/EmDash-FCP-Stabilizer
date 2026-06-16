@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
+import Metal
 
 private let toolSchemaVersion = 1
 private let cacheSchemaVersion = 15
@@ -262,113 +263,282 @@ func blurAmount(_ pixels: [UInt8], width: Int, height: Int) -> Float {
     return Float(total) / Float(count)
 }
 
-func lumaSample(from pixelBuffer: CVPixelBuffer, sampleWidth: Int, sampleHeight: Int) throws -> [UInt8] {
-    CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-    guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else {
-        throw AnalyzerError("pixel buffer had no base address")
-    }
-    let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
-    let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
-    let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-    let pointer = base.assumingMemoryBound(to: UInt8.self)
-    var pixels = [UInt8](repeating: 0, count: sampleWidth * sampleHeight)
-    for y in 0..<sampleHeight {
-        let sy = min(sourceHeight - 1, Int((Double(y) + 0.5) * Double(sourceHeight) / Double(sampleHeight)))
-        for x in 0..<sampleWidth {
-            let sx = min(sourceWidth - 1, Int((Double(x) + 0.5) * Double(sourceWidth) / Double(sampleWidth)))
-            let offset = sy * bytesPerRow + sx * 4
-            let b = Double(pointer[offset])
-            let g = Double(pointer[offset + 1])
-            let r = Double(pointer[offset + 2])
-            pixels[y * sampleWidth + x] = UInt8(clamp(Int((0.299 * r + 0.587 * g + 0.114 * b).rounded()), 0, 255))
-        }
-    }
-    return pixels
+struct MetalLumaSample {
+    let pixels: [UInt8]
+    let buffer: MTLBuffer
 }
 
-func blockScore(previous: [UInt8], current: [UInt8], width: Int, height: Int, centerX: Int, centerY: Int, blockWidth: Int, blockHeight: Int, dx: Int, dy: Int, step: Int) -> Float {
-    var total = 0
-    var count = 0
-    let halfW = blockWidth / 2
-    let halfH = blockHeight / 2
-    let x0 = max(0, centerX - halfW)
-    let x1 = min(width - 1, centerX + halfW)
-    let y0 = max(0, centerY - halfH)
-    let y1 = min(height - 1, centerY + halfH)
-    var y = y0
-    while y <= y1 {
-        let cy = y + dy
-        if cy >= 0 && cy < height {
-            var x = x0
-            while x <= x1 {
-                let cx = x + dx
-                if cx >= 0 && cx < width {
-                    total += abs(Int(previous[y * width + x]) - Int(current[cy * width + cx]))
-                    count += 1
-                }
-                x += step
-            }
-        }
-        y += step
-    }
-    guard count > 0 else { return Float.greatestFiniteMagnitude }
-    return Float(total) / Float(count)
+private struct MetalLumaUniforms {
+    let sourceWidth: UInt32
+    let sourceHeight: UInt32
+    let bytesPerRow: UInt32
+    let sampleWidth: UInt32
+    let sampleHeight: UInt32
 }
 
-func estimateMotion(previous: [UInt8], current: [UInt8], width: Int, height: Int) -> PairMotion {
-    let radius = min(24, max(4, min(width, height) / 64))
-    let searchStep = width > 1400 || height > 900 ? 2 : 1
-    let blockWidth = max(32, width / 4)
-    let blockHeight = max(24, height / 5)
-    let sampleStep = max(1, min(blockWidth, blockHeight) / 56)
-    let centers = [
-        (width / 2, max(1, height / 4)),
-        (width / 3, max(1, height / 3)),
-        ((width * 2) / 3, max(1, height / 3)),
-    ]
-    var dxValues: [Float] = []
-    var dyValues: [Float] = []
-    var scores: [Float] = []
-    for center in centers {
-        var bestScore = Float.greatestFiniteMagnitude
-        var bestDx = 0
-        var bestDy = 0
-        var dy = -radius
-        while dy <= radius {
-            var dx = -radius
-            while dx <= radius {
-                let score = blockScore(
-                    previous: previous,
-                    current: current,
-                    width: width,
-                    height: height,
-                    centerX: center.0,
-                    centerY: center.1,
-                    blockWidth: blockWidth,
-                    blockHeight: blockHeight,
-                    dx: dx,
-                    dy: dy,
-                    step: sampleStep
-                )
+private struct MetalBlockUniforms {
+    let centerX: UInt32
+    let centerY: UInt32
+    let blockWidth: UInt32
+    let blockHeight: UInt32
+    let width: UInt32
+    let height: UInt32
+    let radius: UInt32
+    let searchStep: UInt32
+    let sampleStep: UInt32
+    let scoreGridWidth: UInt32
+    let scoreGridHeight: UInt32
+}
+
+final class MetalAnalysisContext {
+    private let device: MTLDevice
+    private let commandQueue: MTLCommandQueue
+    private let lumaPipelineState: MTLComputePipelineState
+    private let blockScorePipelineState: MTLComputePipelineState
+
+    var deviceName: String { device.name }
+
+    init() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw AnalyzerError("Metal analysis device unavailable; Event analysis requires GPU resources")
+        }
+        guard let commandQueue = device.makeCommandQueue() else {
+            throw AnalyzerError("Metal analysis command queue unavailable")
+        }
+        let library = try device.makeLibrary(source: Self.kernelSource, options: nil)
+        guard let lumaFunction = library.makeFunction(name: "stabilizer_luma_sample"),
+              let blockScoreFunction = library.makeFunction(name: "stabilizer_block_scores") else {
+            throw AnalyzerError("Metal analysis kernels were not found")
+        }
+        self.device = device
+        self.commandQueue = commandQueue
+        self.lumaPipelineState = try device.makeComputePipelineState(function: lumaFunction)
+        self.blockScorePipelineState = try device.makeComputePipelineState(function: blockScoreFunction)
+    }
+
+    func lumaSample(from pixelBuffer: CVPixelBuffer, sampleWidth: Int, sampleHeight: Int) throws -> MetalLumaSample {
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            throw AnalyzerError("pixel buffer had no base address")
+        }
+        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let sourceLength = bytesPerRow * sourceHeight
+        let pixelCount = sampleWidth * sampleHeight
+        guard let sourceBuffer = device.makeBuffer(bytes: base, length: sourceLength, options: .storageModeShared),
+              let outputBuffer = device.makeBuffer(length: pixelCount, options: .storageModeShared),
+              let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw AnalyzerError("could not allocate Metal luma sampling resources")
+        }
+        var uniforms = MetalLumaUniforms(
+            sourceWidth: UInt32(sourceWidth),
+            sourceHeight: UInt32(sourceHeight),
+            bytesPerRow: UInt32(bytesPerRow),
+            sampleWidth: UInt32(sampleWidth),
+            sampleHeight: UInt32(sampleHeight)
+        )
+        encoder.setComputePipelineState(lumaPipelineState)
+        encoder.setBuffer(sourceBuffer, offset: 0, index: 0)
+        encoder.setBuffer(outputBuffer, offset: 0, index: 1)
+        encoder.setBytes(&uniforms, length: MemoryLayout<MetalLumaUniforms>.stride, index: 2)
+        encoder.dispatchThreads(
+            MTLSize(width: sampleWidth, height: sampleHeight, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1)
+        )
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        try Self.validate(commandBuffer: commandBuffer, stage: "luma sampling")
+        let pixels = [UInt8](UnsafeBufferPointer(
+            start: outputBuffer.contents().assumingMemoryBound(to: UInt8.self),
+            count: pixelCount
+        ))
+        return MetalLumaSample(pixels: pixels, buffer: outputBuffer)
+    }
+
+    func estimateMotion(previous: MTLBuffer, current: MTLBuffer, width: Int, height: Int) throws -> PairMotion {
+        let radius = min(24, max(4, min(width, height) / 64))
+        let searchStep = width > 1400 || height > 900 ? 2 : 1
+        let blockWidth = max(32, width / 4)
+        let blockHeight = max(24, height / 5)
+        let sampleStep = max(1, min(blockWidth, blockHeight) / 56)
+        let centers = [
+            (width / 2, max(1, height / 4)),
+            (width / 3, max(1, height / 3)),
+            ((width * 2) / 3, max(1, height / 3)),
+        ]
+        let scoreGridWidth = ((radius * 2) / searchStep) + 1
+        let scoreGridHeight = scoreGridWidth
+        let scoreCount = scoreGridWidth * scoreGridHeight
+        let uniforms = centers.map {
+            MetalBlockUniforms(
+                centerX: UInt32($0.0),
+                centerY: UInt32($0.1),
+                blockWidth: UInt32(blockWidth),
+                blockHeight: UInt32(blockHeight),
+                width: UInt32(width),
+                height: UInt32(height),
+                radius: UInt32(radius),
+                searchStep: UInt32(searchStep),
+                sampleStep: UInt32(sampleStep),
+                scoreGridWidth: UInt32(scoreGridWidth),
+                scoreGridHeight: UInt32(scoreGridHeight)
+            )
+        }
+        guard let uniformBuffer = device.makeBuffer(
+            bytes: uniforms,
+            length: MemoryLayout<MetalBlockUniforms>.stride * uniforms.count,
+            options: .storageModeShared
+        ),
+            let scoreBuffer = device.makeBuffer(
+                length: MemoryLayout<Float>.stride * scoreCount * uniforms.count,
+                options: .storageModeShared
+            ),
+            let commandBuffer = commandQueue.makeCommandBuffer(),
+            let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw AnalyzerError("could not allocate Metal block motion resources")
+        }
+        encoder.setComputePipelineState(blockScorePipelineState)
+        encoder.setBuffer(previous, offset: 0, index: 0)
+        encoder.setBuffer(current, offset: 0, index: 1)
+        encoder.setBuffer(scoreBuffer, offset: 0, index: 2)
+        encoder.setBuffer(uniformBuffer, offset: 0, index: 3)
+        encoder.dispatchThreads(
+            MTLSize(width: scoreCount, height: uniforms.count, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(64, scoreCount), height: 1, depth: 1)
+        )
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        try Self.validate(commandBuffer: commandBuffer, stage: "block motion search")
+
+        let scores = UnsafeBufferPointer(
+            start: scoreBuffer.contents().assumingMemoryBound(to: Float.self),
+            count: scoreCount * uniforms.count
+        )
+        var dxValues: [Float] = []
+        var dyValues: [Float] = []
+        var residuals: [Float] = []
+        for blockIndex in 0..<uniforms.count {
+            var bestScore = Float.greatestFiniteMagnitude
+            var bestIndex = 0
+            let blockOffset = blockIndex * scoreCount
+            for scoreIndex in 0..<scoreCount {
+                let score = scores[blockOffset + scoreIndex]
                 if score < bestScore {
                     bestScore = score
-                    bestDx = dx
-                    bestDy = dy
+                    bestIndex = scoreIndex
                 }
-                dx += searchStep
             }
-            dy += searchStep
+            let gx = bestIndex % scoreGridWidth
+            let gy = bestIndex / scoreGridWidth
+            dxValues.append(Float(-radius + gx * searchStep))
+            dyValues.append(Float(-radius + gy * searchStep))
+            residuals.append(bestScore)
         }
-        dxValues.append(Float(bestDx))
-        dyValues.append(Float(bestDy))
-        scores.append(bestScore)
+        let dx = dxValues.reduce(0, +) / Float(max(1, dxValues.count))
+        let dy = dyValues.reduce(0, +) / Float(max(1, dyValues.count))
+        let residual = residuals.reduce(0, +) / Float(max(1, residuals.count))
+        let confidence = clamp(1.0 - (residual / 48.0), 0.05, 1.0)
+        return PairMotion(dx: dx, dy: dy, residual: residual, confidence: confidence)
     }
-    let dx = dxValues.reduce(0, +) / Float(max(1, dxValues.count))
-    let dy = dyValues.reduce(0, +) / Float(max(1, dyValues.count))
-    let residual = scores.reduce(0, +) / Float(max(1, scores.count))
-    let confidence = clamp(1.0 - (residual / 48.0), 0.05, 1.0)
-    return PairMotion(dx: dx, dy: dy, residual: residual, confidence: confidence)
+
+    private static func validate(commandBuffer: MTLCommandBuffer, stage: String) throws {
+        if commandBuffer.status == .error {
+            throw AnalyzerError("Metal \(stage) failed: \(commandBuffer.error?.localizedDescription ?? "unknown error")")
+        }
+    }
+
+    private static let kernelSource = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct LumaUniforms {
+        uint sourceWidth;
+        uint sourceHeight;
+        uint bytesPerRow;
+        uint sampleWidth;
+        uint sampleHeight;
+    };
+
+    struct BlockUniforms {
+        uint centerX;
+        uint centerY;
+        uint blockWidth;
+        uint blockHeight;
+        uint width;
+        uint height;
+        uint radius;
+        uint searchStep;
+        uint sampleStep;
+        uint scoreGridWidth;
+        uint scoreGridHeight;
+    };
+
+    kernel void stabilizer_luma_sample(
+        device const uchar *source [[buffer(0)]],
+        device uchar *output [[buffer(1)]],
+        constant LumaUniforms &uniforms [[buffer(2)]],
+        uint2 gid [[thread_position_in_grid]]
+    ) {
+        if (gid.x >= uniforms.sampleWidth || gid.y >= uniforms.sampleHeight) {
+            return;
+        }
+        uint sx = min(uniforms.sourceWidth - 1, uint((float(gid.x) + 0.5f) * float(uniforms.sourceWidth) / float(uniforms.sampleWidth)));
+        uint sy = min(uniforms.sourceHeight - 1, uint((float(gid.y) + 0.5f) * float(uniforms.sourceHeight) / float(uniforms.sampleHeight)));
+        uint offset = (sy * uniforms.bytesPerRow) + (sx * 4);
+        float b = float(source[offset]);
+        float g = float(source[offset + 1]);
+        float r = float(source[offset + 2]);
+        output[(gid.y * uniforms.sampleWidth) + gid.x] = uchar(clamp(int(round((0.299f * r) + (0.587f * g) + (0.114f * b))), 0, 255));
+    }
+
+    kernel void stabilizer_block_scores(
+        device const uchar *previous [[buffer(0)]],
+        device const uchar *current [[buffer(1)]],
+        device float *scores [[buffer(2)]],
+        device const BlockUniforms *uniformsList [[buffer(3)]],
+        uint2 gid [[thread_position_in_grid]]
+    ) {
+        BlockUniforms uniforms = uniformsList[gid.y];
+        uint scoreCount = uniforms.scoreGridWidth * uniforms.scoreGridHeight;
+        if (gid.x >= scoreCount || gid.y >= 3) {
+            return;
+        }
+        uint gx = gid.x % uniforms.scoreGridWidth;
+        uint gy = gid.x / uniforms.scoreGridWidth;
+        int dx = -int(uniforms.radius) + int(gx * uniforms.searchStep);
+        int dy = -int(uniforms.radius) + int(gy * uniforms.searchStep);
+        int halfW = int(uniforms.blockWidth / 2);
+        int halfH = int(uniforms.blockHeight / 2);
+        int x0 = max(0, int(uniforms.centerX) - halfW);
+        int y0 = max(0, int(uniforms.centerY) - halfH);
+        int x1 = min(int(uniforms.width) - 1, int(uniforms.centerX) + halfW);
+        int y1 = min(int(uniforms.height) - 1, int(uniforms.centerY) + halfH);
+        float total = 0.0f;
+        uint count = 0;
+        for (int y = y0; y <= y1; y += int(uniforms.sampleStep)) {
+            int cy = y + dy;
+            if (cy < 0 || cy >= int(uniforms.height)) {
+                continue;
+            }
+            for (int x = x0; x <= x1; x += int(uniforms.sampleStep)) {
+                int cx = x + dx;
+                if (cx < 0 || cx >= int(uniforms.width)) {
+                    continue;
+                }
+                uint previousIndex = uint(y) * uniforms.width + uint(x);
+                uint currentIndex = uint(cy) * uniforms.width + uint(cx);
+                total += float(abs(int(previous[previousIndex]) - int(current[currentIndex])));
+                count += 1;
+            }
+        }
+        scores[(gid.y * scoreCount) + gid.x] = count > 0 ? total / float(count) : FLT_MAX;
+    }
+    """
 }
 
 func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedAnalysis {
@@ -412,7 +582,13 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     )
 }
 
-func readFrames(asset plan: AssetPlan, sampleScalePercent: Double, maxFrames: Int?, progressEnabled: Bool) throws -> PreparedAnalysis {
+func readFrames(
+    asset plan: AssetPlan,
+    sampleScalePercent: Double,
+    maxFrames: Int?,
+    progressEnabled: Bool,
+    metalContext: MetalAnalysisContext
+) throws -> PreparedAnalysis {
     guard plan.mediaKind == "original-media" || plan.mediaKind == "asset-src" else {
         throw AnalyzerError("analysis requires original media; got \(plan.mediaKind ?? "unknown") for \(plan.name)")
     }
@@ -442,7 +618,7 @@ func readFrames(asset plan: AssetPlan, sampleScalePercent: Double, maxFrames: In
     }
     var frames: [AnalysisFrame] = []
     var motions: [PairMotion] = []
-    var previousPixels: [UInt8]?
+    var previousLumaBuffer: MTLBuffer?
     var firstPTS: Double?
     while reader.status == .reading {
         guard let sampleBuffer = output.copyNextSampleBuffer() else {
@@ -462,21 +638,27 @@ func readFrames(asset plan: AssetPlan, sampleScalePercent: Double, maxFrames: In
             firstPTS = pts
         }
         let time = max(0, pts - (firstPTS ?? pts))
-        let pixels = try lumaSample(from: pixelBuffer, sampleWidth: sample.width, sampleHeight: sample.height)
+        let luma = try metalContext.lumaSample(from: pixelBuffer, sampleWidth: sample.width, sampleHeight: sample.height)
+        let pixels = luma.pixels
         let frame = AnalysisFrame(
             time: time,
-            pixels: pixels,
+            pixels: [],
             sampleWidth: sample.width,
             sampleHeight: sample.height,
             blurAmount: blurAmount(pixels, width: sample.width, height: sample.height),
             fingerprint: fingerprint(for: pixels)
         )
-        if let previousPixels {
-            motions.append(estimateMotion(previous: previousPixels, current: pixels, width: sample.width, height: sample.height))
+        if let previousLumaBuffer {
+            motions.append(try metalContext.estimateMotion(
+                previous: previousLumaBuffer,
+                current: luma.buffer,
+                width: sample.width,
+                height: sample.height
+            ))
         } else {
             motions.append(PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
         }
-        previousPixels = pixels
+        previousLumaBuffer = luma.buffer
         frames.append(frame)
         if frames.count % 30 == 0 {
             progress(progressEnabled, "analyzed \(frames.count) frame(s) for \(plan.name)")
@@ -659,6 +841,8 @@ func run() throws {
     let plan = try JSONDecoder().decode(AnalysisPlan.self, from: planData)
     let cacheRoot = URL(fileURLWithPath: plan.cacheRoot, isDirectory: true)
     try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+    let metalContext = try MetalAnalysisContext()
+    progress(arguments.progress, "using Metal analyzer device: \(metalContext.deviceName)")
     var results: [AnalysisResult] = []
     for asset in plan.assets {
         progress(arguments.progress, "starting \(asset.name)")
@@ -666,7 +850,8 @@ func run() throws {
             asset: asset,
             sampleScalePercent: plan.sampleScalePercent,
             maxFrames: plan.maxFrames,
-            progressEnabled: arguments.progress
+            progressEnabled: arguments.progress,
+            metalContext: metalContext
         )
         let cache = buildCache(
             asset: asset,
