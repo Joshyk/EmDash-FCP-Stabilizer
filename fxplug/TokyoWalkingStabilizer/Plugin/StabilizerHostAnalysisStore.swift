@@ -464,6 +464,18 @@ final class StabilizerHostAnalysisStore {
         }
     }
 
+    var canStartHostAnalysis: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        switch status {
+        case .requested, .queued, .analyzing, .trimmedClip, .proxyRejected, .proxyNeedsOriginalValidation, .sourceUnavailable:
+            return false
+        case .needsAnalysis, .cacheLoaded, .ready, .cacheRejected, .cacheUnsupported, .cacheIncomplete, .cacheCleared, .projectCacheUnavailable, .proxyPreview, .sourceMetadataUnconfirmedPreview:
+            return true
+        }
+    }
+
     var hasCompletedAnalysis: Bool {
         lock.lock()
         defer { lock.unlock() }

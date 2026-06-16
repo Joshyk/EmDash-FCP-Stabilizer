@@ -228,7 +228,7 @@ struct HostAnalysisExpectedRange {
     }
 
     var trimmedTimelineAnalysisStatusText: String? {
-        hasTimelineHeadTrim ? "Trimmed Clip - Use Open Clip Analysis" : nil
+        hasTimelineHeadTrim ? "Invalid - Trimmed Clip" : nil
     }
 
     private var trimDetectionToleranceSeconds: Double {
@@ -546,6 +546,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedSampleInfo = ""
     private var lastPublishedQueueInfo = ""
     private var lastPublishedRenderRevision: Double?
+    private var lastPublishedStartHostAnalysisButtonEnabled: Bool?
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
@@ -884,12 +885,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let expectedRange = Self.expectedInputRange(from: state)
         let trimmedStatusOverride = expectedRange?.trimmedTimelineAnalysisStatusText
+        let canStartHostAnalysisOverride = trimmedStatusOverride == nil ? nil : false
         if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
                hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
             } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true) {
-                publishHostAnalysisStatus(force: true, statusOverride: trimmedStatusOverride)
+                publishHostAnalysisStatus(
+                    force: true,
+                    statusOverride: trimmedStatusOverride,
+                    canStartHostAnalysisOverride: canStartHostAnalysisOverride
+                )
                 publishStabilizerInfo(force: true)
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
                 publishRenderRevision(
@@ -902,7 +908,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
         state.hostAnalysisRevision = hostAnalysisStore.revision
-        publishHostAnalysisStatus(statusOverride: trimmedStatusOverride)
+        publishHostAnalysisStatus(
+            statusOverride: trimmedStatusOverride,
+            canStartHostAnalysisOverride: canStartHostAnalysisOverride
+        )
         publishStabilizerInfo(state: state)
         publishRenderRevision(hostAnalysisStore.renderInvalidationToken, currentParameterValue: state.renderRevision)
 
@@ -912,9 +921,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     @objc(startHostAnalysis)
     func startHostAnalysis() {
         os_log("Start Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
+        let expectedRange = currentInputRange()
+        if let rejectionReason = expectedRange?.trimmedTimelineAnalysisRejectionReason {
+            hostAnalysisStore.markTrimmedClipAnalysisUnavailable(reason: rejectionReason)
+            publishHostAnalysisStatus(force: true, canStartHostAnalysisOverride: false)
+            publishStabilizerInfo(force: true)
+            publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+            return
+        }
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
-        let expectedRange = currentInputRange()
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         if hostAnalysisStore.hasCompletedAnalysis,
            let activeIdentity = hostAnalysisStore.activeCacheIdentity,
@@ -1726,22 +1742,49 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return stabilizedPixels
     }
 
-    private func publishHostAnalysisStatus(force: Bool = false, statusOverride: String? = nil) {
+    private func publishHostAnalysisStatus(
+        force: Bool = false,
+        statusOverride: String? = nil,
+        canStartHostAnalysisOverride: Bool? = nil
+    ) {
         let status = Self.hostAnalysisStatusText(statusOverride ?? hostAnalysisStore.statusText)
+        let startHostAnalysisButtonEnabled = canStartHostAnalysisOverride ?? hostAnalysisStore.canStartHostAnalysis
         statusLock.lock()
-        let shouldPublish = force || status != lastPublishedStatus
+        let shouldPublishStatus = force || status != lastPublishedStatus
+        let shouldPublishStartHostAnalysisButton = force
+            || lastPublishedStartHostAnalysisButtonEnabled != startHostAnalysisButtonEnabled
         statusLock.unlock()
-        guard shouldPublish,
+        guard shouldPublishStatus || shouldPublishStartHostAnalysisButton,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
         else {
             return
         }
-        if settingAPI.setStringParameterValue(status, toParameter: ParameterID.hostAnalysisStatus.rawValue) {
+        if shouldPublishStatus,
+           settingAPI.setStringParameterValue(status, toParameter: ParameterID.hostAnalysisStatus.rawValue) {
             statusLock.lock()
             lastPublishedStatus = status
             statusLock.unlock()
-        } else {
+        } else if shouldPublishStatus {
             NSLog("TokyoWalkingStabilizer: failed to update Host Analysis Status parameter.")
+        }
+        if shouldPublishStartHostAnalysisButton {
+            publishStartHostAnalysisButtonEnabled(startHostAnalysisButtonEnabled, settingAPI: settingAPI)
+        }
+    }
+
+    private func publishStartHostAnalysisButtonEnabled(
+        _ enabled: Bool,
+        settingAPI: FxParameterSettingAPI_v5
+    ) {
+        let flags = enabled
+            ? FxParameterFlags(kFxParameterFlag_DEFAULT)
+            : FxParameterFlags(kFxParameterFlag_DEFAULT | kFxParameterFlag_DISABLED)
+        if settingAPI.setParameterFlags(flags, toParameter: ParameterID.startHostAnalysis.rawValue) {
+            statusLock.lock()
+            lastPublishedStartHostAnalysisButtonEnabled = enabled
+            statusLock.unlock()
+        } else {
+            NSLog("TokyoWalkingStabilizer: failed to update Start Host Analysis enabled state to \(enabled).")
         }
     }
 
