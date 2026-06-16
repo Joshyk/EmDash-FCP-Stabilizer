@@ -46,6 +46,10 @@ black outside-source pixels. `Edge Display Mode` defaults to `Black Outside`.
 starts can report the reason in `Host Analysis Status`. They are the only paths that ask
 Final Cut Pro to analyze the clip. Preview and render callbacks only read completed
 analysis or a validated persisted analysis; they do not start analysis on their own.
+If `Sample Size` changes and no analysis exists for that size, the status reports that the
+selected sample has not been analyzed so `Start Host Analysis` can request that size. If
+the current clip range is trimmed relative to the saved analysis range, Start/Reanalyze
+report the trimmed-clip block instead of starting Host Analysis.
 
 ## Optional Final Cut Pro Shortcuts
 

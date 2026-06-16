@@ -302,7 +302,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   sampling and binary-search framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
 - `Host Analysis Status`: read-only analysis/persisted-analysis state. It also reports why a
-  pressable Start/Reanalyze button did not start a new analysis. It appends the current FxPlug
+  pressable Start/Reanalyze button did not start a new analysis, including missing analysis
+  for the selected `Sample Size` and trimmed/range-mismatched clips. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. During a real analysis
   run, the status advances as `Analyzing Host Frames (N)`. If Final Cut Pro restores an
   in-progress analysis state while a compatible saved persisted analysis is already present, the plug-in

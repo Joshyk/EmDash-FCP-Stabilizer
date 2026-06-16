@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.147"
+private let tokyoWalkingStabilizerVersion = "0.3.148"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let hostAnalysisControlRefreshIntervalSeconds = 0.5
 private let reanalysisConfirmationWindowSeconds = 8.0
@@ -883,12 +883,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             state.inputFrameDurationSeconds = inputRange.frameDurationSeconds
         }
         let expectedRange = Self.expectedInputRange(from: state)
+        let sampleRequirement = currentSampleRequirement(for: expectedRange)
         refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "plugin-state")
         if configureProjectBundleCacheDirectory(expectedRange: expectedRange) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
+               hostAnalysisStore.activatePersistentCache(
+                    identity: preferredIdentity,
+                    expectedRange: expectedRange,
+                    allowRangeMismatch: true,
+                    requestedSampleScalePercent: sampleRequirement.percent,
+                    expectedSampleSize: sampleRequirement.sampleSize
+               ) {
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
-            } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true) {
+            } else if hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(
+                expectedRange: expectedRange,
+                allowRangeMismatch: true,
+                requestedSampleScalePercent: sampleRequirement.percent,
+                expectedSampleSize: sampleRequirement.sampleSize
+            ) {
                 publishHostAnalysisStatus(force: true)
                 publishStabilizerInfo(force: true)
                 publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: false)
@@ -898,6 +910,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     force: true
                 )
             }
+        }
+        if hostAnalysisStore.hasCompletedAnalysis,
+           !hostAnalysisStore.hasCompletedAnalysis(
+                requestedSampleScalePercent: sampleRequirement.percent,
+                expectedSampleSize: sampleRequirement.sampleSize
+           ) {
+            hostAnalysisStore.markRequestedSampleUnavailable(requestedSampleScalePercent: sampleRequirement.percent)
+        } else {
+            hostAnalysisStore.clearRequestedSampleUnavailable()
         }
         let cappedHostFrameCount = min(hostAnalysisStore.frameCount, Int(Int32.max))
         state.hostAnalysisFrameCount = Int32(cappedHostFrameCount)
@@ -916,6 +937,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         refreshHostAnalysisControlState(expectedRange: expectedRange, reason: "start-button", force: true)
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
+        guard canRequestHostAnalysisForCurrentRange(expectedRange, actionName: "Start") else {
+            return
+        }
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         let expectedSampleSize = hostAnalysisStore.expectedSampleSizeForCurrentSource(
             requestedSampleScalePercent: requestedSamplePercent
@@ -991,6 +1015,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
         os_log("Reanalyze Host Analysis pressed in FxPlug %{public}@", log: stabilizerHostAnalysisLog, type: .default, tokyoWalkingStabilizerVersion)
         NSLog("TokyoWalkingStabilizer: Reanalyze Host Analysis requested.")
+        guard canRequestHostAnalysisForCurrentRange(expectedRange, actionName: "Reanalyze") else {
+            return
+        }
 
         guard consumeReanalysisConfirmation(
             expectedRange: expectedRange,
@@ -1019,6 +1046,46 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             acceptedSampleScalePercentOverride: requestedSamplePercent,
             resetStoreBeforeStart: true
         )
+    }
+
+    private func canRequestHostAnalysisForCurrentRange(
+        _ expectedRange: HostAnalysisExpectedRange?,
+        actionName: String
+    ) -> Bool {
+        guard let expectedRange,
+              expectedRange.isValid
+        else {
+            return true
+        }
+        if let activeRange = hostAnalysisStore.activeExpectedRange,
+           !Self.analysisRange(activeRange, matches: expectedRange) {
+            markHostAnalysisActionBlockedForTrimmedClip(actionName: actionName, expectedRange: expectedRange, analysisRange: activeRange)
+            return false
+        }
+        if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
+           !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
+            markHostAnalysisActionBlockedForTrimmedClip(actionName: actionName, expectedRange: expectedRange, analysisRange: nil)
+            return false
+        }
+        return true
+    }
+
+    private func markHostAnalysisActionBlockedForTrimmedClip(
+        actionName: String,
+        expectedRange: HostAnalysisExpectedRange,
+        analysisRange: HostAnalysisExpectedRange?
+    ) {
+        let message = "\(actionName) Not Started - Trimmed Clip"
+        let current = Self.expectedRangeDescription(expectedRange)
+        let existing = analysisRange.map(Self.expectedRangeDescription) ?? "saved analysis identity"
+        hostAnalysisStore.markActionMessage(
+            message,
+            analysisInfo: "Trimmed clip blocked: current \(current), analysis \(existing)"
+        )
+        publishHostAnalysisStatus(force: true)
+        publishStabilizerInfo(force: true)
+        publishRenderRevision(hostAnalysisStore.renderInvalidationToken, force: true)
+        NSLog("TokyoWalkingStabilizer: \(actionName) Host Analysis blocked because the current clip range is trimmed or range-mismatched. current=\(current) analysis=\(existing)")
     }
 
     private func consumeReanalysisConfirmation(
@@ -2114,6 +2181,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private func pollPersistentCacheForPreviewInvalidation() {
         let expectedRange = currentCacheResolutionExpectedRange()
+        let sampleRequirement = currentSampleRequirement(for: expectedRange)
         guard configureProjectBundleCacheDirectory(expectedRange: expectedRange) else {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
@@ -2129,10 +2197,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let loadedCache: Bool
         if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange) {
+           hostAnalysisStore.activatePersistentCache(
+                identity: preferredIdentity,
+                expectedRange: expectedRange,
+                requestedSampleScalePercent: sampleRequirement.percent,
+                expectedSampleSize: sampleRequirement.sampleSize
+           ) {
             loadedCache = true
         } else {
-            loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange)
+            loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(
+                expectedRange: expectedRange,
+                requestedSampleScalePercent: sampleRequirement.percent,
+                expectedSampleSize: sampleRequirement.sampleSize
+            )
         }
         guard loadedCache || hostAnalysisStore.hasCompletedAnalysis else {
             return
@@ -3772,6 +3849,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return "start\(StabilizerHostAnalysisStore.timeKey(expectedRange.startSeconds))-end\(StabilizerHostAnalysisStore.timeKey(expectedRange.endSeconds))-duration\(StabilizerHostAnalysisStore.timeKey(expectedRange.durationSeconds))"
     }
 
+    private static func analysisRange(_ lhs: HostAnalysisExpectedRange, matches rhs: HostAnalysisExpectedRange) -> Bool {
+        StabilizerHostAnalysisStore.timeKey(lhs.startSeconds) == StabilizerHostAnalysisStore.timeKey(rhs.startSeconds)
+            && StabilizerHostAnalysisStore.timeKey(lhs.durationSeconds) == StabilizerHostAnalysisStore.timeKey(rhs.durationSeconds)
+    }
+
     private static func topLevelEventRoots(in bundleRoot: URL) -> [URL] {
         let bundleRoot = bundleRoot.standardizedFileURL
         let childURLs: [URL]
@@ -3878,6 +3960,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return requestedSampleScalePercent(at: .zero)
         }
         return requestedSampleScalePercent(at: CMTime(seconds: expectedRange.startSeconds, preferredTimescale: 600))
+    }
+
+    private func currentSampleRequirement(
+        for expectedRange: HostAnalysisExpectedRange?
+    ) -> (percent: Double, sampleSize: (width: Int, height: Int)?) {
+        let percent = requestedSampleScalePercent(for: expectedRange)
+        return (
+            percent,
+            hostAnalysisStore.expectedSampleSizeForCurrentSource(requestedSampleScalePercent: percent)
+        )
     }
 
     private func publishHostAnalysisRenderDiagnostics(
@@ -4311,7 +4403,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             CMTimeGetSeconds(analysisRange.duration),
             CMTimeGetSeconds(frameDuration)
         )
-        _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange.isValid ? expectedRange : nil)
+        _ = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(
+            expectedRange: expectedRange.isValid ? expectedRange : nil,
+            requestedSampleScalePercent: requestedSampleScalePercent,
+            expectedSampleSize: nil
+        )
         publishAnalysisCallbackStatus(analysisStore)
     }
 

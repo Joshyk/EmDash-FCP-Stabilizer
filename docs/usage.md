@@ -226,7 +226,10 @@ fallbacks.
   A persisted analysis whose fingerprints do not match the current source frame is
   rejected instead of being accepted by time proximity alone. `Start Host Analysis` and
   `Reanalyze Host Analysis` stay pressable so skipped or failed starts report their reason
-  in `Host Analysis Status`; they are the only paths that request Host Analysis from Final Cut Pro. Concurrent analyzer callbacks
+  in `Host Analysis Status`; they are the only paths that request Host Analysis from Final Cut Pro.
+  A selected `Sample Size` without a matching completed analysis is reported as needing
+  analysis for that sample, while a trimmed/range-mismatched clip reports the trimmed block
+  and does not start or reanalyze. Concurrent analyzer callbacks
   are routed through a process-wide session registry with per-clip in-progress stores; if a
   callback cannot be assigned unambiguously, the plug-in fails visibly instead of mixing
   frames between clips.

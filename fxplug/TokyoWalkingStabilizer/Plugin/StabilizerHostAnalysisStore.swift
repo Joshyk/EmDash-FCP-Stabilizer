@@ -519,6 +519,20 @@ final class StabilizerHostAnalysisStore {
         return finished && validationState != .rejected && preparedAnalysis != nil
     }
 
+    func hasCompletedAnalysis(
+        requestedSampleScalePercent: Double,
+        expectedSampleSize: (width: Int, height: Int)?
+    ) -> Bool {
+        lock.lock()
+        let isCompleted = finished && validationState != .rejected && preparedAnalysis != nil
+        let activeRequestedPercent = activeRequestedSampleScalePercent
+        let activeSampleSize = preparedAnalysis?.frames.first.map { (width: $0.sampleWidth, height: $0.sampleHeight) }
+        lock.unlock()
+        return isCompleted
+            && Self.sampleScale(activeRequestedPercent, matches: requestedSampleScalePercent)
+            && Self.sampleSize(activeSampleSize, matches: expectedSampleSize)
+    }
+
     func expectedSampleSizeForCurrentSource(requestedSampleScalePercent: Double) -> (width: Int, height: Int)? {
         lock.lock()
         let sourceInfo = latestSourceFrameInfo
@@ -648,6 +662,23 @@ final class StabilizerHostAnalysisStore {
             analysisInfoText = analysisInfo
         }
         bumpRevisionLocked()
+        lock.unlock()
+    }
+
+    func markRequestedSampleUnavailable(requestedSampleScalePercent: Double) {
+        let percentText = Self.sampleScaleDescription(requestedSampleScalePercent)
+        markActionMessage(
+            "Needs Analysis - Sample Size \(percentText) Not Analyzed",
+            analysisInfo: "Sample size changed: \(percentText) not analyzed"
+        )
+    }
+
+    func clearRequestedSampleUnavailable() {
+        lock.lock()
+        if actionStatusText?.hasPrefix("Needs Analysis - Sample Size ") == true {
+            actionStatusText = nil
+            bumpRevisionLocked()
+        }
         lock.unlock()
     }
 
@@ -1315,11 +1346,21 @@ final class StabilizerHostAnalysisStore {
         return false
     }
 
-    func reloadPersistentCacheForConsumerIfNeeded(expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
+    func reloadPersistentCacheForConsumerIfNeeded(
+        expectedRange: HostAnalysisExpectedRange? = nil,
+        allowRangeMismatch: Bool = false,
+        requestedSampleScalePercent: Double? = nil,
+        expectedSampleSize: (width: Int, height: Int)? = nil
+    ) -> Bool {
         guard shouldReloadPersistentCacheForConsumer() else {
             return false
         }
-        return loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: allowRangeMismatch)
+        return loadPersistentCache(
+            expectedRange: expectedRange,
+            allowRangeMismatch: allowRangeMismatch,
+            requestedSampleScalePercent: requestedSampleScalePercent,
+            expectedSampleSize: expectedSampleSize
+        )
     }
 
     func activatePersistentCache(
