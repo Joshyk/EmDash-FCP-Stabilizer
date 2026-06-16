@@ -50,9 +50,9 @@ private let stabilizerDefaultAutoCropZoomSpeed = 1.0
 private let stabilizerDefaultAutoCropZoomSmoothness = 0.35
 private let stabilizerDefaultAutoCropPositionSpeed = 1.0
 private let stabilizerDefaultAutoCropPositionSmoothness = 0.80
-let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
-let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
-let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
+let stabilizerProjectCacheUnavailableMessage = "Project Persisted Analysis Unavailable - Event Analysis Files Unavailable"
+let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Persisted Analysis Unavailable - Ambiguous Event"
+let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Persisted Analysis Unavailable - Ambiguous Active Libraries"
 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
@@ -516,7 +516,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
     private let cacheIdentityLock = NSLock()
-    private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.TokyoWalkingStabilizer.PersistentCacheMonitor")
+    private let persistentCacheMonitorQueue = DispatchQueue(label: "com.justadev.TokyoWalkingStabilizer.PersistentAnalysisMonitor")
     private var lastPublishedStatus = ""
     private var lastPublishedSampleInfo = ""
     private var lastPublishedQueueInfo = ""
@@ -544,7 +544,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         self.apiManager = apiManager
         super.init()
         _ = Self.sharedHostAnalysisStore
-        startPersistentCacheMonitor()
+        startPersistentAnalysisMonitor()
         NSLog("TokyoWalkingStabilizer: runtime initialized version \(tokyoWalkingStabilizerVersion).")
     }
 
@@ -766,7 +766,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
         )
         paramAPI.addStringParameter(
-            withName: "Host Analysis Cache Identity",
+            withName: "Host Analysis Persisted Identity",
             parameterID: ParameterID.hostAnalysisCacheIdentity.rawValue,
             defaultValue: "",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
@@ -885,16 +885,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishHostAnalysisStatus(force: true, statusOverride: "Start Pressed")
         publishStabilizerInfo(force: true)
         let requestedSamplePercent = requestedSampleScalePercent(for: expectedRange)
-        if hostAnalysisStore.hasCompletedAnalysis,
+        if hostAnalysisStore.hasCompletedPersistedAnalysis(
+            expectedRange: expectedRange,
+            requestedSampleScalePercent: requestedSamplePercent
+        ),
            let activeIdentity = hostAnalysisStore.activeCacheIdentity,
            StabilizerHostAnalysisStore.cacheIdentity(activeIdentity, matches: expectedRange) {
             os_log(
-                "Start Host Analysis reused active prepared cache %{public}@ without reset or disk reload.",
+                "Start Host Analysis reused active persisted analysis %{public}@ without reset or disk reload.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 activeIdentity
             )
-            NSLog("TokyoWalkingStabilizer: Start Host Analysis reused active prepared cache \(activeIdentity) without reset or disk reload.")
+            NSLog("TokyoWalkingStabilizer: Start Host Analysis reused active persisted analysis \(activeIdentity) without reset or disk reload.")
             publishHostAnalysisCacheIdentity(activeIdentity, force: true)
             publishHostAnalysisStatus(force: true)
             publishStabilizerInfo(force: true)
@@ -905,15 +908,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let loadedPersistentCache: Bool
         if configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange, forceRefresh: true) {
             if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-               hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
+               hostAnalysisStore.activatePersistentCache(
+                    identity: preferredIdentity,
+                    expectedRange: expectedRange,
+                    allowRangeMismatch: true,
+                    requestedSampleScalePercent: requestedSamplePercent
+               ) {
                 loadedPersistentCache = true
             } else {
-                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(expectedRange: expectedRange, allowRangeMismatch: true)
+                loadedPersistentCache = hostAnalysisStore.loadPersistentCache(
+                    expectedRange: expectedRange,
+                    allowRangeMismatch: true,
+                    requestedSampleScalePercent: requestedSamplePercent
+                )
             }
         } else {
             loadedPersistentCache = false
-            os_log("Start preflight could not resolve Event cache root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
-            NSLog("TokyoWalkingStabilizer: Start Host Analysis could not preflight the Event cache root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
+            os_log("Start preflight could not resolve Event persisted analysis root; requesting host analysis for analyzer setup resolution.", log: stabilizerHostAnalysisLog, type: .default)
+            NSLog("TokyoWalkingStabilizer: Start Host Analysis could not preflight the Event persisted analysis root; requesting Host Analysis so setupAnalysis can resolve the host analysis context.")
         }
         if loadedPersistentCache {
             publishHostAnalysisCacheIdentity(hostAnalysisStore.activeCacheIdentity, force: true)
@@ -1913,7 +1925,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishAnalysisCallbackStatus(analysisStore, canPublishCallbackStatus: true)
     }
 
-    private func startPersistentCacheMonitor() {
+    private func startPersistentAnalysisMonitor() {
         let timer = DispatchSource.makeTimerSource(queue: persistentCacheMonitorQueue)
         timer.schedule(deadline: .now() + 0.5, repeating: 0.75)
         timer.setEventHandler { [weak self] in
@@ -2217,7 +2229,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             preferredHostAnalysisCacheIdentity = normalizedIdentity
             cacheIdentityLock.unlock()
         } else {
-            NSLog("TokyoWalkingStabilizer: failed to update Host Analysis Cache Identity parameter.")
+            NSLog("TokyoWalkingStabilizer: failed to update Host Analysis persisted identity parameter.")
         }
     }
 
@@ -2318,7 +2330,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     guard let bundleRoot = Self.fcpBundleRoot(containing: projectMediaURL) else {
                         let reason = "FxProjectAPI media folder is not inside a .fcpbundle: \(projectMediaURL.path)"
                         NSLog("TokyoWalkingStabilizer: \(reason)")
-                        os_log("Event cache resolver rejected mediaFolderURL %{public}@ because it is not inside a .fcpbundle.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path)
+                        os_log("Event persisted analysis resolver rejected mediaFolderURL %{public}@ because it is not inside a .fcpbundle.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path)
                         clearStaleProjectCacheIfNeeded(reason: reason)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
@@ -2326,7 +2338,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         return false
                     }
                     os_log(
-                        "Event cache resolver input mediaFolderURL=%{public}@ bundleRoot=%{public}@ expectedRange=%{public}@.",
+                        "Event persisted analysis resolver input mediaFolderURL=%{public}@ bundleRoot=%{public}@ expectedRange=%{public}@.",
                         log: stabilizerHostAnalysisLog,
                         type: .default,
                         projectMediaURL.path,
@@ -2334,9 +2346,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         Self.expectedRangeDescription(expectedRange)
                     )
                     guard let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot, expectedRange: expectedRange) else {
-                        let reason = "Ambiguous Event for Host Analysis cache. FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
+                        let reason = "Ambiguous Event for Host Analysis persisted analysis. FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
                         NSLog("TokyoWalkingStabilizer: \(reason)")
-                        os_log("Event cache resolver rejected mediaFolderURL %{public}@ in bundle %{public}@ because no unambiguous Event candidate was selected.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path, bundleRoot.path)
+                        os_log("Event persisted analysis resolver rejected mediaFolderURL %{public}@ in bundle %{public}@ because no unambiguous Event candidate was selected.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path, bundleRoot.path)
                         clearStaleProjectCacheIfNeeded(reason: reason)
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
@@ -2357,13 +2369,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     if configured {
                         shouldRetainSecurityScopedAccess = didStartAccess
                     } else {
-                        clearStaleProjectCacheIfNeeded(reason: "Event cache root configuration failed for \(eventResolution.eventRoot.path)")
+                        clearStaleProjectCacheIfNeeded(reason: "Event persisted analysis root configuration failed for \(eventResolution.eventRoot.path)")
                     }
                     return configured
                 }
                 let reason = "FxProjectAPI did not provide a project media folder URL."
                 NSLog("TokyoWalkingStabilizer: \(reason)")
-                os_log("Event cache resolver rejected because FxProjectAPI did not provide mediaFolderURL.", log: stabilizerHostAnalysisLog, type: .error)
+                os_log("Event persisted analysis resolver rejected because FxProjectAPI did not provide mediaFolderURL.", log: stabilizerHostAnalysisLog, type: .error)
                 if configureActiveFinalCutLibraryCacheDirectory(
                     markUnavailable: markUnavailable,
                     expectedRange: expectedRange,
@@ -2381,7 +2393,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             } catch {
                 let reason = "FxProjectAPI media folder unavailable: \(error.localizedDescription)"
                 NSLog("TokyoWalkingStabilizer: \(reason)")
-                os_log("Event cache resolver rejected because mediaFolderURL failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
+                os_log("Event persisted analysis resolver rejected because mediaFolderURL failed: %{public}@.", log: stabilizerHostAnalysisLog, type: .error, error.localizedDescription)
                 if Self.isNoMediaFolderError(error),
                    configureActiveFinalCutLibraryCacheDirectory(
                         markUnavailable: markUnavailable,
@@ -2399,9 +2411,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 return false
             }
         } else {
-            let reason = "FxProjectAPI unavailable; Event Analysis Files cache cannot be resolved."
+            let reason = "FxProjectAPI unavailable; Event Analysis Files persisted analysis cannot be resolved."
             NSLog("TokyoWalkingStabilizer: \(reason)")
-            os_log("Event cache resolver rejected because FxProjectAPI is unavailable.", log: stabilizerHostAnalysisLog, type: .error)
+            os_log("Event persisted analysis resolver rejected because FxProjectAPI is unavailable.", log: stabilizerHostAnalysisLog, type: .error)
             if configureActiveFinalCutLibraryCacheDirectory(
                 markUnavailable: markUnavailable,
                 expectedRange: expectedRange,
@@ -2431,10 +2443,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         do {
             try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
         } catch {
-            let reason = "Event Analysis Files cache root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
+            let reason = "Event Analysis Files persisted analysis root could not be created at \(cacheRoot.path): \(error.localizedDescription)"
             NSLog("TokyoWalkingStabilizer: \(reason)")
             os_log(
-                "Event cache resolver selected Event %{public}@ in bundle %{public}@ but cache root creation failed at %{public}@: %{public}@.",
+                "Event persisted analysis resolver selected Event %{public}@ in bundle %{public}@ but persisted analysis root creation failed at %{public}@: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .error,
                 eventResolution.eventRoot.path,
@@ -2456,9 +2468,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             securityScopedURL: retainedSecurityScopedURL,
             eventName: eventResolution.eventRoot.lastPathComponent
         )
-        NSLog("TokyoWalkingStabilizer: using \(eventResolution.sourceDescription) Event Host Analysis cache at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
+        NSLog("TokyoWalkingStabilizer: using \(eventResolution.sourceDescription) Event Host Analysis persisted analysis at \(cacheRoot.path) inside \(eventResolution.eventRoot.path).")
         os_log(
-            "Event cache resolver selected Event %{public}@ by %{public}@; bundleRoot=%{public}@ cacheRoot=%{public}@.",
+            "Event persisted analysis resolver selected Event %{public}@ by %{public}@; bundleRoot=%{public}@ persistedRoot=%{public}@.",
             log: stabilizerHostAnalysisLog,
             type: .default,
             eventResolution.eventRoot.lastPathComponent,
@@ -2521,7 +2533,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             resolution.securityScopedURL?.stopAccessingSecurityScopedResource()
             if forceRefresh {
                 StabilizerHostAnalysisStore.clearProjectBundleCacheDirectory(
-                    reason: "Event cache root configuration failed for \(resolution.eventResolution.eventRoot.path)"
+                    reason: "Event persisted analysis root configuration failed for \(resolution.eventResolution.eventRoot.path)"
                 )
             }
         }
@@ -2533,7 +2545,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         do {
             try projectAPI.documentID(&documentID)
             os_log(
-                "Event cache resolver input documentID=%{public}@.",
+                "Event persisted analysis resolver input documentID=%{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 projectDocumentIDDescription(documentID)
@@ -2541,7 +2553,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return documentID
         } catch {
             os_log(
-                "Event cache resolver could not read documentID: %{public}@.",
+                "Event persisted analysis resolver could not read documentID: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .error,
                 error.localizedDescription
@@ -2601,12 +2613,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let remainingItems = try FileManager.default.contentsOfDirectory(atPath: legacyURL.path)
             if remainingItems.isEmpty {
                 try FileManager.default.removeItem(at: legacyURL)
-                NSLog("TokyoWalkingStabilizer: moved legacy Host Analysis cache from \(legacyURL.path) to \(cacheRoot.path).")
+                NSLog("TokyoWalkingStabilizer: moved legacy Host Analysis persisted analysis from \(legacyURL.path) to \(cacheRoot.path).")
             } else {
-                NSLog("TokyoWalkingStabilizer: left legacy Host Analysis cache at \(legacyURL.path) because \(remainingItems.count) item(s) could not be moved without overwriting newer files.")
+                NSLog("TokyoWalkingStabilizer: left legacy Host Analysis persisted analysis at \(legacyURL.path) because \(remainingItems.count) item(s) could not be moved without overwriting newer files.")
             }
         } catch {
-            NSLog("TokyoWalkingStabilizer: failed to migrate legacy Host Analysis cache from \(legacyURL.path) to \(cacheRoot.path): \(error.localizedDescription)")
+            NSLog("TokyoWalkingStabilizer: failed to migrate legacy Host Analysis persisted analysis from \(legacyURL.path) to \(cacheRoot.path): \(error.localizedDescription)")
         }
     }
 
@@ -2630,7 +2642,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         try FileManager.default.removeItem(at: itemURL)
                     }
                 } else {
-                    NSLog("TokyoWalkingStabilizer: keeping legacy Host Analysis cache item \(itemURL.path) because \(destinationItemURL.path) already exists.")
+                    NSLog("TokyoWalkingStabilizer: keeping legacy Host Analysis persisted analysis item \(itemURL.path) because \(destinationItemURL.path) already exists.")
                 }
                 continue
             }
@@ -3407,7 +3419,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let bundleRoot = bundleRoot.standardizedFileURL
         let eventRoots = topLevelEventRoots(in: bundleRoot)
         os_log(
-            "Event cache resolver candidates in %{public}@: %{public}@.",
+            "Event persisted analysis resolver candidates in %{public}@: %{public}@.",
             log: stabilizerHostAnalysisLog,
             type: .default,
             bundleRoot.path,
@@ -3429,7 +3441,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if let ancestorEventRoot {
             os_log(
-                "Event cache resolver selected ancestor Event %{public}@ for mediaFolderURL %{public}@.",
+                "Event persisted analysis resolver selected ancestor Event %{public}@ for mediaFolderURL %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 ancestorEventRoot.path,
@@ -3444,7 +3456,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if analysisFilesEventRoots.count == 1,
            let analysisFilesEventRoot = analysisFilesEventRoots.first {
             os_log(
-                "Event cache resolver selected the only Event with Analysis Files: %{public}@.",
+                "Event persisted analysis resolver selected the only Event with Analysis Files: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 analysisFilesEventRoot.path
@@ -3460,7 +3472,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 in: analysisFilesEventRoots
            ) {
             os_log(
-                "Event cache resolver selected Event %{public}@ by FCP Stabilization range match for %{public}@.",
+                "Event persisted analysis resolver selected Event %{public}@ by FCP Stabilization range match for %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 stabilizationMatch.path,
@@ -3474,7 +3486,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if eventRoots.count == 1,
            let onlyEventRoot = eventRoots.first {
             os_log(
-                "Event cache resolver selected the only top-level Event: %{public}@.",
+                "Event persisted analysis resolver selected the only top-level Event: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 onlyEventRoot.path
@@ -3485,7 +3497,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         os_log(
-            "Event cache resolver rejected ambiguous Event candidates. Analysis Files candidates=%{public}d total candidates=%{public}d expectedRange=%{public}@.",
+            "Event persisted analysis resolver rejected ambiguous Event candidates. Analysis Files candidates=%{public}d total candidates=%{public}d expectedRange=%{public}@.",
             log: stabilizerHostAnalysisLog,
             type: .error,
             analysisFilesEventRoots.count,
@@ -3594,7 +3606,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         } catch {
             os_log(
-                "Event cache resolver could not list active library bundle %{public}@: %{public}@.",
+                "Event persisted analysis resolver could not list active library bundle %{public}@: %{public}@.",
                 log: stabilizerHostAnalysisLog,
                 type: .error,
                 bundleRoot.path,
@@ -3891,7 +3903,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform = .identity
         }
         publishRenderAnalysisDecisionIfChanged(
-            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | auto crop \(state.autoCropEnabled ? "on" : "off") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
+            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project persisted analysis \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | auto crop \(state.autoCropEnabled ? "on" : "off") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
         )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
         let renderStoreRevision = hostAnalysisStore.revision
@@ -4083,8 +4095,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         let projectCacheUnavailableReason = configuredProjectCache ? nil : hostAnalysisStore.projectCacheUnavailableReasonText
         if !configuredProjectCache {
-            NSLog("TokyoWalkingStabilizer: setup Host Analysis will continue in memory because the Event cache root is unavailable.")
-            os_log("setupAnalysis continuing in memory because the Event cache root is unavailable; completed analysis will persist later if the Event cache root becomes available.", log: stabilizerHostAnalysisLog, type: .error)
+            NSLog("TokyoWalkingStabilizer: setup Host Analysis will continue in memory because the Event persisted analysis root is unavailable.")
+            os_log("setupAnalysis continuing in memory because the Event persisted analysis root is unavailable; completed analysis will persist later if the Event persisted analysis root becomes available.", log: stabilizerHostAnalysisLog, type: .error)
         }
         let analysisStore = StabilizerHostAnalysisStore()
         let requestedSampleScalePercent = requestedSampleScalePercent(at: analysisRange.start)

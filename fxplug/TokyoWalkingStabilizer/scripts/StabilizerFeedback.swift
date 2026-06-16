@@ -45,6 +45,7 @@ private struct Strengths {
 
 private struct PersistedHostAnalysisCache: Decodable {
     let schemaVersion: Int
+    let requestedSampleScalePercent: Double?
     let rangeStartSeconds: Double
     let rangeDurationSeconds: Double
     let frameDurationSeconds: Double
@@ -89,6 +90,7 @@ private struct CacheInventoryEntry {
     let frameCount: Int?
     let rangeStartSeconds: Double?
     let rangeDurationSeconds: Double?
+    let requestedSampleScalePercent: Double?
     let sampleWidth: Int?
     let sampleHeight: Int?
     let modifiedAt: Date?
@@ -678,6 +680,7 @@ private func cacheInventoryEntry(at url: URL) -> CacheInventoryEntry {
             frameCount: cache.frames.count,
             rangeStartSeconds: cache.rangeStartSeconds,
             rangeDurationSeconds: cache.rangeDurationSeconds,
+            requestedSampleScalePercent: cache.requestedSampleScalePercent,
             sampleWidth: cache.sampleWidth,
             sampleHeight: cache.sampleHeight,
             modifiedAt: modifiedAt
@@ -691,6 +694,7 @@ private func cacheInventoryEntry(at url: URL) -> CacheInventoryEntry {
             frameCount: nil,
             rangeStartSeconds: nil,
             rangeDurationSeconds: nil,
+            requestedSampleScalePercent: nil,
             sampleWidth: nil,
             sampleHeight: nil,
             modifiedAt: modifiedAt
@@ -1636,10 +1640,10 @@ private func renderCacheComparisonJSON(_ comparison: CacheComparison) throws {
 }
 
 private func renderCacheInventoryHuman(_ entries: [CacheInventoryEntry], rootPath: String) {
-    print("Stabilizer Host Analysis caches")
+    print("Stabilizer Host Analysis persisted analyses")
     print("Root: \(expandPath(rootPath))")
     if entries.isEmpty {
-        print("No cache files found.")
+        print("No persisted analysis files found.")
         return
     }
     for entry in entries {
@@ -1651,6 +1655,7 @@ private func renderCacheInventoryHuman(_ entries: [CacheInventoryEntry], rootPat
         } else {
             sample = "-"
         }
+        let requestedSample = entry.requestedSampleScalePercent.map(formatPercent) ?? "-"
         let range: String
         if let start = entry.rangeStartSeconds, let duration = entry.rangeDurationSeconds {
             range = "\(formatSeconds(start))+\(formatSeconds(duration))"
@@ -1658,7 +1663,7 @@ private func renderCacheInventoryHuman(_ entries: [CacheInventoryEntry], rootPat
             range = "-"
         }
         let modified = entry.modifiedAt.map { iso8601Formatter.string(from: $0) } ?? "-"
-        print("\(entry.status.uppercased()) schema \(schema) frames \(frames) sample \(sample) range \(range) modified \(modified)")
+        print("\(entry.status.uppercased()) schema \(schema) frames \(frames) requested \(requestedSample) sample \(sample) range \(range) modified \(modified)")
         print("  \(entry.reason)")
         print("  \(entry.path)")
     }
@@ -1667,7 +1672,7 @@ private func renderCacheInventoryHuman(_ entries: [CacheInventoryEntry], rootPat
 private func renderCacheInventoryJSON(_ entries: [CacheInventoryEntry], rootPath: String) throws {
     let root: [String: Any] = [
         "root": expandPath(rootPath),
-        "caches": entries.map { entry in
+        "persistedAnalyses": entries.map { entry in
             [
                 "path": entry.path,
                 "status": entry.status,
@@ -1676,6 +1681,7 @@ private func renderCacheInventoryJSON(_ entries: [CacheInventoryEntry], rootPath
                 "frameCount": jsonValue(entry.frameCount),
                 "rangeStartSeconds": jsonValue(entry.rangeStartSeconds),
                 "rangeDurationSeconds": jsonValue(entry.rangeDurationSeconds),
+                "requestedSampleScalePercent": jsonValue(entry.requestedSampleScalePercent),
                 "sampleWidth": jsonValue(entry.sampleWidth),
                 "sampleHeight": jsonValue(entry.sampleHeight),
                 "modifiedAt": jsonValue(entry.modifiedAt.map { iso8601Formatter.string(from: $0) })
@@ -1788,6 +1794,13 @@ private func printUsage() {
 
 private func formatSeconds(_ value: Double) -> String {
     String(format: "%.3fs", value)
+}
+
+private func formatPercent(_ value: Double) -> String {
+    if value.rounded() == value {
+        return String(format: "%.0f%%", value)
+    }
+    return String(format: "%.2f%%", value)
 }
 
 private func formatSignedSeconds(_ value: Double) -> String {
