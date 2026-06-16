@@ -1510,13 +1510,133 @@ func indexEntry(cache: PersistedHostAnalysisCache, fileName: String, identity: S
     )
 }
 
-func copyFileAtomically(from sourceURL: URL, to destinationURL: URL) throws {
+private final class UTF8FileWriter {
+    private let handle: FileHandle
+
+    init(url: URL) throws {
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        handle = try FileHandle(forWritingTo: url)
+    }
+
+    func write(_ value: String) {
+        handle.write(Data(value.utf8))
+    }
+
+    func close() throws {
+        try handle.close()
+    }
+}
+
+private func jsonNumber(_ value: Double, field: String) throws -> String {
+    guard value.isFinite else {
+        throw AnalyzerError("cache field \(field) contained a non-finite number")
+    }
+    return String(value)
+}
+
+private func jsonNumber(_ value: Float, field: String) throws -> String {
+    guard value.isFinite else {
+        throw AnalyzerError("cache field \(field) contained a non-finite number")
+    }
+    return String(value)
+}
+
+private func writeJSONString(_ value: String, to writer: UTF8FileWriter) {
+    writer.write("\"")
+    var buffer = ""
+    buffer.reserveCapacity(min(4096, value.count + 16))
+    for scalar in value.unicodeScalars {
+        switch scalar.value {
+        case 0x08:
+            buffer += "\\b"
+        case 0x09:
+            buffer += "\\t"
+        case 0x0A:
+            buffer += "\\n"
+        case 0x0C:
+            buffer += "\\f"
+        case 0x0D:
+            buffer += "\\r"
+        case 0x22:
+            buffer += "\\\""
+        case 0x5C:
+            buffer += "\\\\"
+        case 0x00..<0x20:
+            buffer += String(format: "\\u%04X", scalar.value)
+        default:
+            buffer.unicodeScalars.append(scalar)
+        }
+        if buffer.utf8.count >= 16 * 1024 {
+            writer.write(buffer)
+            buffer.removeAll(keepingCapacity: true)
+        }
+    }
+    if !buffer.isEmpty {
+        writer.write(buffer)
+    }
+    writer.write("\"")
+}
+
+private func writeFloatArray(_ values: [Float], field: String, to writer: UTF8FileWriter) throws {
+    writer.write("[")
+    var buffer = ""
+    buffer.reserveCapacity(64 * 1024)
+    for index in values.indices {
+        if index > values.startIndex {
+            buffer += ","
+        }
+        buffer += try jsonNumber(values[index], field: "\(field)[\(index)]")
+        if buffer.utf8.count >= 64 * 1024 {
+            writer.write(buffer)
+            buffer.removeAll(keepingCapacity: true)
+        }
+    }
+    if !buffer.isEmpty {
+        writer.write(buffer)
+    }
+    writer.write("]")
+}
+
+private func writeInt32Array(_ values: [Int32], to writer: UTF8FileWriter) {
+    writer.write("[")
+    var buffer = ""
+    buffer.reserveCapacity(64 * 1024)
+    for index in values.indices {
+        if index > values.startIndex {
+            buffer += ","
+        }
+        buffer += String(values[index])
+        if buffer.utf8.count >= 64 * 1024 {
+            writer.write(buffer)
+            buffer.removeAll(keepingCapacity: true)
+        }
+    }
+    if !buffer.isEmpty {
+        writer.write(buffer)
+    }
+    writer.write("]")
+}
+
+private func writeFrames(_ frames: [AnalysisFrame], to writer: UTF8FileWriter) throws {
+    writer.write("[")
+    for index in frames.indices {
+        if index > frames.startIndex {
+            writer.write(",")
+        }
+        let frame = frames[index]
+        writer.write("{\"time\":")
+        writer.write(try jsonNumber(frame.time, field: "frames[\(index)].time"))
+        writer.write(",\"pixels\":null,\"blurAmount\":")
+        writer.write(try jsonNumber(frame.blurAmount, field: "frames[\(index)].blurAmount"))
+        writer.write(",\"fingerprint\":")
+        writeJSONString(frame.fingerprint, to: writer)
+        writer.write("}")
+    }
+    writer.write("]")
+}
+
+private func replaceFileAtomically(at destinationURL: URL, withTemporaryFileAt temporaryURL: URL) throws {
     let fileManager = FileManager.default
-    let temporaryURL = destinationURL
-        .deletingLastPathComponent()
-        .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
-    try? fileManager.removeItem(at: temporaryURL)
-    try fileManager.copyItem(at: sourceURL, to: temporaryURL)
     do {
         if fileManager.fileExists(atPath: destinationURL.path) {
             _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
@@ -1529,6 +1649,110 @@ func copyFileAtomically(from sourceURL: URL, to destinationURL: URL) throws {
     }
 }
 
+private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationURL: URL) throws {
+    let fileManager = FileManager.default
+    let temporaryURL = destinationURL
+        .deletingLastPathComponent()
+        .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
+    try? fileManager.removeItem(at: temporaryURL)
+    let writer = try UTF8FileWriter(url: temporaryURL)
+    do {
+        var wroteField = false
+
+        func beginField(_ name: String) {
+            if wroteField {
+                writer.write(",")
+            }
+            writeJSONString(name, to: writer)
+            writer.write(":")
+            wroteField = true
+        }
+
+        func writeDoubleField(_ name: String, _ value: Double) throws {
+            beginField(name)
+            writer.write(try jsonNumber(value, field: name))
+        }
+
+        func writeOptionalDoubleField(_ name: String, _ value: Double?) throws {
+            guard let value else { return }
+            try writeDoubleField(name, value)
+        }
+
+        func writeOptionalStringField(_ name: String, _ value: String?) {
+            guard let value else { return }
+            beginField(name)
+            writeJSONString(value, to: writer)
+        }
+
+        func writeOptionalFloatArrayField(_ name: String, _ values: [Float]?) throws {
+            guard let values else { return }
+            beginField(name)
+            try writeFloatArray(values, field: name, to: writer)
+        }
+
+        func writeOptionalInt32ArrayField(_ name: String, _ values: [Int32]?) {
+            guard let values else { return }
+            beginField(name)
+            writeInt32Array(values, to: writer)
+        }
+
+        writer.write("{")
+        beginField("schemaVersion")
+        writer.write(String(cache.schemaVersion))
+        try writeDoubleField("createdAt", cache.createdAt)
+        writeOptionalStringField("clipLabel", cache.clipLabel)
+        try writeDoubleField("rangeStartSeconds", cache.rangeStartSeconds)
+        try writeDoubleField("rangeDurationSeconds", cache.rangeDurationSeconds)
+        try writeOptionalDoubleField("rangeEndSeconds", cache.rangeEndSeconds)
+        try writeDoubleField("frameDurationSeconds", cache.frameDurationSeconds)
+        beginField("sampleWidth")
+        writer.write(String(cache.sampleWidth))
+        beginField("sampleHeight")
+        writer.write(String(cache.sampleHeight))
+        writeOptionalStringField("eventName", cache.eventName)
+        beginField("frames")
+        try writeFrames(cache.frames, to: writer)
+        try writeOptionalFloatArrayField("residuals", cache.residuals)
+        try writeOptionalFloatArrayField("rollMotion", cache.rollMotion)
+        try writeOptionalFloatArrayField("pathX", cache.pathX)
+        try writeOptionalFloatArrayField("pathY", cache.pathY)
+        try writeOptionalFloatArrayField("pathRoll", cache.pathRoll)
+        try writeOptionalFloatArrayField("footstepPathX", cache.footstepPathX)
+        try writeOptionalFloatArrayField("footstepPathY", cache.footstepPathY)
+        try writeOptionalFloatArrayField("footstepPathRoll", cache.footstepPathRoll)
+        try writeOptionalFloatArrayField("pathYaw", cache.pathYaw)
+        try writeOptionalFloatArrayField("pathPitch", cache.pathPitch)
+        try writeOptionalFloatArrayField("pathShearX", cache.pathShearX)
+        try writeOptionalFloatArrayField("pathShearY", cache.pathShearY)
+        try writeOptionalFloatArrayField("pathPerspectiveX", cache.pathPerspectiveX)
+        try writeOptionalFloatArrayField("pathPerspectiveY", cache.pathPerspectiveY)
+        try writeOptionalFloatArrayField("analysisConfidence", cache.analysisConfidence)
+        try writeOptionalFloatArrayField("warpConfidence", cache.warpConfidence)
+        writeOptionalInt32ArrayField("acceptedBlockCounts", cache.acceptedBlockCounts)
+        writeOptionalInt32ArrayField("totalBlockCounts", cache.totalBlockCounts)
+        try writeOptionalFloatArrayField("blurAmounts", cache.blurAmounts)
+        writeOptionalInt32ArrayField("searchRadiusHitCounts", cache.searchRadiusHitCounts)
+        writeOptionalInt32ArrayField("searchRadiusTotalCounts", cache.searchRadiusTotalCounts)
+        writer.write("}")
+        try writer.close()
+        try replaceFileAtomically(at: destinationURL, withTemporaryFileAt: temporaryURL)
+    } catch {
+        try? writer.close()
+        try? fileManager.removeItem(at: temporaryURL)
+        throw error
+    }
+}
+
+func copyFileAtomically(from sourceURL: URL, to destinationURL: URL) throws {
+    let fileManager = FileManager.default
+    let temporaryURL = destinationURL
+        .deletingLastPathComponent()
+        .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
+    try? fileManager.removeItem(at: temporaryURL)
+    try fileManager.copyItem(at: sourceURL, to: temporaryURL)
+    try replaceFileAtomically(at: destinationURL, withTemporaryFileAt: temporaryURL)
+}
+
 func writeCache(cacheRoot: URL, asset: AssetPlan, prepared: PreparedAnalysis, cache: PersistedHostAnalysisCache, sampleScalePercent: Double) throws -> AnalysisResult {
     let fileManager = FileManager.default
     let storageURL = cacheRoot.appendingPathComponent(cacheStorageDirectoryName, isDirectory: true)
@@ -1537,10 +1761,7 @@ func writeCache(cacheRoot: URL, asset: AssetPlan, prepared: PreparedAnalysis, ca
     let fileName = try cacheFileName(cache: cache, frames: prepared.frames)
     let encoder = JSONEncoder()
     let storedCacheURL = storageURL.appendingPathComponent(fileName)
-    do {
-        let data = try encoder.encode(cache)
-        try data.write(to: storedCacheURL, options: .atomic)
-    }
+    try writeCacheJSON(cache, to: storedCacheURL)
     try copyFileAtomically(from: storedCacheURL, to: cacheRoot.appendingPathComponent(cacheFileName))
 
     let indexURL = cacheRoot.appendingPathComponent(cacheIndexFileName)
