@@ -744,6 +744,10 @@ final class MetalAnalysisContext {
         return (metrics, motion)
     }
 
+    fileprivate func flushTextureCache() {
+        CVMetalTextureCacheFlush(textureCache, 0)
+    }
+
     private func workspaceForMotion(width: Int, height: Int) throws -> MetalMotionWorkspace {
         if let motionWorkspace,
            motionWorkspace.width == width,
@@ -1063,6 +1067,11 @@ private func firstPresentationTimeSeconds(url: URL) throws -> Double {
     guard reader.startReading() else {
         throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed to start")
     }
+    defer {
+        if reader.status == .reading {
+            reader.cancelReading()
+        }
+    }
     guard let sampleBuffer = output.copyNextSampleBuffer() else {
         throw AnalyzerError("asset had no readable video frames: \(url.path)")
     }
@@ -1110,6 +1119,12 @@ private func readFrameChunk(
     reader.add(output)
     guard reader.startReading() else {
         throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed to start")
+    }
+    defer {
+        if reader.status == .reading {
+            reader.cancelReading()
+        }
+        metalContext.flushTextureCache()
     }
     var frames: [AnalysisFrame] = []
     var motions: [PairMotion] = []
