@@ -13,7 +13,15 @@ import zlib
 from pathlib import Path
 from typing import Iterable
 
-from fcpxml_common import SCHEMA_VERSION, local_name, resolve_info_path, resources, safe_file_component
+from fcpxml_common import (
+    SCHEMA_VERSION,
+    event_names,
+    local_name,
+    parse_time,
+    resolve_info_path,
+    resources,
+    safe_file_component,
+)
 
 
 EFFECT_NAME = "Tokyo Walking Stabilizer"
@@ -175,6 +183,116 @@ def insert_after_child(parent: ET.Element, child: ET.Element, node: ET.Element) 
     parent.insert(index, node)
 
 
+def time_string(value) -> str:
+    if value.denominator == 1:
+        return f"{value.numerator}s"
+    return f"{value.numerator}/{value.denominator}s"
+
+
+def resource_by_id(root: ET.Element, resource_id: str) -> ET.Element | None:
+    for child in resources(root):
+        if child.attrib.get("id") == resource_id:
+            return child
+    return None
+
+
+def first_event_asset_clip(root: ET.Element, asset_id: str) -> ET.Element | None:
+    for event in root.iter():
+        if local_name(event.tag) != "event":
+            continue
+        for child in list(event):
+            if local_name(child.tag) == "asset-clip" and child.attrib.get("ref") == asset_id:
+                return child
+    return None
+
+
+def filtered_pre_effect_children(source: ET.Element | None) -> list[ET.Element]:
+    if source is None:
+        return []
+    children = []
+    for child in list(source):
+        tag = local_name(child.tag)
+        if tag not in PRE_EFFECT_CHILD_TAGS:
+            continue
+        if tag == "filter-video" or filter_name(child) in LEGACY_FILTER_NAMES | FILTER_NAMES:
+            continue
+        children.append(copy.deepcopy(child))
+    return children
+
+
+def clip_attributes(asset: ET.Element, source_clip: ET.Element | None, *, offset: str | None = None) -> dict[str, str]:
+    attrs: dict[str, str] = {
+        "ref": asset.attrib["id"],
+        "name": asset.attrib.get("name") or asset.attrib["id"],
+    }
+    for key in ("start", "duration", "format"):
+        if source_clip is not None and source_clip.attrib.get(key):
+            attrs[key] = source_clip.attrib[key]
+        elif asset.attrib.get(key):
+            attrs[key] = asset.attrib[key]
+    for key in ("tcFormat", "audioRole"):
+        if source_clip is not None and source_clip.attrib.get(key):
+            attrs[key] = source_clip.attrib[key]
+    if offset is not None:
+        attrs["offset"] = offset
+    return attrs
+
+
+def append_filtered_asset_clip(parent: ET.Element, asset: ET.Element, source_clip: ET.Element | None, ref: str, result: dict, *, offset: str | None = None) -> ET.Element:
+    clip = ET.SubElement(parent, "asset-clip", clip_attributes(asset, source_clip, offset=offset))
+    for child in filtered_pre_effect_children(source_clip):
+        clip.append(child)
+    clip.append(stabilizer_filter(ref, result))
+    return clip
+
+
+def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) -> ET.Element:
+    root = ET.Element("fcpxml", dict(source_root.attrib))
+    source_resources = resources(source_root)
+    target_resources = ET.SubElement(root, "resources")
+    copied_resource_ids: set[str] = set()
+    for asset_id in results:
+        asset = resource_by_id(source_root, asset_id)
+        if asset is None or local_name(asset.tag) != "asset":
+            raise ValueError(f"analyzed asset resource was not found in source FCPXML: {asset_id}")
+        format_id = asset.attrib.get("format")
+        if not format_id:
+            raise ValueError(f"analyzed asset has no format resource: {asset_id}")
+        fmt = resource_by_id(source_root, format_id)
+        if fmt is None or local_name(fmt.tag) != "format":
+            raise ValueError(f"format resource {format_id} was not found for analyzed asset {asset_id}")
+        for resource in (fmt, asset):
+            resource_id = resource.attrib.get("id")
+            if resource_id and resource_id not in copied_resource_ids:
+                target_resources.append(copy.deepcopy(resource))
+                copied_resource_ids.add(resource_id)
+
+    ref = ensure_effect_resource(root)
+    library = ET.SubElement(root, "library")
+    event_name = (event_names(source_root) or ["Stabilized Analysis"])[0]
+    event = ET.SubElement(library, "event", {"name": event_name})
+    project_duration = sum((parse_time(resource_by_id(source_root, asset_id).attrib["duration"]) for asset_id in results), start=parse_time("0s"))
+    first_asset = resource_by_id(source_root, next(iter(results)))
+    first_format = first_asset.attrib["format"]
+    sequence_attrs = {
+        "format": first_format,
+        "duration": time_string(project_duration),
+        "tcStart": "0s",
+        "tcFormat": "NDF",
+    }
+    project = ET.SubElement(event, "project", {"name": "Tokyo Walking Stabilizer - Analyzed Footage"})
+    sequence = ET.SubElement(project, "sequence", sequence_attrs)
+    spine = ET.SubElement(sequence, "spine")
+    offset = parse_time("0s")
+    for asset_id, result in results.items():
+        asset = resource_by_id(source_root, asset_id)
+        source_clip = first_event_asset_clip(source_root, asset_id)
+        append_filtered_asset_clip(event, asset, source_clip, ref, result)
+        append_filtered_asset_clip(spine, asset, source_clip, ref, result, offset=time_string(offset))
+        offset += parse_time(asset.attrib["duration"])
+    return root
+
+
 def output_package_path(output_dir: Path, source_path: Path) -> Path:
     source_name = source_path.name if source_path.suffix == ".fcpxmld" else source_path.stem
     if not source_name.endswith(".fcpxmld"):
@@ -200,6 +318,11 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--source-fcpxml", type=Path, required=True)
     parser.add_argument("--analysis-json", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--only-analyzed-assets",
+        action="store_true",
+        help="Build a compact FCPXMLD containing only analyzed video assets and one review project.",
+    )
     return parser.parse_args(argv)
 
 
@@ -211,9 +334,35 @@ def main(argv: Iterable[str]) -> int:
         results = {item["assetId"]: item for item in analysis.get("results", []) if item.get("cacheIdentity")}
         if not results:
             raise ValueError("analysis JSON did not contain cache identities")
-        package_path, target_info = copy_source_package(args.source_fcpxml, info_path, args.output_dir)
-        tree = ET.parse(target_info)
+        if args.only_analyzed_assets:
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+            package_path = output_package_path(args.output_dir, args.source_fcpxml)
+            if package_path.exists():
+                shutil.rmtree(package_path)
+            package_path.mkdir(parents=True)
+            target_info = package_path / "Info.fcpxml"
+            tree = ET.parse(info_path)
+        else:
+            package_path, target_info = copy_source_package(args.source_fcpxml, info_path, args.output_dir)
+            tree = ET.parse(target_info)
         root = tree.getroot()
+        if args.only_analyzed_assets:
+            root = build_analyzed_only_tree(root, results)
+            tree = ET.ElementTree(root)
+            tree.write(target_info, encoding="utf-8", xml_declaration=True)
+            return emit(
+                {
+                    "schemaVersion": SCHEMA_VERSION,
+                    "status": "ok",
+                    "outputPackage": str(package_path),
+                    "infoPath": str(target_info),
+                    "insertedFilters": len(results) * 2,
+                    "removedExistingFilters": 0,
+                    "assetIds": sorted(results),
+                    "safeName": safe_file_component(package_path.stem),
+                    "onlyAnalyzedAssets": True,
+                }
+            )
         removed = remove_filters_by_name(root, LEGACY_FILTER_NAMES)
         remove_unused_effect_resources(root, LEGACY_FILTER_NAMES)
         ref = ensure_effect_resource(root)
