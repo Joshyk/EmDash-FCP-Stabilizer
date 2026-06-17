@@ -48,6 +48,7 @@ renderAppVersion(window.STABILIZER_EVENT_ANALYZER_VERSION);
 async function api(path, options = {}) {
   const response = await fetch(path, {
     method: options.method || "GET",
+    cache: "no-store",
     headers: { "content-type": "application/json" },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
@@ -93,6 +94,19 @@ function jobStatusText(job) {
   const message = /^progress\s+/.test(job.message || "") ? "" : (job.message || "");
   const status = message ? `${stage}: ${message}` : stage;
   return withProgress(job, status);
+}
+
+function attachRunningJob(job) {
+  if (!job || (job.status !== "running" && job.status !== "cancelling")) {
+    return false;
+  }
+  state.currentJobId = job.id;
+  el.runButton.disabled = true;
+  el.cancelButton.disabled = job.status === "cancelling";
+  el.cancelButton.classList.remove("hidden");
+  setStatus(jobStatusText(job));
+  pollJob();
+  return true;
 }
 
 function readLastAnalysisSettings() {
@@ -288,6 +302,13 @@ async function loadConfig() {
   renderExports([]);
   updateLastAnalysisState();
   updateRunState();
+  await resumeLatestJob();
+}
+
+async function resumeLatestJob() {
+  if (state.currentJobId) return;
+  const payload = await api("/api/latest-job");
+  attachRunningJob(payload.job);
 }
 
 async function selectExportFiles() {

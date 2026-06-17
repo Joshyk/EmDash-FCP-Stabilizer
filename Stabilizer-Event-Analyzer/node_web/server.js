@@ -52,6 +52,7 @@ function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
     "content-length": Buffer.byteLength(body),
   });
   res.end(body);
@@ -100,6 +101,15 @@ function publicJob(job) {
     result: job.result,
     error: job.error,
   };
+}
+
+function latestPublicJob() {
+  const allJobs = Array.from(jobs.values());
+  if (!allJobs.length) return null;
+  const activeJobs = allJobs.filter((job) => job.status === "running" || job.status === "cancelling");
+  const candidates = activeJobs.length ? activeJobs : allJobs;
+  candidates.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return publicJob(candidates[0]);
 }
 
 function jobId() {
@@ -564,6 +574,9 @@ async function handleApi(req, res, pathname) {
       if (!job) return sendError(res, 404, "job was not found");
       return sendJson(res, 200, { status: "ok", job });
     }
+    if (req.method === "GET" && pathname === "/api/latest-job") {
+      return sendJson(res, 200, { status: "ok", job: latestPublicJob() });
+    }
     if (req.method === "POST" && pathname === "/api/cancel") {
       const body = await readJsonBody(req);
       return sendJson(res, 200, { status: "ok", job: cancelJob(body.id) });
@@ -592,7 +605,10 @@ async function handleApi(req, res, pathname) {
 async function serveStatic(req, res, pathname) {
   if (pathname === "/version.js") {
     const body = `window.STABILIZER_EVENT_ANALYZER_VERSION=${JSON.stringify(packageInfo.version)};\n`;
-    res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+    res.writeHead(200, {
+      "content-type": "application/javascript; charset=utf-8",
+      "cache-control": "no-store",
+    });
     res.end(body);
     return;
   }
@@ -603,7 +619,10 @@ async function serveStatic(req, res, pathname) {
   }
   try {
     const data = await fsp.readFile(targetPath);
-    res.writeHead(200, { "content-type": MIME_TYPES[path.extname(targetPath)] || "application/octet-stream" });
+    res.writeHead(200, {
+      "content-type": MIME_TYPES[path.extname(targetPath)] || "application/octet-stream",
+      "cache-control": "no-store",
+    });
     res.end(data);
   } catch {
     sendError(res, 404, "not found");
