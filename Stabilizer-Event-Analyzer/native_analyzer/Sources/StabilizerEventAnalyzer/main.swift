@@ -791,33 +791,10 @@ func fingerprintString(hash initialHash: UInt64, byteCount: Int) -> String {
     return String(format: "%016llx", hash)
 }
 
-func fingerprint(_ pixels: UnsafePointer<UInt8>, byteCount: Int) -> String {
-    var hash = fingerprintInitialHash
-    var index = 0
-    while index + 8 <= byteCount {
-        combineFingerprintByte(pixels[index], into: &hash)
-        combineFingerprintByte(pixels[index + 1], into: &hash)
-        combineFingerprintByte(pixels[index + 2], into: &hash)
-        combineFingerprintByte(pixels[index + 3], into: &hash)
-        combineFingerprintByte(pixels[index + 4], into: &hash)
-        combineFingerprintByte(pixels[index + 5], into: &hash)
-        combineFingerprintByte(pixels[index + 6], into: &hash)
-        combineFingerprintByte(pixels[index + 7], into: &hash)
-        index += 8
-    }
-    while index < byteCount {
-        combineFingerprintByte(pixels[index], into: &hash)
-        index += 1
-    }
-    return fingerprintString(hash: hash, byteCount: byteCount)
-}
-
-private func frameMetrics(_ pixels: UnsafePointer<UInt16>, pixelCount: Int, blurAmount: Float) -> FrameMetrics {
-    let rawBytes = UnsafeRawPointer(pixels).assumingMemoryBound(to: UInt8.self)
-    let byteCount = pixelCount * MemoryLayout<UInt16>.stride
+private func frameMetrics(fingerprint: String, blurAmount: Float) -> FrameMetrics {
     return FrameMetrics(
         blurAmount: blurAmount,
-        fingerprint: fingerprint(rawBytes, byteCount: byteCount)
+        fingerprint: fingerprint
     )
 }
 
@@ -861,6 +838,10 @@ private struct MetalShiftResult {
 private struct MetalBlurResult {
     let total: UInt32
     let count: UInt32
+}
+
+private struct MetalFingerprintResult {
+    let value: UInt64
 }
 
 private final class MetalMotionWorkspace {
@@ -954,6 +935,7 @@ private final class MetalMotionWorkspace {
 private struct MetalFrameSlot {
     let lumaBuffer: MTLBuffer
     let blurResultBuffer: MTLBuffer
+    let fingerprintResultBuffer: MTLBuffer
     let partialSumBuffer: MTLBuffer
     let partialCountBuffer: MTLBuffer
     let resultBuffer: MTLBuffer
@@ -971,6 +953,8 @@ private struct MetalEncodedFrame {
     let outputBuffer: MTLBuffer
     let blurResultBuffer: MTLBuffer
     let blurChunkCount: Int
+    let fingerprintResultBuffer: MTLBuffer
+    let fingerprintByteCount: Int
     let resultBuffer: MTLBuffer?
     let motionWorkspace: MetalMotionWorkspace?
     let lumaFormat: LumaBufferFormat
@@ -984,6 +968,7 @@ private final class MetalAnalysisSharedState {
     let device: MTLDevice
     let lumaPipelineState: MTLComputePipelineState
     let blurPartialPipelineState: MTLComputePipelineState
+    let fingerprintPipelineState: MTLComputePipelineState
     let blockScorePartialPipelineState: MTLComputePipelineState
     let blockScoreResolvePipelineState: MTLComputePipelineState
 
@@ -994,6 +979,7 @@ private final class MetalAnalysisSharedState {
         let library = try device.makeLibrary(source: MetalAnalysisContext.kernelSource, options: nil)
         guard let lumaFunction = library.makeFunction(name: "stabilizer_luma_sample"),
               let blurPartialFunction = library.makeFunction(name: "stabilizer_blur_partials"),
+              let fingerprintFunction = library.makeFunction(name: "stabilizer_fingerprint"),
               let blockScorePartialFunction = library.makeFunction(name: "stabilizer_block_score_partials"),
               let blockScoreResolveFunction = library.makeFunction(name: "stabilizer_block_score_resolve") else {
             throw AnalyzerError("Metal analysis kernels were not found")
@@ -1001,6 +987,7 @@ private final class MetalAnalysisSharedState {
         self.device = device
         self.lumaPipelineState = try device.makeComputePipelineState(function: lumaFunction)
         self.blurPartialPipelineState = try device.makeComputePipelineState(function: blurPartialFunction)
+        self.fingerprintPipelineState = try device.makeComputePipelineState(function: fingerprintFunction)
         self.blockScorePartialPipelineState = try device.makeComputePipelineState(function: blockScorePartialFunction)
         self.blockScoreResolvePipelineState = try device.makeComputePipelineState(function: blockScoreResolveFunction)
     }
@@ -1012,6 +999,7 @@ final class MetalAnalysisContext {
     private let textureCache: CVMetalTextureCache
     private let lumaPipelineState: MTLComputePipelineState
     private let blurPartialPipelineState: MTLComputePipelineState
+    private let fingerprintPipelineState: MTLComputePipelineState
     private let blockScorePartialPipelineState: MTLComputePipelineState
     private let blockScoreResolvePipelineState: MTLComputePipelineState
     private var motionWorkspace: MetalMotionWorkspace?
@@ -1034,6 +1022,7 @@ final class MetalAnalysisContext {
         self.textureCache = textureCache
         self.lumaPipelineState = sharedState.lumaPipelineState
         self.blurPartialPipelineState = sharedState.blurPartialPipelineState
+        self.fingerprintPipelineState = sharedState.fingerprintPipelineState
         self.blockScorePartialPipelineState = sharedState.blockScorePartialPipelineState
         self.blockScoreResolvePipelineState = sharedState.blockScoreResolvePipelineState
     }
@@ -1042,6 +1031,7 @@ final class MetalAnalysisContext {
         let workspace = try workspaceForMotion(width: width, height: height)
         let lumaLength = pixelCount * MemoryLayout<UInt16>.stride
         let blurResultLength = MemoryLayout<MetalBlurResult>.stride * metalBlurChunkCount
+        let fingerprintResultLength = MemoryLayout<MetalFingerprintResult>.stride
         let partialLength = MemoryLayout<UInt32>.stride * workspace.partialElementCount
         let resultLength = MemoryLayout<MetalShiftResult>.stride * workspace.blockCount
         let sharedOptions: MTLResourceOptions = .storageModeShared
@@ -1051,6 +1041,7 @@ final class MetalAnalysisContext {
         for _ in 0..<count {
             guard let lumaBuffer = device.makeBuffer(length: lumaLength, options: sharedOptions),
                   let blurResultBuffer = device.makeBuffer(length: blurResultLength, options: sharedOptions),
+                  let fingerprintResultBuffer = device.makeBuffer(length: fingerprintResultLength, options: sharedOptions),
                   let partialSumBuffer = device.makeBuffer(length: partialLength, options: gpuOnlyOptions),
                   let partialCountBuffer = device.makeBuffer(length: partialLength, options: gpuOnlyOptions),
                   let resultBuffer = device.makeBuffer(length: resultLength, options: sharedOptions) else {
@@ -1059,6 +1050,7 @@ final class MetalAnalysisContext {
             slots.append(MetalFrameSlot(
                 lumaBuffer: lumaBuffer,
                 blurResultBuffer: blurResultBuffer,
+                fingerprintResultBuffer: fingerprintResultBuffer,
                 partialSumBuffer: partialSumBuffer,
                 partialCountBuffer: partialCountBuffer,
                 resultBuffer: resultBuffer
@@ -1073,6 +1065,7 @@ final class MetalAnalysisContext {
         sampleHeight: Int,
         outputBuffer: MTLBuffer,
         blurResultBuffer: MTLBuffer,
+        fingerprintResultBuffer: MTLBuffer,
         partialSumBuffer: MTLBuffer,
         partialCountBuffer: MTLBuffer,
         resultBuffer: MTLBuffer,
@@ -1140,6 +1133,20 @@ final class MetalAnalysisContext {
         )
         blurEncoder.endEncoding()
 
+        guard let fingerprintEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw AnalyzerError("could not allocate Metal fingerprint encoder")
+        }
+        var fingerprintByteCount = UInt32(pixelCount * MemoryLayout<UInt16>.stride)
+        fingerprintEncoder.setComputePipelineState(fingerprintPipelineState)
+        fingerprintEncoder.setBuffer(outputBuffer, offset: 0, index: 0)
+        fingerprintEncoder.setBuffer(fingerprintResultBuffer, offset: 0, index: 1)
+        fingerprintEncoder.setBytes(&fingerprintByteCount, length: MemoryLayout<UInt32>.stride, index: 2)
+        fingerprintEncoder.dispatchThreads(
+            MTLSize(width: 1, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+        )
+        fingerprintEncoder.endEncoding()
+
         let activeMotionWorkspace: MetalMotionWorkspace?
         if let previousBuffer {
             let workspace = try workspaceForMotion(width: sampleWidth, height: sampleHeight)
@@ -1184,6 +1191,8 @@ final class MetalAnalysisContext {
             outputBuffer: outputBuffer,
             blurResultBuffer: blurResultBuffer,
             blurChunkCount: metalBlurChunkCount,
+            fingerprintResultBuffer: fingerprintResultBuffer,
+            fingerprintByteCount: Int(fingerprintByteCount),
             resultBuffer: previousBuffer == nil ? nil : resultBuffer,
             motionWorkspace: activeMotionWorkspace,
             lumaFormat: lumaSource.format
@@ -1191,22 +1200,23 @@ final class MetalAnalysisContext {
     }
 
     fileprivate func completeFrame(
-        _ encodedFrame: MetalEncodedFrame,
-        pixelCount: Int,
-        sampleWidth: Int,
-        sampleHeight: Int
+        _ encodedFrame: MetalEncodedFrame
     ) throws -> (metrics: FrameMetrics, motion: PairMotion?) {
         encodedFrame.commandBuffer.waitUntilCompleted()
-        try Self.validate(commandBuffer: encodedFrame.commandBuffer, stage: encodedFrame.motionWorkspace == nil ? "luma sampling" : "luma sampling and block motion search")
-        let pixels = encodedFrame.outputBuffer.contents().assumingMemoryBound(to: UInt16.self)
+        let stage = encodedFrame.motionWorkspace == nil ? "luma sampling, blur, and fingerprint" : "luma sampling, blur, fingerprint, and block motion search"
+        try Self.validate(commandBuffer: encodedFrame.commandBuffer, stage: stage)
         let blurAmount = Self.blurAmount(
             resultBuffer: encodedFrame.blurResultBuffer,
             chunkCount: encodedFrame.blurChunkCount,
             lumaFormat: encodedFrame.lumaFormat
         )
+        let fingerprintHash = encodedFrame.fingerprintResultBuffer.contents()
+            .assumingMemoryBound(to: MetalFingerprintResult.self)
+            .pointee
+            .value
+        let fingerprint = fingerprintString(hash: fingerprintHash, byteCount: encodedFrame.fingerprintByteCount)
         let metrics = frameMetrics(
-            pixels,
-            pixelCount: pixelCount,
+            fingerprint: fingerprint,
             blurAmount: blurAmount
         )
         let motion: PairMotion?
@@ -1377,6 +1387,23 @@ final class MetalAnalysisContext {
         }
         results[gid].total = total;
         results[gid].count = count;
+    }
+
+    kernel void stabilizer_fingerprint(
+        device const uchar *bytes [[buffer(0)]],
+        device ulong *result [[buffer(1)]],
+        constant uint &byteCount [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]
+    ) {
+        if (gid != 0) {
+            return;
+        }
+        ulong hash = 14695981039346656037UL;
+        for (uint index = 0; index < byteCount; index += 1) {
+            hash ^= ulong(bytes[index]);
+            hash *= 1099511628211UL;
+        }
+        result[0] = hash;
     }
 
     kernel void stabilizer_block_score_partials(
@@ -1719,12 +1746,7 @@ private func readFrameChunk(
 
     func finishOldestPendingFrame() throws {
         let pending = pendingFrames.removeFirst()
-        let frameAnalysis = try metalContext.completeFrame(
-            pending.encoded,
-            pixelCount: pixelCount,
-            sampleWidth: sample.width,
-            sampleHeight: sample.height
-        )
+        let frameAnalysis = try metalContext.completeFrame(pending.encoded)
         completedEncodedFrameCount += 1
         if completedEncodedFrameCount % textureCacheFlushInterval == 0 {
             metalContext.flushTextureCache()
@@ -1781,6 +1803,7 @@ private func readFrameChunk(
                 sampleHeight: sample.height,
                 outputBuffer: currentFrameSlot.lumaBuffer,
                 blurResultBuffer: currentFrameSlot.blurResultBuffer,
+                fingerprintResultBuffer: currentFrameSlot.fingerprintResultBuffer,
                 partialSumBuffer: currentFrameSlot.partialSumBuffer,
                 partialCountBuffer: currentFrameSlot.partialCountBuffer,
                 resultBuffer: currentFrameSlot.resultBuffer,
