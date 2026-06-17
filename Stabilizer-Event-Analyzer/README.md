@@ -63,8 +63,10 @@ hardware-required VideoToolbox on M1. In that case the analyzer prints the codec
 dimensions, and VideoToolbox status, then continues with the visible software
 decode fallback.
 
-When `--progress` is enabled, frame and chunk progress updates rewrite one
-stderr line instead of printing a new `progress ...` line for every update.
+When `--progress` is enabled in an interactive terminal, frame and chunk
+progress updates rewrite one stderr line. When stderr is piped, such as through
+the local web UI, each progress update is emitted as a `progress ...` line so
+the UI can parse and display it live.
 
 ## Run
 

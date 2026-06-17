@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import CoreVideo
+import Darwin
 import Foundation
 import Metal
 import VideoToolbox
@@ -12,6 +13,7 @@ private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
 private let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
 private let metalBlurChunkCount = 256
+private let progressOutputIsTerminal = isatty(STDERR_FILENO) == 1
 private let analyzerVideoOutputSettings: [String: Any] = [
     kCVPixelBufferPixelFormatTypeKey as String: [
         NSNumber(value: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
@@ -669,6 +671,12 @@ func progressUpdate(_ enabled: Bool, _ message: String) {
     defer {
         progressOutputLock.unlock()
     }
+    guard progressOutputIsTerminal else {
+        FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
+        progressLineActive = false
+        progressLineWidth = 0
+        return
+    }
     let paddingCount = max(0, progressLineWidth - message.count)
     let paddedMessage = message + String(repeating: " ", count: paddingCount)
     FileHandle.standardError.write(("\r" + paddedMessage).data(using: .utf8)!)
@@ -692,7 +700,7 @@ func finishProgressLine(_ enabled: Bool) {
 }
 
 private func clearProgressLineLocked() {
-    if progressLineActive {
+    if progressOutputIsTerminal && progressLineActive {
         let clearText = "\r" + String(repeating: " ", count: progressLineWidth) + "\r"
         FileHandle.standardError.write(clearText.data(using: .utf8)!)
         progressLineActive = false
@@ -717,6 +725,10 @@ private final class AnalyzerFrameProgressReporter {
         self.publishEveryFrameCount = max(1, totalFrameCount / 100)
     }
 
+    func start() {
+        publishAfterAddingFrameCount(0, force: true)
+    }
+
     func completeFrame() {
         publishAfterAddingFrameCount(1, force: false)
     }
@@ -737,6 +749,8 @@ private final class AnalyzerFrameProgressReporter {
             || completedFrameCount - lastPublishedFrameCount >= publishEveryFrameCount
         if shouldPublish && completedFrameCount != lastPublishedFrameCount {
             lastPublishedFrameCount = completedFrameCount
+            message = progressMessageLocked()
+        } else if shouldPublish && force {
             message = progressMessageLocked()
         } else {
             message = nil
@@ -1855,6 +1869,7 @@ private func readFramesInParallel(
             frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
         )
     )
+    progressReporter.start()
     let resultLock = NSLock()
     let group = DispatchGroup()
     var results = Array<FrameChunkResult?>(repeating: nil, count: chunks.count)
@@ -1989,6 +2004,7 @@ func readFrames(
             maxFrames: maxFrames
         )
     )
+    progressReporter.start()
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: 1)
     let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
     progress(progressEnabled, "using 1 \(serialDecoderPlan.description) Metal reader lane with \(inFlightLimit) in-flight GPU frame slot(s), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")

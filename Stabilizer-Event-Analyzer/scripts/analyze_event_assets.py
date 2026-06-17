@@ -41,9 +41,21 @@ def normalize_cache_root(path: Path) -> Path:
 
 
 def swift_command(plan_path: Path, progress: bool) -> list[str]:
+    built_executables = [
+        NATIVE_PACKAGE / ".build" / "release" / EXECUTABLE_NAME,
+        *sorted((NATIVE_PACKAGE / ".build").glob("*-apple-macosx/release/" + EXECUTABLE_NAME)),
+    ]
+    for built_executable in built_executables:
+        if built_executable.exists():
+            command = [str(built_executable), "--plan", str(plan_path)]
+            if progress:
+                command.append("--progress")
+            return command
     swift = shutil.which("swift")
     if not swift:
         raise RuntimeError("swift was not found on PATH; native analyzer cannot run")
+    if progress:
+        print("prebuilt native analyzer was not found; building with swift run", file=sys.stderr)
     command = [
         swift,
         "run",

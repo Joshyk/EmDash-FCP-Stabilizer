@@ -88,6 +88,8 @@ function updateJob(id, patch) {
 
 function publicJob(job) {
   if (!job) return null;
+  const live = job.status === "running" || job.status === "cancelling";
+  const elapsedUntil = live ? Date.now() : (job.updatedAt || Date.now());
   return {
     id: job.id,
     status: job.status,
@@ -95,7 +97,7 @@ function publicJob(job) {
     message: job.message,
     startedAt: job.startedAt,
     updatedAt: job.updatedAt,
-    elapsedSeconds: Math.max(0, Math.round(((job.updatedAt || Date.now()) - job.startedAt) / 1000)),
+    elapsedSeconds: Math.max(0, Math.round((elapsedUntil - job.startedAt) / 1000)),
     cancellable: job.status === "running" || job.status === "cancelling",
     progress: job.progress,
     result: job.result,
@@ -227,22 +229,35 @@ function runJsonProcess(command, args, options = {}) {
 }
 
 function progressLineHandler(jobIdValue) {
-  return (text) => {
-    const lines = text.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean);
-    if (!lines.length) return;
-    for (const line of lines) {
-      const parsedProgress = parseAnalyzerProgressLine(line);
-      if (parsedProgress) {
-        updateJob(jobIdValue, {
-          stage: "analyzing",
-          progress: parsedProgress,
-        });
-        continue;
-      }
+  let pending = "";
+  const applyLine = (line) => {
+    const parsedProgress = parseAnalyzerProgressLine(line);
+    if (parsedProgress) {
       updateJob(jobIdValue, {
         stage: "analyzing",
-        message: line,
+        progress: parsedProgress,
       });
+      return;
+    }
+    updateJob(jobIdValue, {
+      stage: "analyzing",
+      message: line,
+    });
+  };
+  return (text) => {
+    const parts = (pending + text).split(/[\r\n]+/);
+    pending = parts.pop() || "";
+    const lines = parts.map((line) => line.trim()).filter(Boolean);
+    for (const line of lines) {
+      applyLine(line);
+    }
+    const pendingProgress = parseAnalyzerProgressLine(pending.trim());
+    if (pendingProgress) {
+      updateJob(jobIdValue, {
+        stage: "analyzing",
+        progress: pendingProgress,
+      });
+      pending = "";
     }
   };
 }
