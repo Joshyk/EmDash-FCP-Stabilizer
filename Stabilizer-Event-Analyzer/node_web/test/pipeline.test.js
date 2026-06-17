@@ -364,7 +364,7 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
 <fcpxml version="1.11">
   <resources>
     <format id="r1" name="FFVideoFormat1080p30" frameDuration="1001/30000s" width="1920" height="1080"/>
-    <asset id="r2" name="P1000307" start="0s" duration="300300/30000s" hasVideo="1" format="r1" src="file:///tmp/P1000307.mov"/>
+    <asset id="r2" name="P1000307" start="3600s" duration="300300/30000s" hasVideo="1" format="r1" src="file:///tmp/P1000307.mov"/>
     <asset id="r4" name="Other" start="0s" duration="300300/30000s" hasVideo="1" format="r1" src="file:///tmp/Other.mov"/>
     <effect id="r5" name="Existing Effect" uid="FxPlug:EXISTING"/>
   </resources>
@@ -425,6 +425,8 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   assert.equal(payload.insertedFilters, 2);
   const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
   assert.match(info, /Tokyo Walking Stabilizer - Analyzed Footage/);
+  assert.match(info, /<asset[^>]+id="r2"[^>]+start="0s"/);
+  assert.doesNotMatch(info, /<asset[^>]+id="r2"[^>]+start="3600s"/);
   assert.equal((info.match(/<asset-clip[^>]+ref="r2"[^>]+start="0s"/g) || []).length, 2);
   assert.doesNotMatch(info, /<asset-clip[^>]+ref="r2"[^>]+start="3600s"/);
   assert.doesNotMatch(info, /Large Existing Project/);

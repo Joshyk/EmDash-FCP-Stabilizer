@@ -281,7 +281,10 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         for resource in (fmt, asset):
             resource_id = resource.attrib.get("id")
             if resource_id and resource_id not in copied_resource_ids:
-                target_resources.append(copy.deepcopy(resource))
+                copied = copy.deepcopy(resource)
+                if local_name(copied.tag) == "asset":
+                    copied.attrib["start"] = "0s"
+                target_resources.append(copied)
                 copied_resource_ids.add(resource_id)
 
     ref = ensure_effect_resource(root)
