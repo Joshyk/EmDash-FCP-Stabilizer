@@ -122,11 +122,22 @@ private struct DecodedVideoFrame {
     let presentationSeconds: Double
 }
 
+private struct DecoderLanePlan {
+    let laneCount: Int
+    let requireHardwareDecode: Bool
+
+    var description: String {
+        requireHardwareDecode ? "hardware-required VideoToolbox" : "best-available VideoToolbox"
+    }
+}
+
 private let hardwareDecodeOutputCallback: VTDecompressionOutputCallback = { refCon, _, status, _, imageBuffer, presentationTimeStamp, _ in
     guard let refCon else { return }
     let reader = Unmanaged<HardwareDecodedFrameReader>.fromOpaque(refCon).takeUnretainedValue()
     reader.handleDecodeOutput(status: status, imageBuffer: imageBuffer, presentationTimeStamp: presentationTimeStamp)
 }
+
+private let hardwareDecodeProbeOutputCallback: VTDecompressionOutputCallback = { _, _, _, _, _, _, _ in }
 
 private func hardwareDecodeImageBufferAttributes(formatDescription: CMVideoFormatDescription) -> [String: Any] {
     let extensions = CMFormatDescriptionGetExtensions(formatDescription) as? [String: Any]
@@ -149,11 +160,131 @@ private func hardwareDecodeImageBufferAttributes(formatDescription: CMVideoForma
     ]
 }
 
+private func makeHardwareDecompressionSession(
+    formatDescription: CMVideoFormatDescription,
+    callback: inout VTDecompressionOutputCallbackRecord,
+    requireHardwareDecode: Bool
+) throws -> VTDecompressionSession {
+    var decoderSpecification: [String: Any] = [
+        kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true
+    ]
+    if requireHardwareDecode {
+        decoderSpecification[kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder as String] = true
+    }
+    var createdSession: VTDecompressionSession?
+    let status = VTDecompressionSessionCreate(
+        allocator: kCFAllocatorDefault,
+        formatDescription: formatDescription,
+        decoderSpecification: decoderSpecification as CFDictionary,
+        imageBufferAttributes: hardwareDecodeImageBufferAttributes(formatDescription: formatDescription) as CFDictionary,
+        outputCallback: &callback,
+        decompressionSessionOut: &createdSession
+    )
+    guard status == noErr, let createdSession else {
+        let mode = requireHardwareDecode ? "hardware-required" : "best-available"
+        throw AnalyzerError("\(mode) VideoToolbox decoder unavailable: VTDecompressionSessionCreate returned \(status)")
+    }
+    return createdSession
+}
+
+private func videoFormatDescription(url: URL) throws -> CMVideoFormatDescription {
+    let asset = AVURLAsset(url: url)
+    guard let track = asset.tracks(withMediaType: .video).first else {
+        throw AnalyzerError("asset had no video track: \(url.path)")
+    }
+    guard let firstFormatDescription = track.formatDescriptions.first else {
+        throw AnalyzerError("asset had no video format description: \(url.path)")
+    }
+    return firstFormatDescription as! CMVideoFormatDescription
+}
+
+private func compressedVideoFormatDescription(url: URL) throws -> CMVideoFormatDescription {
+    let fallbackFormatDescription = try videoFormatDescription(url: url)
+    let asset = AVURLAsset(url: url)
+    guard let track = asset.tracks(withMediaType: .video).first else {
+        throw AnalyzerError("asset had no video track: \(url.path)")
+    }
+    let reader = try AVAssetReader(asset: asset)
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+    output.alwaysCopiesSampleData = true
+    guard reader.canAdd(output) else {
+        throw AnalyzerError("could not add compressed AVAssetReaderTrackOutput")
+    }
+    reader.add(output)
+    guard reader.startReading() else {
+        throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed to start")
+    }
+    defer {
+        if reader.status == .reading {
+            reader.cancelReading()
+        }
+    }
+    while reader.status == .reading {
+        guard let sampleBuffer = output.copyNextSampleBuffer() else {
+            break
+        }
+        if CMSampleBufferGetNumSamples(sampleBuffer) == 0 {
+            continue
+        }
+        return CMSampleBufferGetFormatDescription(sampleBuffer) ?? fallbackFormatDescription
+    }
+    return fallbackFormatDescription
+}
+
+private func decoderSessionLimit(url: URL, requestedLimit: Int, requireHardwareDecode: Bool) throws -> Int {
+    let requestedLimit = max(1, requestedLimit)
+    let formatDescription = try compressedVideoFormatDescription(url: url)
+    var sessions: [VTDecompressionSession] = []
+    defer {
+        for session in sessions {
+            VTDecompressionSessionInvalidate(session)
+        }
+    }
+    for _ in 0..<requestedLimit {
+        var callback = VTDecompressionOutputCallbackRecord(
+            decompressionOutputCallback: hardwareDecodeProbeOutputCallback,
+            decompressionOutputRefCon: nil
+        )
+        do {
+            sessions.append(try makeHardwareDecompressionSession(
+                formatDescription: formatDescription,
+                callback: &callback,
+                requireHardwareDecode: requireHardwareDecode
+            ))
+        } catch {
+            break
+        }
+    }
+    return sessions.count
+}
+
+private func decoderLanePlan(url: URL, requestedLimit: Int) throws -> DecoderLanePlan {
+    let requestedLimit = max(1, requestedLimit)
+    let hardwareRequiredLimit = try decoderSessionLimit(
+        url: url,
+        requestedLimit: requestedLimit,
+        requireHardwareDecode: true
+    )
+    if hardwareRequiredLimit > 0 {
+        return DecoderLanePlan(laneCount: hardwareRequiredLimit, requireHardwareDecode: true)
+    }
+    let bestAvailableLimit = try decoderSessionLimit(
+        url: url,
+        requestedLimit: requestedLimit,
+        requireHardwareDecode: false
+    )
+    guard bestAvailableLimit > 0 else {
+        throw AnalyzerError("VideoToolbox decoder unavailable for \(url.path)")
+    }
+    return DecoderLanePlan(laneCount: bestAvailableLimit, requireHardwareDecode: false)
+}
+
 private final class HardwareDecodedFrameReader {
     private let reader: AVAssetReader
     private let output: AVAssetReaderTrackOutput
     private let sourceFormatDescription: CMVideoFormatDescription
     private let maxPendingDecodeCount: Int
+    private let requireHardwareDecode: Bool
     private var session: VTDecompressionSession?
     private var decodedFrames: [DecodedVideoFrame] = []
     private var decodeError: Error?
@@ -162,15 +293,12 @@ private final class HardwareDecodedFrameReader {
     private let lock = NSLock()
     private let decodeSemaphore = DispatchSemaphore(value: 0)
 
-    init(url: URL, timeRange: CMTimeRange?, maxPendingDecodeCount: Int) throws {
+    init(url: URL, timeRange: CMTimeRange?, maxPendingDecodeCount: Int, requireHardwareDecode: Bool) throws {
         let asset = AVURLAsset(url: url)
         guard let track = asset.tracks(withMediaType: .video).first else {
             throw AnalyzerError("asset had no video track: \(url.path)")
         }
-        guard let firstFormatDescription = track.formatDescriptions.first else {
-            throw AnalyzerError("asset had no video format description: \(url.path)")
-        }
-        let formatDescription = firstFormatDescription as! CMVideoFormatDescription
+        let formatDescription = try videoFormatDescription(url: url)
         let reader = try AVAssetReader(asset: asset)
         if let timeRange {
             reader.timeRange = timeRange
@@ -188,6 +316,7 @@ private final class HardwareDecodedFrameReader {
         self.output = output
         self.sourceFormatDescription = formatDescription
         self.maxPendingDecodeCount = max(2, min(32, maxPendingDecodeCount))
+        self.requireHardwareDecode = requireHardwareDecode
     }
 
     deinit {
@@ -325,26 +454,15 @@ private final class HardwareDecodedFrameReader {
             return session
         }
         let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) ?? sourceFormatDescription
-        let decoderSpecification: [String: Any] = [
-            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true,
-            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder as String: true,
-        ]
         var callback = VTDecompressionOutputCallbackRecord(
             decompressionOutputCallback: hardwareDecodeOutputCallback,
             decompressionOutputRefCon: Unmanaged.passUnretained(self).toOpaque()
         )
-        var createdSession: VTDecompressionSession?
-        let status = VTDecompressionSessionCreate(
-            allocator: kCFAllocatorDefault,
+        let createdSession = try makeHardwareDecompressionSession(
             formatDescription: formatDescription,
-            decoderSpecification: decoderSpecification as CFDictionary,
-            imageBufferAttributes: hardwareDecodeImageBufferAttributes(formatDescription: formatDescription) as CFDictionary,
-            outputCallback: &callback,
-            decompressionSessionOut: &createdSession
+            callback: &callback,
+            requireHardwareDecode: requireHardwareDecode
         )
-        guard status == noErr, let createdSession else {
-            throw AnalyzerError("hardware VideoToolbox decoder unavailable: VTDecompressionSessionCreate returned \(status)")
-        }
         session = createdSession
         return createdSession
     }
@@ -1399,7 +1517,8 @@ private func readFrameChunk(
     progressReporter: AnalyzerFrameProgressReporter?,
     inFlightLimit: Int,
     expectedOutputFrameCount: Int,
-    metalContext: MetalAnalysisContext
+    metalContext: MetalAnalysisContext,
+    requireHardwareDecode: Bool
 ) throws -> FrameChunkResult {
     let timeRange: CMTimeRange?
     if let readStartSeconds = chunk.readStartSeconds,
@@ -1414,7 +1533,8 @@ private func readFrameChunk(
     let frameReader = try HardwareDecodedFrameReader(
         url: url,
         timeRange: timeRange,
-        maxPendingDecodeCount: inFlightLimit * 2
+        maxPendingDecodeCount: inFlightLimit * 2,
+        requireHardwareDecode: requireHardwareDecode
     )
     defer {
         frameReader.cancelReading()
@@ -1536,18 +1656,18 @@ private func readFramesInParallel(
     plan: AssetPlan,
     sample: AnalysisSampleSize,
     sourcePixelCount: Int,
-    workerCount: Int,
+    decoderPlan: DecoderLanePlan,
     progressEnabled: Bool
 ) throws -> PreparedAnalysis {
     let chunks = makeFrameReadChunks(
         durationSeconds: plan.durationSeconds,
         frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
-        workerCount: workerCount
+        workerCount: decoderPlan.laneCount
     )
     let basePTS = try firstPresentationTimeSeconds(url: url)
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: chunks.count)
     let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
-    progress(progressEnabled, "using \(chunks.count) hardware-decoded Metal reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each (\(chunks.count * inFlightLimit) total), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
+    progress(progressEnabled, "using \(chunks.count) \(decoderPlan.description) Metal reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each (\(chunks.count * inFlightLimit) total), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
     let progressReporter = AnalyzerFrameProgressReporter(
         enabled: progressEnabled,
         label: plan.name,
@@ -1586,7 +1706,8 @@ private func readFramesInParallel(
                     progressReporter: progressReporter,
                     inFlightLimit: inFlightLimit,
                     expectedOutputFrameCount: expectedOutputFrameCount,
-                    metalContext: context
+                    metalContext: context,
+                    requireHardwareDecode: decoderPlan.requireHardwareDecode
                 )
                 resultLock.lock()
                 results[chunk.index] = result
@@ -1650,14 +1771,25 @@ func readFrames(
     let sourcePixelCount = sourceWidth * sourceHeight
     let workerCount = analyzerWorkerCount()
     if allowParallelReaders && shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, workerCount: workerCount) {
+        let decoderPlan = try decoderLanePlan(url: url, requestedLimit: workerCount)
+        if decoderPlan.laneCount < workerCount {
+            progress(progressEnabled, "\(decoderPlan.description) accepted \(decoderPlan.laneCount)/\(workerCount) simultaneous reader lane(s) for \(plan.name); using the decoder limit")
+        }
+        if !decoderPlan.requireHardwareDecode {
+            progress(progressEnabled, "hardware-required VideoToolbox decode is unavailable for \(plan.name); using best-available VideoToolbox decode with Metal analysis")
+        }
         return try readFramesInParallel(
             url: url,
             plan: plan,
             sample: sample,
             sourcePixelCount: sourcePixelCount,
-            workerCount: workerCount,
+            decoderPlan: decoderPlan,
             progressEnabled: progressEnabled
         )
+    }
+    let serialDecoderPlan = try decoderLanePlan(url: url, requestedLimit: 1)
+    if !serialDecoderPlan.requireHardwareDecode {
+        progress(progressEnabled, "hardware-required VideoToolbox decode is unavailable for \(plan.name); using best-available VideoToolbox decode with Metal analysis")
     }
     let serialChunk = FrameReadChunk(
         index: 0,
@@ -1680,7 +1812,7 @@ func readFrames(
     )
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: 1)
     let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
-    progress(progressEnabled, "using 1 hardware-decoded Metal reader lane with \(inFlightLimit) in-flight GPU frame slot(s), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
+    progress(progressEnabled, "using 1 \(serialDecoderPlan.description) Metal reader lane with \(inFlightLimit) in-flight GPU frame slot(s), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
     let expectedOutputFrameCount = estimatedFrameCount(
         durationSeconds: plan.durationSeconds,
         frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
@@ -1699,7 +1831,8 @@ func readFrames(
         progressReporter: progressReporter,
         inFlightLimit: inFlightLimit,
         expectedOutputFrameCount: expectedOutputFrameCount,
-        metalContext: metalContext
+        metalContext: metalContext,
+        requireHardwareDecode: serialDecoderPlan.requireHardwareDecode
     )
     progressReporter.finish()
     guard result.frames.count >= 3 else {
@@ -2121,7 +2254,7 @@ func run() throws {
     progress(arguments.progress, "using Metal analyzer device: \(metalContext.deviceName)")
     progress(
         arguments.progress,
-        "processing \(plan.assets.count) selected asset(s) serially with required hardware VideoToolbox decode and Metal GPU analysis; each active asset may use every active hardware-decoded reader lane"
+        "processing \(plan.assets.count) selected asset(s) serially with automatic VideoToolbox decode and Metal GPU analysis; each active asset may use every active reader lane supported by the decoder"
     )
     var results: [AnalysisResult] = []
     for (assetIndex, asset) in plan.assets.enumerated() {
