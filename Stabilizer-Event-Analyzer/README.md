@@ -49,6 +49,14 @@ buffers are allocated directly instead of through a reserved `MTLHeap`, avoiding
 extra heap reservation on memory-limited systems. The reported lane and slot
 counts show the effective limits in use.
 
+Some camera sources can still be unsupported by Apple's hardware decoder even
+when Final Cut Pro or QuickTime can play them through another path. High
+resolution H.264 sources, including some Insta360 `5312x2988` originals, may be
+rejected by hardware-required VideoToolbox on M1. In that case the analyzer
+prints the codec, dimensions, and VideoToolbox status and stops. It does not
+switch to software decode; transcode the original to a hardware-decodable
+format, such as HEVC at a hardware-supported size/profile, before analysis.
+
 When `--progress` is enabled, frame and chunk progress updates rewrite one
 stderr line instead of printing a new `progress ...` line for every update.
 

@@ -130,6 +130,11 @@ private struct DecoderLanePlan {
     }
 }
 
+private struct DecoderSessionProbeResult {
+    let sessionCount: Int
+    let firstFailureDescription: String?
+}
+
 private let hardwareDecodeOutputCallback: VTDecompressionOutputCallback = { refCon, _, status, _, imageBuffer, presentationTimeStamp, _ in
     guard let refCon else { return }
     let reader = Unmanaged<HardwareDecodedFrameReader>.fromOpaque(refCon).takeUnretainedValue()
@@ -137,6 +142,22 @@ private let hardwareDecodeOutputCallback: VTDecompressionOutputCallback = { refC
 }
 
 private let hardwareDecodeProbeOutputCallback: VTDecompressionOutputCallback = { _, _, _, _, _, _, _ in }
+
+private func fourCharacterCodeString(_ code: FourCharCode) -> String {
+    String(
+        format: "%c%c%c%c",
+        Int((code >> 24) & 0xff),
+        Int((code >> 16) & 0xff),
+        Int((code >> 8) & 0xff),
+        Int(code & 0xff)
+    )
+}
+
+private func videoFormatSummary(formatDescription: CMVideoFormatDescription) -> String {
+    let dimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
+    let codec = fourCharacterCodeString(CMFormatDescriptionGetMediaSubType(formatDescription))
+    return "\(codec) \(dimensions.width)x\(dimensions.height)"
+}
 
 private func hardwareDecodeImageBufferAttributes(formatDescription: CMVideoFormatDescription) -> [String: Any] {
     let extensions = CMFormatDescriptionGetExtensions(formatDescription) as? [String: Any]
@@ -177,7 +198,7 @@ private func makeHardwareDecompressionSession(
         decompressionSessionOut: &createdSession
     )
     guard status == noErr, let createdSession else {
-        throw AnalyzerError("hardware-required VideoToolbox decoder unavailable: VTDecompressionSessionCreate returned \(status)")
+        throw AnalyzerError("hardware-required VideoToolbox decoder unavailable for \(videoFormatSummary(formatDescription: formatDescription)): VTDecompressionSessionCreate returned \(status)")
     }
     return createdSession
 }
@@ -226,10 +247,11 @@ private func compressedVideoFormatDescription(url: URL) throws -> CMVideoFormatD
     return assetFormatDescription
 }
 
-private func decoderSessionLimit(url: URL, requestedLimit: Int) throws -> Int {
+private func decoderSessionLimit(url: URL, requestedLimit: Int) throws -> DecoderSessionProbeResult {
     let requestedLimit = max(1, requestedLimit)
     let formatDescription = try compressedVideoFormatDescription(url: url)
     var sessions: [VTDecompressionSession] = []
+    var firstFailureDescription: String?
     defer {
         for session in sessions {
             VTDecompressionSessionInvalidate(session)
@@ -246,22 +268,29 @@ private func decoderSessionLimit(url: URL, requestedLimit: Int) throws -> Int {
                 callback: &callback
             ))
         } catch {
+            if firstFailureDescription == nil {
+                firstFailureDescription = String(describing: error)
+            }
             break
         }
     }
-    return sessions.count
+    return DecoderSessionProbeResult(
+        sessionCount: sessions.count,
+        firstFailureDescription: firstFailureDescription
+    )
 }
 
 private func decoderLanePlan(url: URL, requestedLimit: Int) throws -> DecoderLanePlan {
     let requestedLimit = max(1, requestedLimit)
-    let hardwareRequiredLimit = try decoderSessionLimit(
+    let hardwareProbe = try decoderSessionLimit(
         url: url,
         requestedLimit: requestedLimit
     )
-    guard hardwareRequiredLimit > 0 else {
-        throw AnalyzerError("hardware-required VideoToolbox decoder unavailable for \(url.path)")
+    guard hardwareProbe.sessionCount > 0 else {
+        let detail = hardwareProbe.firstFailureDescription.map { ": \($0)" } ?? ""
+        throw AnalyzerError("hardware-required VideoToolbox decoder unavailable for \(url.path)\(detail). GPU-only Event analysis cannot use VideoToolbox software decode; transcode to a hardware-decodable original format and rerun analysis.")
     }
-    return DecoderLanePlan(laneCount: hardwareRequiredLimit)
+    return DecoderLanePlan(laneCount: hardwareProbe.sessionCount)
 }
 
 private final class HardwareDecodedFrameReader {
@@ -1142,12 +1171,7 @@ final class MetalAnalysisContext {
             return MetalLumaSource(pixelFormat: .r16Unorm, mode: 1, format: LumaBufferFormat(valueRange: 1023), description: "10-bit full-range Y")
         default:
             let code = CVPixelBufferGetPixelFormatType(pixelBuffer)
-            let text = String(format: "%c%c%c%c",
-                Int((code >> 24) & 0xff),
-                Int((code >> 16) & 0xff),
-                Int((code >> 8) & 0xff),
-                Int(code & 0xff)
-            )
+            let text = fourCharacterCodeString(code)
             throw AnalyzerError("unsupported VideoToolbox pixel format \(text); Event analysis requires native YUV frames for Metal luma sampling")
         }
     }
