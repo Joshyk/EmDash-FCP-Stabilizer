@@ -34,7 +34,6 @@ const el = {
   cancelButton: document.getElementById("cancelButton"),
   statusBox: document.getElementById("statusBox"),
   progressText: document.getElementById("progressText"),
-  processLog: document.getElementById("processLog"),
   resultActions: document.getElementById("resultActions"),
   revealCacheButton: document.getElementById("revealCacheButton"),
   revealImportButton: document.getElementById("revealImportButton"),
@@ -68,22 +67,6 @@ function setStatus(message, kind = "") {
 function clearProgress() {
   el.progressText.textContent = "";
   el.progressText.classList.add("hidden");
-}
-
-function clearProcessLog() {
-  el.processLog.textContent = "";
-  el.processLog.classList.add("hidden");
-}
-
-function renderProcessLog(logs) {
-  const lines = Array.isArray(logs) ? logs.filter(Boolean) : [];
-  if (!lines.length) {
-    clearProcessLog();
-    return;
-  }
-  el.processLog.textContent = lines.join("\n");
-  el.processLog.classList.remove("hidden");
-  el.processLog.scrollTop = el.processLog.scrollHeight;
 }
 
 function formatProgress(progress) {
@@ -447,7 +430,6 @@ async function runAnalysis() {
   const body = runBody();
   setStatus("Queueing serial analysis...");
   clearProgress();
-  clearProcessLog();
   el.resultActions.classList.add("hidden");
   const payload = await api("/api/run", { method: "POST", body });
   saveLastAnalysisSettings(body);
@@ -464,12 +446,10 @@ async function pollJob() {
     const payload = await api(`/api/job?id=${encodeURIComponent(state.currentJobId)}`);
     const job = payload.job;
     renderProgress(job.progress);
-    renderProcessLog(job.logs);
     setStatus(jobStatusText(job));
     if (job.status === "done") {
       state.lastResult = job.result;
       setStatus(`Done: ${job.result.resultCount} cache(s), ${job.result.insertedFilters} filter insertion(s).`, "ok");
-      clearProgress();
       state.currentJobId = "";
       el.cancelButton.classList.add("hidden");
       el.cancelButton.disabled = false;
@@ -479,7 +459,6 @@ async function pollJob() {
     }
     if (job.status === "error" || job.status === "cancelled") {
       setStatus(job.error || job.message || job.status, "error");
-      clearProgress();
       state.currentJobId = "";
       el.cancelButton.classList.add("hidden");
       el.cancelButton.disabled = false;
@@ -489,7 +468,6 @@ async function pollJob() {
     setTimeout(pollJob, 1200);
   } catch (error) {
     setStatus(error.message, "error");
-    clearProgress();
     state.currentJobId = "";
     el.cancelButton.classList.add("hidden");
     el.cancelButton.disabled = false;

@@ -19,7 +19,6 @@ const CACHE_ROOT = expandPath(process.env.STABILIZER_CACHE_ROOT || "");
 const JOB_DIR = path.join(REPO_ROOT, ".cache", "node_web_jobs");
 const SAMPLE_SCALE_PERCENT_CHOICES = [100, 75, 50, 25, 10];
 const DEFAULT_SAMPLE_SCALE_PERCENT = 100;
-const MAX_JOB_LOG_LINES = 500;
 const jobs = new Map();
 let serverRef = null;
 
@@ -86,15 +85,6 @@ function updateJob(id, patch) {
   return next;
 }
 
-function appendJobLog(id, text) {
-  const lines = String(text || "").split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean);
-  if (!lines.length) return;
-  const existing = jobs.get(id) || { id, status: "queued", startedAt: Date.now(), updatedAt: Date.now() };
-  updateJob(id, {
-    logs: [...(existing.logs || []), ...lines].slice(-MAX_JOB_LOG_LINES),
-  });
-}
-
 function publicJob(job) {
   if (!job) return null;
   return {
@@ -107,7 +97,6 @@ function publicJob(job) {
     elapsedSeconds: Math.max(0, Math.round(((job.updatedAt || Date.now()) - job.startedAt) / 1000)),
     cancellable: job.status === "running" || job.status === "cancelling",
     progress: job.progress,
-    logs: job.logs || [],
     result: job.result,
     error: job.error,
   };
@@ -231,7 +220,6 @@ function progressLineHandler(jobIdValue) {
   return (text) => {
     const lines = text.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean);
     if (!lines.length) return;
-    appendJobLog(jobIdValue, lines.join("\n"));
     for (const line of lines) {
       const parsedProgress = parseAnalyzerProgressLine(line);
       if (parsedProgress) {
@@ -455,14 +443,13 @@ async function runAnalyzer(body, progress, forcedJobId) {
   if (maxFrames !== null) {
     analysisArgs.push("--max-frames", String(maxFrames));
   }
-  appendJobLog(id, `$ ${PYTHON} ${analysisArgs.join(" ")}`);
   const analysis = await runJsonProcess(PYTHON, analysisArgs, { jobId: id, onStderr: progressLineHandler(id) });
   const analysisPath = path.join(dir, "analysis.json");
   await fsp.writeFile(analysisPath, JSON.stringify(analysis, null, 2), "utf8");
 
   progress("building", "Building Stabilizer FCPXMLD import package.");
   assertNotCancelled(id);
-  const buildArgs = [
+  const build = await runJsonProcess(PYTHON, [
     scriptPath("build_stabilizer_fcpxml_import.py"),
     "--source-fcpxml",
     sourcePath,
@@ -470,9 +457,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     analysisPath,
     "--output-dir",
     importsDir,
-  ];
-  appendJobLog(id, `$ ${PYTHON} ${buildArgs.join(" ")}`);
-  const build = await runJsonProcess(PYTHON, buildArgs, { jobId: id, onStderr: progressLineHandler(id) });
+  ], { jobId: id });
 
   return {
     status: "ok",
@@ -492,7 +477,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
 
 function startRunJob(body) {
   const id = jobId();
-  updateJob(id, { status: "running", stage: "queued", message: "Queued Stabilizer Event analysis.", logs: [] });
+  updateJob(id, { status: "running", stage: "queued", message: "Queued Stabilizer Event analysis." });
   setImmediate(async () => {
     try {
       const result = await runAnalyzer(body, (stage, message, patch = {}) => {
