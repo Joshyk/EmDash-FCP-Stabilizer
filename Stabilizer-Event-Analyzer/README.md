@@ -31,23 +31,23 @@ media source are shown as unsupported in the Web UI and are not selectable for
 analysis. Direct asset `src` paths that point inside Final Cut Pro `Proxy Media`
 or `High Quality Media` folders are also refused.
 
-The native analyzer requires VideoToolbox and Metal. Compressed video samples
-are decoded through `VTDecompressionSession` into Metal-compatible native YUV
-pixel buffers, preserving 10-bit luma for 10-bit sources. The analyzer first
-tries hardware-required decode and uses the maximum simultaneous decoder session
-count the Mac accepts. If a source format cannot be opened as hardware-required
-decode, the log makes that visible and the analyzer uses VideoToolbox's
-best-available decode path while keeping luma sampling and frame-to-frame block
-motion search on Metal. Selected assets remain strictly serial: the analyzer
-finishes one asset before starting the next. Inside that one active asset, reader
-lanes are used to keep the decoder and Metal pipeline fed without user lane
-configuration. Each active asset probes the Mac's active processor reader lanes,
-keeps the maximum simultaneous decoder count VideoToolbox accepts, and budgets
-per-lane GPU in-flight frame slots from frame size and physical memory. Explicit
-lane or slot environment overrides are rejected so the run uses the detected
-maximum resource plan. Reusable Metal buffers are allocated directly instead of
-through a reserved `MTLHeap`, avoiding extra heap reservation on memory-limited
-systems. The reported lane and slot counts show the effective limits in use.
+The native analyzer requires hardware VideoToolbox decode and Metal. Compressed
+video samples are decoded through a hardware-required `VTDecompressionSession`
+into Metal-compatible native YUV pixel buffers, preserving 10-bit luma for
+10-bit sources. Luma sampling and frame-to-frame block motion search run through
+Metal compute kernels. If hardware decode, a Metal device, command queue, or
+kernel dispatch is unavailable, analysis fails visibly instead of falling back
+to CPU decode or CPU motion search. Selected assets remain strictly serial: the
+analyzer finishes one asset before starting the next. Inside that one active
+asset, reader lanes are used to keep the hardware decoder and Metal pipeline fed
+without user lane configuration. Each active asset probes the Mac's active
+processor reader lanes, keeps the maximum simultaneous hardware decoder count
+VideoToolbox accepts, and budgets per-lane GPU in-flight frame slots from frame
+size and physical memory. Explicit lane or slot environment overrides are
+rejected so the run uses the detected maximum resource plan. Reusable Metal
+buffers are allocated directly instead of through a reserved `MTLHeap`, avoiding
+extra heap reservation on memory-limited systems. The reported lane and slot
+counts show the effective limits in use.
 
 When `--progress` is enabled, frame and chunk progress updates rewrite one
 stderr line instead of printing a new `progress ...` line for every update.
