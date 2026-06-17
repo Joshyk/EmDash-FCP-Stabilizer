@@ -40,6 +40,7 @@ PRE_EFFECT_CHILD_TAGS = {
     "adjust-stereo-3D",
     "adjust-volume",
     "adjust-panner",
+    "marker",
 }
 
 

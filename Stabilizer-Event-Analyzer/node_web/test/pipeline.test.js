@@ -213,3 +213,73 @@ test("build_stabilizer_fcpxml_import attaches video refs to parent clips", () =>
   assert.doesNotMatch(videoBody, /Tokyo Walking Stabilizer/);
   assert.match(info, /<\/video>\s*<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"/);
 });
+
+test("build_stabilizer_fcpxml_import preserves marker order before filters", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-marker-order-test-"));
+  const pkg = path.join(tmp, "MarkerOrder.fcpxmld");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(
+    path.join(pkg, "Info.fcpxml"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<fcpxml version="1.11">
+  <resources>
+    <format id="r1" name="FFVideoFormat1080p30" frameDuration="1001/30000s" width="1920" height="1080"/>
+    <asset id="r2" name="P1000307" start="0s" duration="300300/30000s" hasVideo="1" format="r1" src="file:///tmp/P1000307.mov"/>
+    <effect id="r3" name="Existing Effect" uid="FxPlug:EXISTING"/>
+  </resources>
+  <library>
+    <event name="MarkerOrder">
+      <project name="MarkerOrder Project">
+        <sequence format="r1" duration="300300/30000s" tcStart="0s" tcFormat="NDF">
+          <spine>
+            <asset-clip name="P1000307" ref="r2" offset="0s" start="0s" duration="300300/30000s">
+              <adjust-colorConform enabled="1"/>
+              <adjust-volume amount="-96dB"/>
+              <marker start="0s" duration="1001/30000s" value="turn"/>
+              <filter-video ref="r3" name="Existing Effect"/>
+            </asset-clip>
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>
+`,
+    "utf8"
+  );
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({
+      status: "ok",
+      results: [
+        {
+          assetId: "r2",
+          cacheIdentity: "17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 17,
+          sampleScalePercent: 100,
+          sampleWidth: 1920,
+          sampleHeight: 1080,
+          frameCount: 300,
+        },
+      ],
+    }),
+    "utf8"
+  );
+  const payload = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    pkg,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+  ]);
+  assert.equal(payload.status, "ok");
+  assert.equal(payload.insertedFilters, 1);
+  const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
+  assert.match(
+    info,
+    /<marker[^>]*value="turn"[^>]*\s*\/>\s*<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video><filter-video ref="r3" name="Existing Effect"/
+  );
+});
