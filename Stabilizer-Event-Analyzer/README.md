@@ -17,8 +17,9 @@ The workflow is:
    starting the next.
 6. Write schema-compatible Tokyo Walking Stabilizer persisted cache files to an
    explicit Imports staging folder.
-7. Build an import FCPXMLD that adds Tokyo Walking Stabilizer filters carrying
-   the generated cache identity.
+7. Build an import FCPXMLD containing only the analyzed Event media assets and
+   a single review project. The generated clips carry Tokyo Walking Stabilizer
+   filters with the generated cache identity.
 
 Trimmed timeline clips are not treated as the analysis authority. The analyzer
 uses Event media as the unit of work. A trimmed timeline item naturally uses the
@@ -91,8 +92,9 @@ shared fallback cache.
 ## Imports
 
 `Imports` defaults to the same folder as the selected `.fcpxmld` package or
-`Info.fcpxml` export. The generated `*-stabilizer.fcpxmld` import package is
-written there, and analysis cache files are staged below that folder:
+`Info.fcpxml` export. The generated `*-stabilizer.fcpxmld` import package is a
+compact analyzed-footage-only package written there, and analysis cache files
+are staged below that folder:
 
 ```text
 Exports/

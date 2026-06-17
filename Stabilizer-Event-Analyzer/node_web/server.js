@@ -486,7 +486,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
   const analysisPath = path.join(dir, "analysis.json");
   await fsp.writeFile(analysisPath, JSON.stringify(analysis, null, 2), "utf8");
 
-  progress("building", "Building Stabilizer FCPXMLD import package.");
+  progress("building", "Building analyzed-footage-only Stabilizer FCPXMLD import package.");
   assertNotCancelled(id);
   const build = await runJsonProcess(PYTHON, [
     scriptPath("build_stabilizer_fcpxml_import.py"),
@@ -496,6 +496,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     analysisPath,
     "--output-dir",
     importsDir,
+    "--only-analyzed-assets",
   ], { jobId: id });
 
   return {
@@ -511,6 +512,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     outputPackage: build.outputPackage,
     insertedFilters: build.insertedFilters,
     removedExistingFilters: build.removedExistingFilters,
+    onlyAnalyzedAssets: build.onlyAnalyzedAssets === true,
   };
 }
 
