@@ -279,6 +279,20 @@ td:nth-child(5) {
   overflow-wrap: anywhere;
 }
 
+.process-log {
+  max-height: 240px;
+  margin: 8px 0 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #090b0e;
+  color: #c6d0da;
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .hidden {
   display: none;
 }
