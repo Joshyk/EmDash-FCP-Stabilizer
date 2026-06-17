@@ -40,16 +40,14 @@ decode, the log makes that visible and the analyzer uses VideoToolbox's
 best-available decode path while keeping luma sampling and frame-to-frame block
 motion search on Metal. Selected assets remain strictly serial: the analyzer
 finishes one asset before starting the next. Inside that one active asset, reader
-lanes are used to keep the decoder and Metal pipeline fed. Each active asset
-defaults to the Mac's active processor count for reader lanes, while GPU
-in-flight frame slots are budgeted from frame size and physical memory. Reusable
-Metal buffers are allocated directly instead of through a reserved `MTLHeap`,
-avoiding extra heap reservation on memory-limited systems.
-`STABILIZER_ANALYZER_WORKERS` can request an explicit reader lane count, capped
-at the Mac's active processor count. `STABILIZER_ANALYZER_IN_FLIGHT` can tune
-the per-lane GPU frame slot count, capped by the current frame size and
-available memory. The reported lane and slot counts show the effective limits
-in use.
+lanes are used to keep the decoder and Metal pipeline fed without user lane
+configuration. Each active asset probes the Mac's active processor reader lanes,
+keeps the maximum simultaneous decoder count VideoToolbox accepts, and budgets
+per-lane GPU in-flight frame slots from frame size and physical memory. Explicit
+lane or slot environment overrides are rejected so the run uses the detected
+maximum resource plan. Reusable Metal buffers are allocated directly instead of
+through a reserved `MTLHeap`, avoiding extra heap reservation on memory-limited
+systems. The reported lane and slot counts show the effective limits in use.
 
 When `--progress` is enabled, frame and chunk progress updates rewrite one
 stderr line instead of printing a new `progress ...` line for every update.

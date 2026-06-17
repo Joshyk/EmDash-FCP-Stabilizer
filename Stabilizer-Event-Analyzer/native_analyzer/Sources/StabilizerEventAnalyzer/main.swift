@@ -1387,14 +1387,22 @@ private func analyzerPhysicalMemoryGB() -> UInt64 {
     max(1, ProcessInfo.processInfo.physicalMemory / 1_073_741_824)
 }
 
-private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
-    let offeredProcessorCount = analyzerOfferedProcessorCount()
-    if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_WORKERS"],
-       let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        return max(1, min(offeredProcessorCount, parsed))
+private func validateAnalyzerResourceEnvironment() throws {
+    let unsupportedKeys = [
+        "STABILIZER_ANALYZER_WORKERS",
+        "STABILIZER_ANALYZER_IN_FLIGHT",
+    ]
+    for key in unsupportedKeys {
+        guard let value = ProcessInfo.processInfo.environment[key],
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            continue
+        }
+        throw AnalyzerError("\(key) is not supported; Event Analyzer automatically uses detected maximum reader and GPU resources")
     }
-    if explicitOnly { return 1 }
-    return offeredProcessorCount
+}
+
+private func analyzerReaderLaneProbeLimit() -> Int {
+    analyzerOfferedProcessorCount()
 }
 
 private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int {
@@ -1405,14 +1413,7 @@ private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int
     let memoryBudget = max(bytesPerFrameSlot * laneCount * 2, Int(ProcessInfo.processInfo.physicalMemory / memoryDivisor))
     let memoryLimitedTotalSlotCount = max(laneCount * 2, memoryBudget / bytesPerFrameSlot)
     let memoryLimitedSlotCountPerLane = max(2, memoryLimitedTotalSlotCount / laneCount)
-    if let value = ProcessInfo.processInfo.environment["STABILIZER_ANALYZER_IN_FLIGHT"],
-       let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        return max(2, min(memoryLimitedSlotCountPerLane, parsed))
-    }
-    let defaultSlotCountPerLane = memoryGB <= 18 ? 2 : 6
-    let gpuBalancedTotalSlotCount = laneCount * defaultSlotCountPerLane
-    let totalSlotCount = min(memoryLimitedTotalSlotCount, gpuBalancedTotalSlotCount)
-    return max(2, totalSlotCount / laneCount)
+    return memoryLimitedSlotCountPerLane
 }
 
 private func analyzerTextureCacheFlushInterval(sourcePixelCount: Int) -> Int {
@@ -1426,8 +1427,8 @@ private func textureCacheFlushDescription(interval: Int) -> String {
     interval <= 1 ? "every completed frame" : "every \(interval) completed frames"
 }
 
-private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, workerCount: Int) -> Bool {
-    if maxFrames != nil || workerCount <= 1 {
+private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, readerLaneCount: Int) -> Bool {
+    if maxFrames != nil || readerLaneCount <= 1 {
         return false
     }
     return plan.durationSeconds > max(0.10, plan.frameDurationSeconds * 4.0)
@@ -1442,9 +1443,9 @@ private func estimatedFrameCount(durationSeconds: Double, frameDurationSeconds: 
     return frameCount
 }
 
-private func makeFrameReadChunks(durationSeconds: Double, frameDurationSeconds: Double, workerCount: Int) -> [FrameReadChunk] {
+private func makeFrameReadChunks(durationSeconds: Double, frameDurationSeconds: Double, readerLaneCount: Int) -> [FrameReadChunk] {
     let boundedDuration = max(frameDurationSeconds, durationSeconds)
-    let chunkCount = max(1, min(workerCount, estimatedFrameCount(durationSeconds: durationSeconds, frameDurationSeconds: frameDurationSeconds)))
+    let chunkCount = max(1, min(readerLaneCount, estimatedFrameCount(durationSeconds: durationSeconds, frameDurationSeconds: frameDurationSeconds)))
     let chunkDuration = boundedDuration / Double(chunkCount)
     let overlapSeconds = max(frameDurationSeconds * 4.0, 0.12)
     return (0..<chunkCount).map { index in
@@ -1662,7 +1663,7 @@ private func readFramesInParallel(
     let chunks = makeFrameReadChunks(
         durationSeconds: plan.durationSeconds,
         frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
-        workerCount: decoderPlan.laneCount
+        readerLaneCount: decoderPlan.laneCount
     )
     let basePTS = try firstPresentationTimeSeconds(url: url)
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: chunks.count)
@@ -1769,11 +1770,11 @@ func readFrames(
     let size = sampleSize(sourceWidth: sourceWidth, sourceHeight: sourceHeight, scalePercent: sampleScalePercent)
     let sample = AnalysisSampleSize(width: size.width, height: size.height)
     let sourcePixelCount = sourceWidth * sourceHeight
-    let workerCount = analyzerWorkerCount()
-    if allowParallelReaders && shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, workerCount: workerCount) {
-        let decoderPlan = try decoderLanePlan(url: url, requestedLimit: workerCount)
-        if decoderPlan.laneCount < workerCount {
-            progress(progressEnabled, "\(decoderPlan.description) accepted \(decoderPlan.laneCount)/\(workerCount) simultaneous reader lane(s) for \(plan.name); using the decoder limit")
+    let readerLaneProbeLimit = analyzerReaderLaneProbeLimit()
+    if allowParallelReaders && shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, readerLaneCount: readerLaneProbeLimit) {
+        let decoderPlan = try decoderLanePlan(url: url, requestedLimit: readerLaneProbeLimit)
+        if decoderPlan.laneCount < readerLaneProbeLimit {
+            progress(progressEnabled, "\(decoderPlan.description) accepted \(decoderPlan.laneCount)/\(readerLaneProbeLimit) active processor reader lane(s) for \(plan.name); using the decoder-detected maximum")
         }
         if !decoderPlan.requireHardwareDecode {
             progress(progressEnabled, "hardware-required VideoToolbox decode is unavailable for \(plan.name); using best-available VideoToolbox decode with Metal analysis")
@@ -2246,6 +2247,7 @@ func writeCache(cacheRoot: URL, asset: AssetPlan, prepared: PreparedAnalysis, ca
 
 func run() throws {
     let arguments = try parseArguments()
+    try validateAnalyzerResourceEnvironment()
     let planData = try Data(contentsOf: arguments.planPath)
     let plan = try JSONDecoder().decode(AnalysisPlan.self, from: planData)
     let cacheRoot = URL(fileURLWithPath: plan.cacheRoot, isDirectory: true)
@@ -2254,7 +2256,7 @@ func run() throws {
     progress(arguments.progress, "using Metal analyzer device: \(metalContext.deviceName)")
     progress(
         arguments.progress,
-        "processing \(plan.assets.count) selected asset(s) serially with automatic VideoToolbox decode and Metal GPU analysis; each active asset may use every active reader lane supported by the decoder"
+        "processing \(plan.assets.count) selected asset(s) serially with automatic maximum VideoToolbox decode and Metal GPU analysis; each active asset probes active processor reader lanes and uses the decoder-detected maximum"
     )
     var results: [AnalysisResult] = []
     for (assetIndex, asset) in plan.assets.enumerated() {
