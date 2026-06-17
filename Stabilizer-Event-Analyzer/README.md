@@ -34,14 +34,16 @@ or `High Quality Media` folders are also refused.
 The native analyzer prefers hardware VideoToolbox decode and requires Metal for
 analysis. Compressed video samples are decoded through `VTDecompressionSession`
 into Metal-compatible native YUV pixel buffers, preserving 10-bit luma for
-10-bit sources. Luma sampling and frame-to-frame block motion search run through
-Metal compute kernels. If hardware decode is unavailable for a source format,
-the analyzer logs the hardware failure and uses an explicit software-only
-VideoToolbox decode fallback while keeping luma sampling and stabilization
-analysis on Metal. If a Metal device, command queue, or kernel dispatch is
-unavailable, analysis fails visibly instead of falling back to CPU motion
-search. Selected assets remain strictly serial: the analyzer finishes one asset
-before starting the next. Inside that one active asset, reader lanes are used to
+10-bit sources. Luma sampling, blur metric reduction, and frame-to-frame block
+motion search run through Metal compute kernels. If hardware decode is
+unavailable for a source format, the analyzer logs the hardware failure and uses
+an explicit software-only VideoToolbox decode fallback while keeping luma
+sampling and stabilization analysis on Metal. If a Metal device, command queue,
+or kernel dispatch is unavailable, analysis fails visibly instead of falling
+back to CPU motion search. The CPU still computes cache-validation fingerprints
+over the sampled luma bytes and writes the final cache JSON. Selected assets
+remain strictly serial: the analyzer finishes one asset before starting the
+next. Inside that one active asset, reader lanes are used to
 keep the decoder and Metal pipeline fed without user lane configuration. Each
 active asset probes the Mac's active processor reader lanes, keeps the maximum
 simultaneous decoder count VideoToolbox accepts for the selected decode mode,

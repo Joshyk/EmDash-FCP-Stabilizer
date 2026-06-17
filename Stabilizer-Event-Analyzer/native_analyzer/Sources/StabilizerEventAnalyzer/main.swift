@@ -11,6 +11,7 @@ private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
 private let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
+private let metalBlurChunkCount = 256
 private let analyzerVideoOutputSettings: [String: Any] = [
     kCVPixelBufferPixelFormatTypeKey as String: [
         NSNumber(value: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
@@ -774,6 +775,7 @@ func sampleSize(sourceWidth: Int, sourceHeight: Int, scalePercent: Double) -> (w
     )
 }
 
+@inline(__always)
 func combineFingerprintByte(_ byte: UInt8, into hash: inout UInt64) {
     hash ^= UInt64(byte)
     hash = hash &* 1_099_511_628_211
@@ -791,39 +793,30 @@ func fingerprintString(hash initialHash: UInt64, byteCount: Int) -> String {
 
 func fingerprint(_ pixels: UnsafePointer<UInt8>, byteCount: Int) -> String {
     var hash = fingerprintInitialHash
-    for index in 0..<byteCount {
+    var index = 0
+    while index + 8 <= byteCount {
         combineFingerprintByte(pixels[index], into: &hash)
+        combineFingerprintByte(pixels[index + 1], into: &hash)
+        combineFingerprintByte(pixels[index + 2], into: &hash)
+        combineFingerprintByte(pixels[index + 3], into: &hash)
+        combineFingerprintByte(pixels[index + 4], into: &hash)
+        combineFingerprintByte(pixels[index + 5], into: &hash)
+        combineFingerprintByte(pixels[index + 6], into: &hash)
+        combineFingerprintByte(pixels[index + 7], into: &hash)
+        index += 8
+    }
+    while index < byteCount {
+        combineFingerprintByte(pixels[index], into: &hash)
+        index += 1
     }
     return fingerprintString(hash: hash, byteCount: byteCount)
 }
 
-func blurAmount(_ pixels: UnsafePointer<UInt16>, width: Int, height: Int, valueRange: UInt16) -> Float {
-    guard width > 2, height > 2 else { return 0 }
-    var total: Int = 0
-    var count: Int = 0
-    let stride = max(1, min(width, height) / 160)
-    var y = stride
-    while y < height - stride {
-        var x = stride
-        while x < width - stride {
-            let center = Int(pixels[y * width + x])
-            let dx = abs(center - Int(pixels[y * width + x + stride]))
-            let dy = abs(center - Int(pixels[(y + stride) * width + x]))
-            total += dx + dy
-            count += 2
-            x += stride
-        }
-        y += stride
-    }
-    guard count > 0 else { return 0 }
-    return (Float(total) / Float(count)) * (255.0 / Float(max(1, valueRange)))
-}
-
-private func frameMetrics(_ pixels: UnsafePointer<UInt16>, pixelCount: Int, width: Int, height: Int, lumaFormat: LumaBufferFormat) -> FrameMetrics {
+private func frameMetrics(_ pixels: UnsafePointer<UInt16>, pixelCount: Int, blurAmount: Float) -> FrameMetrics {
     let rawBytes = UnsafeRawPointer(pixels).assumingMemoryBound(to: UInt8.self)
     let byteCount = pixelCount * MemoryLayout<UInt16>.stride
     return FrameMetrics(
-        blurAmount: blurAmount(pixels, width: width, height: height, valueRange: lumaFormat.valueRange),
+        blurAmount: blurAmount,
         fingerprint: fingerprint(rawBytes, byteCount: byteCount)
     )
 }
@@ -851,11 +844,23 @@ private struct MetalBlockUniforms {
     let chunkCount: UInt32
 }
 
+private struct MetalBlurUniforms {
+    let width: UInt32
+    let height: UInt32
+    let stride: UInt32
+    let chunkCount: UInt32
+}
+
 private struct MetalShiftResult {
     let dx: Float
     let dy: Float
     let score: Float
     let bestIndex: UInt32
+}
+
+private struct MetalBlurResult {
+    let total: UInt32
+    let count: UInt32
 }
 
 private final class MetalMotionWorkspace {
@@ -948,6 +953,7 @@ private final class MetalMotionWorkspace {
 
 private struct MetalFrameSlot {
     let lumaBuffer: MTLBuffer
+    let blurResultBuffer: MTLBuffer
     let partialSumBuffer: MTLBuffer
     let partialCountBuffer: MTLBuffer
     let resultBuffer: MTLBuffer
@@ -963,6 +969,8 @@ private struct MetalLumaSource {
 private struct MetalEncodedFrame {
     let commandBuffer: MTLCommandBuffer
     let outputBuffer: MTLBuffer
+    let blurResultBuffer: MTLBuffer
+    let blurChunkCount: Int
     let resultBuffer: MTLBuffer?
     let motionWorkspace: MetalMotionWorkspace?
     let lumaFormat: LumaBufferFormat
@@ -975,6 +983,7 @@ private final class MetalAnalysisSharedState {
 
     let device: MTLDevice
     let lumaPipelineState: MTLComputePipelineState
+    let blurPartialPipelineState: MTLComputePipelineState
     let blockScorePartialPipelineState: MTLComputePipelineState
     let blockScoreResolvePipelineState: MTLComputePipelineState
 
@@ -984,12 +993,14 @@ private final class MetalAnalysisSharedState {
         }
         let library = try device.makeLibrary(source: MetalAnalysisContext.kernelSource, options: nil)
         guard let lumaFunction = library.makeFunction(name: "stabilizer_luma_sample"),
+              let blurPartialFunction = library.makeFunction(name: "stabilizer_blur_partials"),
               let blockScorePartialFunction = library.makeFunction(name: "stabilizer_block_score_partials"),
               let blockScoreResolveFunction = library.makeFunction(name: "stabilizer_block_score_resolve") else {
             throw AnalyzerError("Metal analysis kernels were not found")
         }
         self.device = device
         self.lumaPipelineState = try device.makeComputePipelineState(function: lumaFunction)
+        self.blurPartialPipelineState = try device.makeComputePipelineState(function: blurPartialFunction)
         self.blockScorePartialPipelineState = try device.makeComputePipelineState(function: blockScorePartialFunction)
         self.blockScoreResolvePipelineState = try device.makeComputePipelineState(function: blockScoreResolveFunction)
     }
@@ -1000,6 +1011,7 @@ final class MetalAnalysisContext {
     private let commandQueue: MTLCommandQueue
     private let textureCache: CVMetalTextureCache
     private let lumaPipelineState: MTLComputePipelineState
+    private let blurPartialPipelineState: MTLComputePipelineState
     private let blockScorePartialPipelineState: MTLComputePipelineState
     private let blockScoreResolvePipelineState: MTLComputePipelineState
     private var motionWorkspace: MetalMotionWorkspace?
@@ -1021,6 +1033,7 @@ final class MetalAnalysisContext {
         self.commandQueue = commandQueue
         self.textureCache = textureCache
         self.lumaPipelineState = sharedState.lumaPipelineState
+        self.blurPartialPipelineState = sharedState.blurPartialPipelineState
         self.blockScorePartialPipelineState = sharedState.blockScorePartialPipelineState
         self.blockScoreResolvePipelineState = sharedState.blockScoreResolvePipelineState
     }
@@ -1028,6 +1041,7 @@ final class MetalAnalysisContext {
     fileprivate func makeFrameSlots(count: Int, pixelCount: Int, width: Int, height: Int) throws -> [MetalFrameSlot] {
         let workspace = try workspaceForMotion(width: width, height: height)
         let lumaLength = pixelCount * MemoryLayout<UInt16>.stride
+        let blurResultLength = MemoryLayout<MetalBlurResult>.stride * metalBlurChunkCount
         let partialLength = MemoryLayout<UInt32>.stride * workspace.partialElementCount
         let resultLength = MemoryLayout<MetalShiftResult>.stride * workspace.blockCount
         let sharedOptions: MTLResourceOptions = .storageModeShared
@@ -1036,6 +1050,7 @@ final class MetalAnalysisContext {
         slots.reserveCapacity(count)
         for _ in 0..<count {
             guard let lumaBuffer = device.makeBuffer(length: lumaLength, options: sharedOptions),
+                  let blurResultBuffer = device.makeBuffer(length: blurResultLength, options: sharedOptions),
                   let partialSumBuffer = device.makeBuffer(length: partialLength, options: gpuOnlyOptions),
                   let partialCountBuffer = device.makeBuffer(length: partialLength, options: gpuOnlyOptions),
                   let resultBuffer = device.makeBuffer(length: resultLength, options: sharedOptions) else {
@@ -1043,6 +1058,7 @@ final class MetalAnalysisContext {
             }
             slots.append(MetalFrameSlot(
                 lumaBuffer: lumaBuffer,
+                blurResultBuffer: blurResultBuffer,
                 partialSumBuffer: partialSumBuffer,
                 partialCountBuffer: partialCountBuffer,
                 resultBuffer: resultBuffer
@@ -1056,6 +1072,7 @@ final class MetalAnalysisContext {
         sampleWidth: Int,
         sampleHeight: Int,
         outputBuffer: MTLBuffer,
+        blurResultBuffer: MTLBuffer,
         partialSumBuffer: MTLBuffer,
         partialCountBuffer: MTLBuffer,
         resultBuffer: MTLBuffer,
@@ -1104,6 +1121,25 @@ final class MetalAnalysisContext {
         )
         encoder.endEncoding()
 
+        guard let blurEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw AnalyzerError("could not allocate Metal blur metric encoder")
+        }
+        var blurUniforms = MetalBlurUniforms(
+            width: UInt32(sampleWidth),
+            height: UInt32(sampleHeight),
+            stride: UInt32(max(1, min(sampleWidth, sampleHeight) / 160)),
+            chunkCount: UInt32(metalBlurChunkCount)
+        )
+        blurEncoder.setComputePipelineState(blurPartialPipelineState)
+        blurEncoder.setBuffer(outputBuffer, offset: 0, index: 0)
+        blurEncoder.setBuffer(blurResultBuffer, offset: 0, index: 1)
+        blurEncoder.setBytes(&blurUniforms, length: MemoryLayout<MetalBlurUniforms>.stride, index: 2)
+        blurEncoder.dispatchThreads(
+            MTLSize(width: metalBlurChunkCount, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(64, metalBlurChunkCount), height: 1, depth: 1)
+        )
+        blurEncoder.endEncoding()
+
         let activeMotionWorkspace: MetalMotionWorkspace?
         if let previousBuffer {
             let workspace = try workspaceForMotion(width: sampleWidth, height: sampleHeight)
@@ -1146,6 +1182,8 @@ final class MetalAnalysisContext {
         return MetalEncodedFrame(
             commandBuffer: commandBuffer,
             outputBuffer: outputBuffer,
+            blurResultBuffer: blurResultBuffer,
+            blurChunkCount: metalBlurChunkCount,
             resultBuffer: previousBuffer == nil ? nil : resultBuffer,
             motionWorkspace: activeMotionWorkspace,
             lumaFormat: lumaSource.format
@@ -1161,12 +1199,15 @@ final class MetalAnalysisContext {
         encodedFrame.commandBuffer.waitUntilCompleted()
         try Self.validate(commandBuffer: encodedFrame.commandBuffer, stage: encodedFrame.motionWorkspace == nil ? "luma sampling" : "luma sampling and block motion search")
         let pixels = encodedFrame.outputBuffer.contents().assumingMemoryBound(to: UInt16.self)
+        let blurAmount = Self.blurAmount(
+            resultBuffer: encodedFrame.blurResultBuffer,
+            chunkCount: encodedFrame.blurChunkCount,
+            lumaFormat: encodedFrame.lumaFormat
+        )
         let metrics = frameMetrics(
             pixels,
             pixelCount: pixelCount,
-            width: sampleWidth,
-            height: sampleHeight,
-            lumaFormat: encodedFrame.lumaFormat
+            blurAmount: blurAmount
         )
         let motion: PairMotion?
         if let motionWorkspace = encodedFrame.motionWorkspace,
@@ -1176,6 +1217,23 @@ final class MetalAnalysisContext {
             motion = nil
         }
         return (metrics, motion)
+    }
+
+    private static func blurAmount(resultBuffer: MTLBuffer, chunkCount: Int, lumaFormat: LumaBufferFormat) -> Float {
+        let results = UnsafeBufferPointer(
+            start: resultBuffer.contents().assumingMemoryBound(to: MetalBlurResult.self),
+            count: chunkCount
+        )
+        var total: UInt64 = 0
+        var count: UInt64 = 0
+        for result in results {
+            total += UInt64(result.total)
+            count += UInt64(result.count)
+        }
+        guard count > 0 else {
+            return 0.0
+        }
+        return (Float(total) / Float(count)) * (255.0 / Float(max(1, lumaFormat.valueRange)))
     }
 
     fileprivate func flushTextureCache() {
@@ -1235,6 +1293,18 @@ final class MetalAnalysisContext {
         uint lumaMode;
     };
 
+    struct BlurUniforms {
+        uint width;
+        uint height;
+        uint stride;
+        uint chunkCount;
+    };
+
+    struct BlurResult {
+        uint total;
+        uint count;
+    };
+
     struct BlockUniforms {
         uint centerX;
         uint centerY;
@@ -1276,6 +1346,37 @@ final class MetalAnalysisContext {
             scale = 1023.0f;
         }
         output[(gid.y * uniforms.sampleWidth) + gid.x] = ushort(clamp(int(round(normalizedY * scale)), 0, int(scale)));
+    }
+
+    kernel void stabilizer_blur_partials(
+        device const ushort *pixels [[buffer(0)]],
+        device BlurResult *results [[buffer(1)]],
+        constant BlurUniforms &uniforms [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]
+    ) {
+        if (gid >= uniforms.chunkCount) {
+            return;
+        }
+        uint stride = max(1u, uniforms.stride);
+        uint total = 0;
+        uint count = 0;
+        if (uniforms.width > stride * 2u && uniforms.height > stride * 2u) {
+            uint xCount = ((uniforms.width - stride - 1u - stride) / stride) + 1u;
+            uint yCount = ((uniforms.height - stride - 1u - stride) / stride) + 1u;
+            uint sampleCount = xCount * yCount;
+            for (uint sampleIndex = gid; sampleIndex < sampleCount; sampleIndex += uniforms.chunkCount) {
+                uint x = stride + (sampleIndex % xCount) * stride;
+                uint y = stride + (sampleIndex / xCount) * stride;
+                uint centerIndex = (y * uniforms.width) + x;
+                int center = int(pixels[centerIndex]);
+                uint dx = uint(abs(center - int(pixels[centerIndex + stride])));
+                uint dy = uint(abs(center - int(pixels[((y + stride) * uniforms.width) + x])));
+                total += dx + dy;
+                count += 2u;
+            }
+        }
+        results[gid].total = total;
+        results[gid].count = count;
     }
 
     kernel void stabilizer_block_score_partials(
@@ -1679,6 +1780,7 @@ private func readFrameChunk(
                 sampleWidth: sample.width,
                 sampleHeight: sample.height,
                 outputBuffer: currentFrameSlot.lumaBuffer,
+                blurResultBuffer: currentFrameSlot.blurResultBuffer,
                 partialSumBuffer: currentFrameSlot.partialSumBuffer,
                 partialCountBuffer: currentFrameSlot.partialCountBuffer,
                 resultBuffer: currentFrameSlot.resultBuffer,
