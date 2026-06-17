@@ -20,6 +20,7 @@ EFFECT_NAME = "Tokyo Walking Stabilizer"
 EFFECT_UID = "~/Effects.localized/Emdash Studios/Tokyo Walking Stabilizer/Tokyo Walking Stabilizer.moef"
 PARAM_PREFIX = "9999/10013/10016/3/10036"
 FILTER_NAMES = {EFFECT_NAME, "Tokyo Walking Stabilizer copy"}
+LEGACY_FILTER_NAMES = {"Stabilizer Transform"}
 PRE_EFFECT_CHILD_TAGS = {
     "note",
     "conform-rate",
@@ -83,6 +84,37 @@ def remove_existing_stabilizer_filters(clip: ET.Element) -> int:
     for child in list(clip):
         if local_name(child.tag) == "filter-video" and filter_name(child) in FILTER_NAMES:
             clip.remove(child)
+            removed += 1
+    return removed
+
+
+def remove_filters_by_name(root: ET.Element, names: set[str]) -> int:
+    parents = parent_map(root)
+    removed = 0
+    for element in list(root.iter()):
+        if local_name(element.tag) != "filter-video" or filter_name(element) not in names:
+            continue
+        parent = parents.get(element)
+        if parent is None:
+            continue
+        parent.remove(element)
+        removed += 1
+    return removed
+
+
+def remove_unused_effect_resources(root: ET.Element, names: set[str]) -> int:
+    used_refs = {
+        element.attrib["ref"]
+        for element in root.iter()
+        if local_name(element.tag) == "filter-video" and element.attrib.get("ref")
+    }
+    removed = 0
+    resource_node = resources(root)
+    for child in list(resource_node):
+        if local_name(child.tag) != "effect" or child.attrib.get("id") in used_refs:
+            continue
+        if (child.attrib.get("name") or "") in names:
+            resource_node.remove(child)
             removed += 1
     return removed
 
@@ -182,10 +214,11 @@ def main(argv: Iterable[str]) -> int:
         package_path, target_info = copy_source_package(args.source_fcpxml, info_path, args.output_dir)
         tree = ET.parse(target_info)
         root = tree.getroot()
+        removed = remove_filters_by_name(root, LEGACY_FILTER_NAMES)
+        remove_unused_effect_resources(root, LEGACY_FILTER_NAMES)
         ref = ensure_effect_resource(root)
         parents = parent_map(root)
         inserted = 0
-        removed = 0
         inserted_targets: set[int] = set()
         for element in list(root.iter()):
             tag = local_name(element.tag)
