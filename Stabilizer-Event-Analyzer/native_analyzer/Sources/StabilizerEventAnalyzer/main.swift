@@ -3,6 +3,7 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import Metal
+import VideoToolbox
 
 private let toolSchemaVersion = 1
 private let cacheSchemaVersion = 16
@@ -113,6 +114,239 @@ private struct LumaBufferFormat {
 
     var normalizedResidualScale: Float {
         255.0 / Float(max(1, valueRange))
+    }
+}
+
+private struct DecodedVideoFrame {
+    let pixelBuffer: CVPixelBuffer
+    let presentationSeconds: Double
+}
+
+private let hardwareDecodeOutputCallback: VTDecompressionOutputCallback = { refCon, _, status, _, imageBuffer, presentationTimeStamp, _ in
+    guard let refCon else { return }
+    let reader = Unmanaged<HardwareDecodedFrameReader>.fromOpaque(refCon).takeUnretainedValue()
+    reader.handleDecodeOutput(status: status, imageBuffer: imageBuffer, presentationTimeStamp: presentationTimeStamp)
+}
+
+private func hardwareDecodeImageBufferAttributes(formatDescription: CMVideoFormatDescription) -> [String: Any] {
+    let extensions = CMFormatDescriptionGetExtensions(formatDescription) as? [String: Any]
+    let bitsPerComponent = extensions?["BitsPerComponent"] as? Int ?? 8
+    let isFullRange = (extensions?["FullRangeVideo"] as? Int ?? 0) != 0
+    let pixelFormat: OSType
+    if bitsPerComponent >= 10 {
+        pixelFormat = isFullRange
+            ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+            : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+    } else {
+        pixelFormat = isFullRange
+            ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+    }
+    return [
+        kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: pixelFormat),
+        kCVPixelBufferMetalCompatibilityKey as String: true,
+        kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+    ]
+}
+
+private final class HardwareDecodedFrameReader {
+    private let reader: AVAssetReader
+    private let output: AVAssetReaderTrackOutput
+    private let sourceFormatDescription: CMVideoFormatDescription
+    private let maxPendingDecodeCount: Int
+    private var session: VTDecompressionSession?
+    private var decodedFrames: [DecodedVideoFrame] = []
+    private var decodeError: Error?
+    private var pendingDecodeCount = 0
+    private var reachedEnd = false
+    private let lock = NSLock()
+    private let decodeSemaphore = DispatchSemaphore(value: 0)
+
+    init(url: URL, timeRange: CMTimeRange?, maxPendingDecodeCount: Int) throws {
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .video).first else {
+            throw AnalyzerError("asset had no video track: \(url.path)")
+        }
+        guard let firstFormatDescription = track.formatDescriptions.first else {
+            throw AnalyzerError("asset had no video format description: \(url.path)")
+        }
+        let formatDescription = firstFormatDescription as! CMVideoFormatDescription
+        let reader = try AVAssetReader(asset: asset)
+        if let timeRange {
+            reader.timeRange = timeRange
+        }
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        output.alwaysCopiesSampleData = true
+        guard reader.canAdd(output) else {
+            throw AnalyzerError("could not add compressed AVAssetReaderTrackOutput")
+        }
+        reader.add(output)
+        guard reader.startReading() else {
+            throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed to start")
+        }
+        self.reader = reader
+        self.output = output
+        self.sourceFormatDescription = formatDescription
+        self.maxPendingDecodeCount = max(2, min(32, maxPendingDecodeCount))
+    }
+
+    deinit {
+        if let session {
+            VTDecompressionSessionInvalidate(session)
+        }
+        if reader.status == .reading {
+            reader.cancelReading()
+        }
+    }
+
+    func handleDecodeOutput(status: OSStatus, imageBuffer: CVImageBuffer?, presentationTimeStamp: CMTime) {
+        lock.lock()
+        pendingDecodeCount = max(0, pendingDecodeCount - 1)
+        defer { lock.unlock() }
+        defer { decodeSemaphore.signal() }
+        guard status == noErr else {
+            decodeError = AnalyzerError("hardware VideoToolbox decode output failed with status \(status)")
+            return
+        }
+        guard let imageBuffer else {
+            decodeError = AnalyzerError("hardware VideoToolbox decode returned no image buffer")
+            return
+        }
+        let seconds = CMTimeGetSeconds(presentationTimeStamp)
+        guard seconds.isFinite else {
+            decodeError = AnalyzerError("hardware VideoToolbox decode returned a non-finite presentation time")
+            return
+        }
+        decodedFrames.append(DecodedVideoFrame(pixelBuffer: imageBuffer, presentationSeconds: seconds))
+    }
+
+    func copyNextFrame() throws -> DecodedVideoFrame? {
+        while true {
+            if let frame = popDecodedFrame() {
+                return frame
+            }
+            try throwPendingDecodeError()
+            if reachedEnd {
+                if pendingDecodeCountSnapshot() > 0 {
+                    decodeSemaphore.wait()
+                    continue
+                }
+                if reader.status == .failed {
+                    throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed")
+                }
+                return nil
+            }
+            if pendingDecodeCountSnapshot() >= maxPendingDecodeCount {
+                decodeSemaphore.wait()
+                continue
+            }
+            guard let sampleBuffer = output.copyNextSampleBuffer() else {
+                reachedEnd = true
+                if let session {
+                    VTDecompressionSessionFinishDelayedFrames(session)
+                    VTDecompressionSessionWaitForAsynchronousFrames(session)
+                }
+                continue
+            }
+            try decode(sampleBuffer)
+        }
+    }
+
+    func cancelReading() {
+        if reader.status == .reading {
+            reader.cancelReading()
+        }
+    }
+
+    private func popDecodedFrame() -> DecodedVideoFrame? {
+        lock.lock()
+        defer { lock.unlock() }
+        if decodedFrames.isEmpty {
+            return nil
+        }
+        return decodedFrames.removeFirst()
+    }
+
+    private func throwPendingDecodeError() throws {
+        lock.lock()
+        let error = decodeError
+        decodeError = nil
+        lock.unlock()
+        if let error {
+            throw error
+        }
+    }
+
+    private func pendingDecodeCountSnapshot() -> Int {
+        lock.lock()
+        let count = pendingDecodeCount
+        lock.unlock()
+        return count
+    }
+
+    private func beginPendingDecode() {
+        lock.lock()
+        pendingDecodeCount += 1
+        lock.unlock()
+    }
+
+    private func endPendingDecodeWithoutCallback() {
+        lock.lock()
+        pendingDecodeCount = max(0, pendingDecodeCount - 1)
+        lock.unlock()
+        decodeSemaphore.signal()
+    }
+
+    private func decode(_ sampleBuffer: CMSampleBuffer) throws {
+        if CMSampleBufferGetNumSamples(sampleBuffer) == 0 {
+            return
+        }
+        let session = try decompressionSession(for: sampleBuffer)
+        var infoFlags = VTDecodeInfoFlags()
+        beginPendingDecode()
+        let decodeStatus = VTDecompressionSessionDecodeFrame(
+            session,
+            sampleBuffer: sampleBuffer,
+            flags: VTDecodeFrameFlags(rawValue: 1),
+            frameRefcon: nil,
+            infoFlagsOut: &infoFlags
+        )
+        guard decodeStatus == noErr else {
+            endPendingDecodeWithoutCallback()
+            let hasImageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) != nil
+            let hasDataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) != nil
+            throw AnalyzerError("hardware VideoToolbox decode failed with status \(decodeStatus) (hasImageBuffer=\(hasImageBuffer), hasDataBuffer=\(hasDataBuffer), samples=\(CMSampleBufferGetNumSamples(sampleBuffer)))")
+        }
+        try throwPendingDecodeError()
+    }
+
+    private func decompressionSession(for sampleBuffer: CMSampleBuffer) throws -> VTDecompressionSession {
+        if let session {
+            return session
+        }
+        let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) ?? sourceFormatDescription
+        let decoderSpecification: [String: Any] = [
+            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true,
+            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder as String: true,
+        ]
+        var callback = VTDecompressionOutputCallbackRecord(
+            decompressionOutputCallback: hardwareDecodeOutputCallback,
+            decompressionOutputRefCon: Unmanaged.passUnretained(self).toOpaque()
+        )
+        var createdSession: VTDecompressionSession?
+        let status = VTDecompressionSessionCreate(
+            allocator: kCFAllocatorDefault,
+            formatDescription: formatDescription,
+            decoderSpecification: decoderSpecification as CFDictionary,
+            imageBufferAttributes: hardwareDecodeImageBufferAttributes(formatDescription: formatDescription) as CFDictionary,
+            outputCallback: &callback,
+            decompressionSessionOut: &createdSession
+        )
+        guard status == noErr, let createdSession else {
+            throw AnalyzerError("hardware VideoToolbox decoder unavailable: VTDecompressionSessionCreate returned \(status)")
+        }
+        session = createdSession
+        return createdSession
     }
 }
 
@@ -1042,14 +1276,7 @@ private func analyzerWorkerCount(explicitOnly: Bool = false) -> Int {
         return max(1, min(offeredProcessorCount, parsed))
     }
     if explicitOnly { return 1 }
-    let memoryGB = analyzerPhysicalMemoryGB()
-    if memoryGB <= 18 {
-        return max(1, min(4, max(1, offeredProcessorCount / 2)))
-    }
-    if memoryGB <= 36 {
-        return max(1, min(4, max(1, offeredProcessorCount / 2)))
-    }
-    return max(1, min(6, max(1, offeredProcessorCount / 2)))
+    return offeredProcessorCount
 }
 
 private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int {
@@ -1125,11 +1352,8 @@ private func firstPresentationTimeSeconds(url: URL) throws -> Double {
         throw AnalyzerError("asset had no video track: \(url.path)")
     }
     let reader = try AVAssetReader(asset: asset)
-    let output = AVAssetReaderTrackOutput(
-        track: track,
-        outputSettings: analyzerVideoOutputSettings
-    )
-    output.alwaysCopiesSampleData = false
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+    output.alwaysCopiesSampleData = true
     guard reader.canAdd(output) else {
         throw AnalyzerError("could not add AVAssetReaderTrackOutput")
     }
@@ -1142,10 +1366,20 @@ private func firstPresentationTimeSeconds(url: URL) throws -> Double {
             reader.cancelReading()
         }
     }
-    guard let sampleBuffer = output.copyNextSampleBuffer() else {
-        throw AnalyzerError("asset had no readable video frames: \(url.path)")
+    var firstSampleBuffer: CMSampleBuffer?
+    while reader.status == .reading {
+        guard let sampleBuffer = output.copyNextSampleBuffer() else {
+            break
+        }
+        if CMSampleBufferGetNumSamples(sampleBuffer) > 0 {
+            firstSampleBuffer = sampleBuffer
+            break
+        }
     }
-    let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+    guard let firstSampleBuffer else {
+        throw AnalyzerError("asset had no readable compressed video frames: \(url.path)")
+    }
+    let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(firstSampleBuffer))
     guard pts.isFinite else {
         throw AnalyzerError("asset first video frame had non-finite presentation time: \(url.path)")
     }
@@ -1167,34 +1401,23 @@ private func readFrameChunk(
     expectedOutputFrameCount: Int,
     metalContext: MetalAnalysisContext
 ) throws -> FrameChunkResult {
-    let asset = AVURLAsset(url: url)
-    guard let track = asset.tracks(withMediaType: .video).first else {
-        throw AnalyzerError("asset had no video track: \(url.path)")
-    }
-    let reader = try AVAssetReader(asset: asset)
+    let timeRange: CMTimeRange?
     if let readStartSeconds = chunk.readStartSeconds,
        let readEndSeconds = chunk.readEndSeconds {
         let baseSeconds = basePresentationTimeSeconds ?? 0.0
         let start = CMTime(seconds: baseSeconds + readStartSeconds, preferredTimescale: 600_000)
         let duration = CMTime(seconds: max(0.0, readEndSeconds - readStartSeconds), preferredTimescale: 600_000)
-        reader.timeRange = CMTimeRange(start: start, duration: duration)
+        timeRange = CMTimeRange(start: start, duration: duration)
+    } else {
+        timeRange = nil
     }
-    let output = AVAssetReaderTrackOutput(
-        track: track,
-        outputSettings: analyzerVideoOutputSettings
+    let frameReader = try HardwareDecodedFrameReader(
+        url: url,
+        timeRange: timeRange,
+        maxPendingDecodeCount: inFlightLimit * 2
     )
-    output.alwaysCopiesSampleData = false
-    guard reader.canAdd(output) else {
-        throw AnalyzerError("could not add AVAssetReaderTrackOutput")
-    }
-    reader.add(output)
-    guard reader.startReading() else {
-        throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed to start")
-    }
     defer {
-        if reader.status == .reading {
-            reader.cancelReading()
-        }
+        frameReader.cancelReading()
         metalContext.flushTextureCache()
     }
     var frames: [AnalysisFrame] = []
@@ -1251,24 +1474,19 @@ private func readFrameChunk(
         }
     }
 
-    while reader.status == .reading {
+    while true {
         if pendingFrames.count >= inFlightLimit {
             try finishOldestPendingFrame()
         }
         let shouldContinue = try autoreleasepool {
-            guard let sampleBuffer = output.copyNextSampleBuffer() else {
+            guard let decodedFrame = try frameReader.copyNextFrame() else {
                 return false
             }
             if let maxFrames, frames.count + pendingOutputFrameCount() >= maxFrames {
                 return false
             }
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                return true
-            }
-            let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-            guard pts.isFinite else {
-                return true
-            }
+            let pixelBuffer = decodedFrame.pixelBuffer
+            let pts = decodedFrame.presentationSeconds
             if firstPTS == nil {
                 firstPTS = pts
             }
@@ -1310,9 +1528,6 @@ private func readFrameChunk(
     while !pendingFrames.isEmpty {
         try finishOldestPendingFrame()
     }
-    if reader.status == .failed {
-        throw AnalyzerError(reader.error?.localizedDescription ?? "AVAssetReader failed")
-    }
     return FrameChunkResult(index: chunk.index, frames: frames, motions: motions)
 }
 
@@ -1332,7 +1547,7 @@ private func readFramesInParallel(
     let basePTS = try firstPresentationTimeSeconds(url: url)
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: chunks.count)
     let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
-    progress(progressEnabled, "using \(chunks.count) GPU-fed media reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each (\(chunks.count * inFlightLimit) total), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
+    progress(progressEnabled, "using \(chunks.count) hardware-decoded Metal reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each (\(chunks.count * inFlightLimit) total), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
     let progressReporter = AnalyzerFrameProgressReporter(
         enabled: progressEnabled,
         label: plan.name,
@@ -1465,7 +1680,7 @@ func readFrames(
     )
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: 1)
     let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
-    progress(progressEnabled, "using 1 GPU-fed media reader lane with \(inFlightLimit) in-flight GPU frame slot(s), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
+    progress(progressEnabled, "using 1 hardware-decoded Metal reader lane with \(inFlightLimit) in-flight GPU frame slot(s), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
     let expectedOutputFrameCount = estimatedFrameCount(
         durationSeconds: plan.durationSeconds,
         frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
@@ -1906,7 +2121,7 @@ func run() throws {
     progress(arguments.progress, "using Metal analyzer device: \(metalContext.deviceName)")
     progress(
         arguments.progress,
-        "processing \(plan.assets.count) selected asset(s) serially with Metal GPU analysis; each active asset may use all offered CPU reader lanes"
+        "processing \(plan.assets.count) selected asset(s) serially with required hardware VideoToolbox decode and Metal GPU analysis; each active asset may use every active hardware-decoded reader lane"
     )
     var results: [AnalysisResult] = []
     for (assetIndex, asset) in plan.assets.enumerated() {
