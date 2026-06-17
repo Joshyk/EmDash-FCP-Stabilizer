@@ -975,14 +975,18 @@ final class StabilizerHostAnalysisStore {
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                         if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
-                            if Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange),
+                            let preferredIdentityMatchesActive = preferredIdentity == activeIdentity
+                            let canUseExplicitPreferredIdentity = preferredIdentityMatchesActive
+                                && Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange)
+                            if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity),
                                Self.renderSeconds(CMTimeGetSeconds(renderTime), isInside: analysis.frames) {
                                 os_log(
-                                    "Using start-matched range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                    "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ reason=%{public}@ validation=%{public}@.",
                                     log: stabilizerHostAnalysisLog,
                                     type: .default,
                                     activeIdentity,
                                     Self.expectedRangeDescription(expectedRange),
+                                    canUseExplicitPreferredIdentity ? "yes" : "no",
                                     validationIssue.reason,
                                     rejectionReason
                                 )
@@ -2359,6 +2363,20 @@ final class StabilizerHostAnalysisStore {
             return false
         }
         return rangeStartKey == timeKey(expectedRange.startSeconds)
+    }
+
+    private static func cacheIdentityDurationMatches(_ identity: String, expectedRange: HostAnalysisExpectedRange?) -> Bool {
+        guard let expectedRange, expectedRange.isValid else {
+            return true
+        }
+        let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
+        let startIndex = parts.count >= 10 ? 1 : 0
+        guard parts.count > startIndex + 1,
+              let rangeDurationKey = Int64(parts[startIndex + 1])
+        else {
+            return false
+        }
+        return rangeDurationKey == timeKey(expectedRange.durationSeconds)
     }
 
     private static func expectedRangeDescription(_ expectedRange: HostAnalysisExpectedRange?) -> String {

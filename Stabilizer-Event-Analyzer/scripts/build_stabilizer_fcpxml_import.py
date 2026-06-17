@@ -225,7 +225,6 @@ def clip_attributes(
     source_clip: ET.Element | None,
     *,
     offset: str | None = None,
-    zero_based_start: bool = False,
 ) -> dict[str, str]:
     attrs: dict[str, str] = {
         "ref": asset.attrib["id"],
@@ -241,8 +240,6 @@ def clip_attributes(
             attrs[key] = source_clip.attrib[key]
     if offset is not None:
         attrs["offset"] = offset
-    if zero_based_start:
-        attrs["start"] = "0s"
     return attrs
 
 
@@ -254,9 +251,8 @@ def append_filtered_asset_clip(
     result: dict,
     *,
     offset: str | None = None,
-    zero_based_start: bool = False,
 ) -> ET.Element:
-    clip = ET.SubElement(parent, "asset-clip", clip_attributes(asset, source_clip, offset=offset, zero_based_start=zero_based_start))
+    clip = ET.SubElement(parent, "asset-clip", clip_attributes(asset, source_clip, offset=offset))
     for child in filtered_pre_effect_children(source_clip):
         clip.append(child)
     clip.append(stabilizer_filter(ref, result))
@@ -281,10 +277,7 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         for resource in (fmt, asset):
             resource_id = resource.attrib.get("id")
             if resource_id and resource_id not in copied_resource_ids:
-                copied = copy.deepcopy(resource)
-                if local_name(copied.tag) == "asset":
-                    copied.attrib["start"] = "0s"
-                target_resources.append(copied)
+                target_resources.append(copy.deepcopy(resource))
                 copied_resource_ids.add(resource_id)
 
     ref = ensure_effect_resource(root)
@@ -307,8 +300,8 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     for asset_id, result in results.items():
         asset = resource_by_id(source_root, asset_id)
         source_clip = first_event_asset_clip(source_root, asset_id)
-        append_filtered_asset_clip(event, asset, source_clip, ref, result, zero_based_start=True)
-        append_filtered_asset_clip(spine, asset, source_clip, ref, result, offset=time_string(offset), zero_based_start=True)
+        append_filtered_asset_clip(event, asset, source_clip, ref, result)
+        append_filtered_asset_clip(spine, asset, source_clip, ref, result, offset=time_string(offset))
         offset += parse_time(asset.attrib["duration"])
     return root
 
