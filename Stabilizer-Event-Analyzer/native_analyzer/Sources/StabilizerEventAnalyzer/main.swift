@@ -716,41 +716,49 @@ private final class AnalyzerFrameProgressReporter {
     private let startedAt = Date()
     private let lock = NSLock()
     private var completedFrameCount = 0
-    private var lastPublishedFrameCount = 0
+    private var submittedFrameCount = 0
+    private var lastPublishedCompletedFrameCount = 0
+    private var lastPublishedSubmittedFrameCount = 0
 
     init(enabled: Bool, label: String, totalFrameCount: Int) {
         self.enabled = enabled
         self.label = label
         self.totalFrameCount = max(1, totalFrameCount)
-        self.publishEveryFrameCount = max(1, totalFrameCount / 100)
+        self.publishEveryFrameCount = max(1, min(4, totalFrameCount / 100))
     }
 
     func start() {
-        publishAfterAddingFrameCount(0, force: true)
+        publishAfterAddingFrameCount(0, submittedFrameCount: 0, force: true)
+    }
+
+    func submitFrame() {
+        publishAfterAddingFrameCount(0, submittedFrameCount: 1, force: false)
     }
 
     func completeFrame() {
-        publishAfterAddingFrameCount(1, force: false)
+        publishAfterAddingFrameCount(1, submittedFrameCount: 0, force: false)
     }
 
     func finish() {
-        publishAfterAddingFrameCount(0, force: true)
+        publishAfterAddingFrameCount(0, submittedFrameCount: 0, force: true)
     }
 
-    private func publishAfterAddingFrameCount(_ frameCount: Int, force: Bool) {
+    private func publishAfterAddingFrameCount(_ completedFrameCountDelta: Int, submittedFrameCount submittedFrameCountDelta: Int, force: Bool) {
         guard enabled else {
             return
         }
         let message: String?
         lock.lock()
-        completedFrameCount += frameCount
+        completedFrameCount = min(totalFrameCount, completedFrameCount + completedFrameCountDelta)
+        submittedFrameCount = min(totalFrameCount, max(submittedFrameCount + submittedFrameCountDelta, completedFrameCount))
         let shouldPublish = force
             || completedFrameCount >= totalFrameCount
-            || completedFrameCount - lastPublishedFrameCount >= publishEveryFrameCount
-        if shouldPublish && completedFrameCount != lastPublishedFrameCount {
-            lastPublishedFrameCount = completedFrameCount
-            message = progressMessageLocked()
-        } else if shouldPublish && force {
+            || submittedFrameCount >= totalFrameCount
+            || completedFrameCount - lastPublishedCompletedFrameCount >= publishEveryFrameCount
+            || submittedFrameCount - lastPublishedSubmittedFrameCount >= publishEveryFrameCount
+        if shouldPublish {
+            lastPublishedCompletedFrameCount = completedFrameCount
+            lastPublishedSubmittedFrameCount = submittedFrameCount
             message = progressMessageLocked()
         } else {
             message = nil
@@ -763,14 +771,27 @@ private final class AnalyzerFrameProgressReporter {
 
     private func progressMessageLocked() -> String {
         let elapsedSeconds = max(0.001, Date().timeIntervalSince(startedAt))
+        if submittedFrameCount > completedFrameCount {
+            let submittedPercent = min(100.0, (Double(submittedFrameCount) / Double(totalFrameCount)) * 100.0)
+            let submitFPS = Double(submittedFrameCount) / elapsedSeconds
+            return String(
+                format: "progress %@: %d/%d frame(s) complete, %d submitted (%.1f%% submitted, %.1f submit fps)",
+                label,
+                completedFrameCount,
+                totalFrameCount,
+                submittedFrameCount,
+                submittedPercent,
+                submitFPS
+            )
+        }
         let fps = Double(completedFrameCount) / elapsedSeconds
-        let percent = min(100.0, (Double(completedFrameCount) / Double(totalFrameCount)) * 100.0)
+        let completedPercent = min(100.0, (Double(completedFrameCount) / Double(totalFrameCount)) * 100.0)
         return String(
             format: "progress %@: %d/%d frame(s) (%.1f%%, %.1f fps)",
             label,
             completedFrameCount,
             totalFrameCount,
-            percent,
+            completedPercent,
             fps
         )
     }
@@ -1828,6 +1849,7 @@ private func readFrameChunk(
             currentFrameSlotIndex = (currentFrameSlotIndex + 1) % frameSlots.count
             if shouldOutput {
                 sawOutputFrame = true
+                progressReporter?.submitFrame()
             }
             return true
         }

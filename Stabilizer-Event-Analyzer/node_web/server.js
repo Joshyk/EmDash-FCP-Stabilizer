@@ -263,6 +263,20 @@ function progressLineHandler(jobIdValue) {
 }
 
 function parseAnalyzerProgressLine(line) {
+  const submittedFrameMatch = /^progress\s+(.+?):\s+(\d+)\/(\d+)\s+frame\(s\)\s+complete,\s+(\d+)\s+submitted\s+\(([\d.]+)%\s+submitted,\s+([\d.]+)\s+submit fps\)$/.exec(line);
+  if (submittedFrameMatch) {
+    return {
+      kind: "frames",
+      label: submittedFrameMatch[1],
+      current: Number(submittedFrameMatch[2]),
+      total: Number(submittedFrameMatch[3]),
+      percent: Number(submittedFrameMatch[2]) / Math.max(1, Number(submittedFrameMatch[3])) * 100,
+      submitted: Number(submittedFrameMatch[4]),
+      submittedPercent: Number(submittedFrameMatch[5]),
+      submitFps: Number(submittedFrameMatch[6]),
+      message: line,
+    };
+  }
   const frameMatch = /^progress\s+(.+?):\s+(\d+)\/(\d+)\s+frame\(s\)\s+\(([\d.]+)%,\s+([\d.]+)\s+fps\)$/.exec(line);
   if (frameMatch) {
     return {

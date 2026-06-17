@@ -20,6 +20,23 @@ test("parseAnalyzerProgressLine parses frame progress", () => {
   );
 });
 
+test("parseAnalyzerProgressLine parses submitted frame progress", () => {
+  assert.deepEqual(
+    parseAnalyzerProgressLine("progress P1000307: 0/10501 frame(s) complete, 16 submitted (0.2% submitted, 8.0 submit fps)"),
+    {
+      kind: "frames",
+      label: "P1000307",
+      current: 0,
+      total: 10501,
+      percent: 0,
+      submitted: 16,
+      submittedPercent: 0.2,
+      submitFps: 8.0,
+      message: "progress P1000307: 0/10501 frame(s) complete, 16 submitted (0.2% submitted, 8.0 submit fps)",
+    }
+  );
+});
+
 test("parseAnalyzerProgressLine parses chunk progress", () => {
   assert.deepEqual(
     parseAnalyzerProgressLine("progress P1000307: chunk 3/8 complete"),

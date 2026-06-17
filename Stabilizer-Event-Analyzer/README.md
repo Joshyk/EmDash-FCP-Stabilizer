@@ -66,7 +66,9 @@ decode fallback.
 When `--progress` is enabled in an interactive terminal, frame and chunk
 progress updates rewrite one stderr line. When stderr is piped, such as through
 the local web UI, each progress update is emitted as a `progress ...` line so
-the UI can parse and display it live.
+the UI can parse and display it live. Frame progress reports completed frames
+and, while the first Metal command buffers are still in flight, the number of
+frames submitted to the GPU.
 
 ## Run
 

@@ -70,6 +70,11 @@ function formatProgress(progress) {
     const label = progress.label || "analysis";
     const current = Number.isFinite(progress.current) ? progress.current : "?";
     const total = Number.isFinite(progress.total) ? progress.total : "?";
+    if (Number.isFinite(progress.submitted) && progress.submitted > progress.current) {
+      const submittedPercent = Number.isFinite(progress.submittedPercent) ? `${progress.submittedPercent.toFixed(1)}% submitted` : "? submitted";
+      const submitFps = Number.isFinite(progress.submitFps) ? `${progress.submitFps.toFixed(1)} submit fps` : "? submit fps";
+      return `${label}: ${current}/${total} complete | ${progress.submitted}/${total} GPU submitted | ${submittedPercent} | ${submitFps}`;
+    }
     const percent = Number.isFinite(progress.percent) ? `${progress.percent.toFixed(1)}% done` : "? done";
     const fps = Number.isFinite(progress.fps) ? `${progress.fps.toFixed(1)} fps` : "?";
     return `${label}: ${current}/${total} frames | ${percent} | ${fps}`;
