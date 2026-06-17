@@ -26,6 +26,8 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
+- Uses schema 17 chunked frame fingerprints for persisted-cache validation, matching the
+  external Event Analyzer's parallel Metal fingerprint path.
 - Reuses persisted analysis only after the current source frame validates against saved
   frame fingerprints.
 - Maps trimmed-clip render time back to Host Analysis time by matching the current render

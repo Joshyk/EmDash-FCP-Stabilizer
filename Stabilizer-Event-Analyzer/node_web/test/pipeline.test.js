@@ -118,8 +118,8 @@ test("build_stabilizer_fcpxml_import inserts Stabilizer filter", () => {
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "16:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 16,
+          cacheIdentity: "17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 17,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,

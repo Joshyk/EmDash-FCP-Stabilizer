@@ -537,6 +537,9 @@ function startRunJob(body) {
 function cancelJob(id) {
   const job = jobs.get(id);
   if (!job) throw new Error("job was not found");
+  if (job.status === "done" || job.status === "error" || job.status === "cancelled") {
+    return publicJob(job);
+  }
   updateJob(id, { status: "cancelling", cancelRequested: true, message: "Cancelling job." });
   if (job.currentProcess) {
     const killTimer = terminateJobProcess(id, job.currentProcess);

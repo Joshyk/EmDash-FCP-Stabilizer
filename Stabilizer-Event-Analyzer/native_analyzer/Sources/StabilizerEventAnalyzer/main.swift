@@ -7,12 +7,13 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 16
+private let cacheSchemaVersion = 17
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
 private let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
 private let metalBlurChunkCount = 256
+private let fingerprintChunkCount = 1024
 private let progressOutputIsTerminal = isatty(STDERR_FILENO) == 1
 private let analyzerVideoOutputSettings: [String: Any] = [
     kCVPixelBufferPixelFormatTypeKey as String: [
@@ -826,6 +827,18 @@ func fingerprintString(hash initialHash: UInt64, byteCount: Int) -> String {
     return String(format: "%016llx", hash)
 }
 
+func chunkedFingerprintString(partialHashes: UnsafeBufferPointer<UInt64>, byteCount: Int) -> String {
+    var hash = fingerprintInitialHash
+    for partialHash in partialHashes {
+        var value = partialHash
+        for _ in 0..<MemoryLayout<UInt64>.size {
+            combineFingerprintByte(UInt8(value & 0xff), into: &hash)
+            value >>= 8
+        }
+    }
+    return fingerprintString(hash: hash, byteCount: byteCount)
+}
+
 private func frameMetrics(fingerprint: String, blurAmount: Float) -> FrameMetrics {
     return FrameMetrics(
         blurAmount: blurAmount,
@@ -877,6 +890,12 @@ private struct MetalBlurResult {
 
 private struct MetalFingerprintResult {
     let value: UInt64
+}
+
+private struct MetalFingerprintUniforms {
+    let pixelCount: UInt32
+    let valueRange: UInt32
+    let chunkCount: UInt32
 }
 
 private final class MetalMotionWorkspace {
@@ -1066,7 +1085,7 @@ final class MetalAnalysisContext {
         let workspace = try workspaceForMotion(width: width, height: height)
         let lumaLength = pixelCount * MemoryLayout<UInt16>.stride
         let blurResultLength = MemoryLayout<MetalBlurResult>.stride * metalBlurChunkCount
-        let fingerprintResultLength = MemoryLayout<MetalFingerprintResult>.stride
+        let fingerprintResultLength = MemoryLayout<MetalFingerprintResult>.stride * fingerprintChunkCount
         let partialLength = MemoryLayout<UInt32>.stride * workspace.partialElementCount
         let resultLength = MemoryLayout<MetalShiftResult>.stride * workspace.blockCount
         let sharedOptions: MTLResourceOptions = .storageModeShared
@@ -1171,14 +1190,18 @@ final class MetalAnalysisContext {
         guard let fingerprintEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw AnalyzerError("could not allocate Metal fingerprint encoder")
         }
-        var fingerprintByteCount = UInt32(pixelCount * MemoryLayout<UInt16>.stride)
+        var fingerprintUniforms = MetalFingerprintUniforms(
+            pixelCount: UInt32(pixelCount),
+            valueRange: UInt32(max(1, lumaSource.format.valueRange)),
+            chunkCount: UInt32(fingerprintChunkCount)
+        )
         fingerprintEncoder.setComputePipelineState(fingerprintPipelineState)
         fingerprintEncoder.setBuffer(outputBuffer, offset: 0, index: 0)
         fingerprintEncoder.setBuffer(fingerprintResultBuffer, offset: 0, index: 1)
-        fingerprintEncoder.setBytes(&fingerprintByteCount, length: MemoryLayout<UInt32>.stride, index: 2)
+        fingerprintEncoder.setBytes(&fingerprintUniforms, length: MemoryLayout<MetalFingerprintUniforms>.stride, index: 2)
         fingerprintEncoder.dispatchThreads(
-            MTLSize(width: 1, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+            MTLSize(width: fingerprintChunkCount, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(64, fingerprintChunkCount), height: 1, depth: 1)
         )
         fingerprintEncoder.endEncoding()
 
@@ -1227,7 +1250,7 @@ final class MetalAnalysisContext {
             blurResultBuffer: blurResultBuffer,
             blurChunkCount: metalBlurChunkCount,
             fingerprintResultBuffer: fingerprintResultBuffer,
-            fingerprintByteCount: Int(fingerprintByteCount),
+            fingerprintByteCount: pixelCount,
             resultBuffer: previousBuffer == nil ? nil : resultBuffer,
             motionWorkspace: activeMotionWorkspace,
             lumaFormat: lumaSource.format
@@ -1245,11 +1268,11 @@ final class MetalAnalysisContext {
             chunkCount: encodedFrame.blurChunkCount,
             lumaFormat: encodedFrame.lumaFormat
         )
-        let fingerprintHash = encodedFrame.fingerprintResultBuffer.contents()
-            .assumingMemoryBound(to: MetalFingerprintResult.self)
-            .pointee
-            .value
-        let fingerprint = fingerprintString(hash: fingerprintHash, byteCount: encodedFrame.fingerprintByteCount)
+        let fingerprintHashes = UnsafeBufferPointer(
+            start: encodedFrame.fingerprintResultBuffer.contents().assumingMemoryBound(to: UInt64.self),
+            count: fingerprintChunkCount
+        )
+        let fingerprint = chunkedFingerprintString(partialHashes: fingerprintHashes, byteCount: encodedFrame.fingerprintByteCount)
         let metrics = frameMetrics(
             fingerprint: fingerprint,
             blurAmount: blurAmount
@@ -1350,6 +1373,12 @@ final class MetalAnalysisContext {
         uint count;
     };
 
+    struct FingerprintUniforms {
+        uint pixelCount;
+        uint valueRange;
+        uint chunkCount;
+    };
+
     struct BlockUniforms {
         uint centerX;
         uint centerY;
@@ -1425,20 +1454,25 @@ final class MetalAnalysisContext {
     }
 
     kernel void stabilizer_fingerprint(
-        device const uchar *bytes [[buffer(0)]],
-        device ulong *result [[buffer(1)]],
-        constant uint &byteCount [[buffer(2)]],
+        device const ushort *pixels [[buffer(0)]],
+        device ulong *partials [[buffer(1)]],
+        constant FingerprintUniforms &uniforms [[buffer(2)]],
         uint gid [[thread_position_in_grid]]
     ) {
-        if (gid != 0) {
+        if (gid >= uniforms.chunkCount) {
             return;
         }
+        uint startIndex = (uniforms.pixelCount * gid) / uniforms.chunkCount;
+        uint endIndex = (uniforms.pixelCount * (gid + 1u)) / uniforms.chunkCount;
         ulong hash = 14695981039346656037UL;
-        for (uint index = 0; index < byteCount; index += 1) {
-            hash ^= ulong(bytes[index]);
+        uint range = max(1u, uniforms.valueRange);
+        for (uint index = startIndex; index < endIndex; index += 1) {
+            uint value = uint(pixels[index]);
+            uint byteValue = range <= 255u ? min(255u, value) : min(255u, (value * 255u + (range / 2u)) / range);
+            hash ^= ulong(byteValue);
             hash *= 1099511628211UL;
         }
-        result[0] = hash;
+        partials[gid] = hash;
     }
 
     kernel void stabilizer_block_score_partials(

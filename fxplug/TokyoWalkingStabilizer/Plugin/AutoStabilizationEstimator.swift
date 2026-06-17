@@ -121,18 +121,41 @@ struct StabilizerAnalysisFrame {
     }
 
     static func fingerprint(for pixels: [UInt8]) -> String {
-        var hash = fingerprintInitialHash
-        for byte in pixels {
-            combineFingerprintByte(byte, into: &hash)
+        pixels.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else {
+                return fingerprintString(hash: fingerprintInitialHash, byteCount: 0)
+            }
+            return fingerprint(baseAddress, byteCount: buffer.count)
         }
-        return fingerprintString(hash: hash, byteCount: pixels.count)
     }
 
     static let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
+    static let fingerprintChunkCount = 1024
 
     static func combineFingerprintByte(_ byte: UInt8, into hash: inout UInt64) {
         hash ^= UInt64(byte)
         hash = hash &* 1_099_511_628_211
+    }
+
+    static func fingerprint(_ pixels: UnsafePointer<UInt8>, byteCount: Int) -> String {
+        let chunkCount = max(1, min(fingerprintChunkCount, max(1, byteCount)))
+        var combinedHash = fingerprintInitialHash
+        for chunkIndex in 0..<chunkCount {
+            let startIndex = (byteCount * chunkIndex) / chunkCount
+            let endIndex = (byteCount * (chunkIndex + 1)) / chunkCount
+            var chunkHash = fingerprintInitialHash
+            if startIndex < endIndex {
+                for index in startIndex..<endIndex {
+                    combineFingerprintByte(pixels[index], into: &chunkHash)
+                }
+            }
+            var value = chunkHash
+            for _ in 0..<MemoryLayout<UInt64>.size {
+                combineFingerprintByte(UInt8(value & 0xff), into: &combinedHash)
+                value >>= 8
+            }
+        }
+        return fingerprintString(hash: combinedHash, byteCount: byteCount)
     }
 
     static func fingerprintString(hash initialHash: UInt64, byteCount: Int) -> String {
@@ -1659,7 +1682,6 @@ enum AutoStabilizationEstimator {
         sampleWidth: Int,
         sampleHeight: Int
     ) -> StabilizerFrameMetrics {
-        var hash = StabilizerAnalysisFrame.fingerprintInitialHash
         var totalGradient: Float = 0.0
         var edgeSampleCount: Float = 0.0
         var strongEdgeSampleCount: Float = 0.0
@@ -1668,7 +1690,6 @@ enum AutoStabilizationEstimator {
             let row = y * sampleWidth
             for x in 0..<sampleWidth {
                 let index = row + x
-                StabilizerAnalysisFrame.combineFingerprintByte(pixels[index], into: &hash)
                 if y > 0, y < sampleHeight - 1, x > 0, x < sampleWidth - 1 {
                     let horizontal = abs(Int(pixels[row + x + 1]) - Int(pixels[row + x - 1]))
                     let vertical = abs(Int(pixels[row + sampleWidth + x]) - Int(pixels[row - sampleWidth + x]))
@@ -1696,7 +1717,7 @@ enum AutoStabilizationEstimator {
         }
         return StabilizerFrameMetrics(
             blurAmount: blur,
-            fingerprint: StabilizerAnalysisFrame.fingerprintString(hash: hash, byteCount: byteCount)
+            fingerprint: StabilizerAnalysisFrame.fingerprint(pixels, byteCount: byteCount)
         )
     }
 
