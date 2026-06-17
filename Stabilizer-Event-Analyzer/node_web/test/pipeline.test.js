@@ -144,3 +144,72 @@ test("build_stabilizer_fcpxml_import inserts Stabilizer filter", () => {
   assert.match(info, /Tokyo Walking Stabilizer/);
   assert.match(info, /Host Analysis Cache Identity/);
 });
+
+test("build_stabilizer_fcpxml_import attaches video refs to parent clips", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-video-ref-test-"));
+  const pkg = path.join(tmp, "VideoRef.fcpxmld");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(
+    path.join(pkg, "Info.fcpxml"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<fcpxml version="1.11">
+  <resources>
+    <format id="r1" name="FFVideoFormat1080p30" frameDuration="1001/30000s" width="1920" height="1080"/>
+    <asset id="r2" name="P1000307" start="0s" duration="300300/30000s" hasVideo="1" format="r1" src="file:///tmp/P1000307.mov"/>
+  </resources>
+  <library>
+    <event name="VideoRef">
+      <project name="VideoRef Project">
+        <sequence format="r1" duration="300300/30000s" tcStart="0s" tcFormat="NDF">
+          <spine>
+            <clip name="Wrapped video" offset="0s" start="0s" duration="300300/30000s">
+              <video ref="r2" offset="0s" start="0s" duration="300300/30000s">
+                <adjust-stabilization enabled="0" type="smoothCam"/>
+                <filter-video ref="r3" name="Tokyo Walking Stabilizer"/>
+              </video>
+            </clip>
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>
+`,
+    "utf8"
+  );
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({
+      status: "ok",
+      results: [
+        {
+          assetId: "r2",
+          cacheIdentity: "17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 17,
+          sampleScalePercent: 100,
+          sampleWidth: 1920,
+          sampleHeight: 1080,
+          frameCount: 300,
+        },
+      ],
+    }),
+    "utf8"
+  );
+  const payload = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    pkg,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+  ]);
+  assert.equal(payload.status, "ok");
+  assert.equal(payload.insertedFilters, 1);
+  assert.equal(payload.removedExistingFilters, 1);
+  const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
+  const videoBody = info.match(/<video[^>]*ref="r2"[\s\S]*?<\/video>/)[0];
+  assert.doesNotMatch(videoBody, /Tokyo Walking Stabilizer/);
+  assert.match(info, /<\/video>\s*<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"/);
+});

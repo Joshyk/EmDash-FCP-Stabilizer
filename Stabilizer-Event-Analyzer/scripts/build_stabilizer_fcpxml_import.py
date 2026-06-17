@@ -129,6 +129,19 @@ def stabilizer_filter(ref: str, result: dict) -> ET.Element:
     return node
 
 
+def parent_map(root: ET.Element) -> dict[ET.Element, ET.Element]:
+    return {child: parent for parent in root.iter() for child in list(parent)}
+
+
+def insert_after_child(parent: ET.Element, child: ET.Element, node: ET.Element) -> None:
+    children = list(parent)
+    try:
+        index = children.index(child) + 1
+    except ValueError as exc:
+        raise ValueError("matched video node was not a child of its target clip") from exc
+    parent.insert(index, node)
+
+
 def output_package_path(output_dir: Path, source_path: Path) -> Path:
     source_name = source_path.name if source_path.suffix == ".fcpxmld" else source_path.stem
     if not source_name.endswith(".fcpxmld"):
@@ -169,17 +182,36 @@ def main(argv: Iterable[str]) -> int:
         tree = ET.parse(target_info)
         root = tree.getroot()
         ref = ensure_effect_resource(root)
+        parents = parent_map(root)
         inserted = 0
         removed = 0
-        for element in root.iter():
+        inserted_targets: set[int] = set()
+        for element in list(root.iter()):
             tag = local_name(element.tag)
             if tag not in {"asset-clip", "video"}:
                 continue
             asset_id = element.attrib.get("ref")
             if asset_id not in results:
                 continue
-            removed += remove_existing_stabilizer_filters(element)
-            element.insert(filter_insert_index(element), stabilizer_filter(ref, results[asset_id]))
+            if tag == "asset-clip":
+                target = element
+                insertion_anchor = None
+            else:
+                parent = parents.get(element)
+                if parent is None or local_name(parent.tag) != "clip":
+                    raise ValueError("matched video reference must be inside a clip to receive a Stabilizer filter")
+                target = parent
+                insertion_anchor = element
+                removed += remove_existing_stabilizer_filters(element)
+            removed += remove_existing_stabilizer_filters(target)
+            target_key = id(target)
+            if target_key in inserted_targets:
+                continue
+            if insertion_anchor is None:
+                target.insert(filter_insert_index(target), stabilizer_filter(ref, results[asset_id]))
+            else:
+                insert_after_child(target, insertion_anchor, stabilizer_filter(ref, results[asset_id]))
+            inserted_targets.add(target_key)
             inserted += 1
         if inserted == 0:
             raise ValueError("no asset-clip/video nodes referenced the analyzed Event assets")
