@@ -5,13 +5,22 @@ import Foundation
 import Metal
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 15
+private let cacheSchemaVersion = 16
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
 private let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
 private let analyzerVideoOutputSettings: [String: Any] = [
-    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+    kCVPixelBufferPixelFormatTypeKey as String: [
+        NSNumber(value: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
+        NSNumber(value: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange),
+        NSNumber(value: kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange),
+        NSNumber(value: kCVPixelFormatType_422YpCbCr10BiPlanarFullRange),
+        NSNumber(value: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+        NSNumber(value: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+        NSNumber(value: kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange),
+        NSNumber(value: kCVPixelFormatType_422YpCbCr8BiPlanarFullRange),
+    ],
     kCVPixelBufferMetalCompatibilityKey as String: true,
     kCVPixelBufferIOSurfacePropertiesKey as String: [:],
 ]
@@ -97,6 +106,14 @@ struct PairMotion {
 private struct FrameMetrics {
     let blurAmount: Float
     let fingerprint: String
+}
+
+private struct LumaBufferFormat {
+    let valueRange: UInt16
+
+    var normalizedResidualScale: Float {
+        255.0 / Float(max(1, valueRange))
+    }
 }
 
 struct PreparedAnalysis {
@@ -370,7 +387,7 @@ func fingerprint(_ pixels: UnsafePointer<UInt8>, byteCount: Int) -> String {
     return fingerprintString(hash: hash, byteCount: byteCount)
 }
 
-func blurAmount(_ pixels: UnsafePointer<UInt8>, width: Int, height: Int) -> Float {
+func blurAmount(_ pixels: UnsafePointer<UInt16>, width: Int, height: Int, valueRange: UInt16) -> Float {
     guard width > 2, height > 2 else { return 0 }
     var total: Int = 0
     var count: Int = 0
@@ -389,13 +406,15 @@ func blurAmount(_ pixels: UnsafePointer<UInt8>, width: Int, height: Int) -> Floa
         y += stride
     }
     guard count > 0 else { return 0 }
-    return Float(total) / Float(count)
+    return (Float(total) / Float(count)) * (255.0 / Float(max(1, valueRange)))
 }
 
-private func frameMetrics(_ pixels: UnsafePointer<UInt8>, byteCount: Int, width: Int, height: Int) -> FrameMetrics {
-    FrameMetrics(
-        blurAmount: blurAmount(pixels, width: width, height: height),
-        fingerprint: fingerprint(pixels, byteCount: byteCount)
+private func frameMetrics(_ pixels: UnsafePointer<UInt16>, pixelCount: Int, width: Int, height: Int, lumaFormat: LumaBufferFormat) -> FrameMetrics {
+    let rawBytes = UnsafeRawPointer(pixels).assumingMemoryBound(to: UInt8.self)
+    let byteCount = pixelCount * MemoryLayout<UInt16>.stride
+    return FrameMetrics(
+        blurAmount: blurAmount(pixels, width: width, height: height, valueRange: lumaFormat.valueRange),
+        fingerprint: fingerprint(rawBytes, byteCount: byteCount)
     )
 }
 
@@ -404,6 +423,7 @@ private struct MetalLumaUniforms {
     let sourceHeight: UInt32
     let sampleWidth: UInt32
     let sampleHeight: UInt32
+    let lumaMode: UInt32
 }
 
 private struct MetalBlockUniforms {
@@ -494,7 +514,7 @@ private final class MetalMotionWorkspace {
         scoreCount * blockCount * chunkCount
     }
 
-    func resolveMotion(resultBuffer: MTLBuffer) -> PairMotion {
+    func resolveMotion(resultBuffer: MTLBuffer, lumaFormat: LumaBufferFormat) -> PairMotion {
         let results = UnsafeBufferPointer(
             start: resultBuffer.contents().assumingMemoryBound(to: MetalShiftResult.self),
             count: blockCount
@@ -510,7 +530,7 @@ private final class MetalMotionWorkspace {
         let divisor = Float(max(1, results.count))
         let dx = dxTotal / divisor
         let dy = dyTotal / divisor
-        let residual = residualTotal / divisor
+        let residual = (residualTotal / divisor) * lumaFormat.normalizedResidualScale
         let confidence = clamp(1.0 - (residual / 48.0), 0.05, 1.0)
         return PairMotion(dx: dx, dy: dy, residual: residual, confidence: confidence)
     }
@@ -523,11 +543,19 @@ private struct MetalFrameSlot {
     let resultBuffer: MTLBuffer
 }
 
+private struct MetalLumaSource {
+    let pixelFormat: MTLPixelFormat
+    let mode: UInt32
+    let format: LumaBufferFormat
+    let description: String
+}
+
 private struct MetalEncodedFrame {
     let commandBuffer: MTLCommandBuffer
     let outputBuffer: MTLBuffer
     let resultBuffer: MTLBuffer?
     let motionWorkspace: MetalMotionWorkspace?
+    let lumaFormat: LumaBufferFormat
 }
 
 private final class MetalAnalysisSharedState {
@@ -589,7 +617,7 @@ final class MetalAnalysisContext {
 
     fileprivate func makeFrameSlots(count: Int, pixelCount: Int, width: Int, height: Int) throws -> [MetalFrameSlot] {
         let workspace = try workspaceForMotion(width: width, height: height)
-        let lumaLength = pixelCount
+        let lumaLength = pixelCount * MemoryLayout<UInt16>.stride
         let partialLength = MemoryLayout<UInt32>.stride * workspace.partialElementCount
         let resultLength = MemoryLayout<MetalShiftResult>.stride * workspace.blockCount
         let sharedOptions: MTLResourceOptions = .storageModeShared
@@ -623,19 +651,20 @@ final class MetalAnalysisContext {
         resultBuffer: MTLBuffer,
         previousBuffer: MTLBuffer?
     ) throws -> MetalEncodedFrame {
-        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
-        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
         let pixelCount = sampleWidth * sampleHeight
-        guard outputBuffer.length >= pixelCount else {
+        guard outputBuffer.length >= pixelCount * MemoryLayout<UInt16>.stride else {
             throw AnalyzerError("reusable Metal luma output buffer was too small")
         }
+        let lumaSource = try Self.lumaSource(for: pixelBuffer)
+        let sourceWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
+        let sourceHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
         var cvTexture: CVMetalTexture?
         let textureStatus = CVMetalTextureCacheCreateTextureFromImage(
             nil,
             textureCache,
             pixelBuffer,
             nil,
-            .bgra8Unorm,
+            lumaSource.pixelFormat,
             sourceWidth,
             sourceHeight,
             0,
@@ -652,7 +681,8 @@ final class MetalAnalysisContext {
             sourceWidth: UInt32(sourceWidth),
             sourceHeight: UInt32(sourceHeight),
             sampleWidth: UInt32(sampleWidth),
-            sampleHeight: UInt32(sampleHeight)
+            sampleHeight: UInt32(sampleHeight),
+            lumaMode: lumaSource.mode
         )
         encoder.setComputePipelineState(lumaPipelineState)
         encoder.setTexture(sourceTexture, index: 0)
@@ -707,7 +737,8 @@ final class MetalAnalysisContext {
             commandBuffer: commandBuffer,
             outputBuffer: outputBuffer,
             resultBuffer: previousBuffer == nil ? nil : resultBuffer,
-            motionWorkspace: activeMotionWorkspace
+            motionWorkspace: activeMotionWorkspace,
+            lumaFormat: lumaSource.format
         )
     }
 
@@ -719,12 +750,18 @@ final class MetalAnalysisContext {
     ) throws -> (metrics: FrameMetrics, motion: PairMotion?) {
         encodedFrame.commandBuffer.waitUntilCompleted()
         try Self.validate(commandBuffer: encodedFrame.commandBuffer, stage: encodedFrame.motionWorkspace == nil ? "luma sampling" : "luma sampling and block motion search")
-        let pixels = encodedFrame.outputBuffer.contents().assumingMemoryBound(to: UInt8.self)
-        let metrics = frameMetrics(pixels, byteCount: pixelCount, width: sampleWidth, height: sampleHeight)
+        let pixels = encodedFrame.outputBuffer.contents().assumingMemoryBound(to: UInt16.self)
+        let metrics = frameMetrics(
+            pixels,
+            pixelCount: pixelCount,
+            width: sampleWidth,
+            height: sampleHeight,
+            lumaFormat: encodedFrame.lumaFormat
+        )
         let motion: PairMotion?
         if let motionWorkspace = encodedFrame.motionWorkspace,
            let resultBuffer = encodedFrame.resultBuffer {
-            motion = motionWorkspace.resolveMotion(resultBuffer: resultBuffer)
+            motion = motionWorkspace.resolveMotion(resultBuffer: resultBuffer, lumaFormat: encodedFrame.lumaFormat)
         } else {
             motion = nil
         }
@@ -752,6 +789,35 @@ final class MetalAnalysisContext {
         }
     }
 
+    private static func lumaSource(for pixelBuffer: CVPixelBuffer) throws -> MetalLumaSource {
+        guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 1 else {
+            throw AnalyzerError("VideoToolbox did not provide a planar YUV frame for Metal luma sampling")
+        }
+        switch CVPixelBufferGetPixelFormatType(pixelBuffer) {
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange:
+            return MetalLumaSource(pixelFormat: .r8Unorm, mode: 0, format: LumaBufferFormat(valueRange: 255), description: "8-bit video-range Y")
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr8BiPlanarFullRange:
+            return MetalLumaSource(pixelFormat: .r8Unorm, mode: 0, format: LumaBufferFormat(valueRange: 255), description: "8-bit full-range Y")
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
+            return MetalLumaSource(pixelFormat: .r16Unorm, mode: 1, format: LumaBufferFormat(valueRange: 1023), description: "10-bit video-range Y")
+        case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
+            return MetalLumaSource(pixelFormat: .r16Unorm, mode: 1, format: LumaBufferFormat(valueRange: 1023), description: "10-bit full-range Y")
+        default:
+            let code = CVPixelBufferGetPixelFormatType(pixelBuffer)
+            let text = String(format: "%c%c%c%c",
+                Int((code >> 24) & 0xff),
+                Int((code >> 16) & 0xff),
+                Int((code >> 8) & 0xff),
+                Int(code & 0xff)
+            )
+            throw AnalyzerError("unsupported VideoToolbox pixel format \(text); Event analysis requires native YUV frames for Metal luma sampling")
+        }
+    }
+
     fileprivate static let kernelSource = """
     #include <metal_stdlib>
     using namespace metal;
@@ -759,9 +825,9 @@ final class MetalAnalysisContext {
     struct LumaUniforms {
         uint sourceWidth;
         uint sourceHeight;
-        uint bytesPerRow;
         uint sampleWidth;
         uint sampleHeight;
+        uint lumaMode;
     };
 
     struct BlockUniforms {
@@ -788,7 +854,7 @@ final class MetalAnalysisContext {
 
     kernel void stabilizer_luma_sample(
         texture2d<float, access::read> source [[texture(0)]],
-        device uchar *output [[buffer(0)]],
+        device ushort *output [[buffer(0)]],
         constant LumaUniforms &uniforms [[buffer(1)]],
         uint2 gid [[thread_position_in_grid]]
     ) {
@@ -797,13 +863,19 @@ final class MetalAnalysisContext {
         }
         uint sx = min(uniforms.sourceWidth - 1, uint((float(gid.x) + 0.5f) * float(uniforms.sourceWidth) / float(uniforms.sampleWidth)));
         uint sy = min(uniforms.sourceHeight - 1, uint((float(gid.y) + 0.5f) * float(uniforms.sourceHeight) / float(uniforms.sampleHeight)));
-        float4 color = source.read(uint2(sx, sy));
-        output[(gid.y * uniforms.sampleWidth) + gid.x] = uchar(clamp(int(round(((0.299f * color.b) + (0.587f * color.g) + (0.114f * color.r)) * 255.0f)), 0, 255));
+        float normalizedY = source.read(uint2(sx, sy)).r;
+        float scale;
+        if (uniforms.lumaMode == 0) {
+            scale = 255.0f;
+        } else {
+            scale = 1023.0f;
+        }
+        output[(gid.y * uniforms.sampleWidth) + gid.x] = ushort(clamp(int(round(normalizedY * scale)), 0, int(scale)));
     }
 
     kernel void stabilizer_block_score_partials(
-        device const uchar *previous [[buffer(0)]],
-        device const uchar *current [[buffer(1)]],
+        device const ushort *previous [[buffer(0)]],
+        device const ushort *current [[buffer(1)]],
         device uint *partialSums [[buffer(2)]],
         device uint *partialCounts [[buffer(3)]],
         device const BlockUniforms *uniformsList [[buffer(4)]],
