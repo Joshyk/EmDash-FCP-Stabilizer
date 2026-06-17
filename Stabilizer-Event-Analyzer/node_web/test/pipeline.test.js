@@ -370,7 +370,7 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   </resources>
   <library>
     <event name="AnalyzedOnly">
-      <asset-clip name="P1000307" ref="r2" start="0s" duration="300300/30000s" format="r1">
+      <asset-clip name="P1000307" ref="r2" start="3600s" duration="300300/30000s" format="r1">
         <adjust-colorConform enabled="1"/>
       </asset-clip>
       <project name="Large Existing Project">
@@ -425,7 +425,8 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   assert.equal(payload.insertedFilters, 2);
   const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
   assert.match(info, /Tokyo Walking Stabilizer - Analyzed Footage/);
-  assert.match(info, /<asset[^>]*id="r2"[^>]*name="P1000307"/);
+  assert.equal((info.match(/<asset-clip[^>]+ref="r2"[^>]+start="0s"/g) || []).length, 2);
+  assert.doesNotMatch(info, /<asset-clip[^>]+ref="r2"[^>]+start="3600s"/);
   assert.doesNotMatch(info, /Large Existing Project/);
   assert.doesNotMatch(info, /Other/);
   assert.doesNotMatch(info, /Existing Effect/);
