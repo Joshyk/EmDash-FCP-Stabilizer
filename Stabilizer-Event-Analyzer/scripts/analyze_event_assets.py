@@ -40,22 +40,49 @@ def normalize_cache_root(path: Path) -> Path:
     return resolved / "Analysis Files" / CACHE_DIR_NAME
 
 
-def swift_command(plan_path: Path, progress: bool) -> list[str]:
+def native_source_mtime() -> float:
+    source_paths = [NATIVE_PACKAGE / "Package.swift"]
+    source_paths.extend((NATIVE_PACKAGE / "Sources").rglob("*.swift"))
+    existing = [path.stat().st_mtime for path in source_paths if path.exists()]
+    if not existing:
+        raise RuntimeError(f"native analyzer source files were not found: {NATIVE_PACKAGE}")
+    return max(existing)
+
+
+def fresh_built_executables() -> tuple[list[Path], list[Path]]:
+    source_mtime = native_source_mtime()
     built_executables = [
         NATIVE_PACKAGE / ".build" / "release" / EXECUTABLE_NAME,
         *sorted((NATIVE_PACKAGE / ".build").glob("*-apple-macosx/release/" + EXECUTABLE_NAME)),
     ]
+    fresh: list[Path] = []
+    stale: list[Path] = []
     for built_executable in built_executables:
-        if built_executable.exists():
-            command = [str(built_executable), "--plan", str(plan_path)]
-            if progress:
-                command.append("--progress")
-            return command
+        if not built_executable.exists():
+            continue
+        if built_executable.stat().st_mtime >= source_mtime:
+            fresh.append(built_executable)
+        else:
+            stale.append(built_executable)
+    return fresh, stale
+
+
+def swift_command(plan_path: Path, progress: bool) -> list[str]:
+    fresh_executables, stale_executables = fresh_built_executables()
+    for built_executable in fresh_executables:
+        command = [str(built_executable), "--plan", str(plan_path)]
+        if progress:
+            command.append("--progress")
+        return command
     swift = shutil.which("swift")
     if not swift:
+        if stale_executables:
+            stale_names = ", ".join(str(path) for path in stale_executables)
+            raise RuntimeError(f"prebuilt native analyzer is stale and swift was not found on PATH; refusing stale executable(s): {stale_names}")
         raise RuntimeError("swift was not found on PATH; native analyzer cannot run")
     if progress:
-        print("prebuilt native analyzer was not found; building with swift run", file=sys.stderr)
+        reason = "stale" if stale_executables else "not found"
+        print(f"prebuilt native analyzer was {reason}; building with swift run", file=sys.stderr)
     command = [
         swift,
         "run",

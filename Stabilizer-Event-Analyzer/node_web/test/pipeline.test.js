@@ -165,6 +165,54 @@ test("list_event_assets refuses direct asset src inside FCP Proxy Media", () => 
   assert.match(payload.assets[0].unsupported, /FCP Proxy Media/);
 });
 
+test("analyze_event_assets refuses stale prebuilt native analyzer", () => {
+  const script = String.raw`
+import importlib.util
+import os
+import pathlib
+import sys
+import tempfile
+import time
+
+script = pathlib.Path("scripts/analyze_event_assets.py").resolve()
+sys.path.insert(0, str(script.parent))
+spec = importlib.util.spec_from_file_location("analyze_event_assets", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+with tempfile.TemporaryDirectory() as tmp:
+    package = pathlib.Path(tmp) / "native_analyzer"
+    source_dir = package / "Sources" / "StabilizerEventAnalyzer"
+    source_dir.mkdir(parents=True)
+    source = source_dir / "main.swift"
+    source.write_text("print(\"new\")\n", encoding="utf-8")
+    (package / "Package.swift").write_text("// package\n", encoding="utf-8")
+    executable = package / ".build" / "arm64-apple-macosx" / "release" / "StabilizerEventAnalyzer"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    now = time.time()
+    os.utime(executable, (now - 100, now - 100))
+    os.utime(source, (now, now))
+
+    module.NATIVE_PACKAGE = package
+    module.shutil.which = lambda name: "/usr/bin/swift"
+    stale_command = module.swift_command(pathlib.Path("/tmp/plan.json"), False)
+    if stale_command[0] != "/usr/bin/swift":
+        raise AssertionError(stale_command)
+
+    os.utime(executable, (now + 100, now + 100))
+    fresh_command = module.swift_command(pathlib.Path("/tmp/plan.json"), False)
+    if fresh_command[0] != str(executable):
+        raise AssertionError(fresh_command)
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
 test("build_stabilizer_fcpxml_import inserts Stabilizer filter", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-import-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
