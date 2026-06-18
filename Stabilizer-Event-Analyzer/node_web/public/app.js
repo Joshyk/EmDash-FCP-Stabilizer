@@ -29,7 +29,6 @@ const el = {
   cacheRootInput: document.getElementById("cacheRootInput"),
   selectCacheRootButton: document.getElementById("selectCacheRootButton"),
   sampleScaleInput: document.getElementById("sampleScaleInput"),
-  maxFramesInput: document.getElementById("maxFramesInput"),
   runButton: document.getElementById("runButton"),
   cancelButton: document.getElementById("cancelButton"),
   statusBox: document.getElementById("statusBox"),
@@ -249,7 +248,6 @@ function saveLastAnalysisSettings(settings = null) {
     importsDir,
     cacheRoot: importsDir,
     sampleScalePercent: settings ? settings.sampleScalePercent : Number(el.sampleScaleInput.value),
-    maxFrames: settings ? settings.maxFrames : (el.maxFramesInput.value ? Number(el.maxFramesInput.value) : null),
     savedAt: Date.now(),
   };
   try {
@@ -463,7 +461,6 @@ async function applyLastAnalysis() {
   state.pendingPresetAssetIds = new Set(assetIds);
   el.cacheRootInput.value = preset.importsDir || preset.cacheRoot || defaultImportsDirForSource(preset.sourcePath);
   if (preset.sampleScalePercent) el.sampleScaleInput.value = String(preset.sampleScalePercent);
-  el.maxFramesInput.value = preset.maxFrames ? String(preset.maxFrames) : "";
   setStatus("Loading last analysis...");
   await loadAssets();
   const selectedCount = state.selectedAssetIds.size;
@@ -497,7 +494,6 @@ function runBody() {
     outputDir: importsDir,
     assetIds: Array.from(state.selectedAssetIds),
     sampleScalePercent: Number(el.sampleScaleInput.value),
-    maxFrames: el.maxFramesInput.value ? Number(el.maxFramesInput.value) : null,
   };
 }
 

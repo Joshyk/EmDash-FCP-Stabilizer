@@ -71,22 +71,16 @@
           <div class="button-row">
             <button id="selectCacheRootButton" type="button">Select Imports</button>
           </div>
-          <div class="grid-fields">
-            <label class="field">
-              <span>Sample size</span>
-              <select id="sampleScaleInput">
-                <option value="100" selected>100%</option>
-                <option value="75">75%</option>
-                <option value="50">50%</option>
-                <option value="25">25%</option>
-                <option value="10">10%</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Debug max frames</span>
-              <input id="maxFramesInput" type="number" min="3" step="1" placeholder="empty">
-            </label>
-          </div>
+          <label class="field">
+            <span>Sample size</span>
+            <select id="sampleScaleInput">
+              <option value="100" selected>100%</option>
+              <option value="75">75%</option>
+              <option value="50">50%</option>
+              <option value="25">25%</option>
+              <option value="10">10%</option>
+            </select>
+          </label>
           <div class="button-row">
             <button id="runButton" class="primary-button" type="button" disabled>Run Serial Analysis</button>
             <button id="cancelButton" type="button" class="hidden">Cancel</button>

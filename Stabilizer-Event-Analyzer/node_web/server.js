@@ -488,10 +488,6 @@ async function runAnalyzer(body, progress, forcedJobId) {
   if (!SAMPLE_SCALE_PERCENT_CHOICES.includes(sampleScalePercent)) {
     throw new Error(`sampleScalePercent must be one of ${SAMPLE_SCALE_PERCENT_CHOICES.join(", ")}`);
   }
-  const maxFrames = body.maxFrames ? Number(body.maxFrames) : null;
-  if (maxFrames !== null && (!Number.isInteger(maxFrames) || maxFrames < 3)) {
-    throw new Error("maxFrames must be an integer >= 3");
-  }
 
   progress("analyzing", "Running serial Event media analysis.");
   assertNotCancelled(id);
@@ -506,9 +502,6 @@ async function runAnalyzer(body, progress, forcedJobId) {
     ...selectedAssetArgs(body.assetIds, body.analyzeAll === true),
     "--progress",
   ];
-  if (maxFrames !== null) {
-    analysisArgs.push("--max-frames", String(maxFrames));
-  }
   const analysis = await runJsonProcess(PYTHON, analysisArgs, { jobId: id, onStderr: progressLineHandler(id) });
   const analysisPath = path.join(dir, "analysis.json");
   await fsp.writeFile(analysisPath, JSON.stringify(analysis, null, 2), "utf8");
