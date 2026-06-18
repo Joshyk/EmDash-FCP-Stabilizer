@@ -771,6 +771,16 @@ async function serveStatic(req, res, pathname) {
   }
   try {
     const data = await fsp.readFile(targetPath);
+    if (path.basename(targetPath) === "index.html") {
+      const assetVersion = encodeURIComponent(GIT_COMMIT || packageInfo.version || "dev");
+      const body = data.toString("utf8").replaceAll("__ASSET_VERSION__", assetVersion);
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(body);
+      return;
+    }
     res.writeHead(200, {
       "content-type": MIME_TYPES[path.extname(targetPath)] || "application/octet-stream",
       "cache-control": "no-store",
