@@ -4031,9 +4031,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let configuredProjectBundleCache = transformEnabled
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)
             : false
-        let hasCompletedHostAnalysis = hostAnalysisStore.hasCompletedAnalysis
+        var storeSnapshot = hostAnalysisStore.renderSnapshot
+        let hasCompletedHostAnalysis = storeSnapshot.hasCompletedAnalysis
         var renderCacheIdentity: String?
-        var renderStoreRevision = hostAnalysisStore.revision
+        var renderStoreRevision = storeSnapshot.revision
         let canUseHostAnalysisStoreForRender = transformEnabled
             && (hasCompletedHostAnalysis || configuredProjectBundleCache)
         if transformEnabled,
@@ -4044,10 +4045,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                preferredCacheIdentity: preferredCacheIdentity,
                expectedRange: expectedRange
            ) {
+            storeSnapshot = hostAnalysisStore.renderSnapshot
             renderUsesPreparedAnalysis = true
             activePreparedAnalysis = preparedAnalysis
-            renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
-            renderStoreRevision = hostAnalysisStore.revision
+            renderCacheIdentity = storeSnapshot.activeCacheIdentity
+            renderStoreRevision = storeSnapshot.revision
             publishHostAnalysisCacheIdentityOnMain(renderCacheIdentity, force: false)
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             activeAnalysisRenderTime = analysisRenderTime
@@ -4067,7 +4069,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
         let debugOverlayActive = state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis
         if renderCacheIdentity == nil {
-            renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
+            renderCacheIdentity = storeSnapshot.activeCacheIdentity
         }
         let renderCacheIdentityShort = Self.shortRenderCacheIdentity(renderCacheIdentity)
         if transformEnabled && renderUsesPreparedAnalysis {
@@ -4106,8 +4108,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 hostAnalysisFrameCount: state.hostAnalysisFrameCount
             )
         )
-        let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
-        renderStoreRevision = hostAnalysisStore.revision
+        storeSnapshot = hostAnalysisStore.renderSnapshot
+        let renderInvalidationToken = storeSnapshot.renderInvalidationToken
+        renderStoreRevision = storeSnapshot.revision
         let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
         if renderStoreChangedStatus || abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
             publishPreviewInvalidationOnMain(
