@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.175"
+private let tokyoWalkingStabilizerVersion = "0.3.176"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -117,6 +117,47 @@ private struct AutoCropTransitionSample {
     let transform: StabilizerAutoTransform
     let weight: Float
     let leadProgress: Float
+}
+
+private enum AutoCropSamplingProfile: Int32 {
+    case playback = 0
+    case full = 1
+
+    var transitionSampleCount: Int {
+        switch self {
+        case .playback:
+            return 9
+        case .full:
+            return 17
+        }
+    }
+
+    var releaseSampleCount: Int {
+        switch self {
+        case .playback:
+            return 6
+        case .full:
+            return 16
+        }
+    }
+
+    var quantizationStepSeconds: Double {
+        switch self {
+        case .playback:
+            return 0.25
+        case .full:
+            return 0.0
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .playback:
+            return "playback"
+        case .full:
+            return "full"
+        }
+    }
 }
 
 private struct AutoCropFramingTarget {
@@ -219,6 +260,8 @@ private struct AutoCropFramingCacheKey: Hashable {
     let panSmoothSeconds: UInt64
     let masterStrength: UInt32
     let transitionDuration: UInt64
+    let samplingProfile: Int32
+    let renderQualityLevel: UInt32
     let microJitterX: UInt64
     let microJitterY: UInt64
     let microJitterRotation: UInt64
@@ -266,6 +309,7 @@ private struct RenderAnalysisDecisionSignature: Equatable {
     let renderSourceIsProxy: Bool
     let renderCacheIdentityShort: String
     let autoCropEnabled: Bool
+    let autoCropProfileName: String
     let hostAnalysisFrameCount: Int32
 }
 
@@ -288,6 +332,7 @@ private struct StabilizerPluginState {
     var hostAnalysisFrameCount: Int32
     var hostAnalysisRevision: UInt64
     var renderRevision: Double
+    var renderQualityLevel: UInt32
     var inputRangeStartSeconds: Double
     var inputRangeDurationSeconds: Double
     var inputFrameDurationSeconds: Double
@@ -606,11 +651,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static let autoCropFramingCacheLock = NSLock()
     private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
     private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
-    private static let autoCropFramingCacheLimit = 32
+    private static let autoCropFramingCacheLimit = 160
     private static let autoTransformCacheLock = NSLock()
     private static var autoTransformCache: [StabilizerAutoTransformCacheKey: StabilizerAutoTransform] = [:]
     private static var autoTransformCacheOrder: [StabilizerAutoTransformCacheKey] = []
-    private static let autoTransformCacheLimit = 64
+    private static let autoTransformCacheLimit = 512
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -889,6 +934,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             hostAnalysisFrameCount: 0,
             hostAnalysisRevision: 0,
             renderRevision: 0.0,
+            renderQualityLevel: UInt32(clamping: qualityLevel),
             inputRangeStartSeconds: .nan,
             inputRangeDurationSeconds: .nan,
             inputFrameDurationSeconds: .nan
@@ -1438,6 +1484,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         strengths: StabilizerCorrectionStrengths,
         masterStrength: Float,
         transitionDuration: Double,
+        samplingProfile: AutoCropSamplingProfile,
+        renderQualityLevel: UInt32,
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> AutoCropFraming {
@@ -1455,6 +1503,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds.bitPattern,
             masterStrength: masterStrength.bitPattern,
             transitionDuration: transitionDuration.bitPattern,
+            samplingProfile: samplingProfile.rawValue,
+            renderQualityLevel: renderQualityLevel,
             microJitterX: strengths.microJitterX.bitPattern,
             microJitterY: strengths.microJitterY.bitPattern,
             microJitterRotation: strengths.microJitterRotation.bitPattern,
@@ -1481,7 +1531,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             masterStrength: masterStrength,
-            transitionDuration: transitionDuration
+            transitionDuration: transitionDuration,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
         )
 
         autoCropFramingCacheLock.lock()
@@ -1506,7 +1559,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         masterStrength: Float,
-        transitionDuration: Double
+        transitionDuration: Double,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
     ) -> AutoCropFraming {
         guard masterStrength > 0.0001,
               outputSize.x > 1.0,
@@ -1533,7 +1589,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
-            currentTransform: currentTransform
+            currentTransform: currentTransform,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
         )
         let releaseSamples = autoCropReleaseTransformSamples(
             preparedAnalysis: preparedAnalysis,
@@ -1541,7 +1600,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             durationSeconds: transitionDurationSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths
+            strengths: strengths,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
         )
         let framingTargets = autoCropFramingTargets(
             from: transitionSamples,
@@ -1602,6 +1664,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
+    private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32) -> AutoCropSamplingProfile {
+        // FxQuality values are LOW=0, MEDIUM=1, HIGH=2 in FxPlug.
+        qualityLevel >= 2 ? .full : .playback
+    }
+
+    private static func autoCropSampleTime(_ seconds: Double, samplingProfile: AutoCropSamplingProfile) -> Double {
+        let step = samplingProfile.quantizationStepSeconds
+        guard step > 1e-9 else {
+            return seconds
+        }
+        return (seconds / step).rounded() * step
+    }
+
     private static func autoCropTransformSamples(
         preparedAnalysis: StabilizerPreparedAnalysis,
         startSeconds: Double,
@@ -1609,7 +1684,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         outputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
-        currentTransform: StabilizerAutoTransform
+        currentTransform: StabilizerAutoTransform,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
     ) -> [AutoCropTransitionSample] {
         guard durationSeconds > 1e-6,
               let firstTime = preparedAnalysis.frames.first?.time,
@@ -1624,13 +1702,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             ]
         }
 
-        let sampleCount = 17
+        let sampleCount = samplingProfile.transitionSampleCount
         var samples: [AutoCropTransitionSample] = []
+        samples.reserveCapacity(sampleCount)
 
         for sampleIndex in 0..<sampleCount {
             let fraction = Double(sampleIndex) / Double(max(1, sampleCount - 1))
             let offset = fraction * durationSeconds
-            let sampleSeconds = startSeconds + offset
+            let sampleSeconds = sampleIndex == 0
+                ? startSeconds
+                : autoCropSampleTime(startSeconds + offset, samplingProfile: samplingProfile)
             guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
                 continue
             }
@@ -1643,12 +1724,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             if abs(offset) <= 1e-6 {
                 transform = currentTransform
             } else {
-                transform = AutoStabilizationEstimator.autoCropWindowEstimate(
+                transform = cachedAutoTransform(
                     preparedAnalysis: preparedAnalysis,
                     renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths
+                    strengths: strengths,
+                    analysisRevision: analysisRevision,
+                    cacheIdentity: cacheIdentity
                 )
             }
             samples.append(
@@ -1679,7 +1762,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         durationSeconds: Double,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths
+        strengths: StabilizerCorrectionStrengths,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
     ) -> [AutoCropTransitionSample] {
         guard durationSeconds > 1e-6,
               let firstTime = preparedAnalysis.frames.first?.time,
@@ -1688,13 +1774,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return []
         }
 
-        let sampleCount = 17
+        let sampleCount = samplingProfile.releaseSampleCount
         var samples: [AutoCropTransitionSample] = []
+        samples.reserveCapacity(sampleCount)
 
-        for sampleIndex in 1..<sampleCount {
-            let fraction = Double(sampleIndex) / Double(max(1, sampleCount - 1))
+        for sampleIndex in 1...sampleCount {
+            let fraction = Double(sampleIndex) / Double(max(1, sampleCount))
             let offset = fraction * durationSeconds
-            let sampleSeconds = startSeconds - offset
+            let sampleSeconds = autoCropSampleTime(startSeconds - offset, samplingProfile: samplingProfile)
             guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
                 continue
             }
@@ -1704,12 +1791,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             }
             samples.append(
                 AutoCropTransitionSample(
-                    transform: AutoStabilizationEstimator.autoCropWindowEstimate(
+                    transform: cachedAutoTransform(
                         preparedAnalysis: preparedAnalysis,
                         renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
                         outputSize: outputSize,
                         panSmoothSeconds: panSmoothSeconds,
-                        strengths: strengths
+                        strengths: strengths,
+                        analysisRevision: analysisRevision,
+                        cacheIdentity: cacheIdentity
                     ),
                     weight: weight,
                     leadProgress: Float(1.0 - fraction)
@@ -2072,7 +2161,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return
         }
 
-        let decision = "Render Host Analysis decision | FxPlug \(signature.fxPlugVersion) | transform \(signature.transformEnabled ? "on" : "off") | completed \(signature.hasCompletedHostAnalysis ? "yes" : "no") | project cache \(signature.configuredProjectBundleCache ? "configured" : "not configured") | prepared \(signature.renderUsesPreparedAnalysis ? "yes" : "no") | stabilization \(signature.stabilizationActive ? "active" : "inactive") | debug overlay \(signature.debugOverlayActive ? "active" : "inactive") | proxy \(signature.renderSourceIsProxy ? "yes" : "no") | identity \(signature.renderCacheIdentityShort) | auto crop \(signature.autoCropEnabled ? "on" : "off") | frames \(signature.hostAnalysisFrameCount)"
+        let decision = "Render Host Analysis decision | FxPlug \(signature.fxPlugVersion) | transform \(signature.transformEnabled ? "on" : "off") | completed \(signature.hasCompletedHostAnalysis ? "yes" : "no") | project cache \(signature.configuredProjectBundleCache ? "configured" : "not configured") | prepared \(signature.renderUsesPreparedAnalysis ? "yes" : "no") | stabilization \(signature.stabilizationActive ? "active" : "inactive") | debug overlay \(signature.debugOverlayActive ? "active" : "inactive") | proxy \(signature.renderSourceIsProxy ? "yes" : "no") | identity \(signature.renderCacheIdentityShort) | auto crop \(signature.autoCropEnabled ? "on" : "off") profile \(signature.autoCropProfileName) | frames \(signature.hostAnalysisFrameCount)"
         statusLock.lock()
         let shouldPublishString = lastRenderAnalysisDecision != decision
         if shouldPublishString {
@@ -3849,7 +3938,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func pluginState(from data: Data?) -> StabilizerPluginState? {
-        data?.withUnsafeBytes { pointer in
+        guard let data,
+              data.count >= MemoryLayout<StabilizerPluginState>.size else {
+            return nil
+        }
+        return data.withUnsafeBytes { pointer in
             pointer.bindMemory(to: StabilizerPluginState.self).baseAddress?.pointee
         }
     }
@@ -4263,6 +4356,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 renderSourceIsProxy: renderSourceIsProxy,
                 renderCacheIdentityShort: renderCacheIdentityShort,
                 autoCropEnabled: state.autoCropEnabled,
+                autoCropProfileName: state.autoCropEnabled ? Self.autoCropSamplingProfile(forQualityLevel: state.renderQualityLevel).displayName : "off",
                 hostAnalysisFrameCount: state.hostAnalysisFrameCount
             )
         )
@@ -4376,6 +4470,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic5 = vector_float4(0.0, 0.0, 0.0, 0.0)
         }
         let autoCropFraming: AutoCropFraming
+        let autoCropSamplingProfile = Self.autoCropSamplingProfile(forQualityLevel: state.renderQualityLevel)
         if state.autoCropEnabled,
            renderUsesPreparedAnalysis,
            let preparedAnalysis = activePreparedAnalysis {
@@ -4388,6 +4483,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 strengths: correctionStrengths,
                 masterStrength: masterStrength,
                 transitionDuration: state.autoCropTransitionDuration,
+                samplingProfile: autoCropSamplingProfile,
+                renderQualityLevel: state.renderQualityLevel,
                 analysisRevision: renderStoreRevision,
                 cacheIdentity: renderCacheIdentity
             )
