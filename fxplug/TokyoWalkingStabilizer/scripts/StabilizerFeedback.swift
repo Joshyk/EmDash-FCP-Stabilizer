@@ -289,38 +289,66 @@ private struct FrameAssessment {
 
 private struct AssessmentContext {
     let analysis: Analysis
+    let footstepBaselineXPath: [Float]
+    let footstepBaselineYPath: [Float]
+    let footstepBaselineRPath: [Float]
     let footstepCleanXPath: [Float]
     let footstepCleanYPath: [Float]
     let footstepCleanRPath: [Float]
     let strideSmoothedXPath: [Float]
     let strideSmoothedYPath: [Float]
     let strideSmoothedRPath: [Float]
+    let turnStrideSmoothedXPath: [Float]
     let warpMagnitudes: [Float]
 
     init(analysis: Analysis) {
         self.analysis = analysis
         let allIndices = Array(analysis.frames.indices)
-        let cleanX = outerLinearPredictionPath(
+        let baselineX = outerLinearPredictionPath(
             analysis.footstepPathX,
             frames: analysis.frames,
             targetIndices: allIndices,
             innerWindowSeconds: footstepInnerWindowSeconds,
             outerWindowSeconds: footstepOuterWindowSeconds
         )
-        let cleanY = outerLinearPredictionPath(
+        let baselineY = outerLinearPredictionPath(
             analysis.footstepPathY,
             frames: analysis.frames,
             targetIndices: allIndices,
             innerWindowSeconds: footstepInnerWindowSeconds,
             outerWindowSeconds: footstepOuterWindowSeconds
         )
-        let cleanR = outerLinearPredictionPath(
+        let baselineR = outerLinearPredictionPath(
             analysis.footstepPathRoll,
             frames: analysis.frames,
             targetIndices: allIndices,
             innerWindowSeconds: footstepInnerWindowSeconds,
             outerWindowSeconds: footstepOuterWindowSeconds
         )
+        let cleanX = confidenceCleanedFootstepPath(
+            values: analysis.footstepPathX,
+            baselineValues: baselineX,
+            analysis: analysis,
+            targetIndices: allIndices,
+            fullImpulseScale: footstepFullScalePixels
+        )
+        let cleanY = confidenceCleanedFootstepPath(
+            values: analysis.footstepPathY,
+            baselineValues: baselineY,
+            analysis: analysis,
+            targetIndices: allIndices,
+            fullImpulseScale: footstepFullScalePixels
+        )
+        let cleanR = confidenceCleanedFootstepPath(
+            values: analysis.footstepPathRoll,
+            baselineValues: baselineR,
+            analysis: analysis,
+            targetIndices: allIndices,
+            fullImpulseScale: footstepFullScaleDegrees
+        )
+        footstepBaselineXPath = baselineX
+        footstepBaselineYPath = baselineY
+        footstepBaselineRPath = baselineR
         footstepCleanXPath = cleanX
         footstepCleanYPath = cleanY
         footstepCleanRPath = cleanR
@@ -338,6 +366,12 @@ private struct AssessmentContext {
         )
         strideSmoothedRPath = locallyTimeWeightedAveragePath(
             cleanR,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            windowSeconds: strideWindowSeconds
+        )
+        turnStrideSmoothedXPath = locallyTimeWeightedAveragePath(
+            baselineX,
             frames: analysis.frames,
             targetIndices: allIndices,
             windowSeconds: strideWindowSeconds
@@ -835,14 +869,18 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         qualityModel: analysis.qualityModel
     )
 
-    let footstepBaseX = context.footstepCleanXPath[index]
-    let footstepBaseY = context.footstepCleanYPath[index]
-    let footstepBaseR = context.footstepCleanRPath[index]
+    let footstepBaseX = context.footstepBaselineXPath[index]
+    let footstepBaseY = context.footstepBaselineYPath[index]
+    let footstepBaseR = context.footstepBaselineRPath[index]
+    let footstepCleanX = context.footstepCleanXPath[index]
+    let footstepCleanY = context.footstepCleanYPath[index]
+    let footstepCleanR = context.footstepCleanRPath[index]
     let strideSmoothX = context.strideSmoothedXPath[index]
     let strideSmoothY = context.strideSmoothedYPath[index]
     let strideSmoothR = context.strideSmoothedRPath[index]
-    let turnSmoothX = timeWeightedMonotonicSCurveValue(context.strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
-        ?? timeWeightedAverage(context.strideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
+    let turnStrideSmoothX = context.turnStrideSmoothedXPath[index]
+    let turnSmoothX = timeWeightedMonotonicSCurveValue(context.turnStrideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
+        ?? timeWeightedAverage(context.turnStrideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
 
     let strideResidual = percentileValue(analysis.residuals, indices: strideIndices, percentile: 0.70)
     let turnResidual = percentileValue(analysis.residuals, indices: turnIndices, percentile: 0.75)
@@ -862,18 +900,18 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let footX = analysis.footstepPathX[index] - footstepBaseX
     let footY = analysis.footstepPathY[index] - footstepBaseY
     let footR = analysis.footstepPathRoll[index] - footstepBaseR
-    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: context.footstepCleanXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
-    let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: context.footstepCleanYPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
-    let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: context.footstepCleanRPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScaleDegrees)
+    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: context.footstepBaselineXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
+    let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: context.footstepBaselineYPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
+    let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: context.footstepBaselineRPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScaleDegrees)
     let footAppliedX = abs(footX * xScale) * walkingCorrectionFactor(options.strengths.microX, confidence: footQX, maxStrength: 10.0)
     let footAppliedY = abs(footY * yScale) * walkingCorrectionFactor(options.strengths.microY, confidence: footQY, maxStrength: 10.0)
     let footAppliedR = abs(footR) * walkingCorrectionFactor(options.strengths.microR, confidence: footQR)
     let footDetected = hypotf(footX * xScale, footY * yScale) + (abs(footR) * 12.0)
     let footApplied = hypotf(footAppliedX, footAppliedY) + (footAppliedR * 12.0)
 
-    let strideX = footstepBaseX - strideSmoothX
-    let strideY = footstepBaseY - strideSmoothY
-    let strideR = footstepBaseR - strideSmoothR
+    let strideX = footstepCleanX - strideSmoothX
+    let strideY = footstepCleanY - strideSmoothY
+    let strideR = footstepCleanR - strideSmoothR
     let strideQX = strideConfidence(bandValue: strideX, trackingConfidence: strideTracking, fullScale: strideFullScalePixels)
     let strideQY = strideConfidence(bandValue: strideY, trackingConfidence: strideTracking, fullScale: strideFullScalePixels)
     let strideQR = strideConfidence(bandValue: strideR, trackingConfidence: strideTracking, fullScale: strideFullScaleDegrees)
@@ -883,7 +921,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideDetected = hypotf(strideX * xScale, strideY * yScale) + (abs(strideR) * 12.0)
     let strideApplied = hypotf(strideAppliedX, strideAppliedY) + (strideAppliedR * 12.0)
 
-    let turnBandX = strideSmoothX - turnSmoothX
+    let turnBandX = turnStrideSmoothX - turnSmoothX
     let turnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking)
     let turnDetected = abs(turnBandX * xScale)
     let turnApplied = turnDetected * correctionFactor(options.strengths.turn, confidence: turnQ)
@@ -1188,6 +1226,50 @@ private func surroundingIndices(around centerIndex: Int, frames: [AnalysisFrame]
         return Array(indices)
     }
     return outerIndices
+}
+
+private func confidenceCleanedFootstepPath(
+    values: [Float],
+    baselineValues: [Float],
+    analysis: Analysis,
+    targetIndices: [Int],
+    fullImpulseScale: Float
+) -> [Float] {
+    guard !values.isEmpty else {
+        return values
+    }
+    var cleaned = values
+    for index in targetIndices {
+        guard values.indices.contains(index),
+              baselineValues.indices.contains(index),
+              analysis.frames.indices.contains(index),
+              analysis.analysisConfidence.indices.contains(index),
+              analysis.residuals.indices.contains(index),
+              analysis.blurAmounts.indices.contains(index),
+              analysis.acceptedBlockCounts.indices.contains(index),
+              analysis.totalBlockCounts.indices.contains(index)
+        else {
+            continue
+        }
+        let tracking = walkingBandTrackingConfidence(
+            motionConfidence: analysis.analysisConfidence[index],
+            residual: analysis.residuals[index],
+            blurAmount: analysis.blurAmounts[index],
+            acceptedBlockCount: analysis.acceptedBlockCounts[index],
+            totalBlockCount: analysis.totalBlockCounts[index],
+            qualityModel: analysis.qualityModel
+        )
+        let confidence = footstepConfidence(
+            values: values,
+            baselineValues: baselineValues,
+            frames: analysis.frames,
+            index: index,
+            trackingConfidence: tracking,
+            fullImpulseScale: fullImpulseScale
+        )
+        cleaned[index] = values[index] - ((values[index] - baselineValues[index]) * confidence)
+    }
+    return cleaned
 }
 
 private func footstepConfidence(values: [Float], baselineValues: [Float], frames: [AnalysisFrame], index: Int, trackingConfidence: Float, fullImpulseScale: Float) -> Float {

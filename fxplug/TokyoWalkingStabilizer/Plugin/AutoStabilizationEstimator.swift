@@ -1181,51 +1181,6 @@ enum AutoStabilizationEstimator {
             cache: cache
         )
 
-        let footstepCleanXPath = footstepBaselineXPath
-        let footstepCleanYPath = footstepBaselineYPath
-        let footstepCleanRollPath = footstepBaselineRollPath
-        let strideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
-            .footstepX,
-            source: footstepCleanXPath,
-            analysis: analysis,
-            targetIndices: sampledIndices,
-            windowSeconds: effectiveStrideWobbleWindowSeconds
-        )
-        let strideSmoothedYPath = cache.locallyTimeWeightedAveragePath(
-            .footstepY,
-            source: footstepCleanYPath,
-            analysis: analysis,
-            targetIndices: sampledIndices,
-            windowSeconds: effectiveStrideWobbleWindowSeconds
-        )
-        let strideSmoothedRollPath = cache.locallyTimeWeightedAveragePath(
-            .footstepRoll,
-            source: footstepCleanRollPath,
-            analysis: analysis,
-            targetIndices: sampledIndices,
-            windowSeconds: effectiveStrideWobbleWindowSeconds
-        )
-
-        let turnSmoothX = timeWeightedMonotonicSCurveValue(
-            strideSmoothedXPath,
-            frames: frames,
-            indices: activeIndices,
-            centerTime: renderSeconds,
-            windowSeconds: smoothWindowSeconds
-        ) ??
-            timeWeightedAverage(strideSmoothedXPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
-        let footstepCleanXAtRender = interpolatedValue(footstepCleanXPath, using: frameInterpolation)
-        let footstepCleanYAtRender = interpolatedValue(footstepCleanYPath, using: frameInterpolation)
-        let footstepCleanRollAtRender = interpolatedValue(footstepCleanRollPath, using: frameInterpolation)
-        let footstepPathXAtRender = interpolatedValue(analysis.footstepPathX, using: frameInterpolation)
-        let footstepPathYAtRender = interpolatedValue(analysis.footstepPathY, using: frameInterpolation)
-        let footstepPathRollAtRender = interpolatedValue(analysis.footstepPathRoll, using: frameInterpolation)
-        let microImpulseBaselineX = interpolatedValue(footstepBaselineXPath, using: frameInterpolation)
-        let footstepBaselineY = interpolatedValue(footstepBaselineYPath, using: frameInterpolation)
-        let microImpulseBaselineRoll = interpolatedValue(footstepBaselineRollPath, using: frameInterpolation)
-        let strideSmoothX = interpolatedValue(strideSmoothedXPath, using: frameInterpolation)
-        let strideSmoothY = interpolatedValue(strideSmoothedYPath, using: frameInterpolation)
-        let strideSmoothRoll = interpolatedValue(strideSmoothedRollPath, using: frameInterpolation)
         let sampleWidth = frames[centerIndex].sampleWidth
         let sampleHeight = frames[centerIndex].sampleHeight
         let xScale = outputSize.x / Float(max(1, sampleWidth))
@@ -1257,6 +1212,82 @@ enum AutoStabilizationEstimator {
             totalBlockCount: totalBlockCount,
             qualityModel: analysis.qualityModel
         )
+
+        let strideSampledIndices = uniqueSortedIndices(
+            strideWobbleActiveIndices + [centerIndex] + frameInterpolation.indices,
+            validCount: frames.count
+        )
+        let footstepCleanXPath = confidenceCleanedFootstepPath(
+            values: analysis.footstepPathX,
+            baselineValues: footstepBaselineXPath,
+            analysis: analysis,
+            indices: strideWobbleActiveIndices,
+            fullImpulseScale: footstepImpulseFullScalePixels
+        )
+        let footstepCleanYPath = confidenceCleanedFootstepPath(
+            values: analysis.footstepPathY,
+            baselineValues: footstepBaselineYPath,
+            analysis: analysis,
+            indices: strideWobbleActiveIndices,
+            fullImpulseScale: footstepImpulseFullScalePixels
+        )
+        let footstepCleanRollPath = confidenceCleanedFootstepPath(
+            values: analysis.footstepPathRoll,
+            baselineValues: footstepBaselineRollPath,
+            analysis: analysis,
+            indices: strideWobbleActiveIndices,
+            fullImpulseScale: footstepImpulseFullScaleDegrees
+        )
+        let strideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
+            .footstepX,
+            source: footstepCleanXPath,
+            analysis: analysis,
+            targetIndices: strideSampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let strideSmoothedYPath = cache.locallyTimeWeightedAveragePath(
+            .footstepY,
+            source: footstepCleanYPath,
+            analysis: analysis,
+            targetIndices: strideSampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let strideSmoothedRollPath = cache.locallyTimeWeightedAveragePath(
+            .footstepRoll,
+            source: footstepCleanRollPath,
+            analysis: analysis,
+            targetIndices: strideSampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let turnStrideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
+            .footstepX,
+            source: footstepBaselineXPath,
+            analysis: analysis,
+            targetIndices: sampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+
+        let turnSmoothX = timeWeightedMonotonicSCurveValue(
+            turnStrideSmoothedXPath,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothWindowSeconds
+        ) ??
+            timeWeightedAverage(turnStrideSmoothedXPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+        let footstepCleanXAtRender = interpolatedValue(footstepCleanXPath, using: frameInterpolation)
+        let footstepCleanYAtRender = interpolatedValue(footstepCleanYPath, using: frameInterpolation)
+        let footstepCleanRollAtRender = interpolatedValue(footstepCleanRollPath, using: frameInterpolation)
+        let footstepPathXAtRender = interpolatedValue(analysis.footstepPathX, using: frameInterpolation)
+        let footstepPathYAtRender = interpolatedValue(analysis.footstepPathY, using: frameInterpolation)
+        let footstepPathRollAtRender = interpolatedValue(analysis.footstepPathRoll, using: frameInterpolation)
+        let microImpulseBaselineX = interpolatedValue(footstepBaselineXPath, using: frameInterpolation)
+        let footstepBaselineY = interpolatedValue(footstepBaselineYPath, using: frameInterpolation)
+        let microImpulseBaselineRoll = interpolatedValue(footstepBaselineRollPath, using: frameInterpolation)
+        let strideSmoothX = interpolatedValue(strideSmoothedXPath, using: frameInterpolation)
+        let strideSmoothY = interpolatedValue(strideSmoothedYPath, using: frameInterpolation)
+        let strideSmoothRoll = interpolatedValue(strideSmoothedRollPath, using: frameInterpolation)
+        let turnStrideSmoothX = interpolatedValue(turnStrideSmoothedXPath, using: frameInterpolation)
         let footstepXConfidence = footstepFrameConfidence(
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
@@ -1285,7 +1316,7 @@ enum AutoStabilizationEstimator {
         let strideBandX = footstepCleanXAtRender - strideSmoothX
         let strideBandY = footstepCleanYAtRender - strideSmoothY
         let strideBandRoll = footstepCleanRollAtRender - strideSmoothRoll
-        let panBandX = strideSmoothX - turnSmoothX
+        let panBandX = turnStrideSmoothX - turnSmoothX
         let strideTrackingConfidence = residualAdjustedTrackingConfidence(
             walkingTrackingConfidence,
             residual: strideResidual,
@@ -3889,6 +3920,53 @@ enum AutoStabilizationEstimator {
         let countSupport = confidenceRamp(Float(acceptedBlockCount), start: 4.0, full: 10.0)
         let coverageLift = 0.35 * countSupport * (1.0 - coverage)
         return clamp(coverage + coverageLift, min: 0.0, max: 1.0)
+    }
+
+    private static func confidenceCleanedFootstepPath(
+        values: [Float],
+        baselineValues: EstimatedPath,
+        analysis: StabilizerPreparedAnalysis,
+        indices: [Int],
+        fullImpulseScale: Float
+    ) -> EstimatedPath {
+        guard !values.isEmpty else {
+            return EstimatedPath(values: values)
+        }
+        var overrides: [Int: Float] = [:]
+        overrides.reserveCapacity(indices.count)
+        for index in indices {
+            guard values.indices.contains(index),
+                  baselineValues.values.indices.contains(index),
+                  analysis.frames.indices.contains(index),
+                  analysis.analysisConfidence.indices.contains(index),
+                  analysis.residuals.indices.contains(index),
+                  analysis.blurAmounts.indices.contains(index),
+                  analysis.acceptedBlockCounts.indices.contains(index),
+                  analysis.totalBlockCounts.indices.contains(index)
+            else {
+                continue
+            }
+            let trackingConfidence = walkingBandTrackingConfidence(
+                motionConfidence: analysis.analysisConfidence[index],
+                residual: analysis.residuals[index],
+                blurAmount: analysis.blurAmounts[index],
+                acceptedBlockCount: analysis.acceptedBlockCounts[index],
+                totalBlockCount: analysis.totalBlockCounts[index],
+                qualityModel: analysis.qualityModel
+            )
+            let rawValue = values[index]
+            let baselineValue = baselineValues[index]
+            let confidence = footstepFrameConfidenceAtIndex(
+                values: values,
+                baselineValues: baselineValues,
+                frames: analysis.frames,
+                index: index,
+                trackingConfidence: trackingConfidence,
+                fullImpulseScale: fullImpulseScale
+            )
+            overrides[index] = rawValue - ((rawValue - baselineValue) * confidence)
+        }
+        return EstimatedPath(values: values, overrides: overrides)
     }
 
     private static func footstepFrameConfidence(
