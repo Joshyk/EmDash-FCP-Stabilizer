@@ -692,7 +692,7 @@ kernel void stabilizerResolveShiftResults(
 
     float refinedDx = float(bestDx);
     float refinedDy = float(bestDy);
-    if (resolve.refine != 0) {
+    if (resolve.refine != 0 && !searchRadiusHit) {
         refinedDx += stabilizerAxisOffset(
             stabilizerResolvedShiftScoreAt(partials, gid, bestDx - 1, bestDy, resolve, resolve.centerX, resolve.centerY),
             bestScore,
@@ -744,7 +744,7 @@ kernel void stabilizerResolveShiftResultsWithGlobalCenter(
 
     float refinedDx = float(bestDx);
     float refinedDy = float(bestDy);
-    if (resolve.refine != 0) {
+    if (resolve.refine != 0 && !searchRadiusHit) {
         refinedDx += stabilizerAxisOffset(
             stabilizerResolvedShiftScoreAt(partials, gid, bestDx - 1, bestDy, resolve, centerX, centerY),
             bestScore,

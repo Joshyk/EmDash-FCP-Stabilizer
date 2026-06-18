@@ -300,9 +300,11 @@ cache.
 
 Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, and fingerprints instead of
-every frame's full luma sample. Cache writing uses the prepared analysis frame
-set as the authoritative timeline, so a reduced retained source-frame map does
-not prevent a completed prepared path from being saved.
+every frame's full luma sample. Schema 19 analysis uses denser far-field motion
+blocks and sub-pixel block shift refinement for higher precision prepared paths.
+Cache writing uses the prepared analysis frame set as the authoritative timeline,
+so a reduced retained source-frame map does not prevent a completed prepared path
+from being saved.
 
 The installed plug-in bundle is signed with sandbox and security-scoped file
 entitlements so the effect can inspect the Event-scoped cache root that Final Cut Pro exposes

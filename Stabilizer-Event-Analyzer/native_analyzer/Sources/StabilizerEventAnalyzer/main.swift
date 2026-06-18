@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 18
+private let cacheSchemaVersion = 19
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -985,7 +985,7 @@ private final class MetalMotionWorkspace {
             throw AnalyzerError("could not create Event Analyzer motion blocks")
         }
         let maxSampleCount = blockSpecs.map { spec in
-            let sampleStep = max(1, min(spec.width, spec.height) / 56)
+            let sampleStep = max(1, min(spec.width, spec.height) / 72)
             let sampleColumns = max(1, (spec.width / sampleStep) + 1)
             let sampleRows = max(1, (spec.height / sampleStep) + 1)
             return sampleColumns * sampleRows
@@ -995,7 +995,7 @@ private final class MetalMotionWorkspace {
         let scoreGridHeight = scoreGridWidth
         let scoreCount = scoreGridWidth * scoreGridHeight
         let uniforms = blockSpecs.map { spec in
-            let sampleStep = max(1, min(spec.width, spec.height) / 56)
+            let sampleStep = max(1, min(spec.width, spec.height) / 72)
             return MetalBlockUniforms(
                 centerX: UInt32(Int(spec.centerX.rounded())),
                 centerY: UInt32(Int(spec.centerY.rounded())),
@@ -1036,8 +1036,8 @@ private final class MetalMotionWorkspace {
         let verticalMargin = min(6, max(2, height / 10))
         let usableWidth = max(0, width - (horizontalMargin * 2))
         let usableHeight = max(0, height - (verticalMargin * 2))
-        let columns = max(2, min(5, usableWidth / 18))
-        let rows = max(2, min(4, usableHeight / 12))
+        let columns = max(2, min(7, usableWidth / 18))
+        let rows = max(2, min(5, usableHeight / 12))
         guard columns > 0, rows > 0 else {
             return []
         }
@@ -1767,6 +1767,35 @@ final class MetalAnalysisContext {
         uint bestIndex;
     };
 
+    static float stabilizer_axis_offset(float before, float center, float after) {
+        if (!isfinite(before) || !isfinite(center) || !isfinite(after)) {
+            return 0.0f;
+        }
+        float denominator = before - (2.0f * center) + after;
+        if (fabs(denominator) < 1.0e-9f) {
+            return 0.0f;
+        }
+        return clamp(0.5f * (before - after) / denominator, -0.5f, 0.5f);
+    }
+
+    static float stabilizer_resolved_block_score(
+        device const uint *partialSums,
+        device const uint *partialCounts,
+        uint blockIndex,
+        uint scoreIndex,
+        uint scoreCount,
+        uint chunkCount
+    ) {
+        uint total = 0;
+        uint count = 0;
+        uint base = ((blockIndex * scoreCount) + scoreIndex) * chunkCount;
+        for (uint chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+            total += partialSums[base + chunkIndex];
+            count += partialCounts[base + chunkIndex];
+        }
+        return count > 0u ? float(total) / float(count) : FLT_MAX;
+    }
+
     kernel void stabilizer_luma_sample(
         texture2d<float, access::read> source [[texture(0)]],
         device ushort *output [[buffer(0)]],
@@ -1906,14 +1935,14 @@ final class MetalAnalysisContext {
         float bestScore = FLT_MAX;
         uint bestIndex = 0;
         for (uint scoreIndex = 0; scoreIndex < scoreCount; scoreIndex += 1) {
-            uint total = 0;
-            uint count = 0;
-            uint base = ((gid * scoreCount) + scoreIndex) * chunkCount;
-            for (uint chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-                total += partialSums[base + chunkIndex];
-                count += partialCounts[base + chunkIndex];
-            }
-            float score = count > 0 ? float(total) / float(count) : FLT_MAX;
+            float score = stabilizer_resolved_block_score(
+                partialSums,
+                partialCounts,
+                gid,
+                scoreIndex,
+                scoreCount,
+                chunkCount
+            );
             if (score < bestScore) {
                 bestScore = score;
                 bestIndex = scoreIndex;
@@ -1921,8 +1950,31 @@ final class MetalAnalysisContext {
         }
         uint gx = bestIndex % uniforms.scoreGridWidth;
         uint gy = bestIndex / uniforms.scoreGridWidth;
-        results[gid].dx = float(-int(uniforms.radius) + int(gx * uniforms.searchStep));
-        results[gid].dy = float(-int(uniforms.radius) + int(gy * uniforms.searchStep));
+        float refinedGridX = float(gx);
+        float refinedGridY = float(gy);
+        bool searchRadiusHit = gx == 0u
+            || gy == 0u
+            || gx + 1u >= uniforms.scoreGridWidth
+            || gy + 1u >= uniforms.scoreGridHeight;
+        if (!searchRadiusHit) {
+            uint leftIndex = gy * uniforms.scoreGridWidth + (gx - 1u);
+            uint rightIndex = gy * uniforms.scoreGridWidth + (gx + 1u);
+            uint upIndex = (gy - 1u) * uniforms.scoreGridWidth + gx;
+            uint downIndex = (gy + 1u) * uniforms.scoreGridWidth + gx;
+
+            refinedGridX += stabilizer_axis_offset(
+                stabilizer_resolved_block_score(partialSums, partialCounts, gid, leftIndex, scoreCount, chunkCount),
+                bestScore,
+                stabilizer_resolved_block_score(partialSums, partialCounts, gid, rightIndex, scoreCount, chunkCount)
+            );
+            refinedGridY += stabilizer_axis_offset(
+                stabilizer_resolved_block_score(partialSums, partialCounts, gid, upIndex, scoreCount, chunkCount),
+                bestScore,
+                stabilizer_resolved_block_score(partialSums, partialCounts, gid, downIndex, scoreCount, chunkCount)
+            );
+        }
+        results[gid].dx = float(-int(uniforms.radius)) + (refinedGridX * float(uniforms.searchStep));
+        results[gid].dy = float(-int(uniforms.radius)) + (refinedGridY * float(uniforms.searchStep));
         results[gid].score = bestScore;
         results[gid].bestIndex = bestIndex;
     }
