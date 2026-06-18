@@ -31,11 +31,10 @@ private enum ParameterID: UInt32 {
     case clipRangeInfo = 34
     case analysisSampleInfo = 35
     case queueInfo = 36
-    case autoCropZoomSpeed = 37
-    case autoCropZoomSmoothness = 38
-    case autoCropPositionSpeed = 39
-    case autoCropPositionSmoothness = 40
+    // IDs 37-40 are retired Auto Crop speed/smoothness sliders. Do not reuse
+    // them; existing FCP projects may still carry saved values for those IDs.
     case autoCropEnabled = 41
+    case autoCropTransitionDuration = 42
 }
 
 private struct StabilizerInfoFields {
@@ -43,14 +42,12 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.163"
+private let tokyoWalkingStabilizerVersion = "0.3.171"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
-private let stabilizerDefaultAutoCropZoomSpeed = 1.0
-private let stabilizerDefaultAutoCropZoomSmoothness = 0.35
-private let stabilizerDefaultAutoCropPositionSpeed = 1.0
-private let stabilizerDefaultAutoCropPositionSmoothness = 0.80
+private let stabilizerDefaultAutoCropTransitionDuration = 5.0
+private let stabilizerMaximumAutoCropTransitionDuration = 30.0
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
@@ -156,10 +153,7 @@ private struct AutoCropFramingCacheKey: Hashable {
     let analysisLastTime: UInt64
     let panSmoothSeconds: UInt64
     let masterStrength: UInt32
-    let zoomSpeed: UInt64
-    let zoomSmoothness: UInt64
-    let positionSpeed: UInt64
-    let positionSmoothness: UInt64
+    let transitionDuration: UInt64
     let microJitterX: UInt64
     let microJitterY: UInt64
     let microJitterRotation: UInt64
@@ -182,10 +176,7 @@ private struct StabilizerPluginState {
     var panStabilizationStrength: Double
     var farFieldWarpStrength: Double
     var panSmoothSeconds: Double
-    var autoCropZoomSpeed: Double
-    var autoCropZoomSmoothness: Double
-    var autoCropPositionSpeed: Double
-    var autoCropPositionSmoothness: Double
+    var autoCropTransitionDuration: Double
     var autoCropEnabled: Bool
     var edgeDisplayMode: Int32
     var debugOverlay: Bool
@@ -572,22 +563,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Footstep Jitter X Strength",
             parameterID: ParameterID.xStrength.rawValue,
-            defaultValue: 1.0,
+            defaultValue: 5.0,
             parameterMin: 0.0,
-            parameterMax: 4.0,
+            parameterMax: 10.0,
             sliderMin: 0.0,
-            sliderMax: 4.0,
+            sliderMax: 10.0,
             delta: 0.01,
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
             withName: "Footstep Jitter Y Strength",
             parameterID: ParameterID.yStrength.rawValue,
-            defaultValue: 1.0,
+            defaultValue: 5.0,
             parameterMin: 0.0,
-            parameterMax: 4.0,
+            parameterMax: 10.0,
             sliderMin: 0.0,
-            sliderMax: 4.0,
+            sliderMax: 10.0,
             delta: 0.01,
             parameterFlags: flags
         )
@@ -605,22 +596,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Stride Wobble X Strength",
             parameterID: ParameterID.strideWobbleXStrength.rawValue,
-            defaultValue: 0.65,
+            defaultValue: 5.0,
             parameterMin: 0.0,
-            parameterMax: 4.0,
+            parameterMax: 10.0,
             sliderMin: 0.0,
-            sliderMax: 4.0,
+            sliderMax: 10.0,
             delta: 0.01,
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
             withName: "Stride Wobble Y Strength",
             parameterID: ParameterID.strideWobbleYStrength.rawValue,
-            defaultValue: 0.70,
+            defaultValue: 5.0,
             parameterMin: 0.0,
-            parameterMax: 4.0,
+            parameterMax: 10.0,
             sliderMin: 0.0,
-            sliderMax: 4.0,
+            sliderMax: 10.0,
             delta: 0.01,
             parameterFlags: flags
         )
@@ -675,47 +666,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Auto Crop Zoom Speed",
-            parameterID: ParameterID.autoCropZoomSpeed.rawValue,
-            defaultValue: stabilizerDefaultAutoCropZoomSpeed,
-            parameterMin: 0.1,
-            parameterMax: 4.0,
-            sliderMin: 0.1,
-            sliderMax: 4.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Auto Crop Zoom Smoothness",
-            parameterID: ParameterID.autoCropZoomSmoothness.rawValue,
-            defaultValue: stabilizerDefaultAutoCropZoomSmoothness,
+            withName: "Auto Crop Transition Duration",
+            parameterID: ParameterID.autoCropTransitionDuration.rawValue,
+            defaultValue: stabilizerDefaultAutoCropTransitionDuration,
             parameterMin: 0.0,
-            parameterMax: 2.0,
+            parameterMax: stabilizerMaximumAutoCropTransitionDuration,
             sliderMin: 0.0,
-            sliderMax: 2.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Auto Crop Position Speed",
-            parameterID: ParameterID.autoCropPositionSpeed.rawValue,
-            defaultValue: stabilizerDefaultAutoCropPositionSpeed,
-            parameterMin: 0.1,
-            parameterMax: 4.0,
-            sliderMin: 0.1,
-            sliderMax: 4.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Auto Crop Position Smoothness",
-            parameterID: ParameterID.autoCropPositionSmoothness.rawValue,
-            defaultValue: stabilizerDefaultAutoCropPositionSmoothness,
-            parameterMin: 0.0,
-            parameterMax: 4.0,
-            sliderMin: 0.0,
-            sliderMax: 4.0,
-            delta: 0.01,
+            sliderMax: stabilizerMaximumAutoCropTransitionDuration,
+            delta: 0.05,
             parameterFlags: flags
         )
         let hiddenAnalysisControlFlags = FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
@@ -805,19 +763,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         var state = StabilizerPluginState(
             strength: 1.0,
-            microJitterXStrength: 1.0,
-            microJitterYStrength: 1.0,
+            microJitterXStrength: 5.0,
+            microJitterYStrength: 5.0,
             microJitterRotationStrength: 0.2,
-            strideWobbleXStrength: 0.65,
-            strideWobbleYStrength: 0.70,
+            strideWobbleXStrength: 5.0,
+            strideWobbleYStrength: 5.0,
             strideWobbleRotationStrength: 0.2,
             panStabilizationStrength: 1.0,
             farFieldWarpStrength: 1.0,
             panSmoothSeconds: 6.0,
-            autoCropZoomSpeed: stabilizerDefaultAutoCropZoomSpeed,
-            autoCropZoomSmoothness: stabilizerDefaultAutoCropZoomSmoothness,
-            autoCropPositionSpeed: stabilizerDefaultAutoCropPositionSpeed,
-            autoCropPositionSmoothness: stabilizerDefaultAutoCropPositionSmoothness,
+            autoCropTransitionDuration: stabilizerDefaultAutoCropTransitionDuration,
             autoCropEnabled: true,
             edgeDisplayMode: StabilizerEdgeDisplayMode.blackOutside.rawValue,
             debugOverlay: false,
@@ -839,10 +794,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.getFloatValue(&state.panStabilizationStrength, fromParameter: ParameterID.panStabilizationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.farFieldWarpStrength, fromParameter: ParameterID.farFieldWarpStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.autoCropZoomSpeed, fromParameter: ParameterID.autoCropZoomSpeed.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.autoCropZoomSmoothness, fromParameter: ParameterID.autoCropZoomSmoothness.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.autoCropPositionSpeed, fromParameter: ParameterID.autoCropPositionSpeed.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.autoCropPositionSmoothness, fromParameter: ParameterID.autoCropPositionSmoothness.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.autoCropTransitionDuration, fromParameter: ParameterID.autoCropTransitionDuration.rawValue, at: renderTime)
         var autoCropEnabled = ObjCBool(state.autoCropEnabled)
         paramAPI.getBoolValue(&autoCropEnabled, fromParameter: ParameterID.autoCropEnabled.rawValue, at: renderTime)
         state.autoCropEnabled = autoCropEnabled.boolValue
@@ -1305,10 +1257,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         masterStrength: Float,
-        zoomSpeed: Double,
-        zoomSmoothness: Double,
-        positionSpeed: Double,
-        positionSmoothness: Double,
+        transitionDuration: Double,
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> AutoCropFraming {
@@ -1325,10 +1274,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             analysisLastTime: preparedAnalysis.frames.last?.time.bitPattern ?? 0,
             panSmoothSeconds: panSmoothSeconds.bitPattern,
             masterStrength: masterStrength.bitPattern,
-            zoomSpeed: zoomSpeed.bitPattern,
-            zoomSmoothness: zoomSmoothness.bitPattern,
-            positionSpeed: positionSpeed.bitPattern,
-            positionSmoothness: positionSmoothness.bitPattern,
+            transitionDuration: transitionDuration.bitPattern,
             microJitterX: strengths.microJitterX.bitPattern,
             microJitterY: strengths.microJitterY.bitPattern,
             microJitterRotation: strengths.microJitterRotation.bitPattern,
@@ -1355,12 +1301,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             masterStrength: masterStrength,
-            zoomSpeed: zoomSpeed,
-            zoomSmoothness: zoomSmoothness,
-            positionSpeed: positionSpeed,
-            positionSmoothness: positionSmoothness,
-            analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity
+            transitionDuration: transitionDuration
         )
 
         autoCropFramingCacheLock.lock()
@@ -1385,12 +1326,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         masterStrength: Float,
-        zoomSpeed: Double,
-        zoomSmoothness: Double,
-        positionSpeed: Double,
-        positionSmoothness: Double,
-        analysisRevision: UInt64,
-        cacheIdentity: String?
+        transitionDuration: Double
     ) -> AutoCropFraming {
         guard masterStrength > 0.0001,
               outputSize.x > 1.0,
@@ -1399,14 +1335,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return .identity
         }
 
-        let positionSmoothingWeight = autoCropPositionSmoothingWeight(
-            smoothness: positionSmoothness,
-            speed: positionSpeed
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite else {
+            return .identity
+        }
+
+        let transitionSamples = autoCropTransformSamples(
+            preparedAnalysis: preparedAnalysis,
+            startSeconds: renderSeconds,
+            durationSeconds: autoCropTransitionDurationSeconds(transitionDuration),
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            currentTransform: currentTransform
         )
-        let slowPositionPixels = (
-            (currentTransform.pixelOffset * (1.0 - positionSmoothingWeight))
-                + (currentTransform.macroPixelOffset * positionSmoothingWeight)
-        ) * masterStrength
+        let currentPositionPixels = currentTransform.macroPixelOffset * masterStrength
+        let slowPositionPixels = autoCropPositionPixels(
+            from: transitionSamples,
+            currentPositionPixels: currentPositionPixels,
+            masterStrength: masterStrength
+        )
         let positionPixels = blackSafeAutoCropPosition(
             preferredPositionPixels: slowPositionPixels,
             transform: currentTransform,
@@ -1414,30 +1362,124 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             masterStrength: masterStrength
         )
 
-        let scale = requiredAutoCropScale(
+        let currentRequiredScale = requiredAutoCropScale(
             transform: currentTransform,
             outputSize: outputSize,
             masterStrength: masterStrength,
             cropPositionPixels: positionPixels
-        ) * autoCropZoomPadding(smoothness: zoomSmoothness, speed: zoomSpeed)
+        )
+        let transitionScale = autoCropTransitionScale(
+            from: transitionSamples,
+            currentRequiredScale: currentRequiredScale,
+            outputSize: outputSize,
+            masterStrength: masterStrength,
+            cropPositionPixels: positionPixels
+        )
 
         return AutoCropFraming(
-            scale: max(1.0, scale),
+            scale: max(Float(1.0), currentRequiredScale, transitionScale),
             positionPixels: positionPixels
         )
     }
 
-    private static func autoCropPositionSmoothingWeight(smoothness: Double, speed: Double) -> Float {
-        let boundedSmoothness = min(max(smoothness, 0.0), 4.0)
-        let boundedSpeed = min(max(speed, 0.1), 4.0)
-        return min(max(Float((boundedSmoothness / boundedSpeed) / 2.0), 0.0), 1.0)
+    private static func autoCropTransitionDurationSeconds(_ duration: Double) -> Double {
+        min(max(duration, 0.0), stabilizerMaximumAutoCropTransitionDuration)
     }
 
-    private static func autoCropZoomPadding(smoothness: Double, speed: Double) -> Float {
-        let boundedSmoothness = min(max(smoothness, 0.0), 2.0)
-        let boundedSpeed = min(max(speed, 0.1), 4.0)
-        let padding = Float(min(2.0, boundedSmoothness / boundedSpeed)) * 0.015
-        return 1.0 + padding
+    private static func smoothStep(_ progress: Float) -> Float {
+        let t = min(max(progress, 0.0), 1.0)
+        return t * t * (3.0 - (2.0 * t))
+    }
+
+    private static func autoCropTransitionScale(
+        from samples: [(transform: StabilizerAutoTransform, weight: Float, leadProgress: Float)],
+        currentRequiredScale: Float,
+        outputSize: vector_float2,
+        masterStrength: Float,
+        cropPositionPixels: vector_float2
+    ) -> Float {
+        samples.reduce(currentRequiredScale) { partial, sample in
+            let requiredScale = requiredAutoCropScale(
+                transform: sample.transform,
+                outputSize: outputSize,
+                masterStrength: masterStrength,
+                cropPositionPixels: cropPositionPixels
+            )
+            let easedProgress = smoothStep(sample.leadProgress)
+            let easedScale = currentRequiredScale + ((requiredScale - currentRequiredScale) * easedProgress)
+            return max(partial, easedScale)
+        }
+    }
+
+    private static func autoCropTransformSamples(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        startSeconds: Double,
+        durationSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        currentTransform: StabilizerAutoTransform
+    ) -> [(transform: StabilizerAutoTransform, weight: Float, leadProgress: Float)] {
+        guard durationSeconds > 1e-6,
+              let firstTime = preparedAnalysis.frames.first?.time,
+              let lastTime = preparedAnalysis.frames.last?.time
+        else {
+            return [(currentTransform, 1.0, 1.0)]
+        }
+
+        let sampleCount = 17
+        var samples: [(transform: StabilizerAutoTransform, weight: Float, leadProgress: Float)] = []
+
+        for sampleIndex in 0..<sampleCount {
+            let fraction = Double(sampleIndex) / Double(max(1, sampleCount - 1))
+            let offset = fraction * durationSeconds
+            let sampleSeconds = startSeconds + offset
+            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                continue
+            }
+            let weight = Float(1.0 - (fraction * 0.65))
+            guard weight > 0.0001 else {
+                continue
+            }
+            let leadProgress = Float(1.0 - fraction)
+            let transform: StabilizerAutoTransform
+            if abs(offset) <= 1e-6 {
+                transform = currentTransform
+            } else {
+                transform = AutoStabilizationEstimator.autoCropWindowEstimate(
+                    preparedAnalysis: preparedAnalysis,
+                    renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
+                    outputSize: outputSize,
+                    panSmoothSeconds: panSmoothSeconds,
+                    strengths: strengths
+                )
+            }
+            samples.append((transform, weight, leadProgress))
+        }
+
+        if samples.contains(where: { abs($0.weight - 1.0) <= 1e-6 }) {
+            return samples
+        }
+        samples.append((currentTransform, 1.0, 1.0))
+        return samples
+    }
+
+    private static func autoCropPositionPixels(
+        from samples: [(transform: StabilizerAutoTransform, weight: Float, leadProgress: Float)],
+        currentPositionPixels: vector_float2,
+        masterStrength: Float
+    ) -> vector_float2 {
+        let totalWeight = samples.reduce(Float(0.0)) { $0 + $1.weight }
+        guard totalWeight > 1e-6 else {
+            return currentPositionPixels
+        }
+        let weightedPosition = samples.reduce(vector_float2(0.0, 0.0)) { partial, sample in
+            let targetPosition = sample.transform.macroPixelOffset * masterStrength
+            let easedProgress = smoothStep(sample.leadProgress)
+            let easedPosition = currentPositionPixels + ((targetPosition - currentPositionPixels) * easedProgress)
+            return partial + (easedPosition * sample.weight)
+        }
+        return weightedPosition / totalWeight
     }
 
     private static func blackSafeAutoCropPosition(
@@ -4103,10 +4145,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 panSmoothSeconds: state.panSmoothSeconds,
                 strengths: correctionStrengths,
                 masterStrength: masterStrength,
-                zoomSpeed: state.autoCropZoomSpeed,
-                zoomSmoothness: state.autoCropZoomSmoothness,
-                positionSpeed: state.autoCropPositionSpeed,
-                positionSmoothness: state.autoCropPositionSmoothness,
+                transitionDuration: state.autoCropTransitionDuration,
                 analysisRevision: renderStoreRevision,
                 cacheIdentity: renderCacheIdentity
             )

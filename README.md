@@ -87,10 +87,10 @@ bypasses prepared motion-path sampling, crop-safety motion, and debug overlay
 output, producing an identity transform.
 
 `Footstep Jitter` strengths are direct removal amounts for frame-local X, Y, and
-roll impulses. They run up to `4.0`; values above `1.0` can compensate when
+roll impulses. X and Y default to `5.0` and run up to `10.0`; rotation defaults
+to `0.2` and runs up to `4.0`. Values above `1.0` can compensate when
 tracking confidence makes the correction too weak. The applied correction still
 clamps at full detected-impulse removal so it does not add inverse shake. The
-rotation default is `0.2` to keep walking footage from losing a stable horizon. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
 region and predicts from outer samples up to `1.0` second away. Confidence is
 based on current tracking evidence, local baseline support, and the center
@@ -110,8 +110,8 @@ removed twice. It does not use the raw or jerk-limited
 broad path as its band input. Its residual gate uses robust window percentiles
 instead of letting a single bad frame suppress the whole band. Medium stride
 bands reach full confidence earlier than the broad UI scale so real walking
-follow-through is corrected by the stride stage; the Y default is `0.70`.
-The rotation default is `0.2` to protect the horizon.
+follow-through is corrected by the stride stage. X and Y default to `5.0` and run
+up to `10.0`; the rotation default is `0.2` to protect the horizon.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
@@ -137,6 +137,11 @@ suppressed instead of producing a wavy image.
 path skips Auto Crop crop-safe framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
 or black. New effect instances default that menu to `Black Outside`.
+`Auto Crop Transition Duration` controls the unified zoom and framing transition.
+Longer values look farther ahead and start the crop adjustment earlier, so the
+framing changes more slowly. With `Remove Black Edges` on, the render path still
+clamps zoom to the current frame's required safe crop so outside-source black is
+not exposed during the transition.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the

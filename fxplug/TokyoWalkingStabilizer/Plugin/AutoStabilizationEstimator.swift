@@ -88,11 +88,11 @@ struct StabilizerCorrectionStrengths {
     let farFieldWarp: Double
 
     static let defaultStrengths = StabilizerCorrectionStrengths(
-        microJitterX: 1.0,
-        microJitterY: 1.0,
+        microJitterX: 5.0,
+        microJitterY: 5.0,
         microJitterRotation: 1.0,
-        strideWobbleX: 0.65,
-        strideWobbleY: 0.70,
+        strideWobbleX: 5.0,
+        strideWobbleY: 5.0,
         strideWobbleRotation: 0.75,
         panStabilizationStrength: 0.8,
         farFieldWarp: 1.0
@@ -998,11 +998,11 @@ enum AutoStabilizationEstimator {
             trackingConfidence: turnTrackingConfidence
         )
         let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
-        let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence)
-        let microYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence)
+        let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
+        let microYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
-        let strideXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleX, confidence: strideXConfidence)
-        let strideYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence)
+        let strideXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleX, confidence: strideXConfidence, maxStrength: 10.0)
+        let strideYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence, maxStrength: 10.0)
         let strideRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleRotation, confidence: strideRollConfidence)
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
         let macroCompensationX = softLimit(
@@ -3152,8 +3152,8 @@ enum AutoStabilizationEstimator {
         return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
     }
 
-    private static func walkingConfidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
-        let requestedRemoval = clamp(Float(strength), min: 0.0, max: 4.0)
+    private static func walkingConfidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float, maxStrength: Float = 4.0) -> Float {
+        let requestedRemoval = clamp(Float(strength), min: 0.0, max: maxStrength)
         let confidenceResponse = walkingCorrectionConfidenceResponse(confidence)
         let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
         let confidenceBoost = max(0.0, requestedRemoval - 1.0)
