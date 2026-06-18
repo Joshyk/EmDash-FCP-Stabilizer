@@ -1017,6 +1017,38 @@ final class StabilizerHostAnalysisStore {
                         analysis: analysis
                     )
                 }
+                if state == .validated || state == .notRequired {
+                    markReadyAfterOriginalMediaReturnedIfNeeded()
+                    return analysis
+                }
+                if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
+                    let canUseExplicitPreferredIdentity = explicitPreferredIdentityMatchesActive
+                        && Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange)
+                    let mappedRenderSeconds = CMTimeGetSeconds(analysisRenderTime(for: renderTime, preparedAnalysis: analysis))
+                    if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity),
+                       Self.renderSeconds(mappedRenderSeconds, isInside: analysis.frames) {
+                        if unvalidatedPreviewStatusIsAlreadyActive(isScaledProxy: validationIssue.isScaledProxy) {
+                            return analysis
+                        }
+                        os_log(
+                            "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ reason=%{public}@.",
+                            log: stabilizerHostAnalysisLog,
+                            type: .default,
+                            activeIdentity,
+                            Self.expectedRangeDescription(expectedRange),
+                            canUseExplicitPreferredIdentity ? "yes" : "no",
+                            validationIssue.reason
+                        )
+                        if validationIssue.isScaledProxy {
+                            markProxyPreviewForRender(reason: validationIssue.reason)
+                        } else {
+                            markSourceMetadataUnconfirmedPreviewForRender(reason: validationIssue.reason)
+                        }
+                        return analysis
+                    }
+                    markProxyNeedsOriginalValidationForRender(reason: validationIssue.reason)
+                    return nil
+                }
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                         if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
@@ -1819,6 +1851,14 @@ final class StabilizerHostAnalysisStore {
         let state = validationState
         lock.unlock()
         return state
+    }
+
+    private func unvalidatedPreviewStatusIsAlreadyActive(isScaledProxy: Bool) -> Bool {
+        lock.lock()
+        let isActive = preparedAnalysis != nil
+            && (isScaledProxy ? status == .proxyPreview : status == .sourceMetadataUnconfirmedPreview)
+        lock.unlock()
+        return isActive
     }
 
     private func markProxyMediaUnavailable(reason: String) {

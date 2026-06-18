@@ -607,6 +607,10 @@ enum AutoStabilizationEstimator {
     private static let minimumTranslationJerkLimit: Float = 0.5
     private static let minimumRotationAccelerationLimit: Float = 0.04
     private static let minimumRotationJerkLimit: Float = 0.03
+    private static let sharedRenderEstimateCacheLimit = 6
+    private static let sharedRenderEstimateCacheLock = NSLock()
+    private static var sharedRenderEstimateCaches: [RenderEstimateCacheStoreKey: RenderEstimateCache] = [:]
+    private static var sharedRenderEstimateCacheOrder: [RenderEstimateCacheStoreKey] = []
 
     private enum MotionPathKind: Hashable {
         case footstepX
@@ -627,20 +631,63 @@ enum AutoStabilizationEstimator {
         let outerWindowSeconds: UInt64
     }
 
+    private struct LocalAverageCacheKey: Hashable {
+        let kind: MotionPathKind
+        let index: Int
+        let windowSeconds: UInt64
+    }
+
+    private struct RenderEstimateCacheStoreKey: Hashable {
+        let frameCount: Int
+        let firstTime: UInt64
+        let middleTime: UInt64
+        let lastTime: UInt64
+        let sampleWidth: Int
+        let sampleHeight: Int
+        let firstFingerprint: String
+        let middleFingerprint: String
+        let lastFingerprint: String
+        let firstPathX: UInt32
+        let middlePathX: UInt32
+        let lastPathX: UInt32
+        let firstPathY: UInt32
+        let middlePathY: UInt32
+        let lastPathY: UInt32
+        let firstPathRoll: UInt32
+        let middlePathRoll: UInt32
+        let lastPathRoll: UInt32
+    }
+
     private struct EstimatedPath {
         let values: [Float]
         let overrides: [Int: Float]
+        let valueProvider: ((Int) -> Float?)?
+
+        init(
+            values: [Float],
+            overrides: [Int: Float] = [:],
+            valueProvider: ((Int) -> Float?)? = nil
+        ) {
+            self.values = values
+            self.overrides = overrides
+            self.valueProvider = valueProvider
+        }
 
         subscript(index: Int) -> Float {
             guard values.indices.contains(index) else {
                 return 0.0
+            }
+            if let providedValue = valueProvider?(index) {
+                return providedValue
             }
             return overrides[index] ?? values[index]
         }
     }
 
     private final class RenderEstimateCache {
+        private let lock = NSLock()
         private var outerPredictions: [OuterPredictionCacheKey: Float] = [:]
+        private var localAverages: [LocalAverageCacheKey: Float] = [:]
 
         func outerLinearPredictionPath(
             _ kind: MotionPathKind,
@@ -653,10 +700,15 @@ enum AutoStabilizationEstimator {
             guard !values.isEmpty else {
                 return EstimatedPath(values: values, overrides: [:])
             }
-            var overrides: [Int: Float] = [:]
-            overrides.reserveCapacity(indices.count)
-            for index in indices where values.indices.contains(index) && analysis.frames.indices.contains(index) {
-                overrides[index] = outerLinearPrediction(
+            let targetIndexSet = Set(indices)
+            return EstimatedPath(values: values) { [self] index in
+                guard targetIndexSet.contains(index),
+                      values.indices.contains(index),
+                      analysis.frames.indices.contains(index)
+                else {
+                    return nil
+                }
+                return outerLinearPrediction(
                     kind,
                     analysis: analysis,
                     index: index,
@@ -664,7 +716,6 @@ enum AutoStabilizationEstimator {
                     outerWindowSeconds: outerWindowSeconds
                 )
             }
-            return EstimatedPath(values: values, overrides: overrides)
         }
 
         func locallyTimeWeightedAveragePath(
@@ -677,10 +728,15 @@ enum AutoStabilizationEstimator {
             guard !source.values.isEmpty else {
                 return source
             }
-            var overrides = source.overrides
-            overrides.reserveCapacity(max(overrides.count, targetIndices.count))
-            for index in targetIndices where source.values.indices.contains(index) && analysis.frames.indices.contains(index) {
-                overrides[index] = localTimeWeightedAverage(
+            let targetIndexSet = Set(targetIndices)
+            return EstimatedPath(values: source.values) { [self] index in
+                guard source.values.indices.contains(index), analysis.frames.indices.contains(index) else {
+                    return nil
+                }
+                guard targetIndexSet.contains(index) else {
+                    return source[index]
+                }
+                return localTimeWeightedAverage(
                     kind,
                     source: source,
                     analysis: analysis,
@@ -688,7 +744,6 @@ enum AutoStabilizationEstimator {
                     windowSeconds: windowSeconds
                 )
             }
-            return EstimatedPath(values: source.values, overrides: overrides)
         }
 
         private func outerLinearPrediction(
@@ -704,9 +759,12 @@ enum AutoStabilizationEstimator {
                 innerWindowSeconds: innerWindowSeconds.bitPattern,
                 outerWindowSeconds: outerWindowSeconds.bitPattern
             )
+            lock.lock()
             if let cached = outerPredictions[key] {
+                lock.unlock()
                 return cached
             }
+            lock.unlock()
             let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
             let prediction = AutoStabilizationEstimator.outerLinearPrediction(
                 values,
@@ -715,7 +773,9 @@ enum AutoStabilizationEstimator {
                 innerWindowSeconds: innerWindowSeconds,
                 outerWindowSeconds: outerWindowSeconds
             ) ?? values[index]
+            lock.lock()
             outerPredictions[key] = prediction
+            lock.unlock()
             return prediction
         }
 
@@ -726,6 +786,17 @@ enum AutoStabilizationEstimator {
             index: Int,
             windowSeconds: Double
         ) -> Float {
+            let key = LocalAverageCacheKey(
+                kind: kind,
+                index: index,
+                windowSeconds: windowSeconds.bitPattern
+            )
+            lock.lock()
+            if let cached = localAverages[key] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
             let centerTime = analysis.frames[index].time
             let localIndices = AutoStabilizationEstimator.indicesWithinTimeRadius(
                 analysis.frames,
@@ -740,8 +811,79 @@ enum AutoStabilizationEstimator {
                 centerTime: centerTime,
                 windowSeconds: windowSeconds
             )
+            lock.lock()
+            localAverages[key] = average
+            lock.unlock()
             return average
         }
+    }
+
+    private static func renderEstimateCache(for analysis: StabilizerPreparedAnalysis) -> RenderEstimateCache {
+        guard let key = renderEstimateCacheStoreKey(for: analysis) else {
+            return RenderEstimateCache()
+        }
+
+        sharedRenderEstimateCacheLock.lock()
+        if let existingCache = sharedRenderEstimateCaches[key] {
+            if let existingIndex = sharedRenderEstimateCacheOrder.firstIndex(of: key) {
+                sharedRenderEstimateCacheOrder.remove(at: existingIndex)
+            }
+            sharedRenderEstimateCacheOrder.append(key)
+            sharedRenderEstimateCacheLock.unlock()
+            return existingCache
+        }
+
+        let cache = RenderEstimateCache()
+        sharedRenderEstimateCaches[key] = cache
+        sharedRenderEstimateCacheOrder.append(key)
+        while sharedRenderEstimateCacheOrder.count > sharedRenderEstimateCacheLimit {
+            let evictedKey = sharedRenderEstimateCacheOrder.removeFirst()
+            sharedRenderEstimateCaches.removeValue(forKey: evictedKey)
+        }
+        sharedRenderEstimateCacheLock.unlock()
+        return cache
+    }
+
+    private static func renderEstimateCacheStoreKey(for analysis: StabilizerPreparedAnalysis) -> RenderEstimateCacheStoreKey? {
+        let frames = analysis.frames
+        guard let firstFrame = frames.first, let lastFrame = frames.last else {
+            return nil
+        }
+        let middleIndex = frames.count / 2
+        guard frames.indices.contains(middleIndex),
+              analysis.pathX.indices.contains(middleIndex),
+              analysis.pathY.indices.contains(middleIndex),
+              analysis.pathRoll.indices.contains(middleIndex),
+              let firstPathX = analysis.pathX.first,
+              let lastPathX = analysis.pathX.last,
+              let firstPathY = analysis.pathY.first,
+              let lastPathY = analysis.pathY.last,
+              let firstPathRoll = analysis.pathRoll.first,
+              let lastPathRoll = analysis.pathRoll.last
+        else {
+            return nil
+        }
+        let middleFrame = frames[middleIndex]
+        return RenderEstimateCacheStoreKey(
+            frameCount: frames.count,
+            firstTime: firstFrame.time.bitPattern,
+            middleTime: middleFrame.time.bitPattern,
+            lastTime: lastFrame.time.bitPattern,
+            sampleWidth: firstFrame.sampleWidth,
+            sampleHeight: firstFrame.sampleHeight,
+            firstFingerprint: firstFrame.fingerprint,
+            middleFingerprint: middleFrame.fingerprint,
+            lastFingerprint: lastFrame.fingerprint,
+            firstPathX: firstPathX.bitPattern,
+            middlePathX: analysis.pathX[middleIndex].bitPattern,
+            lastPathX: lastPathX.bitPattern,
+            firstPathY: firstPathY.bitPattern,
+            middlePathY: analysis.pathY[middleIndex].bitPattern,
+            lastPathY: lastPathY.bitPattern,
+            firstPathRoll: firstPathRoll.bitPattern,
+            middlePathRoll: analysis.pathRoll[middleIndex].bitPattern,
+            lastPathRoll: lastPathRoll.bitPattern
+        )
     }
 
     private static func values(for kind: MotionPathKind, analysis: StabilizerPreparedAnalysis) -> [Float] {
@@ -1354,7 +1496,7 @@ enum AutoStabilizationEstimator {
 
         let firstTime = frames[0].time
         let lastTime = frames[frames.count - 1].time
-        let renderEstimateCache = RenderEstimateCache()
+        let renderEstimateCache = renderEstimateCache(for: analysis)
         let rawCenterTransform = rawEstimate(
             preparedAnalysis: analysis,
             renderSeconds: renderSeconds,

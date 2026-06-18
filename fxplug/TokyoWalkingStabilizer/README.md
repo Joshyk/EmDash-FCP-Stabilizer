@@ -248,8 +248,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   the current frame's required safe crop so outside-source black is not exposed during the
   transition. High-quality render uses the full 17-sample Auto Crop lead window; proxy,
   low/medium-quality playback, or scaled preview uses a very light non-quantized
-  zoom-only lead profile so playback keeps the stabilizer motion visible without the
-  old coarse zoom-envelope steps.
+  lead/release profile for both zoom and position so playback keeps the stabilizer
+  motion visible without the old coarse zoom-envelope steps.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.

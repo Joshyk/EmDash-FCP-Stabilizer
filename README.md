@@ -147,9 +147,9 @@ position return do not snap back immediately. With `Remove Black Edges` on, the
 render path still clamps zoom to the current frame's required safe crop so
 outside-source black is not exposed during the transition. High-quality render
 uses the full 17-sample Auto Crop lead window; proxy, low/medium-quality
-playback, or scaled preview uses a very light non-quantized zoom-only lead
-profile so playback keeps the stabilizer motion visible without the old coarse
-zoom-envelope steps.
+playback, or scaled preview uses a very light non-quantized lead/release profile
+for both zoom and position so playback keeps the stabilizer motion visible
+without the old coarse zoom-envelope steps.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
