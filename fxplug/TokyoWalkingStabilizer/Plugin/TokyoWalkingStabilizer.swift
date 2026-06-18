@@ -3687,7 +3687,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func currentRenderExpectedRange(from state: StabilizerPluginState) -> HostAnalysisExpectedRange? {
-        currentInputRange() ?? Self.expectedInputRange(from: state) ?? hostAnalysisStore.activeExpectedRange
+        Self.expectedInputRange(from: state) ?? currentInputRange() ?? hostAnalysisStore.activeExpectedRange
     }
 
     private static func pluginState(from data: Data?) -> StabilizerPluginState? {
