@@ -6,10 +6,13 @@ const fsp = require("fs/promises");
 const http = require("http");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const packageInfo = require("./package.json");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
+const WORKTREE_ROOT = path.resolve(REPO_ROOT, "..");
+const WORKTREE_NAME = path.basename(path.dirname(WORKTREE_ROOT));
+const GIT_COMMIT = shortGitCommit(WORKTREE_ROOT);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const PYTHON = process.env.STABILIZER_PYTHON || "python3";
 const HOST = process.env.STABILIZER_WEB_HOST || "127.0.0.1";
@@ -46,6 +49,18 @@ function expandPath(value) {
 
 function scriptPath(name) {
   return path.join(REPO_ROOT, "scripts", name);
+}
+
+function shortGitCommit(cwd) {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
 }
 
 function sendJson(res, status, payload) {
@@ -680,6 +695,8 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, {
         status: "ok",
         appVersion: packageInfo.version,
+        gitCommit: GIT_COMMIT,
+        worktreeName: WORKTREE_NAME,
         repoRoot: REPO_ROOT,
         outputDir: OUTPUT_DIR,
         defaultImportsDir: "",

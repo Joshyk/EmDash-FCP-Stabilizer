@@ -39,8 +39,12 @@ const el = {
   openImportButton: document.getElementById("openImportButton"),
 };
 
-function renderAppVersion(version) {
-  el.versionText.textContent = version ? `v${version}` : "";
+function renderAppVersion(version, config = {}) {
+  const parts = [];
+  if (version) parts.push(`v${version}`);
+  if (config.gitCommit) parts.push(config.gitCommit);
+  if (config.worktreeName) parts.push(config.worktreeName);
+  el.versionText.textContent = parts.join(" / ");
 }
 
 renderAppVersion(window.STABILIZER_EVENT_ANALYZER_VERSION);
@@ -355,10 +359,10 @@ function updateRunState() {
 
 async function loadConfig() {
   state.config = await api("/api/config");
-  renderAppVersion(state.config.appVersion || window.STABILIZER_EVENT_ANALYZER_VERSION);
+  renderAppVersion(state.config.appVersion || window.STABILIZER_EVENT_ANALYZER_VERSION, state.config);
   el.cacheRootInput.value = state.config.cacheRoot || "";
   el.sampleScaleInput.value = String(state.config.defaultSampleScalePercent || 100);
-  el.configText.textContent = "Imports: same folder as selected export";
+  el.configText.textContent = `Imports: same folder as selected export | ${state.config.repoRoot || ""}`;
   renderExports([]);
   updateLastAnalysisState();
   updateRunState();
