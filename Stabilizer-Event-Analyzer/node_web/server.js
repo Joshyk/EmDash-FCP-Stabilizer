@@ -164,6 +164,33 @@ function terminateJobProcess(id, child) {
   }, 3000);
 }
 
+function processFailureMessage(command, code, signal, stdout, stderr) {
+  const stderrText = String(stderr || "").trim();
+  if (stderrText) return stderrText;
+
+  const stdoutText = String(stdout || "").trim();
+  if (stdoutText) {
+    try {
+      const payload = JSON.parse(stdoutText);
+      const failures = Array.isArray(payload.failures)
+        ? payload.failures.filter(Boolean)
+        : [];
+      if (payload.error && failures.length) {
+        return `${payload.error}: ${failures.join("; ")}`;
+      }
+      if (payload.error) return String(payload.error);
+      if (failures.length) return failures.join("; ");
+      if (payload.status && payload.status !== "ok") {
+        return `${command} exited with ${code}; JSON status: ${payload.status}`;
+      }
+    } catch {
+      return stdoutText.slice(0, 2000);
+    }
+  }
+
+  return `${command} exited with ${code}${signal ? ` (${signal})` : ""}`;
+}
+
 function runJsonProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     let child;
@@ -216,7 +243,7 @@ function runJsonProcess(command, args, options = {}) {
         return;
       }
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `${command} exited with ${code}${signal ? ` (${signal})` : ""}`));
+        reject(new Error(processFailureMessage(command, code, signal, stdout, stderr)));
         return;
       }
       try {
@@ -767,4 +794,5 @@ if (require.main === module) {
 
 module.exports = {
   parseAnalyzerProgressLine,
+  processFailureMessage,
 };

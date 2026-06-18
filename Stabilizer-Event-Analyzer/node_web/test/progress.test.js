@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { parseAnalyzerProgressLine } = require("../server.js");
+const { parseAnalyzerProgressLine, processFailureMessage } = require("../server.js");
 
 test("parseAnalyzerProgressLine parses frame progress", () => {
   assert.deepEqual(
@@ -52,4 +52,37 @@ test("parseAnalyzerProgressLine parses chunk progress", () => {
 
 test("parseAnalyzerProgressLine ignores non-progress output", () => {
   assert.equal(parseAnalyzerProgressLine("using Metal analyzer device: Apple M1"), null);
+});
+
+test("processFailureMessage reports JSON error output", () => {
+  assert.equal(
+    processFailureMessage(
+      "python3",
+      1,
+      null,
+      JSON.stringify({
+        status: "error",
+        error: "cache file is missing: /tmp/cache.json",
+      }),
+      ""
+    ),
+    "cache file is missing: /tmp/cache.json"
+  );
+});
+
+test("processFailureMessage reports validation failures from stdout", () => {
+  assert.equal(
+    processFailureMessage(
+      "python3",
+      1,
+      null,
+      JSON.stringify({
+        status: "fail",
+        error: "validation failed",
+        failures: ["Host Analysis Cache Identity does not match manifest", "cache payload frame count does not match manifest"],
+      }),
+      ""
+    ),
+    "validation failed: Host Analysis Cache Identity does not match manifest; cache payload frame count does not match manifest"
+  );
 });
