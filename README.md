@@ -137,6 +137,11 @@ suppressed instead of producing a wavy image.
 path skips Auto Crop window sampling and binary-search framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
 or black. New effect instances default that menu to `Black Outside`.
+`Auto Crop Transition Duration` controls the unified zoom and framing transition.
+Longer values look farther ahead and start the crop adjustment earlier, so the
+framing changes more slowly. With `Remove Black Edges` on, the render path still
+clamps zoom to the current frame's required safe crop so outside-source black is
+not exposed during the transition.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the

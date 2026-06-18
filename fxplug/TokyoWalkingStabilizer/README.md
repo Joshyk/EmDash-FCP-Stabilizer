@@ -238,6 +238,11 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   frames avoid outside-source pixels. Turn it off to bypass Auto Crop render-time
   sampling and binary-search framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
+- `Auto Crop Transition Duration`: default `1.5` seconds. Controls the unified zoom and
+  framing transition. Longer values look farther ahead and begin the crop adjustment earlier,
+  making the visible framing change slower. With `Remove Black Edges` on, final zoom is still
+  clamped to the current frame's required safe crop so outside-source black is not exposed
+  during the transition.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.
