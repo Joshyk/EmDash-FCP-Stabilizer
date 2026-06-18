@@ -247,6 +247,20 @@ private struct StabilizerAutoTransformCacheKey: Hashable {
     let farFieldWarp: UInt64
 }
 
+private struct RenderAnalysisDecisionSignature: Equatable {
+    let fxPlugVersion: String
+    let transformEnabled: Bool
+    let hasCompletedHostAnalysis: Bool
+    let configuredProjectBundleCache: Bool
+    let renderUsesPreparedAnalysis: Bool
+    let stabilizationActive: Bool
+    let debugOverlayActive: Bool
+    let renderSourceIsProxy: Bool
+    let renderCacheIdentityShort: String
+    let autoCropEnabled: Bool
+    let hostAnalysisFrameCount: Int32
+}
+
 private struct StabilizerPluginState {
     var strength: Double
     var microJitterXStrength: Double
@@ -604,6 +618,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
+    private var lastRenderAnalysisDecisionSignature: RenderAnalysisDecisionSignature?
     private let renderDiagnosticsLogLock = NSLock()
     private var lastRenderDiagnosticsLogBucket: Int64?
     private var lastRenderDiagnosticsLogWallTime: TimeInterval = 0.0
@@ -1888,14 +1903,25 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private func publishRenderAnalysisDecisionIfChanged(_ decision: String) {
+    private func publishRenderAnalysisDecisionIfChanged(_ signature: RenderAnalysisDecisionSignature) {
         statusLock.lock()
-        let shouldPublish = lastRenderAnalysisDecision != decision
+        let shouldPublish = lastRenderAnalysisDecisionSignature != signature
         if shouldPublish {
+            lastRenderAnalysisDecisionSignature = signature
+        }
+        statusLock.unlock()
+        guard shouldPublish else {
+            return
+        }
+
+        let decision = "Render Host Analysis decision | FxPlug \(signature.fxPlugVersion) | transform \(signature.transformEnabled ? "on" : "off") | completed \(signature.hasCompletedHostAnalysis ? "yes" : "no") | project cache \(signature.configuredProjectBundleCache ? "configured" : "not configured") | prepared \(signature.renderUsesPreparedAnalysis ? "yes" : "no") | stabilization \(signature.stabilizationActive ? "active" : "inactive") | debug overlay \(signature.debugOverlayActive ? "active" : "inactive") | proxy \(signature.renderSourceIsProxy ? "yes" : "no") | identity \(signature.renderCacheIdentityShort) | auto crop \(signature.autoCropEnabled ? "on" : "off") | frames \(signature.hostAnalysisFrameCount)"
+        statusLock.lock()
+        let shouldPublishString = lastRenderAnalysisDecision != decision
+        if shouldPublishString {
             lastRenderAnalysisDecision = decision
         }
         statusLock.unlock()
-        if shouldPublish {
+        if shouldPublishString {
             os_log("%{public}@", log: stabilizerHostAnalysisLog, type: .default, decision)
         }
     }
@@ -4070,7 +4096,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             }
         }
         publishRenderAnalysisDecisionIfChanged(
-            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | stabilization \(renderUsesPreparedAnalysis && transformEnabled ? "active" : "inactive") | debug overlay \(state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? "active" : "inactive") | proxy \(renderSourceIsProxy ? "yes" : "no") | identity \(renderCacheIdentityShort) | auto crop \(state.autoCropEnabled ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
+            RenderAnalysisDecisionSignature(
+                fxPlugVersion: tokyoWalkingStabilizerVersion,
+                transformEnabled: transformEnabled,
+                hasCompletedHostAnalysis: hasCompletedHostAnalysis,
+                configuredProjectBundleCache: configuredProjectBundleCache,
+                renderUsesPreparedAnalysis: renderUsesPreparedAnalysis,
+                stabilizationActive: renderUsesPreparedAnalysis && transformEnabled,
+                debugOverlayActive: debugOverlayActive,
+                renderSourceIsProxy: renderSourceIsProxy,
+                renderCacheIdentityShort: renderCacheIdentityShort,
+                autoCropEnabled: state.autoCropEnabled,
+                hostAnalysisFrameCount: state.hostAnalysisFrameCount
+            )
         )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
         renderStoreRevision = hostAnalysisStore.revision
