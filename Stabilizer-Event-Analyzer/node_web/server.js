@@ -496,8 +496,49 @@ async function runAnalyzer(body, progress, forcedJobId) {
     analysisPath,
     "--output-dir",
     importsDir,
+    "--cache-root",
+    cacheRoot,
     "--only-analyzed-assets",
+    "--per-footage-packages",
   ], { jobId: id });
+
+  progress("validating", "Validating Stabilizer FCPXMLD package(s) before FCP import.");
+  assertNotCancelled(id);
+  const packages = Array.isArray(build.packages) ? build.packages : [];
+  const validations = [];
+  for (const pkg of packages) {
+    try {
+      const validation = await runJsonProcess(PYTHON, [
+        scriptPath("validate_stabilizer_fcpxml_import.py"),
+        "--fcpxml",
+        pkg.outputPackage,
+        "--manifest",
+        pkg.manifestPath,
+        "--output",
+        pkg.validationPath,
+      ], { jobId: id });
+      validations.push({ ...validation, packageDirectory: pkg.packageDirectory, outputPackage: pkg.outputPackage });
+    } catch (error) {
+      let validationPayload = null;
+      try {
+        validationPayload = JSON.parse(await fsp.readFile(pkg.validationPath, "utf8"));
+      } catch {
+        validationPayload = { status: "fail", failures: [error.message], importReady: false };
+        await fsp.writeFile(pkg.validationPath, JSON.stringify(validationPayload, null, 2), "utf8");
+      }
+      validations.push({ ...validationPayload, packageDirectory: pkg.packageDirectory, outputPackage: pkg.outputPackage });
+    }
+  }
+  const validationFailures = validations.filter((item) => item.status !== "pass" || item.importReady !== true);
+  if (validationFailures.length) {
+    const firstFailure = validationFailures[0];
+    const reason = (firstFailure.failures || [firstFailure.error || "validation failed"])[0];
+    const error = new Error(`FCPXMLD validation failed for ${path.basename(firstFailure.packageDirectory || firstFailure.outputPackage || "package")}: ${reason}`);
+    error.validations = validations;
+    throw error;
+  }
+
+  const summary = batchSummary(analysis, build, validations);
 
   return {
     status: "ok",
@@ -509,10 +550,50 @@ async function runAnalyzer(body, progress, forcedJobId) {
     resultCount: (analysis.results || []).length,
     results: analysis.results || [],
     skipped: analysis.skipped || [],
+    packages,
+    validations,
+    summary,
     outputPackage: build.outputPackage,
+    outputPackages: packages.map((pkg) => pkg.outputPackage),
     insertedFilters: build.insertedFilters,
     removedExistingFilters: build.removedExistingFilters,
     onlyAnalyzedAssets: build.onlyAnalyzedAssets === true,
+    perFootagePackages: build.perFootagePackages === true,
+  };
+}
+
+function batchSummary(analysis, build, validations) {
+  const results = Array.isArray(analysis.results) ? analysis.results : [];
+  const skipped = Array.isArray(analysis.skipped) ? analysis.skipped : [];
+  const packages = Array.isArray(build.packages) ? build.packages : [];
+  const validationPass = validations.filter((item) => item.status === "pass" && item.importReady === true).length;
+  const validationFail = Math.max(0, validations.length - validationPass);
+  return {
+    analyzedSuccessCount: results.length,
+    analyzedFailureCount: skipped.length,
+    packageCreatedCount: packages.length,
+    validationPassCount: validationPass,
+    validationFailCount: validationFail,
+    fcpImportReady: packages.length > 0 && validationFail === 0 && validationPass === packages.length,
+    failedClips: [
+      ...skipped.map((reason) => ({ reason })),
+      ...validations
+        .filter((item) => item.status !== "pass" || item.importReady !== true)
+        .map((item) => ({
+          packagePath: item.packageDirectory || item.outputPackage,
+          reason: (item.failures || [item.error || "validation failed"])[0],
+        })),
+    ],
+    packages: packages.map((pkg) => ({
+      packagePath: pkg.packageDirectory,
+      fcpxmldPath: pkg.outputPackage,
+      sampleScalePercent: pkg.sampleScalePercent,
+      sampleWidth: pkg.sampleWidth,
+      sampleHeight: pkg.sampleHeight,
+      cacheSchemaVersion: pkg.cacheSchemaVersion,
+      cacheIdentityShort: pkg.cacheIdentityShort,
+      importReady: validations.some((item) => item.outputPackage === pkg.outputPackage && item.importReady === true),
+    })),
   };
 }
 

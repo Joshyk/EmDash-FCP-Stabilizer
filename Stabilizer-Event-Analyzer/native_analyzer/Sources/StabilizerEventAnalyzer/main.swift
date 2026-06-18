@@ -53,11 +53,14 @@ struct AssetPlan: Decodable {
 struct AnalysisResult: Encodable {
     let assetId: String
     let name: String
+    let footageFileName: String
     let mediaPath: String
     let mediaKind: String?
+    let sourceMediaFingerprint: String
     let cacheFileName: String
     let cacheIdentity: String
     let cacheSchemaVersion: Int
+    let durationSeconds: Double
     let sampleScalePercent: Double
     let sampleWidth: Int
     let sampleHeight: Int
@@ -69,6 +72,7 @@ struct AnalysisResult: Encodable {
     let firstFingerprint: String
     let middleFingerprint: String
     let lastFingerprint: String
+    let preparedMotionPath: Bool
 }
 
 struct ToolOutput: Encodable {
@@ -2476,11 +2480,14 @@ func writeCache(cacheRoot: URL, asset: AssetPlan, prepared: PreparedAnalysis, ca
     return AnalysisResult(
         assetId: asset.assetId,
         name: asset.name,
+        footageFileName: URL(fileURLWithPath: asset.mediaPath).lastPathComponent,
         mediaPath: asset.mediaPath,
         mediaKind: asset.mediaKind,
+        sourceMediaFingerprint: "\(fp.first):\(fp.middle):\(fp.last)",
         cacheFileName: fileName,
         cacheIdentity: identity,
         cacheSchemaVersion: cacheSchemaVersion,
+        durationSeconds: asset.durationSeconds,
         sampleScalePercent: sampleScalePercent,
         sampleWidth: cache.sampleWidth,
         sampleHeight: cache.sampleHeight,
@@ -2491,7 +2498,8 @@ func writeCache(cacheRoot: URL, asset: AssetPlan, prepared: PreparedAnalysis, ca
         frameDurationSeconds: cache.frameDurationSeconds,
         firstFingerprint: fp.first,
         middleFingerprint: fp.middle,
-        lastFingerprint: fp.last
+        lastFingerprint: fp.last,
+        preparedMotionPath: !prepared.pathX.isEmpty && !prepared.pathY.isEmpty && !prepared.pathRoll.isEmpty
     )
 }
 

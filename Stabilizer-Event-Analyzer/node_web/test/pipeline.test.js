@@ -20,6 +20,33 @@ function run(command, args) {
   return JSON.parse(result.stdout);
 }
 
+function analysisResult(assetId = "r2", name = "P1000307") {
+  return {
+    assetId,
+    name,
+    footageFileName: `${name}.mov`,
+    mediaPath: `/tmp/${name}.mov`,
+    mediaKind: "original-media",
+    sourceMediaFingerprint: "aaa:bbb:ccc",
+    cacheFileName: `host-analysis-v2-${name}.json`,
+    cacheIdentity: `17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:${name}`,
+    cacheSchemaVersion: 17,
+    durationSeconds: 10.01,
+    sampleScalePercent: 10,
+    sampleWidth: 192,
+    sampleHeight: 108,
+    frameCount: 300,
+    rangeStartSeconds: 0,
+    rangeDurationSeconds: 10.01,
+    rangeEndSeconds: 10.01,
+    frameDurationSeconds: 1001 / 30000,
+    firstFingerprint: "aaa",
+    middleFingerprint: "bbb",
+    lastFingerprint: "ccc",
+    preparedMotionPath: true,
+  };
+}
+
 function writeFcpxmld(packageDir, assetXml) {
   fs.mkdirSync(packageDir, { recursive: true });
   fs.writeFileSync(
@@ -431,4 +458,118 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   assert.doesNotMatch(info, /Other/);
   assert.doesNotMatch(info, /Existing Effect/);
   assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 2);
+});
+
+test("build_stabilizer_fcpxml_import emits one package directory per footage", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-per-footage-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({
+      status: "ok",
+      cacheRoot: path.join(tmp, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
+      results: [analysisResult()],
+    }),
+    "utf8"
+  );
+  const payload = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  assert.equal(payload.status, "ok");
+  assert.equal(payload.perFootagePackages, true);
+  assert.equal(payload.packages.length, 1);
+  const pkg = payload.packages[0];
+  assert.match(path.basename(pkg.packageDirectory), /^P1000307__sample10__schema17__300f__/);
+  assert.equal(path.basename(pkg.outputPackage), "P1000307.fcpxmld");
+  assert.equal(path.basename(pkg.manifestPath), "P1000307.analysis-manifest.json");
+  const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  assert.equal(manifest.footageFileName, "P1000307.mov");
+  assert.equal(manifest.sourceMediaFingerprint, "aaa:bbb:ccc");
+  assert.equal(manifest.cacheIdentity, analysisResult().cacheIdentity);
+  assert.equal(manifest.preparedMotionPath, true);
+  assert.equal(fs.existsSync(path.join(pkg.outputPackage, "Info.fcpxml")), true);
+});
+
+test("validate_stabilizer_fcpxml_import passes generated per-footage package", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-pass-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", results: [analysisResult()] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const validation = run("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    pkg.outputPackage,
+    "--manifest",
+    pkg.manifestPath,
+    "--output",
+    pkg.validationPath,
+  ]);
+  assert.equal(validation.status, "pass");
+  assert.equal(validation.importReady, true);
+  assert.equal(fs.existsSync(pkg.validationPath), true);
+});
+
+test("validate_stabilizer_fcpxml_import fails cache identity mismatch before FCP import", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-fail-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", results: [analysisResult()] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  manifest.cacheIdentity = "wrong-cache-identity";
+  fs.writeFileSync(pkg.manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const result = spawnSync("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    pkg.outputPackage,
+    "--manifest",
+    pkg.manifestPath,
+    "--output",
+    pkg.validationPath,
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  const validation = JSON.parse(result.stdout);
+  assert.equal(validation.status, "fail");
+  assert.equal(validation.importReady, false);
+  assert.match(validation.failures.join("\n"), /Cache Identity does not match manifest/i);
 });

@@ -33,6 +33,7 @@ const el = {
   runButton: document.getElementById("runButton"),
   cancelButton: document.getElementById("cancelButton"),
   statusBox: document.getElementById("statusBox"),
+  batchSummary: document.getElementById("batchSummary"),
   resultActions: document.getElementById("resultActions"),
   revealCacheButton: document.getElementById("revealCacheButton"),
   revealImportButton: document.getElementById("revealImportButton"),
@@ -99,6 +100,62 @@ function jobStatusText(job) {
   const message = /^progress\s+/.test(job.message || "") ? "" : (job.message || "");
   const status = message ? `${stage}: ${message}` : stage;
   return withProgress(job, status);
+}
+
+function renderBatchSummary(result) {
+  const summary = result && result.summary;
+  el.batchSummary.textContent = "";
+  if (!summary) {
+    el.batchSummary.classList.add("hidden");
+    return;
+  }
+  el.batchSummary.classList.remove("hidden");
+  const header = document.createElement("div");
+  header.className = summary.fcpImportReady ? "status-ready" : "status-error";
+  header.textContent = summary.fcpImportReady ? "FCP import ready" : "FCP import blocked";
+  el.batchSummary.appendChild(header);
+
+  const counts = document.createElement("div");
+  counts.className = "summary-grid";
+  const countItems = [
+    ["Analyzed", `${summary.analyzedSuccessCount || 0} ok / ${summary.analyzedFailureCount || 0} failed`],
+    ["Packages", `${summary.packageCreatedCount || 0}`],
+    ["Validation", `${summary.validationPassCount || 0} pass / ${summary.validationFailCount || 0} fail`],
+  ];
+  for (const [label, value] of countItems) {
+    const item = document.createElement("div");
+    item.innerHTML = "<strong></strong><span></span>";
+    item.querySelector("strong").textContent = label;
+    item.querySelector("span").textContent = value;
+    counts.appendChild(item);
+  }
+  el.batchSummary.appendChild(counts);
+
+  const packages = Array.isArray(summary.packages) ? summary.packages : [];
+  if (packages.length) {
+    const list = document.createElement("div");
+    list.className = "package-list";
+    for (const pkg of packages) {
+      const row = document.createElement("div");
+      row.className = "package-item";
+      const sample = pkg.sampleScalePercent ? `${pkg.sampleScalePercent}%` : "?";
+      const pixels = pkg.sampleWidth && pkg.sampleHeight ? `${pkg.sampleWidth}x${pkg.sampleHeight}` : "?";
+      row.innerHTML = "<strong></strong><span></span><code></code>";
+      row.querySelector("strong").textContent = pkg.importReady ? "Ready" : "Blocked";
+      row.querySelector("span").textContent = `sample ${sample} (${pixels}) | schema ${pkg.cacheSchemaVersion || "?"} | ${pkg.cacheIdentityShort || "no identity"}`;
+      row.querySelector("code").textContent = pkg.packagePath || pkg.fcpxmldPath || "";
+      list.appendChild(row);
+    }
+    el.batchSummary.appendChild(list);
+  }
+
+  const failed = Array.isArray(summary.failedClips) ? summary.failedClips : [];
+  if (failed.length) {
+    const failures = document.createElement("div");
+    failures.className = "failure-list";
+    failures.textContent = failed.map((item) => item.reason || item.packagePath || "failed").join("\n");
+    el.batchSummary.appendChild(failures);
+  }
 }
 
 function attachRunningJob(job) {
@@ -347,6 +404,7 @@ async function loadAssets() {
   state.selectedAssetIds.clear();
   state.lastResult = null;
   el.resultActions.classList.add("hidden");
+  renderBatchSummary(null);
   renderAssets();
   if (!state.sourcePath) {
     setStatus("Set an FCPXMLD or Info.fcpxml path.", "error");
@@ -447,6 +505,7 @@ async function runAnalysis() {
   const body = runBody();
   setStatus("Queueing serial analysis...");
   el.resultActions.classList.add("hidden");
+  renderBatchSummary(null);
   const payload = await api("/api/run", { method: "POST", body });
   saveLastAnalysisSettings(body);
   state.currentJobId = payload.job.id;
@@ -464,7 +523,9 @@ async function pollJob() {
     setStatus(jobStatusText(job));
     if (job.status === "done") {
       state.lastResult = job.result;
-      setStatus(withProgress(job, `Done: ${job.result.resultCount} cache(s), ${job.result.insertedFilters} filter insertion(s).`), "ok");
+      renderBatchSummary(job.result);
+      const summary = job.result.summary || {};
+      setStatus(withProgress(job, `Done: ${summary.packageCreatedCount || job.result.resultCount} package(s), ${summary.validationPassCount || 0} validation pass.`), "ok");
       state.currentJobId = "";
       el.cancelButton.classList.add("hidden");
       el.cancelButton.disabled = false;
@@ -473,6 +534,7 @@ async function pollJob() {
       return;
     }
     if (job.status === "error" || job.status === "cancelled") {
+      if (job.result) renderBatchSummary(job.result);
       setStatus(withProgress(job, job.error || job.message || job.status), "error");
       state.currentJobId = "";
       el.cancelButton.classList.add("hidden");

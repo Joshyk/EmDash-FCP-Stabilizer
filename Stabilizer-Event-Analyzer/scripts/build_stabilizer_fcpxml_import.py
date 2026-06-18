@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime as dt
 import json
 import shutil
 import sys
@@ -306,11 +307,138 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     return root
 
 
+def build_single_asset_tree(source_root: ET.Element, asset_id: str, result: dict) -> ET.Element:
+    return build_analyzed_only_tree(source_root, {asset_id: result})
+
+
 def output_package_path(output_dir: Path, source_path: Path) -> Path:
     source_name = source_path.name if source_path.suffix == ".fcpxmld" else source_path.stem
     if not source_name.endswith(".fcpxmld"):
         source_name = f"{source_name}.fcpxmld"
     return output_dir / f"{Path(source_name).stem}-stabilizer.fcpxmld"
+
+
+def footage_stem(source_root: ET.Element, asset_id: str, result: dict) -> str:
+    asset = resource_by_id(source_root, asset_id)
+    name = result.get("footageFileName") or result.get("name")
+    if not name and asset is not None:
+        name = asset.attrib.get("name")
+    return safe_file_component(Path(str(name or asset_id)).stem)
+
+
+def package_directory_name(source_root: ET.Element, asset_id: str, result: dict) -> str:
+    footage = footage_stem(source_root, asset_id, result)
+    sample_percent = result.get("sampleScalePercent")
+    sample_label = f"sample{sample_percent:g}" if isinstance(sample_percent, (int, float)) else "sampleunknown"
+    schema = result.get("cacheSchemaVersion", "unknown")
+    frame_count = result.get("frameCount", "unknown")
+    date_label = dt.date.today().isoformat()
+    return safe_file_component(f"{footage}__{sample_label}__schema{schema}__{frame_count}f__{date_label}")
+
+
+def analysis_manifest(source_root: ET.Element, asset_id: str, result: dict, cache_root: str | None = None) -> dict:
+    asset = resource_by_id(source_root, asset_id)
+    source_clip = first_event_asset_clip(source_root, asset_id)
+    media_reps = []
+    if asset is not None:
+        for child in asset:
+            if local_name(child.tag) == "media-rep":
+                media_reps.append({
+                    "kind": child.attrib.get("kind"),
+                    "src": child.attrib.get("src"),
+                })
+    frame_count = result.get("frameCount")
+    prepared_fields = (
+        result.get("preparedMotionPath") is True
+        or result.get("preparedMotionPathPresent") is True
+        or (isinstance(frame_count, int) and frame_count > 1 and bool(result.get("cacheIdentity")))
+    )
+    range_start = result.get("rangeStartSeconds")
+    range_duration = result.get("rangeDurationSeconds")
+    if range_start is None and asset is not None:
+        range_start = float(parse_time(asset.attrib.get("start"), parse_time("0s")))
+    if range_duration is None and asset is not None and asset.attrib.get("duration"):
+        range_duration = float(parse_time(asset.attrib["duration"]))
+    return {
+        "manifestSchemaVersion": 1,
+        "assetId": asset_id,
+        "footageName": result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
+        "footageFileName": result.get("footageFileName") or result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
+        "mediaPath": result.get("mediaPath"),
+        "mediaKind": result.get("mediaKind"),
+        "mediaReps": media_reps,
+        "sourceMediaFingerprint": result.get("sourceMediaFingerprint") or result.get("firstFingerprint"),
+        "firstFingerprint": result.get("firstFingerprint"),
+        "middleFingerprint": result.get("middleFingerprint"),
+        "lastFingerprint": result.get("lastFingerprint"),
+        "analyzedRange": {
+            "startSeconds": range_start,
+            "durationSeconds": range_duration,
+            "endSeconds": result.get("rangeEndSeconds"),
+        },
+        "durationSeconds": result.get("durationSeconds") or range_duration,
+        "sampleScalePercent": result.get("sampleScalePercent"),
+        "sampleWidth": result.get("sampleWidth"),
+        "sampleHeight": result.get("sampleHeight"),
+        "cacheSchemaVersion": result.get("cacheSchemaVersion"),
+        "frameCount": frame_count,
+        "cacheIdentity": result.get("cacheIdentity"),
+        "cacheIdentityShort": short_identity(result.get("cacheIdentity")),
+        "cacheFileName": result.get("cacheFileName"),
+        "cacheRoot": cache_root,
+        "preparedMotionPath": prepared_fields,
+        "sourceClip": {
+            "start": source_clip.attrib.get("start") if source_clip is not None else None,
+            "duration": source_clip.attrib.get("duration") if source_clip is not None else None,
+        },
+    }
+
+
+def short_identity(identity: str | None) -> str | None:
+    if not identity:
+        return None
+    return zlib.adler32(identity.encode("utf-8")).to_bytes(4, "big").hex()
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict], source_path: Path, output_dir: Path, cache_root: str | None) -> list[dict]:
+    packages = []
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for asset_id, result in results.items():
+        package_dir = output_dir / package_directory_name(source_root, asset_id, result)
+        if package_dir.exists():
+            shutil.rmtree(package_dir)
+        package_dir.mkdir(parents=True)
+        footage = footage_stem(source_root, asset_id, result)
+        fcpxmld_path = package_dir / f"{footage}.fcpxmld"
+        fcpxmld_path.mkdir()
+        info_path = fcpxmld_path / "Info.fcpxml"
+        tree = ET.ElementTree(build_single_asset_tree(source_root, asset_id, result))
+        tree.write(info_path, encoding="utf-8", xml_declaration=True)
+        manifest_path = package_dir / f"{footage}.analysis-manifest.json"
+        manifest = analysis_manifest(source_root, asset_id, result, cache_root=cache_root)
+        write_json(manifest_path, manifest)
+        packages.append({
+            "assetId": asset_id,
+            "footageName": manifest["footageName"],
+            "packageDirectory": str(package_dir),
+            "outputPackage": str(fcpxmld_path),
+            "infoPath": str(info_path),
+            "manifestPath": str(manifest_path),
+            "validationPath": str(package_dir / f"{footage}.validation.json"),
+            "cacheIdentity": result.get("cacheIdentity"),
+            "cacheIdentityShort": manifest["cacheIdentityShort"],
+            "cacheSchemaVersion": result.get("cacheSchemaVersion"),
+            "sampleScalePercent": result.get("sampleScalePercent"),
+            "sampleWidth": result.get("sampleWidth"),
+            "sampleHeight": result.get("sampleHeight"),
+            "frameCount": result.get("frameCount"),
+            "preparedMotionPath": manifest["preparedMotionPath"],
+        })
+    return packages
 
 
 def copy_source_package(source_path: Path, info_path: Path, output_dir: Path) -> tuple[Path, Path]:
@@ -336,6 +464,12 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         action="store_true",
         help="Build a compact FCPXMLD containing only analyzed video assets and one review project.",
     )
+    parser.add_argument(
+        "--per-footage-packages",
+        action="store_true",
+        help="Build one import package directory per analyzed footage with a manifest next to the FCPXMLD.",
+    )
+    parser.add_argument("--cache-root", type=Path)
     return parser.parse_args(argv)
 
 
@@ -347,14 +481,37 @@ def main(argv: Iterable[str]) -> int:
         results = {item["assetId"]: item for item in analysis.get("results", []) if item.get("cacheIdentity")}
         if not results:
             raise ValueError("analysis JSON did not contain cache identities")
-        if args.only_analyzed_assets:
+        if args.only_analyzed_assets or args.per_footage_packages:
+            tree = ET.parse(info_path)
+            root = tree.getroot()
+            if args.per_footage_packages:
+                packages = build_per_footage_packages(
+                    root,
+                    results,
+                    args.source_fcpxml,
+                    args.output_dir,
+                    str(args.cache_root or analysis.get("cacheRoot") or ""),
+                )
+                return emit(
+                    {
+                        "schemaVersion": SCHEMA_VERSION,
+                        "status": "ok",
+                        "packages": packages,
+                        "outputPackage": packages[0]["outputPackage"] if packages else None,
+                        "infoPath": packages[0]["infoPath"] if packages else None,
+                        "insertedFilters": len(packages) * 2,
+                        "removedExistingFilters": 0,
+                        "assetIds": sorted(results),
+                        "onlyAnalyzedAssets": True,
+                        "perFootagePackages": True,
+                    }
+                )
             args.output_dir.mkdir(parents=True, exist_ok=True)
             package_path = output_package_path(args.output_dir, args.source_fcpxml)
             if package_path.exists():
                 shutil.rmtree(package_path)
             package_path.mkdir(parents=True)
             target_info = package_path / "Info.fcpxml"
-            tree = ET.parse(info_path)
         else:
             package_path, target_info = copy_source_package(args.source_fcpxml, info_path, args.output_dir)
             tree = ET.parse(target_info)
