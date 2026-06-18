@@ -142,8 +142,8 @@ fallbacks.
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
-  Turn it off to skip Auto Crop window sampling and binary-search framing completely while
-  checking playback cost; `Edge Display Mode` then directly controls outside-source pixels.
+  Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
+  `Edge Display Mode` then directly controls outside-source pixels.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image. New effect

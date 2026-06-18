@@ -51,7 +51,6 @@ private let stabilizerDefaultAutoCropZoomSpeed = 1.0
 private let stabilizerDefaultAutoCropZoomSmoothness = 0.35
 private let stabilizerDefaultAutoCropPositionSpeed = 1.0
 private let stabilizerDefaultAutoCropPositionSmoothness = 0.80
-private let stabilizerAutoCropWindowSampleCount = 3
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
@@ -170,32 +169,6 @@ private struct AutoCropFramingCacheKey: Hashable {
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
     let currentTransform: AutoCropTransformSignature
-}
-
-private struct AutoCropEstimateCacheKey: Hashable {
-    let cacheIdentity: String?
-    let analysisRevision: UInt64
-    let sampleSeconds: UInt64
-    let outputWidth: Int32
-    let outputHeight: Int32
-    let analysisFrameCount: Int
-    let analysisFirstTime: UInt64
-    let analysisMiddleTime: UInt64
-    let analysisLastTime: UInt64
-    let analysisSampleWidth: Int32
-    let analysisSampleHeight: Int32
-    let analysisFirstFingerprint: String
-    let analysisMiddleFingerprint: String
-    let analysisLastFingerprint: String
-    let panSmoothSeconds: UInt64
-    let microJitterX: UInt64
-    let microJitterY: UInt64
-    let microJitterRotation: UInt64
-    let strideWobbleX: UInt64
-    let strideWobbleY: UInt64
-    let strideWobbleRotation: UInt64
-    let panStabilizationStrength: UInt64
-    let farFieldWarp: UInt64
 }
 
 private struct StabilizerPluginState {
@@ -539,10 +512,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
     private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
     private static let autoCropFramingCacheLimit = 32
-    private static let autoCropEstimateCacheLock = NSLock()
-    private static var autoCropEstimateCache: [AutoCropEstimateCacheKey: StabilizerAutoTransform] = [:]
-    private static var autoCropEstimateCacheOrder: [AutoCropEstimateCacheKey] = []
-    private static let autoCropEstimateCacheLimit = 384
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -1430,23 +1399,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return .identity
         }
 
-        let renderSeconds = CMTimeGetSeconds(renderTime)
-        guard renderSeconds.isFinite else {
-            return .identity
-        }
-
-        let positionSamples = autoCropTransformSamples(
-            preparedAnalysis: preparedAnalysis,
-            centerSeconds: renderSeconds,
-            windowSeconds: autoCropWindowSeconds(smoothness: positionSmoothness, speed: positionSpeed),
-            outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths,
-            currentTransform: currentTransform,
-            analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity
+        let positionSmoothingWeight = autoCropPositionSmoothingWeight(
+            smoothness: positionSmoothness,
+            speed: positionSpeed
         )
-        let slowPositionPixels = autoCropPositionPixels(from: positionSamples, masterStrength: masterStrength)
+        let slowPositionPixels = (
+            (currentTransform.pixelOffset * (1.0 - positionSmoothingWeight))
+                + (currentTransform.macroPixelOffset * positionSmoothingWeight)
+        ) * masterStrength
         let positionPixels = blackSafeAutoCropPosition(
             preferredPositionPixels: slowPositionPixels,
             transform: currentTransform,
@@ -1454,28 +1414,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             masterStrength: masterStrength
         )
 
-        let zoomSamples = autoCropTransformSamples(
-            preparedAnalysis: preparedAnalysis,
-            centerSeconds: renderSeconds,
-            windowSeconds: autoCropWindowSeconds(smoothness: zoomSmoothness, speed: zoomSpeed),
+        let scale = requiredAutoCropScale(
+            transform: currentTransform,
             outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths,
-            currentTransform: currentTransform,
-            analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity
-        )
-        let scale = zoomSamples.reduce(Float(1.0)) { partial, sample in
-            return max(
-                partial,
-                requiredAutoCropScale(
-                    transform: sample.transform,
-                    outputSize: outputSize,
-                    masterStrength: masterStrength,
-                    cropPositionPixels: positionPixels
-                )
-            )
-        }
+            masterStrength: masterStrength,
+            cropPositionPixels: positionPixels
+        ) * autoCropZoomPadding(smoothness: zoomSmoothness, speed: zoomSpeed)
 
         return AutoCropFraming(
             scale: max(1.0, scale),
@@ -1483,156 +1427,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
     }
 
-    private static func autoCropWindowSeconds(smoothness: Double, speed: Double) -> Double {
+    private static func autoCropPositionSmoothingWeight(smoothness: Double, speed: Double) -> Float {
         let boundedSmoothness = min(max(smoothness, 0.0), 4.0)
         let boundedSpeed = min(max(speed, 0.1), 4.0)
-        return boundedSmoothness / boundedSpeed
+        return min(max(Float((boundedSmoothness / boundedSpeed) / 2.0), 0.0), 1.0)
     }
 
-    private static func autoCropTransformSamples(
-        preparedAnalysis: StabilizerPreparedAnalysis,
-        centerSeconds: Double,
-        windowSeconds: Double,
-        outputSize: vector_float2,
-        panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths,
-        currentTransform: StabilizerAutoTransform,
-        analysisRevision: UInt64,
-        cacheIdentity: String?
-    ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
-        guard windowSeconds > 1e-6,
-              let firstTime = preparedAnalysis.frames.first?.time,
-              let lastTime = preparedAnalysis.frames.last?.time
-        else {
-            return [(currentTransform, 1.0)]
-        }
-
-        let sampleCount = max(3, stabilizerAutoCropWindowSampleCount)
-        let centerIndex = sampleCount / 2
-        let halfWindow = windowSeconds * 0.5
-        let sigma = max(1e-6, halfWindow * 0.5)
-        var samples: [(transform: StabilizerAutoTransform, weight: Float)] = []
-
-        for sampleIndex in 0..<sampleCount {
-            let fraction = Double(sampleIndex - centerIndex) / Double(max(1, sampleCount - 1))
-            let offset = fraction * windowSeconds
-            let sampleSeconds = centerSeconds + offset
-            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
-                continue
-            }
-            let normalizedDistance = offset / sigma
-            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
-            guard weight > 0.0001 else {
-                continue
-            }
-            let transform: StabilizerAutoTransform
-            if abs(offset) <= 1e-6 {
-                transform = currentTransform
-            } else {
-                transform = cachedAutoCropWindowEstimate(
-                    preparedAnalysis: preparedAnalysis,
-                    sampleSeconds: sampleSeconds,
-                    outputSize: outputSize,
-                    panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths,
-                    analysisRevision: analysisRevision,
-                    cacheIdentity: cacheIdentity
-                )
-            }
-            samples.append((transform, weight))
-        }
-
-        if samples.contains(where: { abs($0.weight - 1.0) <= 1e-6 }) {
-            return samples
-        }
-        samples.append((currentTransform, 1.0))
-        return samples
-    }
-
-    private static func cachedAutoCropWindowEstimate(
-        preparedAnalysis: StabilizerPreparedAnalysis,
-        sampleSeconds: Double,
-        outputSize: vector_float2,
-        panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths,
-        analysisRevision: UInt64,
-        cacheIdentity: String?
-    ) -> StabilizerAutoTransform {
-        guard sampleSeconds.isFinite,
-              let firstFrame = preparedAnalysis.frames.first,
-              let lastFrame = preparedAnalysis.frames.last
-        else {
-            return .identity
-        }
-
-        let middleFrame = preparedAnalysis.frames[preparedAnalysis.frames.count / 2]
-        let key = AutoCropEstimateCacheKey(
-            cacheIdentity: cacheIdentity,
-            analysisRevision: analysisRevision,
-            sampleSeconds: sampleSeconds.bitPattern,
-            outputWidth: Int32(clamping: Int(outputSize.x.rounded())),
-            outputHeight: Int32(clamping: Int(outputSize.y.rounded())),
-            analysisFrameCount: preparedAnalysis.frames.count,
-            analysisFirstTime: firstFrame.time.bitPattern,
-            analysisMiddleTime: middleFrame.time.bitPattern,
-            analysisLastTime: lastFrame.time.bitPattern,
-            analysisSampleWidth: Int32(clamping: firstFrame.sampleWidth),
-            analysisSampleHeight: Int32(clamping: firstFrame.sampleHeight),
-            analysisFirstFingerprint: firstFrame.fingerprint,
-            analysisMiddleFingerprint: middleFrame.fingerprint,
-            analysisLastFingerprint: lastFrame.fingerprint,
-            panSmoothSeconds: panSmoothSeconds.bitPattern,
-            microJitterX: strengths.microJitterX.bitPattern,
-            microJitterY: strengths.microJitterY.bitPattern,
-            microJitterRotation: strengths.microJitterRotation.bitPattern,
-            strideWobbleX: strengths.strideWobbleX.bitPattern,
-            strideWobbleY: strengths.strideWobbleY.bitPattern,
-            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
-            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
-            farFieldWarp: strengths.farFieldWarp.bitPattern
-        )
-
-        autoCropEstimateCacheLock.lock()
-        if let cachedTransform = autoCropEstimateCache[key] {
-            autoCropEstimateCacheLock.unlock()
-            return cachedTransform
-        }
-        autoCropEstimateCacheLock.unlock()
-
-        let transform = AutoStabilizationEstimator.autoCropWindowEstimate(
-            preparedAnalysis: preparedAnalysis,
-            renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
-            outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths
-        )
-
-        autoCropEstimateCacheLock.lock()
-        defer { autoCropEstimateCacheLock.unlock() }
-        if let cachedTransform = autoCropEstimateCache[key] {
-            return cachedTransform
-        }
-        autoCropEstimateCache[key] = transform
-        autoCropEstimateCacheOrder.append(key)
-        while autoCropEstimateCacheOrder.count > autoCropEstimateCacheLimit {
-            let oldestKey = autoCropEstimateCacheOrder.removeFirst()
-            autoCropEstimateCache.removeValue(forKey: oldestKey)
-        }
-        return transform
-    }
-
-    private static func autoCropPositionPixels(
-        from samples: [(transform: StabilizerAutoTransform, weight: Float)],
-        masterStrength: Float
-    ) -> vector_float2 {
-        let totalWeight = samples.reduce(Float(0.0)) { $0 + $1.weight }
-        guard totalWeight > 1e-6 else {
-            return vector_float2(0.0, 0.0)
-        }
-        let weightedPosition = samples.reduce(vector_float2(0.0, 0.0)) { partial, sample in
-            partial + (sample.transform.macroPixelOffset * sample.weight)
-        }
-        return (weightedPosition / totalWeight) * masterStrength
+    private static func autoCropZoomPadding(smoothness: Double, speed: Double) -> Float {
+        let boundedSmoothness = min(max(smoothness, 0.0), 2.0)
+        let boundedSpeed = min(max(speed, 0.1), 4.0)
+        let padding = Float(min(2.0, boundedSmoothness / boundedSpeed)) * 0.015
+        return 1.0 + padding
     }
 
     private static func blackSafeAutoCropPosition(

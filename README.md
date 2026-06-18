@@ -134,7 +134,7 @@ disappear while high-side gate jumps and low-confidence warp evidence are
 suppressed instead of producing a wavy image.
 
 `Remove Black Edges` controls dynamic Auto Crop framing. When it is off, the render
-path skips Auto Crop window sampling and binary-search framing completely, so
+path skips Auto Crop crop-safe framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
 or black. New effect instances default that menu to `Black Outside`.
 

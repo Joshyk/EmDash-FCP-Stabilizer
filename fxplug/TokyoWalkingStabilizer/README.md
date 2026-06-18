@@ -234,8 +234,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   not delete Event Analyzer cache files and reports `External Cache Managed - Use Event
   Analyzer`.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing so stabilized
-  frames avoid outside-source pixels. Turn it off to bypass Auto Crop render-time
-  sampling and binary-search framing while checking playback cost; `Edge Display Mode`
+  frames avoid outside-source pixels. Turn it off to bypass Auto Crop crop-safe
+  framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
