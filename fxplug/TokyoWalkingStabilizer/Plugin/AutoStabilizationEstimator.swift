@@ -3300,7 +3300,7 @@ enum AutoStabilizationEstimator {
         guard indices.count >= 3 else {
             return nil
         }
-        let sortedIndices = indices.sorted()
+        let sortedIndices = indicesAreStrictlyAscending(indices) ? indices : indices.sorted()
         guard let firstIndex = sortedIndices.first, let lastIndex = sortedIndices.last else {
             return nil
         }
@@ -3374,7 +3374,7 @@ enum AutoStabilizationEstimator {
         guard indices.count >= 3 else {
             return nil
         }
-        let sortedIndices = indices.sorted()
+        let sortedIndices = indicesAreStrictlyAscending(indices) ? indices : indices.sorted()
         guard let firstIndex = sortedIndices.first, let lastIndex = sortedIndices.last else {
             return nil
         }
@@ -3444,11 +3444,15 @@ enum AutoStabilizationEstimator {
     }
 
     private static func percentileValue(_ values: [Float], indices: [Int], percentile: Float) -> Float {
-        let sortedValues = indices
-            .filter { values.indices.contains($0) }
-            .map { values[$0] }
-            .filter(\.isFinite)
-            .sorted()
+        var sortedValues: [Float] = []
+        sortedValues.reserveCapacity(indices.count)
+        for index in indices where values.indices.contains(index) {
+            let value = values[index]
+            if value.isFinite {
+                sortedValues.append(value)
+            }
+        }
+        sortedValues.sort()
         guard !sortedValues.isEmpty else {
             return 0.0
         }
@@ -3530,7 +3534,9 @@ enum AutoStabilizationEstimator {
         indices: [Int],
         currentTrackingConfidence: Float
     ) -> Float {
-        let localTrackingValues = indices.compactMap { index -> Float? in
+        var localTrackingValues: [Float] = []
+        localTrackingValues.reserveCapacity(indices.count)
+        for index in indices {
             guard analysis.frames.indices.contains(index),
                   analysis.residuals.indices.contains(index),
                   analysis.blurAmounts.indices.contains(index),
@@ -3538,16 +3544,16 @@ enum AutoStabilizationEstimator {
                   analysis.acceptedBlockCounts.indices.contains(index),
                   analysis.totalBlockCounts.indices.contains(index)
             else {
-                return nil
+                continue
             }
-            return frameTrackingConfidence(
+            localTrackingValues.append(frameTrackingConfidence(
                 motionConfidence: analysis.analysisConfidence[index],
                 residual: analysis.residuals[index],
                 blurAmount: analysis.blurAmounts[index],
                 acceptedBlockCount: analysis.acceptedBlockCounts[index],
                 totalBlockCount: analysis.totalBlockCounts[index],
                 qualityModel: analysis.qualityModel
-            )
+            ))
         }
         guard let localMedianTrackingConfidence = median(localTrackingValues) else {
             return currentTrackingConfidence
@@ -3574,16 +3580,18 @@ enum AutoStabilizationEstimator {
             hitCount: currentSearchRadiusHitCount,
             totalCount: currentSearchRadiusTotalCount
         )
-        let localEdgeQualityValues = indices.compactMap { index -> Float? in
+        var localEdgeQualityValues: [Float] = []
+        localEdgeQualityValues.reserveCapacity(indices.count)
+        for index in indices {
             guard analysis.searchRadiusHitCounts.indices.contains(index),
                   analysis.searchRadiusTotalCounts.indices.contains(index)
             else {
-                return nil
+                continue
             }
-            return searchRadiusEdgeQuality(
+            localEdgeQualityValues.append(searchRadiusEdgeQuality(
                 hitCount: analysis.searchRadiusHitCounts[index],
                 totalCount: analysis.searchRadiusTotalCounts[index]
-            )
+            ))
         }
         guard let localMedianEdgeQuality = median(localEdgeQualityValues) else {
             return currentEdgeQuality
