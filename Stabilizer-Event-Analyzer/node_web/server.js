@@ -486,6 +486,13 @@ function cacheRootValue(value) {
   return resolved;
 }
 
+function buildCacheRootFromAnalysis(analysis) {
+  if (!analysis || !analysis.cacheRoot) {
+    throw new Error("analyzer did not return a normalized cache root");
+  }
+  return analysis.cacheRoot;
+}
+
 function outputDirValue(value, sourcePath) {
   const resolved = expandPath(value || defaultImportsDirForSource(sourcePath) || OUTPUT_DIR);
   if (!resolved) throw new Error("imports directory is required");
@@ -520,10 +527,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
   const analysis = await runJsonProcess(PYTHON, analysisArgs, { jobId: id, onStderr: progressLineHandler(id) });
   const analysisPath = path.join(dir, "analysis.json");
   await fsp.writeFile(analysisPath, JSON.stringify(analysis, null, 2), "utf8");
-  if (!analysis.cacheRoot) {
-    throw new Error("analyzer did not return a normalized cache root");
-  }
-  const analysisCacheRoot = analysis.cacheRoot;
+  const analysisCacheRoot = buildCacheRootFromAnalysis(analysis);
 
   progress("building", "Building analyzed-footage-only Stabilizer FCPXMLD import package.");
   assertNotCancelled(id);
@@ -817,6 +821,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildCacheRootFromAnalysis,
   parseAnalyzerProgressLine,
   processFailureMessage,
 };

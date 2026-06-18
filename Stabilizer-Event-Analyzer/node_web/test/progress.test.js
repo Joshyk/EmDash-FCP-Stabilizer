@@ -3,7 +3,18 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { parseAnalyzerProgressLine, processFailureMessage } = require("../server.js");
+const { buildCacheRootFromAnalysis, parseAnalyzerProgressLine, processFailureMessage } = require("../server.js");
+
+test("buildCacheRootFromAnalysis requires analyzer-normalized cache root", () => {
+  assert.equal(
+    buildCacheRootFromAnalysis({ cacheRoot: "/tmp/imports/Analysis Files/TokyoWalkingStabilizerHostAnalysis" }),
+    "/tmp/imports/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
+  );
+  assert.throws(
+    () => buildCacheRootFromAnalysis({}),
+    /analyzer did not return a normalized cache root/
+  );
+});
 
 test("parseAnalyzerProgressLine parses frame progress", () => {
   assert.deepEqual(
