@@ -137,8 +137,8 @@ fallbacks.
   not create stretched-edge jumps in the preview. TURN confidence requires both tracking
   evidence and a real X turn band, so low-evidence frames no longer receive a hidden minimum
   turn correction.
-- `Turn Detection Window`: centered smoothing window for walking turns. In Host Analysis
-  mode this is evaluated against prepared motion paths during render, so changing the slider
+- `Turn Detection Window`: centered smoothing window for walking turns. The default is
+  `6.0` seconds. In Host Analysis mode this is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.

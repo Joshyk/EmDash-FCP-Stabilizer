@@ -116,8 +116,9 @@ up to `10.0`; the rotation default is `0.2` to protect the horizon.
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
 Y or roll, and is soft-limited to a small output-edge budget during render.
-`Turn Detection Window` comes from the Inspector UI value. Its UI minimum is the
-fixed `2.0` second Stride Wobble window, so TURN cannot run shorter than SWOB.
+`Turn Detection Window` defaults to `6.0` seconds and comes from the Inspector UI
+value. Its UI minimum is the fixed `2.0` second Stride Wobble window, so TURN
+cannot run shorter than SWOB.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 

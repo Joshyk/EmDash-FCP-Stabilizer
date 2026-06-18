@@ -17,7 +17,7 @@ private struct Options {
     var json = false
     var limit = 5
     var listCaches = false
-    var turnWindowSeconds = 3.0
+    var turnWindowSeconds = 6.0
     var strengths = Strengths.defaults
 }
 
@@ -1890,7 +1890,7 @@ private func printUsage() {
 
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
-    --turn-window should match the Inspector Turn Detection Window when it is not 3.0.
+    --turn-window should match the Inspector Turn Detection Window when it is not 6.0.
     --list-caches reports saved cache readiness without repairing cache files.
     --compare-cache validates saved cache equivalence; float arrays may differ only within --compare-tolerance.
     """)
