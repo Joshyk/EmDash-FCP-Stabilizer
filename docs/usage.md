@@ -144,6 +144,10 @@ fallbacks.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.
+- `Auto Crop Transition Duration`: uses the selected seconds as the Auto Crop
+  look-ahead window. Longer values begin both zoom and position changes before
+  a future steep-turn crop demand reaches the current frame, while still keeping
+  the current frame black-safe when `Remove Black Edges` is on.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image. New effect

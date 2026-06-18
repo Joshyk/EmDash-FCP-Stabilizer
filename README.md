@@ -138,10 +138,11 @@ path skips Auto Crop crop-safe framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
 or black. New effect instances default that menu to `Black Outside`.
 `Auto Crop Transition Duration` controls the unified zoom and framing transition.
-Longer values look farther ahead and start the crop adjustment earlier, so the
-framing changes more slowly. With `Remove Black Edges` on, the render path still
-clamps zoom to the current frame's required safe crop so outside-source black is
-not exposed during the transition.
+Longer values look that many seconds ahead and start both zoom and position
+adjustments before a future safe-crop demand reaches the current frame, so
+steep turns are framed more gradually. With `Remove Black Edges` on, the render
+path still clamps zoom to the current frame's required safe crop so
+outside-source black is not exposed during the transition.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
