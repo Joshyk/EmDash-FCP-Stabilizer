@@ -4007,12 +4007,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         let outputWidth = destinationImage.tilePixelBounds.right - destinationImage.tilePixelBounds.left
         let outputHeight = destinationImage.tilePixelBounds.top - destinationImage.tilePixelBounds.bottom
-        var vertices = [
-            StabilizerVertex2D(position: vector_float2(Float(outputWidth) / 2.0, Float(-outputHeight) / 2.0), textureCoordinate: vector_float2(1.0, 1.0)),
-            StabilizerVertex2D(position: vector_float2(Float(-outputWidth) / 2.0, Float(-outputHeight) / 2.0), textureCoordinate: vector_float2(0.0, 1.0)),
-            StabilizerVertex2D(position: vector_float2(Float(outputWidth) / 2.0, Float(outputHeight) / 2.0), textureCoordinate: vector_float2(1.0, 0.0)),
-            StabilizerVertex2D(position: vector_float2(Float(-outputWidth) / 2.0, Float(outputHeight) / 2.0), textureCoordinate: vector_float2(0.0, 0.0))
-        ]
+        let halfOutputWidth = Float(outputWidth) * 0.5
+        let halfOutputHeight = Float(outputHeight) * 0.5
         var viewportSize = simd_uint2(UInt32(outputWidth), UInt32(outputHeight))
         let masterStrength = Float(max(0.0, state.strength))
         let transformEnabled = masterStrength > 0.0001
@@ -4286,7 +4282,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(outputWidth), height: Double(outputHeight), znear: -1.0, zfar: 1.0))
         encoder.setRenderPipelineState(pipelineState)
-        encoder.setVertexBytes(&vertices, length: MemoryLayout<StabilizerVertex2D>.size * vertices.count, index: Int(SVI_Vertices.rawValue))
+        withUnsafeTemporaryAllocation(of: StabilizerVertex2D.self, capacity: 4) { vertices in
+            vertices[0] = StabilizerVertex2D(position: vector_float2(halfOutputWidth, -halfOutputHeight), textureCoordinate: vector_float2(1.0, 1.0))
+            vertices[1] = StabilizerVertex2D(position: vector_float2(-halfOutputWidth, -halfOutputHeight), textureCoordinate: vector_float2(0.0, 1.0))
+            vertices[2] = StabilizerVertex2D(position: vector_float2(halfOutputWidth, halfOutputHeight), textureCoordinate: vector_float2(1.0, 0.0))
+            vertices[3] = StabilizerVertex2D(position: vector_float2(-halfOutputWidth, halfOutputHeight), textureCoordinate: vector_float2(0.0, 0.0))
+            encoder.setVertexBytes(vertices.baseAddress!, length: MemoryLayout<StabilizerVertex2D>.stride * vertices.count, index: Int(SVI_Vertices.rawValue))
+        }
         encoder.setVertexBytes(&viewportSize, length: MemoryLayout.size(ofValue: viewportSize), index: Int(SVI_ViewportSize.rawValue))
         encoder.setFragmentTexture(inputTexture, index: Int(STI_InputImage.rawValue))
         encoder.setFragmentBytes(&transform, length: MemoryLayout.size(ofValue: transform), index: Int(SFI_Transform.rawValue))
