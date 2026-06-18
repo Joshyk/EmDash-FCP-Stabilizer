@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.169"
+private let tokyoWalkingStabilizerVersion = "0.3.170"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1338,7 +1338,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let transitionSamples = autoCropTransformSamples(
             preparedAnalysis: preparedAnalysis,
             startSeconds: renderSeconds,
-            durationSeconds: autoCropTransitionDurationSeconds(transitionDuration),
+            durationSeconds: autoCropTransitionLookaheadSeconds(transitionDuration),
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
@@ -1379,6 +1379,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func autoCropTransitionDurationSeconds(_ duration: Double) -> Double {
         min(max(duration, 0.0), 6.0)
+    }
+
+    private static func autoCropTransitionLookaheadSeconds(_ duration: Double) -> Double {
+        let clampedDuration = autoCropTransitionDurationSeconds(duration)
+        guard clampedDuration > 1e-6 else {
+            return 0.0
+        }
+        return clampedDuration * 2.0
     }
 
     private static func smoothStep(_ progress: Float) -> Float {
