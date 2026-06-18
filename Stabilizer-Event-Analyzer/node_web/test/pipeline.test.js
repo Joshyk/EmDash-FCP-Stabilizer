@@ -47,6 +47,36 @@ function analysisResult(assetId = "r2", name = "P1000307") {
   };
 }
 
+function writeCachePayload(root, result = analysisResult()) {
+  const cacheRoot = path.join(root, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis");
+  const cachesDir = path.join(cacheRoot, "caches");
+  fs.mkdirSync(cachesDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(cachesDir, result.cacheFileName),
+    JSON.stringify({
+      schemaVersion: result.cacheSchemaVersion,
+      frames: Array.from({ length: result.frameCount }, (_, index) => ({ time: index * result.frameDurationSeconds })),
+      pathX: Array.from({ length: result.frameCount }, () => 0),
+      pathY: Array.from({ length: result.frameCount }, () => 0),
+      pathRoll: Array.from({ length: result.frameCount }, () => 0),
+    }),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(cacheRoot, "host-analysis-index-v2.json"),
+    JSON.stringify({
+      schemaVersion: result.cacheSchemaVersion,
+      entries: [{
+        cacheIdentity: result.cacheIdentity,
+        cacheFileName: result.cacheFileName,
+        frameCount: result.frameCount,
+      }],
+    }),
+    "utf8"
+  );
+  return cacheRoot;
+}
+
 function writeFcpxmld(packageDir, assetXml) {
   fs.mkdirSync(packageDir, { recursive: true });
   fs.writeFileSync(
@@ -463,12 +493,14 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
 test("build_stabilizer_fcpxml_import emits one package directory per footage", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-per-footage-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
+  const result = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, result);
   fs.writeFileSync(
     analysisPath,
     JSON.stringify({
       status: "ok",
-      cacheRoot: path.join(tmp, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
-      results: [analysisResult()],
+      cacheRoot,
+      results: [result],
     }),
     "utf8"
   );
@@ -495,15 +527,18 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(manifest.sourceMediaFingerprint, "aaa:bbb:ccc");
   assert.equal(manifest.cacheIdentity, analysisResult().cacheIdentity);
   assert.equal(manifest.preparedMotionPath, true);
+  assert.equal(fs.existsSync(path.join(pkg.packageDirectory, manifest.cachePayloadCacheFile)), true);
   assert.equal(fs.existsSync(path.join(pkg.outputPackage, "Info.fcpxml")), true);
 });
 
 test("validate_stabilizer_fcpxml_import passes generated per-footage package", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-pass-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
   fs.writeFileSync(
     analysisPath,
-    JSON.stringify({ status: "ok", results: [analysisResult()] }),
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
     "utf8"
   );
   const build = run("python3", [
@@ -535,9 +570,11 @@ test("validate_stabilizer_fcpxml_import passes generated per-footage package", (
 test("validate_stabilizer_fcpxml_import fails cache identity mismatch before FCP import", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-fail-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
   fs.writeFileSync(
     analysisPath,
-    JSON.stringify({ status: "ok", results: [analysisResult()] }),
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
     "utf8"
   );
   const build = run("python3", [

@@ -336,7 +336,34 @@ def package_directory_name(source_root: ET.Element, asset_id: str, result: dict)
     return safe_file_component(f"{footage}__{sample_label}__schema{schema}__{frame_count}f__{date_label}")
 
 
-def analysis_manifest(source_root: ET.Element, asset_id: str, result: dict, cache_root: str | None = None) -> dict:
+def copy_cache_payload(package_dir: Path, footage: str, result: dict, cache_root: str | None) -> dict:
+    if not cache_root:
+        raise ValueError("cache root is required for per-footage packages")
+    cache_root_path = Path(cache_root).expanduser()
+    cache_file_name = result.get("cacheFileName")
+    if not cache_file_name:
+        raise ValueError(f"analysis result for {result.get('name') or result.get('assetId') or 'footage'} is missing cacheFileName")
+    source_cache_file = cache_root_path / "caches" / cache_file_name
+    if not source_cache_file.exists():
+        raise FileNotFoundError(f"cache file is missing: {source_cache_file}")
+    payload_dir = package_dir / f"{footage}.analysis-cache"
+    caches_dir = payload_dir / "caches"
+    caches_dir.mkdir(parents=True)
+    shutil.copy2(source_cache_file, caches_dir / cache_file_name)
+    copied = [str((caches_dir / cache_file_name).relative_to(package_dir))]
+    for sidecar in ("host-analysis-index-v2.json", "host-analysis-v2.json", "host-analysis-render-offset-v2.json"):
+        source_sidecar = cache_root_path / sidecar
+        if source_sidecar.exists():
+            shutil.copy2(source_sidecar, payload_dir / sidecar)
+            copied.append(str((payload_dir / sidecar).relative_to(package_dir)))
+    return {
+        "cachePayloadDirectory": str(payload_dir.relative_to(package_dir)),
+        "cachePayloadFiles": copied,
+        "cachePayloadCacheFile": str((caches_dir / cache_file_name).relative_to(package_dir)),
+    }
+
+
+def analysis_manifest(source_root: ET.Element, asset_id: str, result: dict, cache_root: str | None = None, cache_payload: dict | None = None) -> dict:
     asset = resource_by_id(source_root, asset_id)
     source_clip = first_event_asset_clip(source_root, asset_id)
     media_reps = []
@@ -386,6 +413,9 @@ def analysis_manifest(source_root: ET.Element, asset_id: str, result: dict, cach
         "cacheIdentityShort": short_identity(result.get("cacheIdentity")),
         "cacheFileName": result.get("cacheFileName"),
         "cacheRoot": cache_root,
+        "cachePayloadDirectory": (cache_payload or {}).get("cachePayloadDirectory"),
+        "cachePayloadFiles": (cache_payload or {}).get("cachePayloadFiles") or [],
+        "cachePayloadCacheFile": (cache_payload or {}).get("cachePayloadCacheFile"),
         "preparedMotionPath": prepared_fields,
         "sourceClip": {
             "start": source_clip.attrib.get("start") if source_clip is not None else None,
@@ -419,7 +449,8 @@ def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict]
         tree = ET.ElementTree(build_single_asset_tree(source_root, asset_id, result))
         tree.write(info_path, encoding="utf-8", xml_declaration=True)
         manifest_path = package_dir / f"{footage}.analysis-manifest.json"
-        manifest = analysis_manifest(source_root, asset_id, result, cache_root=cache_root)
+        cache_payload = copy_cache_payload(package_dir, footage, result, cache_root)
+        manifest = analysis_manifest(source_root, asset_id, result, cache_root=cache_root, cache_payload=cache_payload)
         write_json(manifest_path, manifest)
         packages.append({
             "assetId": asset_id,

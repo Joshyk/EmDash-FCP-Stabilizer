@@ -80,7 +80,30 @@ def stabilizer_filter_identities(root: ET.Element) -> list[str]:
     return identities
 
 
-def validate(root: ET.Element, manifest: dict) -> list[str]:
+def cache_prepared_path_present(cache_payload: dict) -> bool:
+    frame_count = len(cache_payload.get("frames") or [])
+    for key in ("pathX", "pathY", "pathRoll"):
+        value = cache_payload.get(key)
+        if not isinstance(value, list) or len(value) != frame_count or frame_count == 0:
+            return False
+    return True
+
+
+def cache_index_entry(manifest_path: Path, manifest: dict, cache_identity: str) -> dict | None:
+    payload_dir = manifest.get("cachePayloadDirectory")
+    if not payload_dir:
+        return None
+    index_path = manifest_path.parent / payload_dir / "host-analysis-index-v2.json"
+    if not index_path.exists():
+        return None
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    for entry in index.get("entries") or []:
+        if (entry.get("cacheIdentity") or "").strip() == cache_identity:
+            return entry
+    return None
+
+
+def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]:
     failures: list[str] = []
     asset_id = manifest.get("assetId")
     cache_identity = (manifest.get("cacheIdentity") or "").strip()
@@ -149,6 +172,29 @@ def validate(root: ET.Element, manifest: dict) -> list[str]:
         failures.append("manifest is missing sample size")
     if not manifest.get("frameCount"):
         failures.append("manifest is missing frame count")
+    payload_cache_file = manifest.get("cachePayloadCacheFile")
+    if not payload_cache_file:
+        failures.append("manifest is missing cache payload file")
+    else:
+        payload_path = (manifest_path.parent / payload_cache_file).resolve()
+        if not payload_path.exists():
+            failures.append(f"cache payload file is missing: {payload_cache_file}")
+        else:
+            try:
+                cache_payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                index_entry = cache_index_entry(manifest_path, manifest, cache_identity)
+                if index_entry is None:
+                    failures.append("cache payload index does not contain manifest identity")
+                elif index_entry.get("cacheFileName") != Path(payload_cache_file).name:
+                    failures.append("cache payload index file name does not match manifest")
+                if cache_payload.get("schemaVersion") != manifest.get("cacheSchemaVersion"):
+                    failures.append("cache payload schema does not match manifest")
+                if len(cache_payload.get("frames") or []) != manifest.get("frameCount"):
+                    failures.append("cache payload frame count does not match manifest")
+                if not cache_prepared_path_present(cache_payload):
+                    failures.append("cache payload does not confirm prepared motion path")
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"cache payload is unreadable: {exc}")
 
     return sorted(set(failures))
 
@@ -159,7 +205,7 @@ def main(argv: Iterable[str]) -> int:
         info_path, package_path = resolve_info_path(args.fcpxml)
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
         root = ET.parse(info_path).getroot()
-        failures = validate(root, manifest)
+        failures = validate(root, manifest, args.manifest)
         payload = {
             "schemaVersion": SCHEMA_VERSION,
             "status": "pass" if not failures else "fail",
