@@ -520,6 +520,10 @@ async function runAnalyzer(body, progress, forcedJobId) {
   const analysis = await runJsonProcess(PYTHON, analysisArgs, { jobId: id, onStderr: progressLineHandler(id) });
   const analysisPath = path.join(dir, "analysis.json");
   await fsp.writeFile(analysisPath, JSON.stringify(analysis, null, 2), "utf8");
+  if (!analysis.cacheRoot) {
+    throw new Error("analyzer did not return a normalized cache root");
+  }
+  const analysisCacheRoot = analysis.cacheRoot;
 
   progress("building", "Building analyzed-footage-only Stabilizer FCPXMLD import package.");
   assertNotCancelled(id);
@@ -532,7 +536,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     "--output-dir",
     importsDir,
     "--cache-root",
-    cacheRoot,
+    analysisCacheRoot,
     "--only-analyzed-assets",
     "--per-footage-packages",
   ], { jobId: id });
@@ -579,7 +583,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     status: "ok",
     jobId: id,
     sourcePath,
-    cacheRoot: analysis.cacheRoot,
+    cacheRoot: analysisCacheRoot,
     importsDir,
     analysisPath,
     resultCount: (analysis.results || []).length,
