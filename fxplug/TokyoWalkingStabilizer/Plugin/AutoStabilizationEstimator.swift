@@ -577,6 +577,10 @@ enum AutoStabilizationEstimator {
     private static let footstepSurroundingNoiseMultiplier: Float = 1.10
     private static let footstepSurroundingNoiseFloorCapScale: Float = 0.45
     private static let footstepFullResponseScale: Float = 0.65
+    private static let footstepConfidenceStabilityWindowSeconds = 0.18
+    private static let footstepConfidenceCenterBlend: Float = 0.65
+    private static let footstepPersistentSignWindowStartSeconds = 0.055
+    private static let footstepPersistentSignWindowEndSeconds = 0.22
     private static let strideWobbleWindowSeconds = 2.0
     private static let strideWobbleFullScalePixels: Float = 0.75
     private static let strideWobbleFullScaleDegrees: Float = 0.16
@@ -3904,7 +3908,15 @@ enum AutoStabilizationEstimator {
             fullImpulseScale: fullImpulseScale
         )
         guard interpolation.upperIndex != interpolation.lowerIndex else {
-            return lowerConfidence
+            return stableFootstepFrameConfidence(
+                values: values,
+                baselineValues: baselineValues,
+                frames: frames,
+                centerTime: frames.indices.contains(interpolation.lowerIndex) ? frames[interpolation.lowerIndex].time : 0.0,
+                instantConfidence: lowerConfidence,
+                trackingConfidence: trackingConfidence,
+                fullImpulseScale: fullImpulseScale
+            )
         }
         let upperConfidence = footstepFrameConfidenceAtIndex(
             values: values,
@@ -3914,7 +3926,71 @@ enum AutoStabilizationEstimator {
             trackingConfidence: trackingConfidence,
             fullImpulseScale: fullImpulseScale
         )
-        return lowerConfidence + ((upperConfidence - lowerConfidence) * interpolation.fraction)
+        let instantConfidence = lowerConfidence + ((upperConfidence - lowerConfidence) * interpolation.fraction)
+        let lowerTime = frames.indices.contains(interpolation.lowerIndex) ? frames[interpolation.lowerIndex].time : 0.0
+        let upperTime = frames.indices.contains(interpolation.upperIndex) ? frames[interpolation.upperIndex].time : lowerTime
+        let centerTime = lowerTime + ((upperTime - lowerTime) * Double(interpolation.fraction))
+        return stableFootstepFrameConfidence(
+            values: values,
+            baselineValues: baselineValues,
+            frames: frames,
+            centerTime: centerTime,
+            instantConfidence: instantConfidence,
+            trackingConfidence: trackingConfidence,
+            fullImpulseScale: fullImpulseScale
+        )
+    }
+
+    private static func stableFootstepFrameConfidence(
+        values: [Float],
+        baselineValues: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        centerTime: Double,
+        instantConfidence: Float,
+        trackingConfidence: Float,
+        fullImpulseScale: Float
+    ) -> Float {
+        guard centerTime.isFinite, !frames.isEmpty else {
+            return instantConfidence
+        }
+        let halfWindow = max(0.0, footstepConfidenceStabilityWindowSeconds * 0.5)
+        let indices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindow)
+        guard !indices.isEmpty else {
+            return instantConfidence
+        }
+        let sigma = max(1e-6, halfWindow * 0.55)
+        var weightedTotal: Float = 0.0
+        var totalWeight: Float = 0.0
+        for index in indices {
+            guard frames.indices.contains(index) else {
+                continue
+            }
+            let offset = (frames[index].time - centerTime) / sigma
+            let weight = Float(Darwin.exp(-0.5 * offset * offset))
+            guard weight > 0.0001 else {
+                continue
+            }
+            let confidence = footstepFrameConfidenceAtIndex(
+                values: values,
+                baselineValues: baselineValues,
+                frames: frames,
+                index: index,
+                trackingConfidence: trackingConfidence,
+                fullImpulseScale: fullImpulseScale
+            )
+            weightedTotal += confidence * weight
+            totalWeight += weight
+        }
+        guard totalWeight > Float.ulpOfOne else {
+            return instantConfidence
+        }
+        let localConfidence = weightedTotal / totalWeight
+        let centerBlend = clamp(footstepConfidenceCenterBlend, min: 0.0, max: 1.0)
+        return clamp(
+            (instantConfidence * centerBlend) + (localConfidence * (1.0 - centerBlend)),
+            min: 0.0,
+            max: 1.0
+        )
     }
 
     private static func footstepFrameConfidenceAtIndex(
@@ -3956,7 +4032,76 @@ enum AutoStabilizationEstimator {
             start: noiseFloor,
             full: max(noiseFloor + Float.ulpOfOne, fullImpulseScale * footstepFullResponseScale)
         )
-        return clamp(trackingConfidence * supportQuality * impulseQuality, min: 0.0, max: 1.0)
+        let isolationQuality = footstepImpulseIsolationQuality(
+            values: values,
+            baselineValues: baselineValues,
+            frames: frames,
+            index: index,
+            impulse: values[index] - baselineValues[index],
+            fullImpulseScale: fullImpulseScale
+        )
+        return clamp(trackingConfidence * supportQuality * impulseQuality * isolationQuality, min: 0.0, max: 1.0)
+    }
+
+    private static func footstepImpulseIsolationQuality(
+        values: [Float],
+        baselineValues: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        index: Int,
+        impulse: Float,
+        fullImpulseScale: Float
+    ) -> Float {
+        guard frames.indices.contains(index), values.indices.contains(index), baselineValues.values.indices.contains(index) else {
+            return 1.0
+        }
+        let impulseMagnitude = abs(impulse)
+        guard impulseMagnitude > max(fullImpulseScale * footstepNoiseFloorScale, Float.ulpOfOne) else {
+            return 1.0
+        }
+        let centerTime = frames[index].time
+        let outerIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: centerTime,
+            radiusSeconds: footstepPersistentSignWindowEndSeconds
+        )
+        let impulseSign: Float = impulse >= 0.0 ? 1.0 : -1.0
+        var sameSignEnergy: Float = 0.0
+        var totalEnergy: Float = 0.0
+        var count: Float = 0.0
+        for candidateIndex in outerIndices {
+            guard candidateIndex != index,
+                  frames.indices.contains(candidateIndex),
+                  values.indices.contains(candidateIndex),
+                  baselineValues.values.indices.contains(candidateIndex)
+            else {
+                continue
+            }
+            let distance = abs(frames[candidateIndex].time - centerTime)
+            guard distance >= footstepPersistentSignWindowStartSeconds,
+                  distance <= footstepPersistentSignWindowEndSeconds + timeWindowSelectionEpsilon
+            else {
+                continue
+            }
+            let candidateImpulse = values[candidateIndex] - baselineValues[candidateIndex]
+            let energy = abs(candidateImpulse)
+            totalEnergy += energy
+            count += 1.0
+            if candidateImpulse * impulseSign > 0.0 {
+                sameSignEnergy += energy
+            }
+        }
+        guard count >= 2.0, totalEnergy > Float.ulpOfOne else {
+            return 1.0
+        }
+        let sameSignRatio = sameSignEnergy / totalEnergy
+        let averageSameSignEnergy = sameSignEnergy / count
+        let persistentSign = confidenceRamp(sameSignRatio, start: 0.45, full: 0.85)
+        let persistentMagnitude = confidenceRamp(
+            averageSameSignEnergy,
+            start: impulseMagnitude * 0.18,
+            full: max((impulseMagnitude * 0.55), fullImpulseScale * 0.20)
+        )
+        return clamp(1.0 - (0.42 * persistentSign * persistentMagnitude), min: 0.58, max: 1.0)
     }
 
     private static func confidenceRamp(_ value: Float, start: Float, full: Float) -> Float {
