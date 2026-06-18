@@ -24,10 +24,28 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument(
         "--event-root",
         type=Path,
-        required=True,
+        required=False,
         help="FCP Event directory inside the .fcpbundle, for example .../Library.fcpbundle/Event Name",
     )
     return parser.parse_args(argv)
+
+
+def infer_event_root(manifest: dict) -> Path:
+    media_path_value = manifest.get("mediaPath")
+    if not media_path_value:
+        raise ValueError("manifest is missing mediaPath; pass --event-root explicitly")
+    media_path = Path(media_path_value).expanduser().resolve()
+    bundle_root = None
+    for parent in media_path.parents:
+        if parent.suffix == ".fcpbundle":
+            bundle_root = parent
+            break
+    if bundle_root is None:
+        raise ValueError("mediaPath is not inside an .fcpbundle; pass --event-root explicitly")
+    relative_parts = media_path.relative_to(bundle_root).parts
+    if len(relative_parts) < 2:
+        raise ValueError("mediaPath does not include an Event directory inside the .fcpbundle")
+    return bundle_root / relative_parts[0]
 
 
 def main(argv: Iterable[str]) -> int:
@@ -63,7 +81,7 @@ def main(argv: Iterable[str]) -> int:
         if index_entry.get("cacheFileName") != source_cache_file.name:
             raise ValueError("cache payload index file name does not match manifest")
 
-        event_root = args.event_root.resolve()
+        event_root = args.event_root.expanduser().resolve() if args.event_root else infer_event_root(manifest)
         if not event_root.exists() or not event_root.is_dir():
             raise FileNotFoundError(f"FCP Event root is missing: {event_root}")
         cache_root = event_root / "Analysis Files" / "TokyoWalkingStabilizerHostAnalysis"

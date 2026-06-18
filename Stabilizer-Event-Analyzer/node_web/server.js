@@ -613,7 +613,35 @@ async function runAnalyzer(body, progress, forcedJobId) {
     throw error;
   }
 
-  const summary = batchSummary(analysis, build, validations);
+  progress("installing-cache", "Installing package cache payload(s) into source Event cache root.");
+  assertNotCancelled(id);
+  const eventCacheInstallations = [];
+  for (const pkg of packages) {
+    try {
+      const installation = await runJsonProcess(PYTHON, [
+        scriptPath("install_stabilizer_package_cache.py"),
+        "--manifest",
+        pkg.manifestPath,
+      ], { jobId: id });
+      eventCacheInstallations.push({ ...installation, packageDirectory: pkg.packageDirectory, outputPackage: pkg.outputPackage });
+    } catch (error) {
+      eventCacheInstallations.push({
+        status: "error",
+        error: error.message,
+        packageDirectory: pkg.packageDirectory,
+        outputPackage: pkg.outputPackage,
+      });
+    }
+  }
+  const installFailures = eventCacheInstallations.filter((item) => item.status !== "ok");
+  if (installFailures.length) {
+    const firstFailure = installFailures[0];
+    const error = new Error(`Event cache install failed for ${path.basename(firstFailure.packageDirectory || firstFailure.outputPackage || "package")}: ${firstFailure.error || "install failed"}`);
+    error.eventCacheInstallations = eventCacheInstallations;
+    throw error;
+  }
+
+  const summary = batchSummary(analysis, build, validations, eventCacheInstallations);
 
   return {
     status: "ok",
@@ -627,6 +655,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     skipped: analysis.skipped || [],
     packages,
     validations,
+    eventCacheInstallations,
     summary,
     outputPackage: build.outputPackage,
     outputPackages: packages.map((pkg) => pkg.outputPackage),
@@ -637,19 +666,27 @@ async function runAnalyzer(body, progress, forcedJobId) {
   };
 }
 
-function batchSummary(analysis, build, validations) {
+function batchSummary(analysis, build, validations, eventCacheInstallations = []) {
   const results = Array.isArray(analysis.results) ? analysis.results : [];
   const skipped = Array.isArray(analysis.skipped) ? analysis.skipped : [];
   const packages = Array.isArray(build.packages) ? build.packages : [];
   const validationPass = validations.filter((item) => item.status === "pass" && item.importReady === true).length;
   const validationFail = Math.max(0, validations.length - validationPass);
+  const eventCacheInstallPass = eventCacheInstallations.filter((item) => item.status === "ok").length;
+  const eventCacheInstallFail = Math.max(0, eventCacheInstallations.length - eventCacheInstallPass);
   return {
     analyzedSuccessCount: results.length,
     analyzedFailureCount: skipped.length,
     packageCreatedCount: packages.length,
     validationPassCount: validationPass,
     validationFailCount: validationFail,
-    fcpImportReady: packages.length > 0 && validationFail === 0 && validationPass === packages.length,
+    eventCacheInstallPassCount: eventCacheInstallPass,
+    eventCacheInstallFailCount: eventCacheInstallFail,
+    fcpImportReady: packages.length > 0
+      && validationFail === 0
+      && validationPass === packages.length
+      && eventCacheInstallFail === 0
+      && eventCacheInstallPass === packages.length,
     failedClips: [
       ...skipped.map((reason) => ({ reason })),
       ...validations
@@ -658,17 +695,30 @@ function batchSummary(analysis, build, validations) {
           packagePath: item.packageDirectory || item.outputPackage,
           reason: (item.failures || [item.error || "validation failed"])[0],
         })),
+      ...eventCacheInstallations
+        .filter((item) => item.status !== "ok")
+        .map((item) => ({
+          packagePath: item.packageDirectory || item.outputPackage,
+          reason: item.error || "Event cache install failed",
+        })),
     ],
-    packages: packages.map((pkg) => ({
-      packagePath: pkg.packageDirectory,
-      fcpxmldPath: pkg.outputPackage,
-      sampleScalePercent: pkg.sampleScalePercent,
-      sampleWidth: pkg.sampleWidth,
-      sampleHeight: pkg.sampleHeight,
-      cacheSchemaVersion: pkg.cacheSchemaVersion,
-      cacheIdentityShort: pkg.cacheIdentityShort,
-      importReady: validations.some((item) => item.outputPackage === pkg.outputPackage && item.importReady === true),
-    })),
+    packages: packages.map((pkg) => {
+      const installation = eventCacheInstallations.find((item) => item.outputPackage === pkg.outputPackage);
+      const validationReady = validations.some((item) => item.outputPackage === pkg.outputPackage && item.importReady === true);
+      const eventCacheInstalled = installation ? installation.status === "ok" : false;
+      return {
+        packagePath: pkg.packageDirectory,
+        fcpxmldPath: pkg.outputPackage,
+        sampleScalePercent: pkg.sampleScalePercent,
+        sampleWidth: pkg.sampleWidth,
+        sampleHeight: pkg.sampleHeight,
+        cacheSchemaVersion: pkg.cacheSchemaVersion,
+        cacheIdentityShort: pkg.cacheIdentityShort,
+        eventCacheInstalled,
+        eventCacheRoot: installation && installation.cacheRoot,
+        importReady: validationReady && eventCacheInstalled,
+      };
+    }),
   };
 }
 

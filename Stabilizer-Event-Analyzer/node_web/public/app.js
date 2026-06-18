@@ -124,6 +124,7 @@ function renderBatchSummary(result) {
     ["Analyzed", `${summary.analyzedSuccessCount || 0} ok / ${summary.analyzedFailureCount || 0} failed`],
     ["Packages", `${summary.packageCreatedCount || 0}`],
     ["Validation", `${summary.validationPassCount || 0} pass / ${summary.validationFailCount || 0} fail`],
+    ["Event Cache", `${summary.eventCacheInstallPassCount || 0} installed / ${summary.eventCacheInstallFailCount || 0} fail`],
   ];
   for (const [label, value] of countItems) {
     const item = document.createElement("div");
@@ -143,9 +144,10 @@ function renderBatchSummary(result) {
       row.className = "package-item";
       const sample = pkg.sampleScalePercent ? `${pkg.sampleScalePercent}%` : "?";
       const pixels = pkg.sampleWidth && pkg.sampleHeight ? `${pkg.sampleWidth}x${pkg.sampleHeight}` : "?";
+      const cacheInstall = pkg.eventCacheInstalled ? "event cache installed" : "event cache pending";
       row.innerHTML = "<strong></strong><span></span><code></code>";
       row.querySelector("strong").textContent = pkg.importReady ? "Ready" : "Blocked";
-      row.querySelector("span").textContent = `sample ${sample} (${pixels}) | schema ${pkg.cacheSchemaVersion || "?"} | ${pkg.cacheIdentityShort || "no identity"}`;
+      row.querySelector("span").textContent = `sample ${sample} (${pixels}) | schema ${pkg.cacheSchemaVersion || "?"} | ${pkg.cacheIdentityShort || "no identity"} | ${cacheInstall}`;
       row.querySelector("code").textContent = pkg.packagePath || pkg.fcpxmldPath || "";
       list.appendChild(row);
     }

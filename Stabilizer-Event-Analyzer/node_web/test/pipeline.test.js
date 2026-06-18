@@ -615,6 +615,43 @@ test("validate_stabilizer_fcpxml_import passes generated per-footage package", (
   assert.equal(fs.existsSync(pkg.validationPath), true);
 });
 
+test("install_stabilizer_package_cache infers Event root from manifest mediaPath", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-test-"));
+  const eventRoot = path.join(tmp, "Library.fcpbundle", "Event A");
+  fs.mkdirSync(path.join(eventRoot, "Original Media"), { recursive: true });
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  analysis.mediaPath = path.join(eventRoot, "Original Media", "P1000307.mov");
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const install = run("python3", [
+    "scripts/install_stabilizer_package_cache.py",
+    "--manifest",
+    pkg.manifestPath,
+  ]);
+  assert.equal(install.status, "ok");
+  const resolvedEventRoot = fs.realpathSync(eventRoot);
+  assert.equal(install.eventRoot, resolvedEventRoot);
+  assert.equal(install.cacheRoot, path.join(resolvedEventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"));
+  assert.equal(fs.existsSync(path.join(install.cacheRoot, "caches", analysis.cacheFileName)), true);
+});
+
 test("validate_stabilizer_fcpxml_import fails cache identity mismatch before FCP import", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-fail-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
