@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.172"
+private let tokyoWalkingStabilizerVersion = "0.3.173"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1525,17 +1525,30 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputSize: outputSize,
             masterStrength: masterStrength
         )
+        let transitionDurationSeconds = autoCropTransitionDurationSeconds(transitionDuration)
         let transitionSamples = autoCropTransformSamples(
             preparedAnalysis: preparedAnalysis,
             startSeconds: renderSeconds,
-            durationSeconds: autoCropTransitionDurationSeconds(transitionDuration),
+            durationSeconds: transitionDurationSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             currentTransform: currentTransform
         )
+        let releaseSamples = autoCropReleaseTransformSamples(
+            preparedAnalysis: preparedAnalysis,
+            startSeconds: renderSeconds,
+            durationSeconds: transitionDurationSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        )
         let framingTargets = autoCropFramingTargets(
             from: transitionSamples,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        ) + autoCropFramingTargets(
+            from: releaseSamples,
             outputSize: outputSize,
             masterStrength: masterStrength
         )
@@ -1575,7 +1588,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func smoothStep(_ progress: Float) -> Float {
         let t = min(max(progress, 0.0), 1.0)
-        return t * t * (3.0 - (2.0 * t))
+        return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
     private static func autoCropTransitionScale(
@@ -1657,6 +1670,53 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 leadProgress: 1.0
             )
         )
+        return samples
+    }
+
+    private static func autoCropReleaseTransformSamples(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        startSeconds: Double,
+        durationSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> [AutoCropTransitionSample] {
+        guard durationSeconds > 1e-6,
+              let firstTime = preparedAnalysis.frames.first?.time,
+              let lastTime = preparedAnalysis.frames.last?.time
+        else {
+            return []
+        }
+
+        let sampleCount = 17
+        var samples: [AutoCropTransitionSample] = []
+
+        for sampleIndex in 1..<sampleCount {
+            let fraction = Double(sampleIndex) / Double(max(1, sampleCount - 1))
+            let offset = fraction * durationSeconds
+            let sampleSeconds = startSeconds - offset
+            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                continue
+            }
+            let weight = Float(1.0 - (fraction * 0.65))
+            guard weight > 0.0001 else {
+                continue
+            }
+            samples.append(
+                AutoCropTransitionSample(
+                    transform: AutoStabilizationEstimator.autoCropWindowEstimate(
+                        preparedAnalysis: preparedAnalysis,
+                        renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
+                        outputSize: outputSize,
+                        panSmoothSeconds: panSmoothSeconds,
+                        strengths: strengths
+                    ),
+                    weight: weight,
+                    leadProgress: Float(1.0 - fraction)
+                )
+            )
+        }
+
         return samples
     }
 

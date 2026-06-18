@@ -140,8 +140,10 @@ or black. New effect instances default that menu to `Black Outside`.
 `Auto Crop Transition Duration` controls the unified zoom and framing transition.
 Longer values look that many seconds ahead and start both zoom and position
 adjustments before a future safe-crop demand reaches the current frame, so
-steep turns are framed more gradually. With `Remove Black Edges` on, the render
-path still clamps zoom to the current frame's required safe crop so
+steep turns are framed more gradually. Recent high zoom demands are also kept
+in the transition window and released with the same S-curve so zoom-out and
+position return do not snap back immediately. With `Remove Black Edges` on, the
+render path still clamps zoom to the current frame's required safe crop so
 outside-source black is not exposed during the transition.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction

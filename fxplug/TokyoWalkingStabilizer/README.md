@@ -240,9 +240,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   then decides whether outside-source pixels are stretched or black.
 - `Auto Crop Transition Duration`: default `5` seconds, range `0...30` seconds. This is the
   actual S-curve transition time for unified zoom and position framing. Longer values begin
-  the crop adjustment earlier and make the visible framing change slower. With `Remove Black
-  Edges` on, final zoom is still clamped to the current frame's required safe crop so
-  outside-source black is not exposed during the transition.
+  the crop adjustment earlier, retain recent high zoom demands while releasing, and make the
+  visible framing change slower. With `Remove Black Edges` on, final zoom is still clamped to
+  the current frame's required safe crop so outside-source black is not exposed during the
+  transition.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.
