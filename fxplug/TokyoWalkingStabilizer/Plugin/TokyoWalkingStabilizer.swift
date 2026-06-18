@@ -171,6 +171,32 @@ private struct AutoCropFramingCacheKey: Hashable {
     let currentTransform: AutoCropTransformSignature
 }
 
+private struct AutoCropEstimateCacheKey: Hashable {
+    let cacheIdentity: String?
+    let analysisRevision: UInt64
+    let sampleSeconds: UInt64
+    let outputWidth: Int32
+    let outputHeight: Int32
+    let analysisFrameCount: Int
+    let analysisFirstTime: UInt64
+    let analysisMiddleTime: UInt64
+    let analysisLastTime: UInt64
+    let analysisSampleWidth: Int32
+    let analysisSampleHeight: Int32
+    let analysisFirstFingerprint: String
+    let analysisMiddleFingerprint: String
+    let analysisLastFingerprint: String
+    let panSmoothSeconds: UInt64
+    let microJitterX: UInt64
+    let microJitterY: UInt64
+    let microJitterRotation: UInt64
+    let strideWobbleX: UInt64
+    let strideWobbleY: UInt64
+    let strideWobbleRotation: UInt64
+    let panStabilizationStrength: UInt64
+    let farFieldWarp: UInt64
+}
+
 private struct StabilizerPluginState {
     var strength: Double
     var microJitterXStrength: Double
@@ -512,6 +538,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
     private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
     private static let autoCropFramingCacheLimit = 32
+    private static let autoCropEstimateCacheLock = NSLock()
+    private static var autoCropEstimateCache: [AutoCropEstimateCacheKey: StabilizerAutoTransform] = [:]
+    private static var autoCropEstimateCacheOrder: [AutoCropEstimateCacheKey] = []
+    private static let autoCropEstimateCacheLimit = 384
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -1341,14 +1371,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
 
         autoCropFramingCacheLock.lock()
-        defer { autoCropFramingCacheLock.unlock() }
-
         if let cachedFraming = autoCropFramingCache[key] {
+            autoCropFramingCacheLock.unlock()
             return cachedFraming
         }
+        autoCropFramingCacheLock.unlock()
 
-        // Keep the first tile miss serialized so parallel FxPlug tile renders do not all
-        // repeat the same expensive window sampling and scale search for one frame.
         let framing = autoCropFraming(
             preparedAnalysis: preparedAnalysis,
             renderTime: renderTime,
@@ -1360,8 +1388,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             zoomSpeed: zoomSpeed,
             zoomSmoothness: zoomSmoothness,
             positionSpeed: positionSpeed,
-            positionSmoothness: positionSmoothness
+            positionSmoothness: positionSmoothness,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
         )
+
+        autoCropFramingCacheLock.lock()
+        defer { autoCropFramingCacheLock.unlock() }
+        if let cachedFraming = autoCropFramingCache[key] {
+            return cachedFraming
+        }
         autoCropFramingCache[key] = framing
         autoCropFramingCacheOrder.append(key)
         while autoCropFramingCacheOrder.count > autoCropFramingCacheLimit {
@@ -1382,7 +1418,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         zoomSpeed: Double,
         zoomSmoothness: Double,
         positionSpeed: Double,
-        positionSmoothness: Double
+        positionSmoothness: Double,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
     ) -> AutoCropFraming {
         guard masterStrength > 0.0001,
               outputSize.x > 1.0,
@@ -1403,7 +1441,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
-            currentTransform: currentTransform
+            currentTransform: currentTransform,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
         )
         let slowPositionPixels = autoCropPositionPixels(from: positionSamples, masterStrength: masterStrength)
         let positionPixels = blackSafeAutoCropPosition(
@@ -1420,7 +1460,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
-            currentTransform: currentTransform
+            currentTransform: currentTransform,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
         )
         let scale = zoomSamples.reduce(Float(1.0)) { partial, sample in
             return max(
@@ -1453,7 +1495,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         outputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
-        currentTransform: StabilizerAutoTransform
+        currentTransform: StabilizerAutoTransform,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
     ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
         guard windowSeconds > 1e-6,
               let firstTime = preparedAnalysis.frames.first?.time,
@@ -1484,12 +1528,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             if abs(offset) <= 1e-6 {
                 transform = currentTransform
             } else {
-                transform = AutoStabilizationEstimator.autoCropWindowEstimate(
+                transform = cachedAutoCropWindowEstimate(
                     preparedAnalysis: preparedAnalysis,
-                    renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
+                    sampleSeconds: sampleSeconds,
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths
+                    strengths: strengths,
+                    analysisRevision: analysisRevision,
+                    cacheIdentity: cacheIdentity
                 )
             }
             samples.append((transform, weight))
@@ -1500,6 +1546,78 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         samples.append((currentTransform, 1.0))
         return samples
+    }
+
+    private static func cachedAutoCropWindowEstimate(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        sampleSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> StabilizerAutoTransform {
+        guard sampleSeconds.isFinite,
+              let firstFrame = preparedAnalysis.frames.first,
+              let lastFrame = preparedAnalysis.frames.last
+        else {
+            return .identity
+        }
+
+        let middleFrame = preparedAnalysis.frames[preparedAnalysis.frames.count / 2]
+        let key = AutoCropEstimateCacheKey(
+            cacheIdentity: cacheIdentity,
+            analysisRevision: analysisRevision,
+            sampleSeconds: sampleSeconds.bitPattern,
+            outputWidth: Int32(clamping: Int(outputSize.x.rounded())),
+            outputHeight: Int32(clamping: Int(outputSize.y.rounded())),
+            analysisFrameCount: preparedAnalysis.frames.count,
+            analysisFirstTime: firstFrame.time.bitPattern,
+            analysisMiddleTime: middleFrame.time.bitPattern,
+            analysisLastTime: lastFrame.time.bitPattern,
+            analysisSampleWidth: Int32(clamping: firstFrame.sampleWidth),
+            analysisSampleHeight: Int32(clamping: firstFrame.sampleHeight),
+            analysisFirstFingerprint: firstFrame.fingerprint,
+            analysisMiddleFingerprint: middleFrame.fingerprint,
+            analysisLastFingerprint: lastFrame.fingerprint,
+            panSmoothSeconds: panSmoothSeconds.bitPattern,
+            microJitterX: strengths.microJitterX.bitPattern,
+            microJitterY: strengths.microJitterY.bitPattern,
+            microJitterRotation: strengths.microJitterRotation.bitPattern,
+            strideWobbleX: strengths.strideWobbleX.bitPattern,
+            strideWobbleY: strengths.strideWobbleY.bitPattern,
+            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+            farFieldWarp: strengths.farFieldWarp.bitPattern
+        )
+
+        autoCropEstimateCacheLock.lock()
+        if let cachedTransform = autoCropEstimateCache[key] {
+            autoCropEstimateCacheLock.unlock()
+            return cachedTransform
+        }
+        autoCropEstimateCacheLock.unlock()
+
+        let transform = AutoStabilizationEstimator.autoCropWindowEstimate(
+            preparedAnalysis: preparedAnalysis,
+            renderTime: CMTime(seconds: sampleSeconds, preferredTimescale: 600),
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        )
+
+        autoCropEstimateCacheLock.lock()
+        defer { autoCropEstimateCacheLock.unlock() }
+        if let cachedTransform = autoCropEstimateCache[key] {
+            return cachedTransform
+        }
+        autoCropEstimateCache[key] = transform
+        autoCropEstimateCacheOrder.append(key)
+        while autoCropEstimateCacheOrder.count > autoCropEstimateCacheLimit {
+            let oldestKey = autoCropEstimateCacheOrder.removeFirst()
+            autoCropEstimateCache.removeValue(forKey: oldestKey)
+        }
+        return transform
     }
 
     private static func autoCropPositionPixels(
@@ -1590,7 +1708,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     ) -> Float {
         var upper: Float = 1.0
         while upper < 128.0,
-              !autoCropScaleContainsSource(
+              !autoCropBoundaryScaleContainsSource(
                   scale: upper,
                   transform: transform,
                   outputSize: outputSize,
@@ -1603,7 +1721,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         var lower: Float = 1.0
         for _ in 0..<18 {
             let midpoint = (lower + upper) * 0.5
-            if autoCropScaleContainsSource(
+            if autoCropBoundaryScaleContainsSource(
                 scale: midpoint,
                 transform: transform,
                 outputSize: outputSize,
@@ -1615,7 +1733,82 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 lower = midpoint
             }
         }
-        return upper
+        if autoCropScaleContainsSource(
+            scale: upper,
+            transform: transform,
+            outputSize: outputSize,
+            masterStrength: masterStrength,
+            cropPositionPixels: cropPositionPixels
+        ) {
+            return upper
+        }
+
+        var fullUpper = max(upper, Float(1.0))
+        while fullUpper < 128.0,
+              !autoCropScaleContainsSource(
+                  scale: fullUpper,
+                  transform: transform,
+                  outputSize: outputSize,
+                  masterStrength: masterStrength,
+                  cropPositionPixels: cropPositionPixels
+              ) {
+            fullUpper *= 2.0
+        }
+
+        var fullLower: Float = 1.0
+        for _ in 0..<18 {
+            let midpoint = (fullLower + fullUpper) * 0.5
+            if autoCropScaleContainsSource(
+                scale: midpoint,
+                transform: transform,
+                outputSize: outputSize,
+                masterStrength: masterStrength,
+                cropPositionPixels: cropPositionPixels
+            ) {
+                fullUpper = midpoint
+            } else {
+                fullLower = midpoint
+            }
+        }
+        return fullUpper
+    }
+
+    private static func autoCropBoundaryScaleContainsSource(
+        scale: Float,
+        transform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float,
+        cropPositionPixels: vector_float2
+    ) -> Bool {
+        let sampleSteps = 6
+        let halfSize = outputSize * 0.5
+        let marginPixels = autoCropMarginPixels(outputSize: outputSize)
+
+        for yIndex in 0...sampleSteps {
+            for xIndex in 0...sampleSteps where xIndex == 0 || xIndex == sampleSteps || yIndex == 0 || yIndex == sampleSteps {
+                let xFraction = (Float(xIndex) / Float(sampleSteps)) - 0.5
+                let yFraction = (Float(yIndex) / Float(sampleSteps)) - 0.5
+                let outputPixel = vector_float2(
+                    xFraction * outputSize.x,
+                    yFraction * outputSize.y
+                )
+                let sourcePixel = autoCropSourcePixel(
+                    outputPixel: outputPixel,
+                    scale: scale,
+                    transform: transform,
+                    outputSize: outputSize,
+                    masterStrength: masterStrength,
+                    cropPositionPixels: cropPositionPixels
+                )
+                if sourcePixel.x < (-halfSize.x + marginPixels)
+                    || sourcePixel.x > (halfSize.x - marginPixels)
+                    || sourcePixel.y < (-halfSize.y + marginPixels)
+                    || sourcePixel.y > (halfSize.y - marginPixels) {
+                    return false
+                }
+            }
+        }
+        return true
     }
 
     private static func autoCropScaleContainsSource(
