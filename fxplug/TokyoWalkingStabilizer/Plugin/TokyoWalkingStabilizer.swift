@@ -51,6 +51,7 @@ private let stabilizerDefaultAutoCropZoomSpeed = 1.0
 private let stabilizerDefaultAutoCropZoomSmoothness = 0.35
 private let stabilizerDefaultAutoCropPositionSpeed = 1.0
 private let stabilizerDefaultAutoCropPositionSmoothness = 0.80
+private let stabilizerAutoCropWindowSampleCount = 3
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
@@ -1506,7 +1507,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return [(currentTransform, 1.0)]
         }
 
-        let sampleCount = 7
+        let sampleCount = max(3, stabilizerAutoCropWindowSampleCount)
         let centerIndex = sampleCount / 2
         let halfWindow = windowSeconds * 0.5
         let sigma = max(1e-6, halfWindow * 0.5)
