@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.168"
+private let tokyoWalkingStabilizerVersion = "0.3.169"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1344,7 +1344,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strengths: strengths,
             currentTransform: currentTransform
         )
-        let slowPositionPixels = autoCropPositionPixels(from: transitionSamples, masterStrength: masterStrength)
+        let currentPositionPixels = currentTransform.macroPixelOffset * masterStrength
+        let slowPositionPixels = autoCropPositionPixels(
+            from: transitionSamples,
+            currentPositionPixels: currentPositionPixels,
+            masterStrength: masterStrength
+        )
         let positionPixels = blackSafeAutoCropPosition(
             preferredPositionPixels: slowPositionPixels,
             transform: currentTransform,
@@ -1360,6 +1365,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         let transitionScale = autoCropTransitionScale(
             from: transitionSamples,
+            currentRequiredScale: currentRequiredScale,
             outputSize: outputSize,
             masterStrength: masterStrength,
             cropPositionPixels: positionPixels
@@ -1375,26 +1381,29 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         min(max(duration, 0.0), 6.0)
     }
 
+    private static func smoothStep(_ progress: Float) -> Float {
+        let t = min(max(progress, 0.0), 1.0)
+        return t * t * (3.0 - (2.0 * t))
+    }
+
     private static func autoCropTransitionScale(
-        from samples: [(transform: StabilizerAutoTransform, weight: Float)],
+        from samples: [(transform: StabilizerAutoTransform, weight: Float, leadProgress: Float)],
+        currentRequiredScale: Float,
         outputSize: vector_float2,
         masterStrength: Float,
         cropPositionPixels: vector_float2
     ) -> Float {
-        let totalWeight = samples.reduce(Float(0.0)) { $0 + $1.weight }
-        guard totalWeight > 1e-6 else {
-            return 1.0
-        }
-        let weightedScale = samples.reduce(Float(0.0)) { partial, sample in
+        samples.reduce(currentRequiredScale) { partial, sample in
             let requiredScale = requiredAutoCropScale(
                 transform: sample.transform,
                 outputSize: outputSize,
                 masterStrength: masterStrength,
                 cropPositionPixels: cropPositionPixels
             )
-            return partial + (requiredScale * sample.weight)
+            let easedProgress = smoothStep(sample.leadProgress)
+            let easedScale = currentRequiredScale + ((requiredScale - currentRequiredScale) * easedProgress)
+            return max(partial, easedScale)
         }
-        return weightedScale / totalWeight
     }
 
     private static func autoCropTransformSamples(
@@ -1405,16 +1414,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         currentTransform: StabilizerAutoTransform
-    ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+    ) -> [(transform: StabilizerAutoTransform, weight: Float, leadProgress: Float)] {
         guard durationSeconds > 1e-6,
               let firstTime = preparedAnalysis.frames.first?.time,
               let lastTime = preparedAnalysis.frames.last?.time
         else {
-            return [(currentTransform, 1.0)]
+            return [(currentTransform, 1.0, 1.0)]
         }
 
-        let sampleCount = 7
-        var samples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+        let sampleCount = 17
+        var samples: [(transform: StabilizerAutoTransform, weight: Float, leadProgress: Float)] = []
 
         for sampleIndex in 0..<sampleCount {
             let fraction = Double(sampleIndex) / Double(max(1, sampleCount - 1))
@@ -1427,6 +1436,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             guard weight > 0.0001 else {
                 continue
             }
+            let leadProgress = Float(1.0 - fraction)
             let transform: StabilizerAutoTransform
             if abs(offset) <= 1e-6 {
                 transform = currentTransform
@@ -1439,28 +1449,32 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     strengths: strengths
                 )
             }
-            samples.append((transform, weight))
+            samples.append((transform, weight, leadProgress))
         }
 
         if samples.contains(where: { abs($0.weight - 1.0) <= 1e-6 }) {
             return samples
         }
-        samples.append((currentTransform, 1.0))
+        samples.append((currentTransform, 1.0, 1.0))
         return samples
     }
 
     private static func autoCropPositionPixels(
-        from samples: [(transform: StabilizerAutoTransform, weight: Float)],
+        from samples: [(transform: StabilizerAutoTransform, weight: Float, leadProgress: Float)],
+        currentPositionPixels: vector_float2,
         masterStrength: Float
     ) -> vector_float2 {
         let totalWeight = samples.reduce(Float(0.0)) { $0 + $1.weight }
         guard totalWeight > 1e-6 else {
-            return vector_float2(0.0, 0.0)
+            return currentPositionPixels
         }
         let weightedPosition = samples.reduce(vector_float2(0.0, 0.0)) { partial, sample in
-            partial + (sample.transform.macroPixelOffset * sample.weight)
+            let targetPosition = sample.transform.macroPixelOffset * masterStrength
+            let easedProgress = smoothStep(sample.leadProgress)
+            let easedPosition = currentPositionPixels + ((targetPosition - currentPositionPixels) * easedProgress)
+            return partial + (easedPosition * sample.weight)
         }
-        return (weightedPosition / totalWeight) * masterStrength
+        return weightedPosition / totalWeight
     }
 
     private static func blackSafeAutoCropPosition(
