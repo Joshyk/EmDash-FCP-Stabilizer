@@ -192,7 +192,7 @@ measure Footstep Jitter against the outer-frame baseline first, then compute Str
 and Turn diagnostics from the footstep-cleaned path.
 The feedback report should print bands in Debug Overlay/render order (`FJIT`, `SWOB`,
 `WARP`, `TURN`) and choose the top remaining band separately. Its `--turn-window` option should
-match the Inspector `Turn Detection Window` when that UI value is not the default `6.0`.
+match the Inspector `Turn Detection Window` when that UI value is not the default `3.0`.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,
 reject outlier blocks, and expose low block-confidence states in status/debug output instead
 of silently falling back to a coarse global shift. Walking landscape analysis should

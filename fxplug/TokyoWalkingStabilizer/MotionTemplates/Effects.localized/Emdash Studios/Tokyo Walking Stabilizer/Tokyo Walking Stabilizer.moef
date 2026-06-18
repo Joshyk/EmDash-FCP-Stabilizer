@@ -279,7 +279,7 @@
 				<parameter name="Overall Strength" id="1" flags="12884901904" default="1" value="1"/>
 				<parameter name="Far-field Warp Strength" id="28" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Smoothing Strength" id="23" flags="12884901904" default="1" value="1"/>
-				<parameter name="Turn Detection Window" id="9" flags="12884901904" default="6" value="6"/>
+				<parameter name="Turn Detection Window" id="9" flags="12884901904" default="3" value="3"/>
 				<parameter name="Remove Black Edges" id="41" flags="12884901904" default="1" value="1"/>
 				<parameter name="Auto Crop Transition Duration" id="42" flags="12884901904" default="5" value="5"/>
 				<parameter name="Sample Size" id="19" flags="12884901906" default="0" value="0"/>

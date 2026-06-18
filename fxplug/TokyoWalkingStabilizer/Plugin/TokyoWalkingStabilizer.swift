@@ -46,6 +46,7 @@ private let tokyoWalkingStabilizerVersion = "0.3.171"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
+private let stabilizerDefaultTurnDetectionWindowSeconds = 3.0
 private let stabilizerDefaultAutoCropTransitionDuration = 5.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
@@ -746,7 +747,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Turn Detection Window",
             parameterID: ParameterID.panSmoothSeconds.rawValue,
-            defaultValue: 6.0,
+            defaultValue: stabilizerDefaultTurnDetectionWindowSeconds,
             parameterMin: stabilizerMinimumTurnDetectionWindowSeconds,
             parameterMax: 120.0,
             sliderMin: stabilizerMinimumTurnDetectionWindowSeconds,
@@ -866,7 +867,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotationStrength: 0.2,
             panStabilizationStrength: 1.0,
             farFieldWarpStrength: 1.0,
-            panSmoothSeconds: 6.0,
+            panSmoothSeconds: stabilizerDefaultTurnDetectionWindowSeconds,
             autoCropTransitionDuration: stabilizerDefaultAutoCropTransitionDuration,
             autoCropEnabled: true,
             edgeDisplayMode: StabilizerEdgeDisplayMode.blackOutside.rawValue,
