@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,8 +20,10 @@ import xml.etree.ElementTree as ET
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_PACKAGE = REPO_ROOT / "native_analyzer"
+NATIVE_MAIN = NATIVE_PACKAGE / "Sources" / "StabilizerEventAnalyzer" / "main.swift"
 EXECUTABLE_NAME = "StabilizerEventAnalyzer"
 CACHE_DIR_NAME = "TokyoWalkingStabilizerHostAnalysis"
+KERNEL_SOURCE_MARKER = 'fileprivate static let kernelSource = """'
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -65,6 +69,77 @@ def fresh_built_executables() -> tuple[list[Path], list[Path]]:
         else:
             stale.append(built_executable)
     return fresh, stale
+
+
+def extract_metal_kernel_source() -> str:
+    text = NATIVE_MAIN.read_text(encoding="utf-8")
+    try:
+        start = text.index(KERNEL_SOURCE_MARKER) + len(KERNEL_SOURCE_MARKER)
+        end = text.index('    """', start)
+    except ValueError as exc:
+        raise RuntimeError(f"could not find embedded Metal kernel source in {NATIVE_MAIN}") from exc
+    source = text[start:end]
+    if source.startswith("\n"):
+        source = source[1:]
+    if not source.strip():
+        raise RuntimeError(f"embedded Metal kernel source was empty in {NATIVE_MAIN}")
+    return source
+
+
+def metal_tools() -> tuple[Path, Path]:
+    metal = shutil.which("metal")
+    if not metal:
+        result = subprocess.run(
+            ["xcrun", "-sdk", "macosx", "-f", "metal"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise RuntimeError(f"metal compiler was not found: {result.stderr.strip()}")
+        metal = result.stdout.strip()
+    metal_path = Path(metal)
+    metallib_path = metal_path.with_name("metallib")
+    if not metallib_path.exists():
+        found = shutil.which("metallib")
+        if found:
+            metallib_path = Path(found)
+    if not metallib_path.exists():
+        raise RuntimeError(f"metallib tool was not found next to metal compiler: {metal_path}")
+    return metal_path, metallib_path
+
+
+def run_tool(command: list[str]) -> None:
+    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"{Path(command[0]).name} failed with exit code {result.returncode}: {details}")
+
+
+def precompiled_metallib(progress: bool) -> Path:
+    source = extract_metal_kernel_source()
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+    cache_dir = NATIVE_PACKAGE / ".build" / "stabilizer-analyzer-kernels"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    metal_source_path = cache_dir / f"AnalyzerKernels-{digest}.metal"
+    air_path = cache_dir / f"AnalyzerKernels-{digest}.air"
+    metallib_path = cache_dir / f"AnalyzerKernels-{digest}.metallib"
+    if metallib_path.exists():
+        return metallib_path
+    metal_source_path.write_text(source, encoding="utf-8")
+    metal, metallib = metal_tools()
+    if progress:
+        print(f"precompiling Stabilizer Metal analyzer kernels: {metallib_path}", file=sys.stderr)
+    run_tool([str(metal), "-c", str(metal_source_path), "-o", str(air_path)])
+    run_tool([str(metallib), str(air_path), "-o", str(metallib_path)])
+    return metallib_path
+
+
+def native_environment(metallib_path: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env["STABILIZER_ANALYZER_METALLIB"] = str(metallib_path)
+    return env
 
 
 def swift_command(plan_path: Path, progress: bool) -> list[str]:
@@ -167,8 +242,10 @@ def main(argv: Iterable[str]) -> int:
         with tempfile.TemporaryDirectory(prefix="stabilizer-event-analysis-") as tmp:
             plan_path = Path(tmp) / "plan.json"
             plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+            metallib_path = precompiled_metallib(args.progress)
             process = subprocess.run(
                 swift_command(plan_path, args.progress),
+                env=native_environment(metallib_path),
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=sys.stderr if args.progress else subprocess.PIPE,

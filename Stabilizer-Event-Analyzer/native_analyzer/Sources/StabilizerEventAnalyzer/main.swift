@@ -1380,7 +1380,7 @@ private final class MetalAnalysisSharedState {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw AnalyzerError("Metal analysis device unavailable; Event analysis requires GPU resources")
         }
-        let library = try device.makeLibrary(source: MetalAnalysisContext.kernelSource, options: nil)
+        let library = try Self.loadPrecompiledLibrary(device: device)
         guard let lumaFunction = library.makeFunction(name: "stabilizer_luma_sample"),
               let blurPartialFunction = library.makeFunction(name: "stabilizer_blur_partials"),
               let fingerprintFunction = library.makeFunction(name: "stabilizer_fingerprint"),
@@ -1394,6 +1394,22 @@ private final class MetalAnalysisSharedState {
         self.fingerprintPipelineState = try device.makeComputePipelineState(function: fingerprintFunction)
         self.blockScorePartialPipelineState = try device.makeComputePipelineState(function: blockScorePartialFunction)
         self.blockScoreResolvePipelineState = try device.makeComputePipelineState(function: blockScoreResolveFunction)
+    }
+
+    private static func loadPrecompiledLibrary(device: MTLDevice) throws -> MTLLibrary {
+        let environment = ProcessInfo.processInfo.environment
+        guard let metallibPath = environment["STABILIZER_ANALYZER_METALLIB"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !metallibPath.isEmpty else {
+            throw AnalyzerError("STABILIZER_ANALYZER_METALLIB is required; run Event analysis through analyze_event_assets.py so Metal kernels are precompiled before analyzer startup")
+        }
+        guard FileManager.default.fileExists(atPath: metallibPath) else {
+            throw AnalyzerError("precompiled Metal analyzer library was not found at \(metallibPath)")
+        }
+        do {
+            return try device.makeLibrary(URL: URL(fileURLWithPath: metallibPath))
+        } catch {
+            throw AnalyzerError("could not load precompiled Metal analyzer library at \(metallibPath): \(error.localizedDescription)")
+        }
     }
 }
 
