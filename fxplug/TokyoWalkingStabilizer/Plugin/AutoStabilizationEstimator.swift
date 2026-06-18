@@ -627,6 +627,18 @@ enum AutoStabilizationEstimator {
         let outerWindowSeconds: UInt64
     }
 
+    private struct EstimatedPath {
+        let values: [Float]
+        let overrides: [Int: Float]
+
+        subscript(index: Int) -> Float {
+            guard values.indices.contains(index) else {
+                return 0.0
+            }
+            return overrides[index] ?? values[index]
+        }
+    }
+
     private final class RenderEstimateCache {
         private var outerPredictions: [OuterPredictionCacheKey: Float] = [:]
 
@@ -636,14 +648,15 @@ enum AutoStabilizationEstimator {
             indices: [Int],
             innerWindowSeconds: Double,
             outerWindowSeconds: Double
-        ) -> [Float] {
+        ) -> EstimatedPath {
             let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
             guard !values.isEmpty else {
-                return values
+                return EstimatedPath(values: values, overrides: [:])
             }
-            var predictedValues = values
+            var overrides: [Int: Float] = [:]
+            overrides.reserveCapacity(indices.count)
             for index in indices where values.indices.contains(index) && analysis.frames.indices.contains(index) {
-                predictedValues[index] = outerLinearPrediction(
+                overrides[index] = outerLinearPrediction(
                     kind,
                     analysis: analysis,
                     index: index,
@@ -651,7 +664,31 @@ enum AutoStabilizationEstimator {
                     outerWindowSeconds: outerWindowSeconds
                 )
             }
-            return predictedValues
+            return EstimatedPath(values: values, overrides: overrides)
+        }
+
+        func locallyTimeWeightedAveragePath(
+            _ kind: MotionPathKind,
+            source: EstimatedPath,
+            analysis: StabilizerPreparedAnalysis,
+            targetIndices: [Int],
+            windowSeconds: Double
+        ) -> EstimatedPath {
+            guard !source.values.isEmpty else {
+                return source
+            }
+            var overrides = source.overrides
+            overrides.reserveCapacity(max(overrides.count, targetIndices.count))
+            for index in targetIndices where source.values.indices.contains(index) && analysis.frames.indices.contains(index) {
+                overrides[index] = localTimeWeightedAverage(
+                    kind,
+                    source: source,
+                    analysis: analysis,
+                    index: index,
+                    windowSeconds: windowSeconds
+                )
+            }
+            return EstimatedPath(values: source.values, overrides: overrides)
         }
 
         private func outerLinearPrediction(
@@ -680,6 +717,30 @@ enum AutoStabilizationEstimator {
             ) ?? values[index]
             outerPredictions[key] = prediction
             return prediction
+        }
+
+        private func localTimeWeightedAverage(
+            _ kind: MotionPathKind,
+            source: EstimatedPath,
+            analysis: StabilizerPreparedAnalysis,
+            index: Int,
+            windowSeconds: Double
+        ) -> Float {
+            let centerTime = analysis.frames[index].time
+            let localIndices = AutoStabilizationEstimator.indicesWithinTimeRadius(
+                analysis.frames,
+                centerTime: centerTime,
+                radiusSeconds: max(0.0, windowSeconds * 0.5)
+            )
+            let activeIndices = localIndices.isEmpty ? [index] : localIndices
+            let average = AutoStabilizationEstimator.timeWeightedAverage(
+                source,
+                frames: analysis.frames,
+                indices: activeIndices,
+                centerTime: centerTime,
+                windowSeconds: windowSeconds
+            )
+            return average
         }
     }
 
@@ -855,7 +916,7 @@ enum AutoStabilizationEstimator {
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
-            cache: nil
+            cache: RenderEstimateCache()
         )
     }
 
@@ -865,7 +926,7 @@ enum AutoStabilizationEstimator {
         outputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
-        cache: RenderEstimateCache?
+        cache: RenderEstimateCache
     ) -> StabilizerAutoTransform {
         let frames = analysis.frames
         guard frames.count >= 3 else {
@@ -975,21 +1036,24 @@ enum AutoStabilizationEstimator {
         let footstepCleanXPath = footstepBaselineXPath
         let footstepCleanYPath = footstepBaselineYPath
         let footstepCleanRollPath = footstepBaselineRollPath
-        let strideSmoothedXPath = locallyTimeWeightedAveragePath(
-            footstepCleanXPath,
-            frames: frames,
+        let strideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
+            .footstepX,
+            source: footstepCleanXPath,
+            analysis: analysis,
             targetIndices: sampledIndices,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
-        let strideSmoothedYPath = locallyTimeWeightedAveragePath(
-            footstepCleanYPath,
-            frames: frames,
+        let strideSmoothedYPath = cache.locallyTimeWeightedAveragePath(
+            .footstepY,
+            source: footstepCleanYPath,
+            analysis: analysis,
             targetIndices: sampledIndices,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
-        let strideSmoothedRollPath = locallyTimeWeightedAveragePath(
-            footstepCleanRollPath,
-            frames: frames,
+        let strideSmoothedRollPath = cache.locallyTimeWeightedAveragePath(
+            .footstepRoll,
+            source: footstepCleanRollPath,
+            analysis: analysis,
             targetIndices: sampledIndices,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
@@ -2791,6 +2855,18 @@ enum AutoStabilizationEstimator {
         return lowerValue + ((upperValue - lowerValue) * interpolation.fraction)
     }
 
+    private static func interpolatedValue(_ values: EstimatedPath, using interpolation: FrameInterpolation) -> Float {
+        guard values.values.indices.contains(interpolation.lowerIndex) else {
+            return 0.0
+        }
+        let lowerValue = values[interpolation.lowerIndex]
+        guard values.values.indices.contains(interpolation.upperIndex), interpolation.upperIndex != interpolation.lowerIndex else {
+            return lowerValue
+        }
+        let upperValue = values[interpolation.upperIndex]
+        return lowerValue + ((upperValue - lowerValue) * interpolation.fraction)
+    }
+
     private static func turnSmoothingOffsetLimit(
         outputPixels: Float,
         baseFraction: Float,
@@ -2828,6 +2904,16 @@ enum AutoStabilizationEstimator {
     }
 
     private static func average(_ values: [Float], indices: [Int]) -> Float {
+        guard !indices.isEmpty else {
+            return 0.0
+        }
+        let total = indices.reduce(Float(0.0)) { partial, index in
+            partial + values[index]
+        }
+        return total / Float(indices.count)
+    }
+
+    private static func average(_ values: EstimatedPath, indices: [Int]) -> Float {
         guard !indices.isEmpty else {
             return 0.0
         }
@@ -3016,20 +3102,11 @@ enum AutoStabilizationEstimator {
         indices: [Int],
         innerWindowSeconds: Double,
         outerWindowSeconds: Double,
-        cache: RenderEstimateCache?
-    ) -> [Float] {
-        if let cache {
-            return cache.outerLinearPredictionPath(
-                kind,
-                analysis: analysis,
-                indices: indices,
-                innerWindowSeconds: innerWindowSeconds,
-                outerWindowSeconds: outerWindowSeconds
-            )
-        }
-        return outerLinearPredictionPath(
-            values(for: kind, analysis: analysis),
-            frames: analysis.frames,
+        cache: RenderEstimateCache
+    ) -> EstimatedPath {
+        cache.outerLinearPredictionPath(
+            kind,
+            analysis: analysis,
             indices: indices,
             innerWindowSeconds: innerWindowSeconds,
             outerWindowSeconds: outerWindowSeconds
@@ -3038,7 +3115,7 @@ enum AutoStabilizationEstimator {
 
     private static func farFieldWarpBandValue(
         values: [Float],
-        baselineValues: [Float],
+        baselineValues: EstimatedPath,
         interpolation: FrameInterpolation,
         deadband: Float,
         confidence: Float
@@ -3132,6 +3209,47 @@ enum AutoStabilizationEstimator {
         return weightedTotal / Float(totalWeight)
     }
 
+    private static func timeWeightedAverage(_ values: EstimatedPath, frames: [StabilizerAnalysisFrame], indices: [Int], centerTime: Double, windowSeconds: Double) -> Float {
+        guard !indices.isEmpty else {
+            return 0.0
+        }
+        guard indices.count > 1 else {
+            return values[indices[0]]
+        }
+
+        let sortedIndices = indicesAreStrictlyAscending(indices) ? indices : indices.sorted()
+        let windowStart = centerTime - (windowSeconds * 0.5)
+        let windowEnd = centerTime + (windowSeconds * 0.5)
+        var weightedTotal: Float = 0.0
+        var totalWeight: Double = 0.0
+
+        for (position, index) in sortedIndices.enumerated() {
+            let currentTime = frames[index].time
+            let leftBoundary: Double
+            if position > 0 {
+                leftBoundary = max(windowStart, (frames[sortedIndices[position - 1]].time + currentTime) * 0.5)
+            } else {
+                leftBoundary = windowStart
+            }
+
+            let rightBoundary: Double
+            if position + 1 < sortedIndices.count {
+                rightBoundary = min(windowEnd, (currentTime + frames[sortedIndices[position + 1]].time) * 0.5)
+            } else {
+                rightBoundary = windowEnd
+            }
+
+            let weight = max(0.0, rightBoundary - leftBoundary)
+            weightedTotal += values[index] * Float(weight)
+            totalWeight += weight
+        }
+
+        guard totalWeight > 1e-9 else {
+            return average(values, indices: indices)
+        }
+        return weightedTotal / Float(totalWeight)
+    }
+
     private static func indicesAreStrictlyAscending(_ indices: [Int]) -> Bool {
         guard indices.count > 1 else {
             return true
@@ -3174,6 +3292,80 @@ enum AutoStabilizationEstimator {
 
     private static func timeWeightedMonotonicSCurveValue(
         _ values: [Float],
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        centerTime: Double,
+        windowSeconds: Double
+    ) -> Float? {
+        guard indices.count >= 3 else {
+            return nil
+        }
+        let sortedIndices = indices.sorted()
+        guard let firstIndex = sortedIndices.first, let lastIndex = sortedIndices.last else {
+            return nil
+        }
+
+        var positiveTravel: Float = 0.0
+        var negativeTravel: Float = 0.0
+        for position in 1..<sortedIndices.count {
+            let previousValue = values[sortedIndices[position - 1]]
+            let currentValue = values[sortedIndices[position]]
+            let delta = currentValue - previousValue
+            if delta >= 0.0 {
+                positiveTravel += delta
+            } else {
+                negativeTravel += -delta
+            }
+        }
+
+        let totalTravel = positiveTravel + negativeTravel
+        guard totalTravel > 0.5 else {
+            return nil
+        }
+
+        let endpointDelta = values[lastIndex] - values[firstIndex]
+        let dominantTravel = max(positiveTravel, negativeTravel)
+        let dominantRatio = dominantTravel / max(totalTravel, Float.ulpOfOne)
+        guard dominantRatio >= 0.62 || abs(endpointDelta) >= dominantTravel * 0.35 else {
+            return nil
+        }
+
+        let direction: Float
+        if abs(endpointDelta) >= dominantTravel * 0.2 {
+            direction = endpointDelta >= 0.0 ? 1.0 : -1.0
+        } else {
+            direction = positiveTravel >= negativeTravel ? 1.0 : -1.0
+        }
+
+        let monotonicStart = values[firstIndex] * direction
+        var monotonicEnd = monotonicStart
+        for index in sortedIndices.dropFirst() {
+            monotonicEnd = max(monotonicEnd, values[index] * direction)
+        }
+
+        let monotonicTravel = monotonicEnd - monotonicStart
+        guard monotonicTravel > 0.5 else {
+            return nil
+        }
+
+        let firstTime = frames[firstIndex].time
+        let lastTime = frames[lastIndex].time
+        let windowStart = centerTime - (windowSeconds * 0.5)
+        let windowEnd = centerTime + (windowSeconds * 0.5)
+        let intentStartTime = max(firstTime, windowStart)
+        let intentEndTime = min(lastTime, windowEnd)
+        let duration = intentEndTime - intentStartTime
+        guard duration > 1e-6 else {
+            return nil
+        }
+
+        let normalizedTime = clamp(Float((centerTime - intentStartTime) / duration), min: 0.0, max: 1.0)
+        let progress = smootherStep(normalizedTime)
+        return (monotonicStart + (monotonicTravel * progress)) * direction
+    }
+
+    private static func timeWeightedMonotonicSCurveValue(
+        _ values: EstimatedPath,
         frames: [StabilizerAnalysisFrame],
         indices: [Int],
         centerTime: Double,
@@ -3530,7 +3722,7 @@ enum AutoStabilizationEstimator {
 
     private static func footstepFrameConfidence(
         values: [Float],
-        baselineValues: [Float],
+        baselineValues: EstimatedPath,
         frames: [StabilizerAnalysisFrame],
         interpolation: FrameInterpolation,
         trackingConfidence: Float,
@@ -3560,13 +3752,13 @@ enum AutoStabilizationEstimator {
 
     private static func footstepFrameConfidenceAtIndex(
         values: [Float],
-        baselineValues: [Float],
+        baselineValues: EstimatedPath,
         frames: [StabilizerAnalysisFrame],
         index: Int,
         trackingConfidence: Float,
         fullImpulseScale: Float
     ) -> Float {
-        guard values.indices.contains(index), baselineValues.indices.contains(index) else {
+        guard values.indices.contains(index), baselineValues.values.indices.contains(index) else {
             return 0.0
         }
         let impulse = abs(values[index] - baselineValues[index])
@@ -3575,7 +3767,7 @@ enum AutoStabilizationEstimator {
             frames: frames,
             innerWindowSeconds: footstepImpulseInnerWindowSeconds,
             outerWindowSeconds: footstepImpulseOuterWindowSeconds
-        ).filter { values.indices.contains($0) && baselineValues.indices.contains($0) }
+        ).filter { values.indices.contains($0) && baselineValues.values.indices.contains($0) }
         guard !surroundingIndices.isEmpty else {
             return 0.0
         }
