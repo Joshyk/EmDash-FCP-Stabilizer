@@ -7,13 +7,18 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 17
+private let cacheSchemaVersion = 18
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
 private let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
 private let metalBlurChunkCount = 256
 private let fingerprintChunkCount = 1024
+private let motionPathJerkLimitMultiplier: Float = 4.0
+private let minimumTranslationAccelerationLimit: Float = 0.75
+private let minimumTranslationJerkLimit: Float = 0.5
+private let minimumRotationAccelerationLimit: Float = 0.04
+private let minimumRotationJerkLimit: Float = 0.03
 private let progressOutputIsTerminal = isatty(STDERR_FILENO) == 1
 private let analyzerVideoOutputSettings: [String: Any] = [
     kCVPixelBufferPixelFormatTypeKey as String: [
@@ -1585,16 +1590,17 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         pathY.append(y)
     }
     let zeros = [Float](repeating: 0, count: frames.count)
+    let rawRoll = zeros
     return PreparedAnalysis(
         frames: frames,
         residuals: motions.map(\.residual),
         rollMotion: zeros,
-        pathX: pathX,
-        pathY: pathY,
-        pathRoll: zeros,
+        pathX: jerkLimitedMotionPath(pathX, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+        pathY: jerkLimitedMotionPath(pathY, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+        pathRoll: jerkLimitedMotionPath(rawRoll, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
         footstepPathX: pathX,
         footstepPathY: pathY,
-        footstepPathRoll: zeros,
+        footstepPathRoll: rawRoll,
         pathYaw: zeros,
         pathPitch: zeros,
         pathShearX: zeros,
@@ -1609,6 +1615,83 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         searchRadiusHitCounts: [Int32](repeating: 0, count: frames.count),
         searchRadiusTotalCounts: [Int32](repeating: 3, count: frames.count)
     )
+}
+
+func jerkLimitedMotionPath(_ values: [Float], minimumAcceleration: Float, minimumJerk: Float) -> [Float] {
+    guard values.count >= 4 else {
+        return values
+    }
+
+    var accelerations: [Float] = []
+    accelerations.reserveCapacity(values.count - 2)
+    for index in 2..<values.count {
+        let current = values[index]
+        let previous = values[index - 1]
+        let beforePrevious = values[index - 2]
+        accelerations.append(current - (Float(2.0) * previous) + beforePrevious)
+    }
+    var jerks: [Float] = []
+    jerks.reserveCapacity(max(0, accelerations.count - 1))
+    for index in accelerations.indices.dropFirst() {
+        jerks.append(accelerations[index] - accelerations[index - 1])
+    }
+    let accelerationMedian = median(accelerations.map { abs($0) }) ?? 0.0
+    let jerkMedian = median(jerks.map { abs($0) }) ?? 0.0
+    let accelerationLimit = max(minimumAcceleration, accelerationMedian * motionPathJerkLimitMultiplier)
+    let jerkLimit = max(minimumJerk, jerkMedian * motionPathJerkLimitMultiplier)
+
+    guard accelerationLimit.isFinite, jerkLimit.isFinite, accelerationLimit > 0.0, jerkLimit > 0.0 else {
+        return values
+    }
+
+    var limited = values
+    for index in 1..<(values.count - 1) {
+        let previousAcceleration = index >= 3
+            ? values[index - 1] - (Float(2.0) * values[index - 2]) + values[index - 3]
+            : Float(0.0)
+        let currentAcceleration = values[index + 1] - (Float(2.0) * values[index]) + values[index - 1]
+        let nextAcceleration = index + 2 < values.count
+            ? values[index + 2] - (Float(2.0) * values[index + 1]) + values[index]
+            : Float(0.0)
+        let localJerk = max(abs(currentAcceleration - previousAcceleration), abs(nextAcceleration - currentAcceleration))
+        let accelerationExceeded = abs(currentAcceleration) > accelerationLimit
+        let jerkExceeded = localJerk > jerkLimit
+        guard accelerationExceeded || jerkExceeded else {
+            continue
+        }
+
+        let localLinearPrediction = (values[index - 1] + values[index + 1]) * 0.5
+        let maxCorrection = max(accelerationLimit, jerkLimit)
+        let correction = clamp(
+            localLinearPrediction - values[index],
+            Float(0.0) - maxCorrection,
+            maxCorrection
+        )
+        limited[index] = values[index] + (correction * 0.85)
+    }
+
+    let endError = limited[limited.count - 1] - values[values.count - 1]
+    guard abs(endError) > Float.ulpOfOne else {
+        return limited
+    }
+    let denominator = Float(max(1, limited.count - 1))
+    for index in limited.indices {
+        let progress = Float(index) / denominator
+        limited[index] -= endError * progress
+    }
+    return limited
+}
+
+func median(_ values: [Float]) -> Float? {
+    guard !values.isEmpty else {
+        return nil
+    }
+    let sorted = values.sorted()
+    let middle = sorted.count / 2
+    if sorted.count % 2 == 0 {
+        return (sorted[middle - 1] + sorted[middle]) * 0.5
+    }
+    return sorted[middle]
 }
 
 private struct AnalysisSampleSize {

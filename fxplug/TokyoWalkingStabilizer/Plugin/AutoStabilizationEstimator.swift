@@ -310,8 +310,14 @@ final class StabilizerDownsampleBufferPool {
     }
 }
 
+enum StabilizerAnalysisQualityModel {
+    case fxplugHostAnalysis
+    case eventAnalyzerCache
+}
+
 struct StabilizerPreparedAnalysis {
     let frames: [StabilizerAnalysisFrame]
+    let qualityModel: StabilizerAnalysisQualityModel
     let residuals: [Float]
     let rollMotion: [Float]
     let pathX: [Float]
@@ -547,7 +553,7 @@ enum AutoStabilizationEstimator {
             return 0.0
         }
         if blurAmount > 1.25 {
-            // Native Event Analyzer schema 17 stores this field as a sharpness-style
+            // Native Event Analyzer schema 17+ stores this field as a sharpness-style
             // Metal blur-kernel response, where useful footage is commonly 2-6+.
             return clamp((blurAmount - 1.5) / 3.0, min: 0.0, max: 1.0)
         }
@@ -919,14 +925,16 @@ enum AutoStabilizationEstimator {
             residual: centerResidual,
             blurAmount: centerBlurAmount,
             acceptedBlockCount: acceptedBlockCount,
-            totalBlockCount: totalBlockCount
+            totalBlockCount: totalBlockCount,
+            qualityModel: analysis.qualityModel
         )
         let walkingTrackingConfidence = walkingBandTrackingConfidence(
             motionConfidence: motionConfidence,
             residual: centerResidual,
             blurAmount: centerBlurAmount,
             acceptedBlockCount: acceptedBlockCount,
-            totalBlockCount: totalBlockCount
+            totalBlockCount: totalBlockCount,
+            qualityModel: analysis.qualityModel
         )
         let footstepXConfidence = footstepFrameConfidence(
             values: analysis.footstepPathX,
@@ -957,7 +965,12 @@ enum AutoStabilizationEstimator {
         let strideBandY = footstepCleanYAtRender - strideSmoothY
         let strideBandRoll = footstepCleanRollAtRender - strideSmoothRoll
         let panBandX = strideSmoothX - turnSmoothX
-        let strideTrackingConfidence = residualAdjustedTrackingConfidence(walkingTrackingConfidence, residual: strideResidual, multiplier: 0.6)
+        let strideTrackingConfidence = residualAdjustedTrackingConfidence(
+            walkingTrackingConfidence,
+            residual: strideResidual,
+            multiplier: 0.6,
+            qualityModel: analysis.qualityModel
+        )
         let strideXConfidence = strideWobbleConfidence(
             bandValue: strideBandX,
             trackingConfidence: strideTrackingConfidence,
@@ -974,7 +987,12 @@ enum AutoStabilizationEstimator {
             fullScale: strideWobbleFullScaleDegrees
         )
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-        let turnTrackingConfidence = residualAdjustedTrackingConfidence(trackingConfidence, residual: turnResidual, multiplier: 0.9)
+        let turnTrackingConfidence = residualAdjustedTrackingConfidence(
+            trackingConfidence,
+            residual: turnResidual,
+            multiplier: 0.9,
+            qualityModel: analysis.qualityModel
+        )
         let confidence = turnSmoothingConfidence(
             bandValue: panBandX,
             trackingConfidence: turnTrackingConfidence
@@ -1532,6 +1550,7 @@ enum AutoStabilizationEstimator {
         let rawPathPerspectiveY = cumulative(motions.map(\.perspectiveY))
         return StabilizerPreparedAnalysis(
             frames: sortedFrames.map { $0.withoutRetainedPixels() },
+            qualityModel: .fxplugHostAnalysis,
             residuals: motions.map(\.residual),
             rollMotion: motions.map(\.rollMotion),
             pathX: jerkLimitedMotionPath(rawPathX, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
@@ -3196,7 +3215,8 @@ enum AutoStabilizationEstimator {
                 residual: analysis.residuals[index],
                 blurAmount: analysis.blurAmounts[index],
                 acceptedBlockCount: analysis.acceptedBlockCounts[index],
-                totalBlockCount: analysis.totalBlockCounts[index]
+                totalBlockCount: analysis.totalBlockCounts[index],
+                qualityModel: analysis.qualityModel
             )
         }
         guard let localMedianTrackingConfidence = median(localTrackingValues) else {
@@ -3290,10 +3310,31 @@ enum AutoStabilizationEstimator {
     private static func residualAdjustedTrackingConfidence(
         _ trackingConfidence: Float,
         residual: Float,
-        multiplier: Float
+        multiplier: Float,
+        qualityModel: StabilizerAnalysisQualityModel
     ) -> Float {
-        let residualQuality = clamp(1.0 - (residual * multiplier), min: 0.0, max: 1.0)
+        let residualQuality = residualEvidenceQuality(
+            residual,
+            multiplier: multiplier,
+            qualityModel: qualityModel
+        )
         return clamp(trackingConfidence * residualQuality, min: 0.0, max: 1.0)
+    }
+
+    private static func residualEvidenceQuality(
+        _ residual: Float,
+        multiplier: Float,
+        qualityModel: StabilizerAnalysisQualityModel
+    ) -> Float {
+        guard residual.isFinite else {
+            return 0.0
+        }
+        switch qualityModel {
+        case .fxplugHostAnalysis:
+            return clamp(1.0 - (residual * multiplier), min: 0.0, max: 1.0)
+        case .eventAnalyzerCache:
+            return clamp(1.0 - (residual / 48.0), min: 0.0, max: 1.0)
+        }
     }
 
     private static func frameTrackingConfidence(
@@ -3301,9 +3342,14 @@ enum AutoStabilizationEstimator {
         residual: Float,
         blurAmount: Float,
         acceptedBlockCount: Int32,
-        totalBlockCount: Int32
+        totalBlockCount: Int32,
+        qualityModel: StabilizerAnalysisQualityModel
     ) -> Float {
-        let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
+        let residualQuality = residualEvidenceQuality(
+            residual,
+            multiplier: 0.7,
+            qualityModel: qualityModel
+        )
         let blurQuality = blurEvidenceQuality(blurAmount)
         let blockQuality: Float
         if totalBlockCount > 0 {
@@ -3320,9 +3366,14 @@ enum AutoStabilizationEstimator {
         residual: Float,
         blurAmount: Float,
         acceptedBlockCount: Int32,
-        totalBlockCount: Int32
+        totalBlockCount: Int32,
+        qualityModel: StabilizerAnalysisQualityModel
     ) -> Float {
-        let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
+        let residualQuality = residualEvidenceQuality(
+            residual,
+            multiplier: 0.7,
+            qualityModel: qualityModel
+        )
         let blurQuality = blurEvidenceQuality(blurAmount)
         let blockQuality = walkingBandBlockQuality(acceptedBlockCount: acceptedBlockCount, totalBlockCount: totalBlockCount)
         let combinedEvidence = motionConfidence * residualQuality * blurQuality * blockQuality

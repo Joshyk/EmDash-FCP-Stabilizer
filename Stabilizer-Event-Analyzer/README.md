@@ -37,7 +37,7 @@ analysis. Compressed video samples are decoded through `VTDecompressionSession`
 into Metal-compatible native YUV pixel buffers, preserving 10-bit luma for
 10-bit sources. Luma sampling, blur metric reduction, cache-validation
 fingerprints, and frame-to-frame block motion search run through Metal compute
-kernels. Cache fingerprints use the schema 17 chunked fingerprint algorithm so
+kernels. Cache fingerprints use the schema 18 chunked fingerprint algorithm so
 full-resolution frames do not serialize fingerprint work through one GPU
 thread. If hardware decode is unavailable for a source format, the analyzer
 logs the hardware failure and uses an explicit software-only VideoToolbox decode

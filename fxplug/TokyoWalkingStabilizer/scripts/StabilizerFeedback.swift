@@ -102,9 +102,15 @@ private struct AnalysisFrame {
     let fingerprint: String
 }
 
+private enum AnalysisQualityModel {
+    case fxplugHostAnalysis
+    case eventAnalyzerCache
+}
+
 private struct Analysis {
     let cachePath: String
     let schemaVersion: Int
+    let qualityModel: AnalysisQualityModel
     let rangeStartSeconds: Double
     let rangeDurationSeconds: Double
     let frameDurationSeconds: Double
@@ -172,6 +178,7 @@ private struct Analysis {
 
         self.cachePath = cachePath
         schemaVersion = cache.schemaVersion
+        qualityModel = analysisQualityModel(for: cache)
         rangeStartSeconds = cache.rangeStartSeconds
         rangeDurationSeconds = cache.rangeDurationSeconds
         frameDurationSeconds = cache.frameDurationSeconds
@@ -414,8 +421,46 @@ private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
 private let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
-private let supportedCacheSchemaVersions: Set<Int> = [17]
+private let supportedCacheSchemaVersions: Set<Int> = [17, 18]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
+
+private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
+    if cache.schemaVersion >= 18 {
+        return .eventAnalyzerCache
+    }
+    if cache.schemaVersion == 17, looksLikeLegacyEventAnalyzerCache(cache) {
+        return .eventAnalyzerCache
+    }
+    return .fxplugHostAnalysis
+}
+
+private func looksLikeLegacyEventAnalyzerCache(_ cache: PersistedHostAnalysisCache) -> Bool {
+    let frameCount = cache.frames.count
+    guard frameCount > 0,
+          cache.acceptedBlockCounts?.count == frameCount,
+          cache.totalBlockCounts?.count == frameCount,
+          cache.warpConfidence?.count == frameCount,
+          cache.pathRoll?.count == frameCount,
+          cache.footstepPathRoll?.count == frameCount
+    else {
+        return false
+    }
+    let allThreeBlockCounts = cache.acceptedBlockCounts?.allSatisfy { $0 == 3 } == true
+        && cache.totalBlockCounts?.allSatisfy { $0 == 3 } == true
+    let zeroRollAndWarp = allNearlyZero(cache.pathRoll)
+        && allNearlyZero(cache.footstepPathRoll)
+        && allNearlyZero(cache.warpConfidence)
+    return allThreeBlockCounts && zeroRollAndWarp
+}
+
+private func allNearlyZero(_ values: [Float]?) -> Bool {
+    guard let values, !values.isEmpty else {
+        return false
+    }
+    return values.allSatisfy { value in
+        value.isFinite && abs(value) <= 1e-6
+    }
+}
 
 private func loadAnalysis(path: String) throws -> Analysis {
     let expandedPath = expandPath(path)
@@ -777,7 +822,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         residual: centerResidual,
         blurAmount: analysis.blurAmounts[index],
         acceptedBlockCount: analysis.acceptedBlockCounts[index],
-        totalBlockCount: analysis.totalBlockCounts[index]
+        totalBlockCount: analysis.totalBlockCounts[index],
+        qualityModel: analysis.qualityModel
     )
     let tracking = frameTrackingConfidence(quality)
     let walkingTracking = walkingBandTrackingConfidence(
@@ -785,7 +831,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         residual: centerResidual,
         blurAmount: analysis.blurAmounts[index],
         acceptedBlockCount: analysis.acceptedBlockCounts[index],
-        totalBlockCount: analysis.totalBlockCounts[index]
+        totalBlockCount: analysis.totalBlockCounts[index],
+        qualityModel: analysis.qualityModel
     )
 
     let footstepBaseX = context.footstepCleanXPath[index]
@@ -799,8 +846,18 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
 
     let strideResidual = percentileValue(analysis.residuals, indices: strideIndices, percentile: 0.70)
     let turnResidual = percentileValue(analysis.residuals, indices: turnIndices, percentile: 0.75)
-    let strideTracking = residualAdjustedTrackingConfidence(walkingTracking, residual: strideResidual, multiplier: 0.6)
-    let turnTracking = residualAdjustedTrackingConfidence(tracking, residual: turnResidual, multiplier: 0.9)
+    let strideTracking = residualAdjustedTrackingConfidence(
+        walkingTracking,
+        residual: strideResidual,
+        multiplier: 0.6,
+        qualityModel: analysis.qualityModel
+    )
+    let turnTracking = residualAdjustedTrackingConfidence(
+        tracking,
+        residual: turnResidual,
+        multiplier: 0.9,
+        qualityModel: analysis.qualityModel
+    )
 
     let footX = analysis.footstepPathX[index] - footstepBaseX
     let footY = analysis.footstepPathY[index] - footstepBaseY
@@ -1210,7 +1267,8 @@ private func stableFarFieldWarpTrackingConfidence(
             residual: analysis.residuals[index],
             blurAmount: analysis.blurAmounts[index],
             acceptedBlockCount: analysis.acceptedBlockCounts[index],
-            totalBlockCount: analysis.totalBlockCounts[index]
+            totalBlockCount: analysis.totalBlockCounts[index],
+            qualityModel: analysis.qualityModel
         )
         return frameTrackingConfidence(quality)
     }
@@ -1269,7 +1327,7 @@ private func blurEvidenceQuality(_ blurAmount: Float) -> Float {
         return 0.0
     }
     if blurAmount > 1.25 {
-        // Native Event Analyzer schema 17 stores this field as a sharpness-style
+        // Native Event Analyzer schema 17+ stores this field as a sharpness-style
         // Metal blur-kernel response, where useful footage is commonly 2-6+.
         return clamp((blurAmount - 1.5) / 3.0, min: 0.0, max: 1.0)
     }
@@ -1281,9 +1339,14 @@ private func frameTrackingQuality(
     residual: Float,
     blurAmount: Float,
     acceptedBlockCount: Int32,
-    totalBlockCount: Int32
+    totalBlockCount: Int32,
+    qualityModel: AnalysisQualityModel
 ) -> (residualQuality: Float, blurQuality: Float, blockCoverage: Float, combinedEvidence: Float) {
-    let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
+    let residualQuality = residualEvidenceQuality(
+        residual,
+        multiplier: 0.7,
+        qualityModel: qualityModel
+    )
     let blurQuality = blurEvidenceQuality(blurAmount)
     let blockCoverage = totalBlockCount > 0 ? clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0) : 0.0
     let evidence = motionConfidence * residualQuality * blurQuality * blockCoverage
@@ -1299,9 +1362,14 @@ private func walkingBandTrackingConfidence(
     residual: Float,
     blurAmount: Float,
     acceptedBlockCount: Int32,
-    totalBlockCount: Int32
+    totalBlockCount: Int32,
+    qualityModel: AnalysisQualityModel
 ) -> Float {
-    let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
+    let residualQuality = residualEvidenceQuality(
+        residual,
+        multiplier: 0.7,
+        qualityModel: qualityModel
+    )
     let blurQuality = blurEvidenceQuality(blurAmount)
     let blockQuality = walkingBandBlockQuality(acceptedBlockCount: acceptedBlockCount, totalBlockCount: totalBlockCount)
     let evidence = motionConfidence * residualQuality * blurQuality * blockQuality
@@ -1318,9 +1386,34 @@ private func walkingBandBlockQuality(acceptedBlockCount: Int32, totalBlockCount:
     return clamp(coverage + coverageLift, min: 0.0, max: 1.0)
 }
 
-private func residualAdjustedTrackingConfidence(_ trackingConfidence: Float, residual: Float, multiplier: Float) -> Float {
-    let residualQuality = clamp(1.0 - (residual * multiplier), min: 0.0, max: 1.0)
+private func residualAdjustedTrackingConfidence(
+    _ trackingConfidence: Float,
+    residual: Float,
+    multiplier: Float,
+    qualityModel: AnalysisQualityModel
+) -> Float {
+    let residualQuality = residualEvidenceQuality(
+        residual,
+        multiplier: multiplier,
+        qualityModel: qualityModel
+    )
     return clamp(trackingConfidence * residualQuality, min: 0.0, max: 1.0)
+}
+
+private func residualEvidenceQuality(
+    _ residual: Float,
+    multiplier: Float,
+    qualityModel: AnalysisQualityModel
+) -> Float {
+    guard residual.isFinite else {
+        return 0.0
+    }
+    switch qualityModel {
+    case .fxplugHostAnalysis:
+        return clamp(1.0 - (residual * multiplier), min: 0.0, max: 1.0)
+    case .eventAnalyzerCache:
+        return clamp(1.0 - (residual / 48.0), min: 0.0, max: 1.0)
+    }
 }
 
 private func symmetricWindowSupport(frames: [AnalysisFrame], centerTime: Double, windowSeconds: Double) -> Float {

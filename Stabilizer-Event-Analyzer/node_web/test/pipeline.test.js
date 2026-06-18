@@ -29,8 +29,8 @@ function analysisResult(assetId = "r2", name = "P1000307") {
     mediaKind: "original-media",
     sourceMediaFingerprint: "aaa:bbb:ccc",
     cacheFileName: `host-analysis-v2-${name}.json`,
-    cacheIdentity: `17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:${name}`,
-    cacheSchemaVersion: 17,
+    cacheIdentity: `18:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:${name}`,
+    cacheSchemaVersion: 18,
     durationSeconds: 10.01,
     sampleScalePercent: 10,
     sampleWidth: 192,
@@ -175,8 +175,8 @@ test("build_stabilizer_fcpxml_import inserts Stabilizer filter", () => {
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 17,
+          cacheIdentity: "18:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 18,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -242,8 +242,8 @@ test("build_stabilizer_fcpxml_import attaches video refs to parent clips", () =>
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 17,
+          cacheIdentity: "18:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 18,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -312,8 +312,8 @@ test("build_stabilizer_fcpxml_import preserves marker order before filters", () 
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 17,
+          cacheIdentity: "18:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 18,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -383,8 +383,8 @@ test("build_stabilizer_fcpxml_import removes legacy Stabilizer Transform filters
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 17,
+          cacheIdentity: "18:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 18,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -456,8 +456,8 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "17:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 17,
+          cacheIdentity: "18:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 18,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -519,7 +519,7 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(payload.perFootagePackages, true);
   assert.equal(payload.packages.length, 1);
   const pkg = payload.packages[0];
-  assert.match(path.basename(pkg.packageDirectory), /^P1000307__sample10__schema17__300f__/);
+  assert.match(path.basename(pkg.packageDirectory), /^P1000307__sample10__schema18__300f__/);
   assert.equal(path.basename(pkg.outputPackage), "P1000307.fcpxmld");
   assert.equal(path.basename(pkg.manifestPath), "P1000307.analysis-manifest.json");
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));

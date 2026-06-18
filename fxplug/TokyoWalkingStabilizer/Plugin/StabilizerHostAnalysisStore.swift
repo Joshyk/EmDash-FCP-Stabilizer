@@ -204,7 +204,7 @@ final class StabilizerHostAnalysisStore {
     }
 
     private static let cacheSchemaVersion = 17
-    private static let supportedCacheSchemaVersions: Set<Int> = [17]
+    private static let supportedCacheSchemaVersions: Set<Int> = [17, 18]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1720,6 +1720,7 @@ final class StabilizerHostAnalysisStore {
         if let analysis = preparedAnalysis {
             preparedAnalysis = StabilizerPreparedAnalysis(
                 frames: analysis.frames.map { $0.withoutRetainedPixels() },
+                qualityModel: analysis.qualityModel,
                 residuals: analysis.residuals,
                 rollMotion: analysis.rollMotion,
                 pathX: analysis.pathX,
@@ -2613,6 +2614,53 @@ final class StabilizerHostAnalysisStore {
         return max(120, expectedFrameCount * 3)
     }
 
+    private static func persistentQualityModel(for cache: PersistedHostAnalysisCache) -> StabilizerAnalysisQualityModel {
+        if cache.schemaVersion >= 18 {
+            return .eventAnalyzerCache
+        }
+        if cache.schemaVersion == 17, looksLikeLegacyEventAnalyzerCache(cache) {
+            return .eventAnalyzerCache
+        }
+        return .fxplugHostAnalysis
+    }
+
+    private static func qualityModelDescription(_ model: StabilizerAnalysisQualityModel) -> String {
+        switch model {
+        case .fxplugHostAnalysis:
+            return "FxPlug Host Analysis"
+        case .eventAnalyzerCache:
+            return "Event Analyzer normalized residual"
+        }
+    }
+
+    private static func looksLikeLegacyEventAnalyzerCache(_ cache: PersistedHostAnalysisCache) -> Bool {
+        let frameCount = cache.frames.count
+        guard frameCount > 0,
+              cache.acceptedBlockCounts?.count == frameCount,
+              cache.totalBlockCounts?.count == frameCount,
+              cache.warpConfidence?.count == frameCount,
+              cache.pathRoll?.count == frameCount,
+              cache.footstepPathRoll?.count == frameCount
+        else {
+            return false
+        }
+        let allThreeBlockCounts = cache.acceptedBlockCounts?.allSatisfy { $0 == 3 } == true
+            && cache.totalBlockCounts?.allSatisfy { $0 == 3 } == true
+        let zeroRollAndWarp = allNearlyZero(cache.pathRoll)
+            && allNearlyZero(cache.footstepPathRoll)
+            && allNearlyZero(cache.warpConfidence)
+        return allThreeBlockCounts && zeroRollAndWarp
+    }
+
+    private static func allNearlyZero(_ values: [Float]?) -> Bool {
+        guard let values, !values.isEmpty else {
+            return false
+        }
+        return values.allSatisfy { value in
+            value.isFinite && abs(value) <= 1e-6
+        }
+    }
+
     private static func frameRangeDistance(_ seconds: Double, firstFrameTime: Double, lastFrameTime: Double, padding: Double) -> Double {
         if seconds < firstFrameTime - padding {
             return firstFrameTime - padding - seconds
@@ -2708,8 +2756,11 @@ final class StabilizerHostAnalysisStore {
            let blurAmounts = cache.blurAmounts,
            let searchRadiusHitCounts = cache.searchRadiusHitCounts,
            let searchRadiusTotalCounts = cache.searchRadiusTotalCounts {
+            let qualityModel = persistentQualityModel(for: cache)
+            NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache schema \(cache.schemaVersion) using \(qualityModelDescription(qualityModel)) quality model.")
             return StabilizerPreparedAnalysis(
                 frames: frames.sorted { $0.time < $1.time },
+                qualityModel: qualityModel,
                 residuals: residuals,
                 rollMotion: rollMotion,
                 pathX: pathX,
