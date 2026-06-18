@@ -179,6 +179,13 @@ struct StabilizerHostAnalysisInspectorSnapshot {
     let frameCount: Int?
 }
 
+struct StabilizerHostAnalysisRenderSnapshot {
+    let hasCompletedAnalysis: Bool
+    let revision: UInt64
+    let renderInvalidationToken: Double
+    let activeCacheIdentity: String?
+}
+
 final class StabilizerHostAnalysisStore {
     private typealias CompletedHostAnalysisSnapshot = (
         frames: [StabilizerAnalysisFrame],
@@ -342,6 +349,17 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         defer { lock.unlock() }
         return activePersistentCacheIdentity
+    }
+
+    var renderSnapshot: StabilizerHostAnalysisRenderSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return StabilizerHostAnalysisRenderSnapshot(
+            hasCompletedAnalysis: finished && validationState != .rejected && preparedAnalysis != nil,
+            revision: analysisRevision,
+            renderInvalidationToken: renderRevisionToken,
+            activeCacheIdentity: activePersistentCacheIdentity
+        )
     }
 
     var activeExpectedRange: HostAnalysisExpectedRange? {

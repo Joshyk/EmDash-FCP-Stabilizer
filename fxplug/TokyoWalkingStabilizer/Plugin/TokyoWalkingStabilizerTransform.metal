@@ -282,10 +282,12 @@ fragment float4 fragmentShader(
     float2 sampleUV = (stabilizedPixels / transform->outputSize) + 0.5;
 
     bool outsideSource = sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0;
-    half4 colorSample = colorTexture.sample(textureSampler, sampleUV);
-    float4 outputColor = (transform->edgeMode > 0.5 && outsideSource)
-        ? float4(0.0, 0.0, 0.0, 1.0)
-        : float4(colorSample);
+    float4 outputColor;
+    if (transform->edgeMode > 0.5 && outsideSource) {
+        outputColor = float4(0.0, 0.0, 0.0, 1.0);
+    } else {
+        outputColor = float4(colorTexture.sample(textureSampler, sampleUV));
+    }
     outputColor.a = 1.0;
 
     if (transform->debugOverlay > 0.5) {
