@@ -149,9 +149,10 @@ fallbacks.
   a future steep-turn crop demand reaches the current frame, then keep recent
   high zoom/position demands in a matching release window so zoom-out and
   position return use the same S-curve. The current frame remains black-safe
-  when `Remove Black Edges` is on. Original/optimized media keeps the full sampling
-  profile; proxy or scaled preview uses fewer quantized samples for smoother realtime
-  playback at high duration values.
+  when `Remove Black Edges` is on. High-quality render uses the full 17-sample
+  Auto Crop lead window; proxy, low/medium-quality playback, or scaled preview
+  uses a very light non-quantized zoom-only lead profile so playback keeps the
+  stabilizer motion visible without the old coarse zoom-envelope steps.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image. New effect

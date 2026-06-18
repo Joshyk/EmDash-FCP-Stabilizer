@@ -181,6 +181,7 @@ struct StabilizerHostAnalysisInspectorSnapshot {
 
 struct StabilizerHostAnalysisRenderSnapshot {
     let hasCompletedAnalysis: Bool
+    let hasPreparedAnalysis: Bool
     let revision: UInt64
     let renderInvalidationToken: Double
     let activeCacheIdentity: String?
@@ -354,8 +355,10 @@ final class StabilizerHostAnalysisStore {
     var renderSnapshot: StabilizerHostAnalysisRenderSnapshot {
         lock.lock()
         defer { lock.unlock() }
+        let hasRenderablePreparedAnalysis = validationState != .rejected && preparedAnalysis != nil
         return StabilizerHostAnalysisRenderSnapshot(
-            hasCompletedAnalysis: finished && validationState != .rejected && preparedAnalysis != nil,
+            hasCompletedAnalysis: finished && hasRenderablePreparedAnalysis,
+            hasPreparedAnalysis: hasRenderablePreparedAnalysis,
             revision: analysisRevision,
             renderInvalidationToken: renderRevisionToken,
             activeCacheIdentity: activePersistentCacheIdentity

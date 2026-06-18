@@ -126,7 +126,7 @@ private enum AutoCropSamplingProfile: Int32 {
     var transitionSampleCount: Int {
         switch self {
         case .playback:
-            return 9
+            return 5
         case .full:
             return 17
         }
@@ -135,7 +135,7 @@ private enum AutoCropSamplingProfile: Int32 {
     var releaseSampleCount: Int {
         switch self {
         case .playback:
-            return 6
+            return 1
         case .full:
             return 16
         }
@@ -144,7 +144,7 @@ private enum AutoCropSamplingProfile: Int32 {
     var quantizationStepSeconds: Double {
         switch self {
         case .playback:
-            return 0.25
+            return 0.0
         case .full:
             return 0.0
         }
@@ -1605,27 +1605,50 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity
         )
-        let framingTargets = autoCropFramingTargets(
+        let transitionTargets = autoCropFramingTargets(
             from: transitionSamples,
             outputSize: outputSize,
             masterStrength: masterStrength
-        ) + autoCropFramingTargets(
+        )
+        let releaseTargets = autoCropFramingTargets(
             from: releaseSamples,
             outputSize: outputSize,
             masterStrength: masterStrength
         )
-        let currentPositionPixels = framingTargets.first(where: { abs($0.leadProgress - 1.0) <= 1e-6 })?.positionPixels
-            ?? framingTargets.first?.positionPixels
+        if samplingProfile == .playback {
+            let positionPixels = vector_float2(0.0, 0.0)
+            let currentRequiredScale = requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: positionPixels
+            )
+            let scaleTargets = autoCropScaleTargets(
+                from: transitionSamples + releaseSamples,
+                outputSize: outputSize,
+                masterStrength: masterStrength,
+                cropPositionPixels: positionPixels
+            )
+            let transitionScale = autoCropTransitionScale(
+                from: scaleTargets,
+                currentRequiredScale: currentRequiredScale
+            )
+            return AutoCropFraming(
+                scale: max(Float(1.0), currentRequiredScale, transitionScale),
+                positionPixels: positionPixels
+            )
+        }
+
+        let currentPositionPixels = transitionTargets.first(where: { abs($0.leadProgress - 1.0) <= 1e-6 })?.positionPixels
+            ?? transitionTargets.first?.positionPixels
             ?? blackSafeAutoCropPosition(
                 preferredPositionPixels: currentTransform.macroPixelOffset * masterStrength,
                 context: context
             )
-        let slowPositionPixels = autoCropPositionPixels(
-            from: framingTargets,
+        let leadPositionPixels = autoCropPositionPixels(
+            from: transitionTargets + releaseTargets,
             currentPositionPixels: currentPositionPixels
         )
         let positionPixels = blackSafeAutoCropPosition(
-            preferredPositionPixels: slowPositionPixels,
+            preferredPositionPixels: leadPositionPixels,
             context: context
         )
 
@@ -1634,7 +1657,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cropPositionPixels: positionPixels
         )
         let transitionScale = autoCropTransitionScale(
-            from: framingTargets,
+            from: transitionTargets + releaseTargets,
             currentRequiredScale: currentRequiredScale
         )
 
@@ -1658,14 +1681,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         currentRequiredScale: Float
     ) -> Float {
         targets.reduce(currentRequiredScale) { partial, target in
+            guard target.leadProgress < 1.0 - 1e-6 else {
+                return partial
+            }
             let easedProgress = smoothStep(target.leadProgress)
-            let easedScale = currentRequiredScale + ((target.requiredScale - currentRequiredScale) * easedProgress)
+            let targetScale = max(currentRequiredScale, target.requiredScale)
+            let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress)
             return max(partial, easedScale)
         }
     }
 
     private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32, renderSourceIsProxy: Bool) -> AutoCropSamplingProfile {
-        if renderSourceIsProxy {
+        if renderSourceIsProxy || qualityLevel == 0 {
             return .playback
         }
         return .full
@@ -1777,6 +1804,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         let sampleCount = samplingProfile.releaseSampleCount
+        guard sampleCount > 0 else {
+            return []
+        }
         var samples: [AutoCropTransitionSample] = []
         samples.reserveCapacity(sampleCount)
 
@@ -1840,20 +1870,46 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
+    private static func autoCropScaleTargets(
+        from samples: [AutoCropTransitionSample],
+        outputSize: vector_float2,
+        masterStrength: Float,
+        cropPositionPixels: vector_float2
+    ) -> [AutoCropFramingTarget] {
+        samples.map { sample in
+            let context = AutoCropTransformContext(
+                transform: sample.transform,
+                outputSize: outputSize,
+                masterStrength: masterStrength
+            )
+            let requiredScale = requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: cropPositionPixels
+            )
+            return AutoCropFramingTarget(
+                positionPixels: cropPositionPixels,
+                requiredScale: requiredScale,
+                weight: sample.weight,
+                leadProgress: sample.leadProgress
+            )
+        }
+    }
+
     private static func autoCropPositionPixels(
         from targets: [AutoCropFramingTarget],
         currentPositionPixels: vector_float2
     ) -> vector_float2 {
-        let totalWeight = targets.reduce(Float(0.0)) { $0 + $1.weight }
+        let leadTargets = targets.filter { $0.leadProgress < 1.0 - 1e-6 }
+        let totalWeight = leadTargets.reduce(Float(0.0)) { $0 + $1.weight }
         guard totalWeight > 1e-6 else {
             return currentPositionPixels
         }
-        let weightedPosition = targets.reduce(vector_float2(0.0, 0.0)) { partial, target in
+        let weightedOffset = leadTargets.reduce(vector_float2(0.0, 0.0)) { partial, target in
             let easedProgress = smoothStep(target.leadProgress)
-            let easedPosition = currentPositionPixels + ((target.positionPixels - currentPositionPixels) * easedProgress)
-            return partial + (easedPosition * target.weight)
+            let leadOffset = (target.positionPixels - currentPositionPixels) * easedProgress
+            return partial + (leadOffset * target.weight)
         }
-        return weightedPosition / totalWeight
+        return currentPositionPixels + (weightedOffset / totalWeight)
     }
 
     private static func blackSafeAutoCropPosition(
@@ -4286,10 +4342,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             : false
         var storeSnapshot = hostAnalysisStore.renderSnapshot
         let hasCompletedHostAnalysis = storeSnapshot.hasCompletedAnalysis
+        let hasPreparedHostAnalysis = storeSnapshot.hasPreparedAnalysis
         var renderCacheIdentity: String?
         var renderStoreRevision = storeSnapshot.revision
         let canUseHostAnalysisStoreForRender = transformEnabled
-            && (hasCompletedHostAnalysis || configuredProjectBundleCache)
+            && (hasCompletedHostAnalysis || hasPreparedHostAnalysis || configuredProjectBundleCache)
         if transformEnabled,
            canUseHostAnalysisStoreForRender,
            let preparedAnalysis = hostAnalysisStore.preparedAnalysisForRender(
@@ -4326,12 +4383,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let renderCacheIdentityShort = Self.shortRenderCacheIdentity(renderCacheIdentity)
         if transformEnabled && renderUsesPreparedAnalysis {
-            if !renderSourceIsProxy {
-                hostAnalysisStore.noteStabilizationActiveForRender(
-                    debugOverlayActive: state.debugOverlay,
-                    reason: "prepared=yes debug=\(state.debugOverlay ? "on" : "off") identity=\(renderCacheIdentityShort)"
-                )
-            }
+            hostAnalysisStore.noteStabilizationActiveForRender(
+                debugOverlayActive: state.debugOverlay,
+                reason: "prepared=yes debug=\(state.debugOverlay ? "on" : "off") proxy=\(renderSourceIsProxy ? "yes" : "no") identity=\(renderCacheIdentityShort)"
+            )
         } else if transformEnabled {
             let preferredIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let preferredIdentity,
@@ -4340,9 +4395,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 hostAnalysisStore.noteCacheRangeMismatchForRender(
                     reason: "preferred identity \(Self.shortRenderCacheIdentity(preferredIdentity)) did not match expected render range"
                 )
-            } else if hasCompletedHostAnalysis || configuredProjectBundleCache || !(preferredIdentity ?? "").isEmpty {
+            } else if hasCompletedHostAnalysis || hasPreparedHostAnalysis || configuredProjectBundleCache || !(preferredIdentity ?? "").isEmpty {
                 hostAnalysisStore.noteLoadedButNotRenderingForRender(
-                    reason: "prepared=no completed=\(hasCompletedHostAnalysis ? "yes" : "no") projectCache=\(configuredProjectBundleCache ? "configured" : "not configured") debug=\(state.debugOverlay ? "on" : "off") identity=\(renderCacheIdentityShort)"
+                    reason: "prepared=no completed=\(hasCompletedHostAnalysis ? "yes" : "no") loaded=\(hasPreparedHostAnalysis ? "yes" : "no") projectCache=\(configuredProjectBundleCache ? "configured" : "not configured") debug=\(state.debugOverlay ? "on" : "off") identity=\(renderCacheIdentityShort)"
                 )
             }
         }
