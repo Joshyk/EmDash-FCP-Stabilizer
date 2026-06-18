@@ -987,14 +987,19 @@ final class StabilizerHostAnalysisStore {
             let activeIdentity = activeCacheIdentity
             if let activeIdentity,
                !Self.cacheIdentity(activeIdentity, matches: expectedRange) {
+                let explicitPreferredIdentityMatchesActive = preferredIdentity == activeIdentity
+                if explicitPreferredIdentityMatchesActive,
+                   Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange) {
+                    installExplicitRenderTimeMappingIfNeeded(expectedRange: expectedRange)
+                }
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                         if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
-                            let preferredIdentityMatchesActive = preferredIdentity == activeIdentity
-                            let canUseExplicitPreferredIdentity = preferredIdentityMatchesActive
+                            let canUseExplicitPreferredIdentity = explicitPreferredIdentityMatchesActive
                                 && Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange)
+                            let mappedRenderSeconds = CMTimeGetSeconds(analysisRenderTime(for: renderTime, preparedAnalysis: analysis))
                             if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity),
-                               Self.renderSeconds(CMTimeGetSeconds(renderTime), isInside: analysis.frames) {
+                               Self.renderSeconds(mappedRenderSeconds, isInside: analysis.frames) {
                                 os_log(
                                     "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ reason=%{public}@ validation=%{public}@.",
                                     log: stabilizerHostAnalysisLog,
@@ -1145,6 +1150,24 @@ final class StabilizerHostAnalysisStore {
 
     func noteCacheRangeMismatchForRender(reason: String) {
         markRenderStatus(.cacheRangeMismatch, info: "Cache range mismatch.", logReason: reason)
+    }
+
+    private func installExplicitRenderTimeMappingIfNeeded(expectedRange: HostAnalysisExpectedRange?) {
+        guard let expectedRange,
+              expectedRange.isValid
+        else {
+            return
+        }
+        lock.lock()
+        let alreadyMapped = renderToAnalysisOffsetSeconds != nil
+        let cacheRangeStart = CMTimeGetSeconds(activeRange.start)
+        if !alreadyMapped,
+           cacheRangeStart.isFinite,
+           expectedRange.startSeconds.isFinite {
+            renderToAnalysisOffsetSeconds = cacheRangeStart - expectedRange.startSeconds
+            renderToAnalysisOffsetProbeAttempted = true
+        }
+        lock.unlock()
     }
 
     func noteStabilizationActiveForRender(debugOverlayActive: Bool, reason: String) {
