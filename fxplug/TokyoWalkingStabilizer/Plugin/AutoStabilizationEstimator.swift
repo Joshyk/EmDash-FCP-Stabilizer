@@ -608,6 +608,104 @@ enum AutoStabilizationEstimator {
     private static let minimumRotationAccelerationLimit: Float = 0.04
     private static let minimumRotationJerkLimit: Float = 0.03
 
+    private enum MotionPathKind: Hashable {
+        case footstepX
+        case footstepY
+        case footstepRoll
+        case yaw
+        case pitch
+        case shearX
+        case shearY
+        case perspectiveX
+        case perspectiveY
+    }
+
+    private struct OuterPredictionCacheKey: Hashable {
+        let kind: MotionPathKind
+        let index: Int
+        let innerWindowSeconds: UInt64
+        let outerWindowSeconds: UInt64
+    }
+
+    private final class RenderEstimateCache {
+        private var outerPredictions: [OuterPredictionCacheKey: Float] = [:]
+
+        func outerLinearPredictionPath(
+            _ kind: MotionPathKind,
+            analysis: StabilizerPreparedAnalysis,
+            indices: [Int],
+            innerWindowSeconds: Double,
+            outerWindowSeconds: Double
+        ) -> [Float] {
+            let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+            guard !values.isEmpty else {
+                return values
+            }
+            var predictedValues = values
+            for index in indices where values.indices.contains(index) && analysis.frames.indices.contains(index) {
+                predictedValues[index] = outerLinearPrediction(
+                    kind,
+                    analysis: analysis,
+                    index: index,
+                    innerWindowSeconds: innerWindowSeconds,
+                    outerWindowSeconds: outerWindowSeconds
+                )
+            }
+            return predictedValues
+        }
+
+        private func outerLinearPrediction(
+            _ kind: MotionPathKind,
+            analysis: StabilizerPreparedAnalysis,
+            index: Int,
+            innerWindowSeconds: Double,
+            outerWindowSeconds: Double
+        ) -> Float {
+            let key = OuterPredictionCacheKey(
+                kind: kind,
+                index: index,
+                innerWindowSeconds: innerWindowSeconds.bitPattern,
+                outerWindowSeconds: outerWindowSeconds.bitPattern
+            )
+            if let cached = outerPredictions[key] {
+                return cached
+            }
+            let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+            let prediction = AutoStabilizationEstimator.outerLinearPrediction(
+                values,
+                frames: analysis.frames,
+                centerIndex: index,
+                innerWindowSeconds: innerWindowSeconds,
+                outerWindowSeconds: outerWindowSeconds
+            ) ?? values[index]
+            outerPredictions[key] = prediction
+            return prediction
+        }
+    }
+
+    private static func values(for kind: MotionPathKind, analysis: StabilizerPreparedAnalysis) -> [Float] {
+        switch kind {
+        case .footstepX:
+            return analysis.footstepPathX
+        case .footstepY:
+            return analysis.footstepPathY
+        case .footstepRoll:
+            return analysis.footstepPathRoll
+        case .yaw:
+            return analysis.pathYaw
+        case .pitch:
+            return analysis.pathPitch
+        case .shearX:
+            return analysis.pathShearX
+        case .shearY:
+            return analysis.pathShearY
+        case .perspectiveX:
+            return analysis.pathPerspectiveX
+        case .perspectiveY:
+            return analysis.pathPerspectiveY
+        }
+    }
+
     fileprivate static func metalError(_ message: String) -> NSError {
         NSError(
             domain: "com.justadev.TokyoWalkingStabilizer",
@@ -756,7 +854,8 @@ enum AutoStabilizationEstimator {
             renderSeconds: renderSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths
+            strengths: strengths,
+            cache: nil
         )
     }
 
@@ -765,7 +864,8 @@ enum AutoStabilizationEstimator {
         renderSeconds: Double,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths
+        strengths: StabilizerCorrectionStrengths,
+        cache: RenderEstimateCache?
     ) -> StabilizerAutoTransform {
         let frames = analysis.frames
         guard frames.count >= 3 else {
@@ -799,68 +899,77 @@ enum AutoStabilizationEstimator {
             activeIndices + strideWobbleActiveIndices + [centerIndex] + frameInterpolation.indices,
             validCount: frames.count
         )
-        let footstepBaselineXPath = outerLinearPredictionPath(
-            analysis.footstepPathX,
-            frames: frames,
+        let footstepBaselineXPath = cachedOuterLinearPredictionPath(
+            .footstepX,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: footstepImpulseInnerWindowSeconds,
-            outerWindowSeconds: footstepImpulseOuterWindowSeconds
+            outerWindowSeconds: footstepImpulseOuterWindowSeconds,
+            cache: cache
         )
-        let footstepBaselineYPath = outerLinearPredictionPath(
-            analysis.footstepPathY,
-            frames: frames,
+        let footstepBaselineYPath = cachedOuterLinearPredictionPath(
+            .footstepY,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: footstepImpulseInnerWindowSeconds,
-            outerWindowSeconds: footstepImpulseOuterWindowSeconds
+            outerWindowSeconds: footstepImpulseOuterWindowSeconds,
+            cache: cache
         )
-        let footstepBaselineRollPath = outerLinearPredictionPath(
-            analysis.footstepPathRoll,
-            frames: frames,
+        let footstepBaselineRollPath = cachedOuterLinearPredictionPath(
+            .footstepRoll,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: footstepImpulseInnerWindowSeconds,
-            outerWindowSeconds: footstepImpulseOuterWindowSeconds
+            outerWindowSeconds: footstepImpulseOuterWindowSeconds,
+            cache: cache
         )
-        let farFieldBaselineYawPath = outerLinearPredictionPath(
-            analysis.pathYaw,
-            frames: frames,
+        let farFieldBaselineYawPath = cachedOuterLinearPredictionPath(
+            .yaw,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: cache
         )
-        let farFieldBaselinePitchPath = outerLinearPredictionPath(
-            analysis.pathPitch,
-            frames: frames,
+        let farFieldBaselinePitchPath = cachedOuterLinearPredictionPath(
+            .pitch,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: cache
         )
-        let farFieldBaselineShearXPath = outerLinearPredictionPath(
-            analysis.pathShearX,
-            frames: frames,
+        let farFieldBaselineShearXPath = cachedOuterLinearPredictionPath(
+            .shearX,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: cache
         )
-        let farFieldBaselineShearYPath = outerLinearPredictionPath(
-            analysis.pathShearY,
-            frames: frames,
+        let farFieldBaselineShearYPath = cachedOuterLinearPredictionPath(
+            .shearY,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: cache
         )
-        let farFieldBaselinePerspectiveXPath = outerLinearPredictionPath(
-            analysis.pathPerspectiveX,
-            frames: frames,
+        let farFieldBaselinePerspectiveXPath = cachedOuterLinearPredictionPath(
+            .perspectiveX,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: cache
         )
-        let farFieldBaselinePerspectiveYPath = outerLinearPredictionPath(
-            analysis.pathPerspectiveY,
-            frames: frames,
+        let farFieldBaselinePerspectiveYPath = cachedOuterLinearPredictionPath(
+            .perspectiveY,
+            analysis: analysis,
             indices: sampledIndices,
             innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: cache
         )
 
         let footstepCleanXPath = footstepBaselineXPath
@@ -1181,12 +1290,14 @@ enum AutoStabilizationEstimator {
 
         let firstTime = frames[0].time
         let lastTime = frames[frames.count - 1].time
+        let renderEstimateCache = RenderEstimateCache()
         let rawCenterTransform = rawEstimate(
             preparedAnalysis: analysis,
             renderSeconds: renderSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths
+            strengths: strengths,
+            cache: renderEstimateCache
         )
         let sampleCount = max(3, renderTemporalSmoothingSampleCount)
         let centerSample = sampleCount / 2
@@ -1215,7 +1326,8 @@ enum AutoStabilizationEstimator {
                     renderSeconds: sampleSeconds,
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths
+                    strengths: strengths,
+                    cache: renderEstimateCache
                 )
             weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
         }
@@ -2896,6 +3008,32 @@ enum AutoStabilizationEstimator {
             ) ?? values[index]
         }
         return predictedValues
+    }
+
+    private static func cachedOuterLinearPredictionPath(
+        _ kind: MotionPathKind,
+        analysis: StabilizerPreparedAnalysis,
+        indices: [Int],
+        innerWindowSeconds: Double,
+        outerWindowSeconds: Double,
+        cache: RenderEstimateCache?
+    ) -> [Float] {
+        if let cache {
+            return cache.outerLinearPredictionPath(
+                kind,
+                analysis: analysis,
+                indices: indices,
+                innerWindowSeconds: innerWindowSeconds,
+                outerWindowSeconds: outerWindowSeconds
+            )
+        }
+        return outerLinearPredictionPath(
+            values(for: kind, analysis: analysis),
+            frames: analysis.frames,
+            indices: indices,
+            innerWindowSeconds: innerWindowSeconds,
+            outerWindowSeconds: outerWindowSeconds
+        )
     }
 
     private static func farFieldWarpBandValue(

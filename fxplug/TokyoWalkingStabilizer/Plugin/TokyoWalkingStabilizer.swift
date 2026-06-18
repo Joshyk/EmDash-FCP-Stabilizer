@@ -3972,6 +3972,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let renderSourceIsProxy = renderUsesPreparedAnalysis
             && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
+        let debugOverlayActive = state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis
         let renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
         let renderCacheIdentityShort = Self.shortRenderCacheIdentity(renderCacheIdentity)
         if transformEnabled && renderUsesPreparedAnalysis {
@@ -4010,87 +4011,102 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 currentRenderRevision: state.renderRevision
             )
         }
-        let debugOverlayScale = Self.debugOverlayScale(
-            outputWidth: Int(outputWidth),
-            outputHeight: Int(outputHeight),
-            renderSourceIsProxy: renderSourceIsProxy
-        )
-        let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
-        let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
-        let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.03)
-        let searchRadiusQuality: Float
-        if autoTransform.searchRadiusTotalCount > 0 {
-            let searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
-            searchRadiusQuality = 1.0 - searchRadiusHitRatio
+        let debugOverlayScale: Float
+        let diagnostic: vector_float4
+        let diagnostic2: vector_float4
+        let diagnostic3: vector_float4
+        let diagnostic4: vector_float4
+        let diagnostic5: vector_float4
+        if debugOverlayActive {
+            debugOverlayScale = Self.debugOverlayScale(
+                outputWidth: Int(outputWidth),
+                outputHeight: Int(outputHeight),
+                renderSourceIsProxy: renderSourceIsProxy
+            )
+            let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
+            let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
+            let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.03)
+            let searchRadiusQuality: Float
+            if autoTransform.searchRadiusTotalCount > 0 {
+                let searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
+                searchRadiusQuality = 1.0 - searchRadiusHitRatio
+            } else {
+                searchRadiusQuality = 0.0
+            }
+            let residualQuality = max(0.0, 1.0 - min(1.0, autoTransform.residual * 50.0))
+            let footstepJitterActivity = min(1.0, max(
+                simd_length(vector_float2(
+                    autoTransform.microPixelOffset.x / diagnosticScaleX,
+                    autoTransform.microPixelOffset.y / diagnosticScaleY
+                )),
+                abs(autoTransform.footstepJitterRotationDegrees) / 5.0
+            ))
+            let strideWobbleActivity = min(1.0, max(
+                simd_length(vector_float2(
+                    autoTransform.strideWobblePixelOffset.x / diagnosticScaleX,
+                    autoTransform.strideWobblePixelOffset.y / diagnosticScaleY
+                )),
+                abs(autoTransform.strideWobbleRotationDegrees) / 5.0
+            ))
+            let farFieldWarpActivity = min(1.0, max(
+                simd_length(autoTransform.shear) / 0.016,
+                simd_length(autoTransform.yawPitchProxy) / 0.010,
+                simd_length(autoTransform.perspective) / 0.006
+            ))
+            diagnostic = vector_float4(
+                min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
+                min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
+                min(1.0, abs(autoTransform.rotationDegrees) / 5.0),
+                searchRadiusQuality
+            )
+            diagnostic2 = vector_float4(
+                min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
+                footstepJitterActivity,
+                strideWobbleActivity,
+                farFieldWarpActivity
+            )
+            diagnostic3 = vector_float4(
+                min(1.0, simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale),
+                min(1.0, autoTransform.microConfidence),
+                min(1.0, autoTransform.strideConfidence),
+                min(1.0, autoTransform.warpConfidence)
+            )
+            diagnostic4 = vector_float4(
+                min(1.0, autoTransform.turnConfidence),
+                min(1.0, autoTransform.trackingConfidence),
+                AutoStabilizationEstimator.blurEvidenceQuality(autoTransform.blurAmount),
+                residualQuality
+            )
+            diagnostic5 = vector_float4(
+                min(1.0, autoTransform.walkingTrackingConfidence),
+                0.0,
+                0.0,
+                0.0
+            )
+            logDebugOverlayRenderTruthIfNeeded(
+                debugOverlayActive: true,
+                transformEnabled: transformEnabled,
+                renderUsesPreparedAnalysis: renderUsesPreparedAnalysis,
+                renderSourceIsProxy: renderSourceIsProxy,
+                renderTime: renderTime,
+                analysisRenderTime: activeAnalysisRenderTime,
+                frameCount: Int(state.hostAnalysisFrameCount),
+                cacheIdentityShort: renderCacheIdentityShort,
+                autoTransform: autoTransform,
+                diagnostic: diagnostic,
+                diagnostic2: diagnostic2,
+                diagnostic3: diagnostic3,
+                diagnostic4: diagnostic4,
+                diagnostic5: diagnostic5
+            )
         } else {
-            searchRadiusQuality = 0.0
+            debugOverlayScale = 1.0
+            diagnostic = vector_float4(0.0, 0.0, 0.0, 0.0)
+            diagnostic2 = vector_float4(0.0, 0.0, 0.0, 0.0)
+            diagnostic3 = vector_float4(0.0, 0.0, 0.0, 0.0)
+            diagnostic4 = vector_float4(0.0, 0.0, 0.0, 0.0)
+            diagnostic5 = vector_float4(0.0, 0.0, 0.0, 0.0)
         }
-        let residualQuality = max(0.0, 1.0 - min(1.0, autoTransform.residual * 50.0))
-        let footstepJitterActivity = min(1.0, max(
-            simd_length(vector_float2(
-                autoTransform.microPixelOffset.x / diagnosticScaleX,
-                autoTransform.microPixelOffset.y / diagnosticScaleY
-            )),
-            abs(autoTransform.footstepJitterRotationDegrees) / 5.0
-        ))
-        let strideWobbleActivity = min(1.0, max(
-            simd_length(vector_float2(
-                autoTransform.strideWobblePixelOffset.x / diagnosticScaleX,
-                autoTransform.strideWobblePixelOffset.y / diagnosticScaleY
-            )),
-            abs(autoTransform.strideWobbleRotationDegrees) / 5.0
-        ))
-        let farFieldWarpActivity = min(1.0, max(
-            simd_length(autoTransform.shear) / 0.016,
-            simd_length(autoTransform.yawPitchProxy) / 0.010,
-            simd_length(autoTransform.perspective) / 0.006
-        ))
-        let diagnostic = vector_float4(
-            min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
-            min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
-            min(1.0, abs(autoTransform.rotationDegrees) / 5.0),
-            searchRadiusQuality
-        )
-        let diagnostic2 = vector_float4(
-            min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
-            footstepJitterActivity,
-            strideWobbleActivity,
-            farFieldWarpActivity
-        )
-        let diagnostic3 = vector_float4(
-            min(1.0, simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale),
-            min(1.0, autoTransform.microConfidence),
-            min(1.0, autoTransform.strideConfidence),
-            min(1.0, autoTransform.warpConfidence)
-        )
-        let diagnostic4 = vector_float4(
-            min(1.0, autoTransform.turnConfidence),
-            min(1.0, autoTransform.trackingConfidence),
-            AutoStabilizationEstimator.blurEvidenceQuality(autoTransform.blurAmount),
-            residualQuality
-        )
-        let diagnostic5 = vector_float4(
-            min(1.0, autoTransform.walkingTrackingConfidence),
-            0.0,
-            0.0,
-            0.0
-        )
-        logDebugOverlayRenderTruthIfNeeded(
-            debugOverlayActive: state.debugOverlay,
-            transformEnabled: transformEnabled,
-            renderUsesPreparedAnalysis: renderUsesPreparedAnalysis,
-            renderSourceIsProxy: renderSourceIsProxy,
-            renderTime: renderTime,
-            analysisRenderTime: activeAnalysisRenderTime,
-            frameCount: Int(state.hostAnalysisFrameCount),
-            cacheIdentityShort: renderCacheIdentityShort,
-            autoTransform: autoTransform,
-            diagnostic: diagnostic,
-            diagnostic2: diagnostic2,
-            diagnostic3: diagnostic3,
-            diagnostic4: diagnostic4,
-            diagnostic5: diagnostic5
-        )
         let autoCropFraming: AutoCropFraming
         if state.autoCropEnabled,
            renderUsesPreparedAnalysis,
@@ -4127,13 +4143,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             shear: autoTransform.shear * masterStrength,
             perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * masterStrength,
             edgeMode: Float(state.edgeDisplayMode),
-            debugOverlay: state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? 1.0 : 0.0,
+            debugOverlay: debugOverlayActive ? 1.0 : 0.0,
             debugMode: renderSourceIsProxy ? 2.0 : 1.0,
             debugOverlayScale: debugOverlayScale,
             autoCropScale: autoCropFraming.scale,
             autoCropPositionPixels: autoCropFraming.positionPixels
         )
-        if state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis {
+        if debugOverlayActive {
             publishHostAnalysisRenderDiagnostics(
                 frameCount: Int(state.hostAnalysisFrameCount),
                 panSmoothSeconds: state.panSmoothSeconds,
