@@ -246,7 +246,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   the crop adjustment earlier, retain recent high zoom demands while releasing, and make the
   visible framing change slower. With `Remove Black Edges` on, final zoom is still clamped to
   the current frame's required safe crop so outside-source black is not exposed during the
-  transition. High-quality render uses the full sampling profile; low/medium-quality playback
+  transition. Original/optimized media uses the full sampling profile; proxy or scaled preview
   uses fewer quantized samples to avoid dropped frames when this duration is high.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis

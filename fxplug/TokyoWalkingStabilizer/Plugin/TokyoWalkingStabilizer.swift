@@ -42,7 +42,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.176"
+private let tokyoWalkingStabilizerVersion = "0.3.177"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1664,9 +1664,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32) -> AutoCropSamplingProfile {
-        // FxQuality values are LOW=0, MEDIUM=1, HIGH=2 in FxPlug.
-        qualityLevel >= 2 ? .full : .playback
+    private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32, renderSourceIsProxy: Bool) -> AutoCropSamplingProfile {
+        if renderSourceIsProxy {
+            return .playback
+        }
+        return .full
     }
 
     private static func autoCropSampleTime(_ seconds: Double, samplingProfile: AutoCropSamplingProfile) -> Double {
@@ -4356,7 +4358,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 renderSourceIsProxy: renderSourceIsProxy,
                 renderCacheIdentityShort: renderCacheIdentityShort,
                 autoCropEnabled: state.autoCropEnabled,
-                autoCropProfileName: state.autoCropEnabled ? Self.autoCropSamplingProfile(forQualityLevel: state.renderQualityLevel).displayName : "off",
+                autoCropProfileName: state.autoCropEnabled ? Self.autoCropSamplingProfile(forQualityLevel: state.renderQualityLevel, renderSourceIsProxy: renderSourceIsProxy).displayName : "off",
                 hostAnalysisFrameCount: state.hostAnalysisFrameCount
             )
         )
@@ -4470,7 +4472,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic5 = vector_float4(0.0, 0.0, 0.0, 0.0)
         }
         let autoCropFraming: AutoCropFraming
-        let autoCropSamplingProfile = Self.autoCropSamplingProfile(forQualityLevel: state.renderQualityLevel)
+        let autoCropSamplingProfile = Self.autoCropSamplingProfile(forQualityLevel: state.renderQualityLevel, renderSourceIsProxy: renderSourceIsProxy)
         if state.autoCropEnabled,
            renderUsesPreparedAnalysis,
            let preparedAnalysis = activePreparedAnalysis {

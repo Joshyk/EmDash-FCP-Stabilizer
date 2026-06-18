@@ -146,8 +146,9 @@ in the transition window and released with the same S-curve so zoom-out and
 position return do not snap back immediately. With `Remove Black Edges` on, the
 render path still clamps zoom to the current frame's required safe crop so
 outside-source black is not exposed during the transition. High-quality render
-uses the full Auto Crop sampling window; low/medium-quality playback uses a
-lighter quantized sampling profile to reduce dropped frames at long durations.
+    uses the full Auto Crop sampling window for original/optimized media; proxy or
+    scaled preview uses a lighter quantized sampling profile to reduce dropped
+    frames at long durations.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
