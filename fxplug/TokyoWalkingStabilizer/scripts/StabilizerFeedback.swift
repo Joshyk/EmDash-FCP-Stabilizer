@@ -1264,6 +1264,18 @@ private func searchRadiusEdgeQuality(hitCount: Int32, totalCount: Int32) -> Floa
     return 1.0 - hitRatio
 }
 
+private func blurEvidenceQuality(_ blurAmount: Float) -> Float {
+    guard blurAmount.isFinite else {
+        return 0.0
+    }
+    if blurAmount > 1.25 {
+        // Native Event Analyzer schema 17 stores this field as a sharpness-style
+        // Metal blur-kernel response, where useful footage is commonly 2-6+.
+        return clamp((blurAmount - 1.5) / 3.0, min: 0.0, max: 1.0)
+    }
+    return clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+}
+
 private func frameTrackingQuality(
     motionConfidence: Float,
     residual: Float,
@@ -1272,7 +1284,7 @@ private func frameTrackingQuality(
     totalBlockCount: Int32
 ) -> (residualQuality: Float, blurQuality: Float, blockCoverage: Float, combinedEvidence: Float) {
     let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
-    let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+    let blurQuality = blurEvidenceQuality(blurAmount)
     let blockCoverage = totalBlockCount > 0 ? clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0) : 0.0
     let evidence = motionConfidence * residualQuality * blurQuality * blockCoverage
     return (residualQuality, blurQuality, blockCoverage, evidence)
@@ -1290,7 +1302,7 @@ private func walkingBandTrackingConfidence(
     totalBlockCount: Int32
 ) -> Float {
     let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
-    let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+    let blurQuality = blurEvidenceQuality(blurAmount)
     let blockQuality = walkingBandBlockQuality(acceptedBlockCount: acceptedBlockCount, totalBlockCount: totalBlockCount)
     let evidence = motionConfidence * residualQuality * blurQuality * blockQuality
     return clamp(sqrtf(max(0.0, evidence)), min: 0.0, max: 1.0)

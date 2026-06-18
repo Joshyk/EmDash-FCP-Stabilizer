@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.148"
+private let tokyoWalkingStabilizerVersion = "0.3.149"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -524,6 +524,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
+    private let renderDiagnosticsLogLock = NSLock()
+    private var lastRenderDiagnosticsLogBucket: Int64?
+    private var lastRenderDiagnosticsLogWallTime: TimeInterval = 0.0
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
@@ -3719,6 +3722,101 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         publishHostAnalysisStatus(statusOverride: status)
     }
 
+    private func logDebugOverlayRenderTruthIfNeeded(
+        debugOverlayActive: Bool,
+        transformEnabled: Bool,
+        renderUsesPreparedAnalysis: Bool,
+        renderSourceIsProxy: Bool,
+        renderTime: CMTime,
+        analysisRenderTime: CMTime?,
+        frameCount: Int,
+        cacheIdentityShort: String,
+        autoTransform: StabilizerAutoTransform,
+        diagnostic: vector_float4,
+        diagnostic2: vector_float4,
+        diagnostic3: vector_float4,
+        diagnostic4: vector_float4,
+        diagnostic5: vector_float4
+    ) {
+        guard debugOverlayActive,
+              transformEnabled,
+              renderUsesPreparedAnalysis,
+              let analysisRenderTime
+        else {
+            return
+        }
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        let analysisSeconds = CMTimeGetSeconds(analysisRenderTime)
+        guard renderSeconds.isFinite,
+              analysisSeconds.isFinite
+        else {
+            return
+        }
+
+        let bucket = Int64((analysisSeconds * 2.0).rounded(.down))
+        let now = Date.timeIntervalSinceReferenceDate
+        renderDiagnosticsLogLock.lock()
+        let shouldLog = lastRenderDiagnosticsLogBucket != bucket
+            && now - lastRenderDiagnosticsLogWallTime >= 0.35
+        if shouldLog {
+            lastRenderDiagnosticsLogBucket = bucket
+            lastRenderDiagnosticsLogWallTime = now
+        }
+        renderDiagnosticsLogLock.unlock()
+        guard shouldLog else {
+            return
+        }
+
+        os_log(
+            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | FJIT %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f | SWOB %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f | bars XYZ %.3f %.3f %.3f HIT %.3f TURN %.3f FJIT %.3f SWOB %.3f WARP %.3f SMD %.3f FQ %.3f SQ %.3f WQ %.3f TQ %.3f TRK %.3f SHRP %.3f RES %.3f WLK %.3f",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            tokyoWalkingStabilizerVersion,
+            renderSeconds,
+            analysisSeconds,
+            renderSourceIsProxy ? "yes" : "no",
+            cacheIdentityShort,
+            frameCount,
+            autoTransform.pixelOffset.x,
+            autoTransform.pixelOffset.y,
+            autoTransform.rotationDegrees,
+            autoTransform.rawPixelOffset.x,
+            autoTransform.rawPixelOffset.y,
+            autoTransform.rawRotationDegrees,
+            autoTransform.footstepImpulse.x,
+            autoTransform.footstepImpulse.y,
+            autoTransform.footstepImpulse.z,
+            autoTransform.microConfidence,
+            autoTransform.effectiveMicroJitterStrength.x,
+            autoTransform.effectiveMicroJitterStrength.y,
+            autoTransform.effectiveMicroJitterStrength.z,
+            autoTransform.strideWobblePixelOffset.x,
+            autoTransform.strideWobblePixelOffset.y,
+            autoTransform.strideWobbleRotationDegrees,
+            autoTransform.strideConfidence,
+            autoTransform.effectiveStrideWobbleStrength.x,
+            autoTransform.effectiveStrideWobbleStrength.y,
+            autoTransform.effectiveStrideWobbleStrength.z,
+            diagnostic.x,
+            diagnostic.y,
+            diagnostic.z,
+            diagnostic.w,
+            diagnostic2.x,
+            diagnostic2.y,
+            diagnostic2.z,
+            diagnostic2.w,
+            diagnostic3.x,
+            diagnostic3.y,
+            diagnostic3.z,
+            diagnostic3.w,
+            diagnostic4.x,
+            diagnostic4.y,
+            diagnostic4.z,
+            diagnostic4.w,
+            diagnostic5.x
+        )
+    }
+
     private static func hostAnalysisStatusText(_ status: String) -> String {
         if status.contains("FxPlug \(tokyoWalkingStabilizerVersion)") {
             return status
@@ -3830,6 +3928,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let transformEnabled = masterStrength > 0.0001
         let autoTransform: StabilizerAutoTransform
         var activePreparedAnalysis: StabilizerPreparedAnalysis?
+        var activeAnalysisRenderTime: CMTime?
         var renderUsesPreparedAnalysis = false
         let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
@@ -3861,6 +3960,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             activePreparedAnalysis = preparedAnalysis
             publishHostAnalysisCacheIdentityOnMain(hostAnalysisStore.activeCacheIdentity, force: false)
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
+            activeAnalysisRenderTime = analysisRenderTime
             autoTransform = AutoStabilizationEstimator.estimate(
                 preparedAnalysis: preparedAnalysis,
                 renderTime: analysisRenderTime,
@@ -3967,7 +4067,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let diagnostic4 = vector_float4(
             min(1.0, autoTransform.turnConfidence),
             min(1.0, autoTransform.trackingConfidence),
-            min(1.0, 1.0 - autoTransform.blurAmount),
+            AutoStabilizationEstimator.blurEvidenceQuality(autoTransform.blurAmount),
             residualQuality
         )
         let diagnostic5 = vector_float4(
@@ -3975,6 +4075,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             0.0,
             0.0,
             0.0
+        )
+        logDebugOverlayRenderTruthIfNeeded(
+            debugOverlayActive: state.debugOverlay,
+            transformEnabled: transformEnabled,
+            renderUsesPreparedAnalysis: renderUsesPreparedAnalysis,
+            renderSourceIsProxy: renderSourceIsProxy,
+            renderTime: renderTime,
+            analysisRenderTime: activeAnalysisRenderTime,
+            frameCount: Int(state.hostAnalysisFrameCount),
+            cacheIdentityShort: renderCacheIdentityShort,
+            autoTransform: autoTransform,
+            diagnostic: diagnostic,
+            diagnostic2: diagnostic2,
+            diagnostic3: diagnostic3,
+            diagnostic4: diagnostic4,
+            diagnostic5: diagnostic5
         )
         let autoCropFraming: AutoCropFraming
         if state.autoCropEnabled,

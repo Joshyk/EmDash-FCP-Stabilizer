@@ -990,7 +990,11 @@ final class StabilizerHostAnalysisStore {
                 let explicitPreferredIdentityMatchesActive = preferredIdentity == activeIdentity
                 if explicitPreferredIdentityMatchesActive,
                    Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange) {
-                    installExplicitRenderTimeMappingIfNeeded(expectedRange: expectedRange)
+                    installExplicitRenderTimeMappingIfNeeded(
+                        renderTime: renderTime,
+                        expectedRange: expectedRange,
+                        analysis: analysis
+                    )
                 }
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
@@ -1152,22 +1156,68 @@ final class StabilizerHostAnalysisStore {
         markRenderStatus(.cacheRangeMismatch, info: "Cache range mismatch.", logReason: reason)
     }
 
-    private func installExplicitRenderTimeMappingIfNeeded(expectedRange: HostAnalysisExpectedRange?) {
+    private func installExplicitRenderTimeMappingIfNeeded(
+        renderTime: CMTime,
+        expectedRange: HostAnalysisExpectedRange?,
+        analysis: StabilizerPreparedAnalysis
+    ) {
         guard let expectedRange,
-              expectedRange.isValid
+              expectedRange.isValid,
+              !analysis.frames.isEmpty
         else {
             return
         }
-        lock.lock()
-        let alreadyMapped = renderToAnalysisOffsetSeconds != nil
-        let cacheRangeStart = CMTimeGetSeconds(activeRange.start)
-        if !alreadyMapped,
-           cacheRangeStart.isFinite,
-           expectedRange.startSeconds.isFinite {
-            renderToAnalysisOffsetSeconds = cacheRangeStart - expectedRange.startSeconds
-            renderToAnalysisOffsetProbeAttempted = true
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite else {
+            return
         }
+        let mappedOffset: Double
+        let mappingReason: String
+        if Self.renderSeconds(renderSeconds, isInside: analysis.frames) {
+            mappedOffset = 0.0
+            mappingReason = "render time already inside analysis range"
+        } else {
+            let cacheRangeStart = CMTimeGetSeconds(activeRange.start)
+            guard cacheRangeStart.isFinite,
+                  expectedRange.startSeconds.isFinite
+            else {
+                return
+            }
+            mappedOffset = cacheRangeStart - expectedRange.startSeconds
+            mappingReason = "render time outside analysis range; using expected source start"
+        }
+        let mappedSeconds = renderSeconds + mappedOffset
+        guard Self.renderSeconds(mappedSeconds, isInside: analysis.frames) else {
+            os_log(
+                "Explicit Host Analysis render-time mapping rejected because mapped time is outside the prepared frame range. render=%.6f offset=%.6f mapped=%.6f expectedRange=%{public}@ reason=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                renderSeconds,
+                mappedOffset,
+                mappedSeconds,
+                Self.expectedRangeDescription(expectedRange),
+                mappingReason
+            )
+            return
+        }
+        lock.lock()
+        let previousOffset = renderToAnalysisOffsetSeconds
+        let shouldPublish = previousOffset == nil || abs((previousOffset ?? 0.0) - mappedOffset) > 1e-9
+        renderToAnalysisOffsetSeconds = mappedOffset
+        renderToAnalysisOffsetProbeAttempted = true
         lock.unlock()
+        if shouldPublish {
+            os_log(
+                "Installed explicit Host Analysis render-time mapping. render=%.6f offset=%.6f mapped=%.6f expectedRange=%{public}@ reason=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                renderSeconds,
+                mappedOffset,
+                mappedSeconds,
+                Self.expectedRangeDescription(expectedRange),
+                mappingReason
+            )
+        }
     }
 
     func noteStabilizationActiveForRender(debugOverlayActive: Bool, reason: String) {

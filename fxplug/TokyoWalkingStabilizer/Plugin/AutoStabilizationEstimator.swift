@@ -542,6 +542,18 @@ enum AutoStabilizationEstimator {
     static let defaultSampleHeight = 54
     static let minimumSampleWidth = 32
     static let minimumSampleHeight = 24
+    static func blurEvidenceQuality(_ blurAmount: Float) -> Float {
+        guard blurAmount.isFinite else {
+            return 0.0
+        }
+        if blurAmount > 1.25 {
+            // Native Event Analyzer schema 17 stores this field as a sharpness-style
+            // Metal blur-kernel response, where useful footage is commonly 2-6+.
+            return clamp((blurAmount - 1.5) / 3.0, min: 0.0, max: 1.0)
+        }
+        return clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+    }
+
     private static let globalSearchRadius = 16
     private static let localSearchRadius = 5
     private static let positionGain: Float = 1.0
@@ -3292,7 +3304,7 @@ enum AutoStabilizationEstimator {
         totalBlockCount: Int32
     ) -> Float {
         let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
-        let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+        let blurQuality = blurEvidenceQuality(blurAmount)
         let blockQuality: Float
         if totalBlockCount > 0 {
             blockQuality = clamp(Float(acceptedBlockCount) / Float(totalBlockCount), min: 0.0, max: 1.0)
@@ -3311,7 +3323,7 @@ enum AutoStabilizationEstimator {
         totalBlockCount: Int32
     ) -> Float {
         let residualQuality = clamp(1.0 - (residual * 0.7), min: 0.0, max: 1.0)
-        let blurQuality = clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
+        let blurQuality = blurEvidenceQuality(blurAmount)
         let blockQuality = walkingBandBlockQuality(acceptedBlockCount: acceptedBlockCount, totalBlockCount: totalBlockCount)
         let combinedEvidence = motionConfidence * residualQuality * blurQuality * blockQuality
         return clamp(Darwin.sqrtf(max(0.0, combinedEvidence)), min: 0.0, max: 1.0)
