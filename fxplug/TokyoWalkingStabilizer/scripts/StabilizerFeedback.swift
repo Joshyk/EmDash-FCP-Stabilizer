@@ -32,11 +32,11 @@ private struct Strengths {
     var warp: Double
 
     static let defaults = Strengths(
-        microX: 1.0,
-        microY: 1.0,
+        microX: 5.0,
+        microY: 5.0,
         microR: 1.0,
-        strideX: 0.65,
-        strideY: 0.70,
+        strideX: 5.0,
+        strideY: 5.0,
         strideR: 0.75,
         turn: 1.0,
         warp: 1.0
@@ -865,8 +865,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: context.footstepCleanXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
     let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: context.footstepCleanYPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
     let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: context.footstepCleanRPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScaleDegrees)
-    let footAppliedX = abs(footX * xScale) * walkingCorrectionFactor(options.strengths.microX, confidence: footQX)
-    let footAppliedY = abs(footY * yScale) * walkingCorrectionFactor(options.strengths.microY, confidence: footQY)
+    let footAppliedX = abs(footX * xScale) * walkingCorrectionFactor(options.strengths.microX, confidence: footQX, maxStrength: 10.0)
+    let footAppliedY = abs(footY * yScale) * walkingCorrectionFactor(options.strengths.microY, confidence: footQY, maxStrength: 10.0)
     let footAppliedR = abs(footR) * walkingCorrectionFactor(options.strengths.microR, confidence: footQR)
     let footDetected = hypotf(footX * xScale, footY * yScale) + (abs(footR) * 12.0)
     let footApplied = hypotf(footAppliedX, footAppliedY) + (footAppliedR * 12.0)
@@ -877,8 +877,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideQX = strideConfidence(bandValue: strideX, trackingConfidence: strideTracking, fullScale: strideFullScalePixels)
     let strideQY = strideConfidence(bandValue: strideY, trackingConfidence: strideTracking, fullScale: strideFullScalePixels)
     let strideQR = strideConfidence(bandValue: strideR, trackingConfidence: strideTracking, fullScale: strideFullScaleDegrees)
-    let strideAppliedX = abs(strideX * xScale) * walkingCorrectionFactor(options.strengths.strideX, confidence: strideQX)
-    let strideAppliedY = abs(strideY * yScale) * walkingCorrectionFactor(options.strengths.strideY, confidence: strideQY)
+    let strideAppliedX = abs(strideX * xScale) * walkingCorrectionFactor(options.strengths.strideX, confidence: strideQX, maxStrength: 10.0)
+    let strideAppliedY = abs(strideY * yScale) * walkingCorrectionFactor(options.strengths.strideY, confidence: strideQY, maxStrength: 10.0)
     let strideAppliedR = abs(strideR) * walkingCorrectionFactor(options.strengths.strideR, confidence: strideQR)
     let strideDetected = hypotf(strideX * xScale, strideY * yScale) + (abs(strideR) * 12.0)
     let strideApplied = hypotf(strideAppliedX, strideAppliedY) + (strideAppliedR * 12.0)
@@ -1451,8 +1451,8 @@ private func correctionFactor(_ strength: Double, confidence: Float) -> Float {
     return clamp(direct + boost, min: 0.0, max: 1.0)
 }
 
-private func walkingCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
-    let requested = clamp(Float(strength), min: 0.0, max: 4.0)
+private func walkingCorrectionFactor(_ strength: Double, confidence: Float, maxStrength: Float = 4.0) -> Float {
+    let requested = clamp(Float(strength), min: 0.0, max: maxStrength)
     let response = walkingCorrectionConfidenceResponse(confidence)
     let direct = min(requested, 1.0) * response
     let boost = max(0.0, requested - 1.0) * 0.20 * response * (1.0 - (response * 0.35))

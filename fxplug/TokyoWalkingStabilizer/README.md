@@ -150,14 +150,15 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 ## Stabilization Model
 
 - `Footstep Jitter X Strength`: direct amount for horizontal frame-local footstep correction.
-  The default is `1.0`; values above `1.0` can compensate for weak frame confidence but are
-  clamped during render to avoid inverse shake. The walking-band confidence response is more
+  The default is `5.0`; values above `1.0` can compensate for weak frame confidence but are
+  clamped during render to avoid inverse shake. The maximum is `10.0`. The walking-band confidence response is more
   assertive than TURN and WARP for medium-confidence frame evidence, but zero confidence
   still produces zero correction.
   Confidence also checks local baseline support and surrounding footstep noise, with the
   surrounding-noise floor capped below full response so repeated walking motion does not bury
   a real center-frame landing impulse.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
+  The default is `5.0`, and the maximum is `10.0`.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
   `0.10` second shock region and predicts from outer samples up to `1.0` second away for
   X/Y/rotation, so landing shock is treated as a frame-level impulse instead of being
@@ -172,9 +173,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   render-time window is fixed at `2.0` seconds; there is no user-facing SWOB window. It is
   measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
-  worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale,
-  the Y default is `0.70`, and the rotation default is `0.2` to protect the horizon while
-  step follow-through is handled by the stride stage. FJIT and SWOB use a
+  worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale.
+  X and Y default to `5.0` and run up to `10.0`; the rotation default is `0.2` to protect
+  the horizon while step follow-through is handled by the stride stage. FJIT and SWOB use a
   count-aware walking-band tracking gate; WARP and TURN keep the stricter tracking gate.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
