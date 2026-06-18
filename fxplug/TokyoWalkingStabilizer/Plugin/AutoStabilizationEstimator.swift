@@ -1553,7 +1553,25 @@ enum AutoStabilizationEstimator {
         let centerWarpConfidence = clamp(rawCenterTransform.warpConfidence, min: 0.0, max: 1.0)
         let cappedWarpConfidence = min(smoothedWarpConfidence, centerWarpConfidence)
         let centerWarpScale = smoothedWarpConfidence > 1e-6 ? cappedWarpConfidence / smoothedWarpConfidence : 0.0
-        smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
+        let transitionDampingPixelScale = min(outputSize.x, outputSize.y)
+        smoothedTransform.macroPixelOffset = transitionStabilizedPositionComponent(
+            center: rawCenterTransform.macroPixelOffset,
+            smoothed: smoothedTransform.macroPixelOffset,
+            confidence: min(rawCenterTransform.turnConfidence, rawCenterTransform.trackingConfidence),
+            fullScalePixels: max(8.0, transitionDampingPixelScale * 0.008)
+        )
+        smoothedTransform.microPixelOffset = transitionStabilizedPositionComponent(
+            center: rawCenterTransform.microPixelOffset,
+            smoothed: smoothedTransform.microPixelOffset,
+            confidence: min(rawCenterTransform.microConfidence, rawCenterTransform.walkingTrackingConfidence),
+            fullScalePixels: max(3.0, transitionDampingPixelScale * 0.004)
+        )
+        smoothedTransform.strideWobblePixelOffset = transitionStabilizedPositionComponent(
+            center: rawCenterTransform.strideWobblePixelOffset,
+            smoothed: smoothedTransform.strideWobblePixelOffset,
+            confidence: min(rawCenterTransform.strideConfidence, rawCenterTransform.walkingTrackingConfidence),
+            fullScalePixels: max(6.0, transitionDampingPixelScale * 0.006)
+        )
         smoothedTransform.footstepJitterRotationDegrees = rawCenterTransform.footstepJitterRotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
         smoothedTransform.microConfidence = rawCenterTransform.microConfidence
@@ -1581,6 +1599,28 @@ enum AutoStabilizationEstimator {
         smoothedTransform.temporalSmoothingSampleCount = Int32(weightedSamples.count)
         smoothedTransform.temporalSmoothingWindowSeconds = Float(renderTemporalSmoothingWindowSeconds)
         return smoothedTransform
+    }
+
+    private static func transitionStabilizedPositionComponent(
+        center: vector_float2,
+        smoothed: vector_float2,
+        confidence: Float,
+        fullScalePixels: Float
+    ) -> vector_float2 {
+        let delta = simd_length(center - smoothed)
+        let normalizedDelta = delta / max(fullScalePixels, 1e-6)
+        let instability = smoothStep((normalizedDelta - 0.25) / 0.75)
+        let confidenceKeep = smoothStep((clamp(confidence, min: 0.0, max: 1.0) - 0.25) / 0.45)
+        let stableCenterWeight = 0.55 + (0.40 * confidenceKeep)
+        let unstableCenterWeight = 0.18 + (0.37 * confidenceKeep)
+        let centerWeight = stableCenterWeight
+            + ((unstableCenterWeight - stableCenterWeight) * instability)
+        return smoothed + ((center - smoothed) * centerWeight)
+    }
+
+    private static func smoothStep(_ progress: Float) -> Float {
+        let t = clamp(progress, min: 0.0, max: 1.0)
+        return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
     private static func farFieldWarpSmoothingSamples(
