@@ -560,8 +560,10 @@ enum AutoStabilizationEstimator {
         return clamp(1.0 - (blurAmount * 0.45), min: 0.0, max: 1.0)
     }
 
-    private static let globalSearchRadius = 16
-    private static let localSearchRadius = 5
+    private static let minimumGlobalSearchRadius = 16
+    private static let maximumGlobalSearchRadius = 36
+    private static let minimumLocalSearchRadius = 5
+    private static let maximumLocalSearchRadius = 10
     private static let positionGain: Float = 1.0
     private static let rotationGain: Float = 1.0
     private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
@@ -2185,6 +2187,7 @@ enum AutoStabilizationEstimator {
     fileprivate static func motionBlockBatch(sampleWidth: Int, sampleHeight: Int) -> StabilizerMotionBlockBatch {
         let blocks = motionBlocks(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
         let localStride: UInt32 = 1
+        let localSearchRadius = analysisLocalSearchRadius(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
         let uniforms = blocks.map { block in
             StabilizerShiftBatchUniforms(
                 width: UInt32(sampleWidth),
@@ -2204,6 +2207,18 @@ enum AutoStabilizationEstimator {
             uniforms: uniforms,
             maxBlockHeight: blocks.map(\.height).max() ?? 0
         )
+    }
+
+    private static func analysisGlobalSearchRadius(sampleWidth: Int, sampleHeight: Int) -> Int {
+        let shortSide = min(sampleWidth, sampleHeight)
+        let scaledRadius = Int((Float(shortSide) / 120.0).rounded(.up))
+        return max(minimumGlobalSearchRadius, min(maximumGlobalSearchRadius, scaledRadius))
+    }
+
+    private static func analysisLocalSearchRadius(sampleWidth: Int, sampleHeight: Int) -> Int {
+        let globalRadius = analysisGlobalSearchRadius(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        let scaledRadius = Int((Float(globalRadius) / 3.25).rounded(.up))
+        return max(minimumLocalSearchRadius, min(maximumLocalSearchRadius, scaledRadius))
     }
 
     private static func farFieldWeight(centerY: Float, sampleHeight: Int) -> Float {
@@ -2378,6 +2393,8 @@ enum AutoStabilizationEstimator {
         overlappedMetricsMilliseconds: Double
     ) {
         let blocks = blockBatch.blocks
+        let globalSearchRadius = analysisGlobalSearchRadius(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        let localSearchRadius = analysisLocalSearchRadius(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
         guard !blocks.isEmpty else {
             let startedAt = CFAbsoluteTimeGetCurrent()
             let pendingGlobal = try beginEstimateShift(

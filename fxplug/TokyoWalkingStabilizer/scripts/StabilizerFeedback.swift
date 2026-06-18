@@ -421,7 +421,7 @@ private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
 private let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
-private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19]
+private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
