@@ -42,11 +42,12 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.170"
+private let tokyoWalkingStabilizerVersion = "0.3.171"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
-private let stabilizerDefaultAutoCropTransitionDuration = 1.5
+private let stabilizerDefaultAutoCropTransitionDuration = 5.0
+private let stabilizerMaximumAutoCropTransitionDuration = 30.0
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
@@ -669,9 +670,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterID: ParameterID.autoCropTransitionDuration.rawValue,
             defaultValue: stabilizerDefaultAutoCropTransitionDuration,
             parameterMin: 0.0,
-            parameterMax: 6.0,
+            parameterMax: stabilizerMaximumAutoCropTransitionDuration,
             sliderMin: 0.0,
-            sliderMax: 6.0,
+            sliderMax: stabilizerMaximumAutoCropTransitionDuration,
             delta: 0.05,
             parameterFlags: flags
         )
@@ -1338,7 +1339,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let transitionSamples = autoCropTransformSamples(
             preparedAnalysis: preparedAnalysis,
             startSeconds: renderSeconds,
-            durationSeconds: autoCropTransitionLookaheadSeconds(transitionDuration),
+            durationSeconds: autoCropTransitionDurationSeconds(transitionDuration),
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
@@ -1378,15 +1379,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func autoCropTransitionDurationSeconds(_ duration: Double) -> Double {
-        min(max(duration, 0.0), 6.0)
-    }
-
-    private static func autoCropTransitionLookaheadSeconds(_ duration: Double) -> Double {
-        let clampedDuration = autoCropTransitionDurationSeconds(duration)
-        guard clampedDuration > 1e-6 else {
-            return 0.0
-        }
-        return clampedDuration * 2.0
+        min(max(duration, 0.0), stabilizerMaximumAutoCropTransitionDuration)
     }
 
     private static func smoothStep(_ progress: Float) -> Float {
