@@ -3,7 +3,13 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { buildCacheRootFromAnalysis, parseAnalyzerProgressLine, processFailureMessage } = require("../server.js");
+const {
+  buildCacheRootFromAnalysis,
+  failedRunResult,
+  parseAnalyzerProgressLine,
+  processFailureDetails,
+  processFailureMessage,
+} = require("../server.js");
 
 test("buildCacheRootFromAnalysis requires analyzer-normalized cache root", () => {
   assert.equal(
@@ -79,6 +85,27 @@ test("processFailureMessage reports JSON error output", () => {
     ),
     "cache file is missing: /tmp/cache.json"
   );
+});
+
+test("processFailureDetails preserves analyzer JSON error payload", () => {
+  const details = processFailureDetails(
+    "python3",
+    1,
+    null,
+    JSON.stringify({
+      status: "error",
+      error: "Metal analyzer device unavailable",
+      schemaVersion: 1,
+    }),
+    ""
+  );
+  assert.equal(details.message, "Metal analyzer device unavailable");
+  assert.equal(details.payload.status, "error");
+  const result = failedRunResult(details);
+  assert.equal(result.summary.fcpImportReady, false);
+  assert.equal(result.summary.analyzedFailureCount, 1);
+  assert.match(result.summary.failedClips[0].reason, /Metal analyzer device unavailable/);
+  assert.equal(result.analyzerPayload.schemaVersion, 1);
 });
 
 test("processFailureMessage reports validation failures from stdout", () => {

@@ -39,6 +39,14 @@ class CancelledError extends Error {
   }
 }
 
+class ProcessFailureError extends Error {
+  constructor(message, payload = null) {
+    super(message);
+    this.name = "ProcessFailureError";
+    this.payload = payload;
+  }
+}
+
 function expandPath(value) {
   const text = String(value || "");
   if (!text) return "";
@@ -179,9 +187,9 @@ function terminateJobProcess(id, child) {
   }, 3000);
 }
 
-function processFailureMessage(command, code, signal, stdout, stderr) {
+function processFailureDetails(command, code, signal, stdout, stderr) {
   const stderrText = String(stderr || "").trim();
-  if (stderrText) return stderrText;
+  if (stderrText) return { message: stderrText, payload: null };
 
   const stdoutText = String(stdout || "").trim();
   if (stdoutText) {
@@ -191,19 +199,42 @@ function processFailureMessage(command, code, signal, stdout, stderr) {
         ? payload.failures.filter(Boolean)
         : [];
       if (payload.error && failures.length) {
-        return `${payload.error}: ${failures.join("; ")}`;
+        return { message: `${payload.error}: ${failures.join("; ")}`, payload };
       }
-      if (payload.error) return String(payload.error);
-      if (failures.length) return failures.join("; ");
+      if (payload.error) return { message: String(payload.error), payload };
+      if (failures.length) return { message: failures.join("; "), payload };
       if (payload.status && payload.status !== "ok") {
-        return `${command} exited with ${code}; JSON status: ${payload.status}`;
+        return { message: `${command} exited with ${code}; JSON status: ${payload.status}`, payload };
       }
     } catch {
-      return stdoutText.slice(0, 2000);
+      return { message: stdoutText.slice(0, 2000), payload: null };
     }
   }
 
-  return `${command} exited with ${code}${signal ? ` (${signal})` : ""}`;
+  return { message: `${command} exited with ${code}${signal ? ` (${signal})` : ""}`, payload: null };
+}
+
+function processFailureMessage(command, code, signal, stdout, stderr) {
+  return processFailureDetails(command, code, signal, stdout, stderr).message;
+}
+
+function failedRunResult(error) {
+  const reason = error && error.message ? error.message : "analysis failed";
+  return {
+    status: "error",
+    summary: {
+      analyzedSuccessCount: 0,
+      analyzedFailureCount: 1,
+      packageCreatedCount: 0,
+      validationPassCount: 0,
+      validationFailCount: 0,
+      fcpImportReady: false,
+      failedClips: [{ reason }],
+      packages: [],
+    },
+    error: reason,
+    analyzerPayload: error && error.payload ? error.payload : undefined,
+  };
 }
 
 function runJsonProcess(command, args, options = {}) {
@@ -258,7 +289,8 @@ function runJsonProcess(command, args, options = {}) {
         return;
       }
       if (code !== 0) {
-        reject(new Error(processFailureMessage(command, code, signal, stdout, stderr)));
+        const details = processFailureDetails(command, code, signal, stdout, stderr);
+        reject(new ProcessFailureError(details.message, details.payload));
         return;
       }
       try {
@@ -653,7 +685,13 @@ function startRunJob(body) {
       if (error instanceof CancelledError) {
         updateJob(id, { status: "cancelled", stage: "cancelled", message: error.message });
       } else {
-        updateJob(id, { status: "error", stage: "error", message: error.message, error: error.message });
+        updateJob(id, {
+          status: "error",
+          stage: "error",
+          message: error.message,
+          error: error.message,
+          result: failedRunResult(error),
+        });
       }
     }
   });
@@ -822,6 +860,8 @@ if (require.main === module) {
 
 module.exports = {
   buildCacheRootFromAnalysis,
+  failedRunResult,
   parseAnalyzerProgressLine,
+  processFailureDetails,
   processFailureMessage,
 };
