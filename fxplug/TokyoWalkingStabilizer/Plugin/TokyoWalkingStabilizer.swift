@@ -222,6 +222,31 @@ private struct AutoCropFramingCacheKey: Hashable {
     let currentTransform: AutoCropTransformSignature
 }
 
+private struct StabilizerAutoTransformCacheKey: Hashable {
+    let cacheIdentity: String?
+    let analysisRevision: UInt64
+    let renderTimeValue: Int64
+    let renderTimeScale: Int32
+    let renderTimeEpoch: Int64
+    let outputWidth: Int32
+    let outputHeight: Int32
+    let analysisFrameCount: Int
+    let analysisFirstTime: UInt64
+    let analysisLastTime: UInt64
+    let analysisSampleWidth: Int32
+    let analysisSampleHeight: Int32
+    let analysisQualityModel: Int
+    let panSmoothSeconds: UInt64
+    let microJitterX: UInt64
+    let microJitterY: UInt64
+    let microJitterRotation: UInt64
+    let strideWobbleX: UInt64
+    let strideWobbleY: UInt64
+    let strideWobbleRotation: UInt64
+    let panStabilizationStrength: UInt64
+    let farFieldWarp: UInt64
+}
+
 private struct StabilizerPluginState {
     var strength: Double
     var microJitterXStrength: Double
@@ -563,6 +588,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
     private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
     private static let autoCropFramingCacheLimit = 32
+    private static let autoTransformCacheLock = NSLock()
+    private static var autoTransformCache: [StabilizerAutoTransformCacheKey: StabilizerAutoTransform] = [:]
+    private static var autoTransformCacheOrder: [StabilizerAutoTransformCacheKey] = []
+    private static let autoTransformCacheLimit = 64
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -1346,6 +1375,77 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let baseScale = min(Float(width) / 3840.0, Float(height) / 2160.0) * 1.35
         let minimumScale: Float = renderSourceIsProxy ? 0.25 : 0.75
         return min(max(baseScale, minimumScale), 2.25)
+    }
+
+    private static func cachedAutoTransform(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> StabilizerAutoTransform {
+        let firstFrame = preparedAnalysis.frames.first
+        let qualityModelKey: Int
+        switch preparedAnalysis.qualityModel {
+        case .fxplugHostAnalysis:
+            qualityModelKey = 0
+        case .eventAnalyzerCache:
+            qualityModelKey = 1
+        }
+        let key = StabilizerAutoTransformCacheKey(
+            cacheIdentity: cacheIdentity,
+            analysisRevision: analysisRevision,
+            renderTimeValue: renderTime.value,
+            renderTimeScale: renderTime.timescale,
+            renderTimeEpoch: renderTime.epoch,
+            outputWidth: Int32(clamping: Int(outputSize.x.rounded())),
+            outputHeight: Int32(clamping: Int(outputSize.y.rounded())),
+            analysisFrameCount: preparedAnalysis.frames.count,
+            analysisFirstTime: firstFrame?.time.bitPattern ?? 0,
+            analysisLastTime: preparedAnalysis.frames.last?.time.bitPattern ?? 0,
+            analysisSampleWidth: Int32(clamping: firstFrame?.sampleWidth ?? 0),
+            analysisSampleHeight: Int32(clamping: firstFrame?.sampleHeight ?? 0),
+            analysisQualityModel: qualityModelKey,
+            panSmoothSeconds: panSmoothSeconds.bitPattern,
+            microJitterX: strengths.microJitterX.bitPattern,
+            microJitterY: strengths.microJitterY.bitPattern,
+            microJitterRotation: strengths.microJitterRotation.bitPattern,
+            strideWobbleX: strengths.strideWobbleX.bitPattern,
+            strideWobbleY: strengths.strideWobbleY.bitPattern,
+            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+            farFieldWarp: strengths.farFieldWarp.bitPattern
+        )
+
+        autoTransformCacheLock.lock()
+        if let cachedTransform = autoTransformCache[key] {
+            autoTransformCacheLock.unlock()
+            return cachedTransform
+        }
+        autoTransformCacheLock.unlock()
+
+        let transform = AutoStabilizationEstimator.estimate(
+            preparedAnalysis: preparedAnalysis,
+            renderTime: renderTime,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        )
+
+        autoTransformCacheLock.lock()
+        defer { autoTransformCacheLock.unlock() }
+        if let cachedTransform = autoTransformCache[key] {
+            return cachedTransform
+        }
+        autoTransformCache[key] = transform
+        autoTransformCacheOrder.append(key)
+        while autoTransformCacheOrder.count > autoTransformCacheLimit {
+            let oldestKey = autoTransformCacheOrder.removeFirst()
+            autoTransformCache.removeValue(forKey: oldestKey)
+        }
+        return transform
     }
 
     private static func cachedAutoCropFraming(
@@ -3910,6 +4010,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)
             : false
         let hasCompletedHostAnalysis = hostAnalysisStore.hasCompletedAnalysis
+        var renderCacheIdentity: String?
+        var renderStoreRevision = hostAnalysisStore.revision
         let canUseHostAnalysisStoreForRender = transformEnabled
             && (hasCompletedHostAnalysis || configuredProjectBundleCache)
         if transformEnabled,
@@ -3922,15 +4024,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
            ) {
             renderUsesPreparedAnalysis = true
             activePreparedAnalysis = preparedAnalysis
-            publishHostAnalysisCacheIdentityOnMain(hostAnalysisStore.activeCacheIdentity, force: false)
+            renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
+            renderStoreRevision = hostAnalysisStore.revision
+            publishHostAnalysisCacheIdentityOnMain(renderCacheIdentity, force: false)
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             activeAnalysisRenderTime = analysisRenderTime
-            autoTransform = AutoStabilizationEstimator.estimate(
+            autoTransform = Self.cachedAutoTransform(
                 preparedAnalysis: preparedAnalysis,
                 renderTime: analysisRenderTime,
                 outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
                 panSmoothSeconds: state.panSmoothSeconds,
-                strengths: correctionStrengths
+                strengths: correctionStrengths,
+                analysisRevision: renderStoreRevision,
+                cacheIdentity: renderCacheIdentity
             )
         } else {
             autoTransform = .identity
@@ -3938,7 +4044,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let renderSourceIsProxy = renderUsesPreparedAnalysis
             && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
         let debugOverlayActive = state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis
-        let renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
+        if renderCacheIdentity == nil {
+            renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
+        }
         let renderCacheIdentityShort = Self.shortRenderCacheIdentity(renderCacheIdentity)
         if transformEnabled && renderUsesPreparedAnalysis {
             if !renderSourceIsProxy {
@@ -3965,7 +4073,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | stabilization \(renderUsesPreparedAnalysis && transformEnabled ? "active" : "inactive") | debug overlay \(state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? "active" : "inactive") | proxy \(renderSourceIsProxy ? "yes" : "no") | identity \(renderCacheIdentityShort) | auto crop \(state.autoCropEnabled ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
         )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
-        let renderStoreRevision = hostAnalysisStore.revision
+        renderStoreRevision = hostAnalysisStore.revision
         let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
         if renderStoreChangedStatus || abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
             publishPreviewInvalidationOnMain(
