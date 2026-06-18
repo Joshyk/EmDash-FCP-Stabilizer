@@ -115,6 +115,57 @@ private struct AutoCropFraming {
     )
 }
 
+private struct AutoCropTransformContext {
+    let outputSize: vector_float2
+    let halfSize: vector_float2
+    let marginPixels: Float
+    let pixelOffset: vector_float2
+    let perspective: vector_float2
+    let shear: vector_float2
+    let rotationSine: Float
+    let rotationCosine: Float
+
+    init(transform: StabilizerAutoTransform, outputSize: vector_float2, masterStrength: Float) {
+        self.outputSize = outputSize
+        self.halfSize = outputSize * 0.5
+        self.marginPixels = min(Float(1.0), max(0.0, min(outputSize.x, outputSize.y) * 0.001))
+        self.pixelOffset = transform.pixelOffset * masterStrength
+        self.perspective = (transform.perspective + transform.yawPitchProxy) * masterStrength
+        self.shear = transform.shear * masterStrength
+        let rotationRadians = transform.rotationDegrees * .pi / 180.0 * masterStrength
+        self.rotationSine = Darwin.sinf(-rotationRadians)
+        self.rotationCosine = Darwin.cosf(-rotationRadians)
+    }
+
+    func sourcePixel(outputPixel: vector_float2, scale: Float, cropPositionPixels: vector_float2) -> vector_float2 {
+        let framedPixels = (outputPixel / max(scale, 1.0)) + cropPositionPixels
+        let rotated = vector_float2(
+            (framedPixels.x * rotationCosine) - (framedPixels.y * rotationSine),
+            (framedPixels.x * rotationSine) + (framedPixels.y * rotationCosine)
+        )
+
+        var stabilizedPixels = rotated - pixelOffset
+        let normalizedPixels = stabilizedPixels / outputSize
+        let perspectiveDenominator = max(
+            Float(0.35),
+            1.0 + (perspective.x * normalizedPixels.x) + (perspective.y * normalizedPixels.y)
+        )
+        stabilizedPixels /= perspectiveDenominator
+        stabilizedPixels -= vector_float2(
+            shear.x * stabilizedPixels.y,
+            shear.y * stabilizedPixels.x
+        )
+        return stabilizedPixels
+    }
+
+    func containsSourcePixel(_ sourcePixel: vector_float2) -> Bool {
+        sourcePixel.x >= (-halfSize.x + marginPixels)
+            && sourcePixel.x <= (halfSize.x - marginPixels)
+            && sourcePixel.y >= (-halfSize.y + marginPixels)
+            && sourcePixel.y <= (halfSize.y - marginPixels)
+    }
+}
+
 private struct AutoCropTransformSignature: Hashable {
     let pixelOffsetX: UInt32
     let pixelOffsetY: UInt32
@@ -1399,6 +1450,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return .identity
         }
 
+        let context = AutoCropTransformContext(
+            transform: currentTransform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        )
         let positionSmoothingWeight = autoCropPositionSmoothingWeight(
             smoothness: positionSmoothness,
             speed: positionSpeed
@@ -1409,15 +1465,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         ) * masterStrength
         let positionPixels = blackSafeAutoCropPosition(
             preferredPositionPixels: slowPositionPixels,
-            transform: currentTransform,
-            outputSize: outputSize,
-            masterStrength: masterStrength
+            context: context
         )
 
         let scale = requiredAutoCropScale(
-            transform: currentTransform,
-            outputSize: outputSize,
-            masterStrength: masterStrength,
+            context: context,
             cropPositionPixels: positionPixels
         ) * autoCropZoomPadding(smoothness: zoomSmoothness, speed: zoomSpeed)
 
@@ -1442,25 +1494,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func blackSafeAutoCropPosition(
         preferredPositionPixels: vector_float2,
-        transform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        masterStrength: Float
+        context: AutoCropTransformContext
     ) -> vector_float2 {
         if autoCropCenterIsInsideSource(
             cropPositionPixels: preferredPositionPixels,
-            transform: transform,
-            outputSize: outputSize,
-            masterStrength: masterStrength
+            context: context
         ) {
             return preferredPositionPixels
         }
 
-        let currentPositionPixels = transform.pixelOffset * masterStrength
+        let currentPositionPixels = context.pixelOffset
         guard autoCropCenterIsInsideSource(
             cropPositionPixels: currentPositionPixels,
-            transform: transform,
-            outputSize: outputSize,
-            masterStrength: masterStrength
+            context: context
         ) else {
             return currentPositionPixels
         }
@@ -1472,9 +1518,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let candidate = (preferredPositionPixels * (1.0 - midpoint)) + (currentPositionPixels * midpoint)
             if autoCropCenterIsInsideSource(
                 cropPositionPixels: candidate,
-                transform: transform,
-                outputSize: outputSize,
-                masterStrength: masterStrength
+                context: context
             ) {
                 validFraction = midpoint
             } else {
@@ -1486,39 +1530,25 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func autoCropCenterIsInsideSource(
         cropPositionPixels: vector_float2,
-        transform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        masterStrength: Float
+        context: AutoCropTransformContext
     ) -> Bool {
-        let halfSize = outputSize * 0.5
-        let marginPixels = autoCropMarginPixels(outputSize: outputSize)
-        let sourcePixel = autoCropSourcePixel(
+        let sourcePixel = context.sourcePixel(
             outputPixel: vector_float2(0.0, 0.0),
             scale: 1.0,
-            transform: transform,
-            outputSize: outputSize,
-            masterStrength: masterStrength,
             cropPositionPixels: cropPositionPixels
         )
-        return sourcePixel.x >= (-halfSize.x + marginPixels)
-            && sourcePixel.x <= (halfSize.x - marginPixels)
-            && sourcePixel.y >= (-halfSize.y + marginPixels)
-            && sourcePixel.y <= (halfSize.y - marginPixels)
+        return context.containsSourcePixel(sourcePixel)
     }
 
     private static func requiredAutoCropScale(
-        transform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        masterStrength: Float,
+        context: AutoCropTransformContext,
         cropPositionPixels: vector_float2
     ) -> Float {
         var upper: Float = 1.0
         while upper < 128.0,
               !autoCropBoundaryScaleContainsSource(
                   scale: upper,
-                  transform: transform,
-                  outputSize: outputSize,
-                  masterStrength: masterStrength,
+                  context: context,
                   cropPositionPixels: cropPositionPixels
               ) {
             upper *= 2.0
@@ -1529,9 +1559,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let midpoint = (lower + upper) * 0.5
             if autoCropBoundaryScaleContainsSource(
                 scale: midpoint,
-                transform: transform,
-                outputSize: outputSize,
-                masterStrength: masterStrength,
+                context: context,
                 cropPositionPixels: cropPositionPixels
             ) {
                 upper = midpoint
@@ -1541,9 +1569,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         if autoCropScaleContainsSource(
             scale: upper,
-            transform: transform,
-            outputSize: outputSize,
-            masterStrength: masterStrength,
+            context: context,
             cropPositionPixels: cropPositionPixels
         ) {
             return upper
@@ -1553,9 +1579,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         while fullUpper < 128.0,
               !autoCropScaleContainsSource(
                   scale: fullUpper,
-                  transform: transform,
-                  outputSize: outputSize,
-                  masterStrength: masterStrength,
+                  context: context,
                   cropPositionPixels: cropPositionPixels
               ) {
             fullUpper *= 2.0
@@ -1566,9 +1590,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let midpoint = (fullLower + fullUpper) * 0.5
             if autoCropScaleContainsSource(
                 scale: midpoint,
-                transform: transform,
-                outputSize: outputSize,
-                masterStrength: masterStrength,
+                context: context,
                 cropPositionPixels: cropPositionPixels
             ) {
                 fullUpper = midpoint
@@ -1581,35 +1603,25 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func autoCropBoundaryScaleContainsSource(
         scale: Float,
-        transform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        masterStrength: Float,
+        context: AutoCropTransformContext,
         cropPositionPixels: vector_float2
     ) -> Bool {
         let sampleSteps = 6
-        let halfSize = outputSize * 0.5
-        let marginPixels = autoCropMarginPixels(outputSize: outputSize)
 
         for yIndex in 0...sampleSteps {
             for xIndex in 0...sampleSteps where xIndex == 0 || xIndex == sampleSteps || yIndex == 0 || yIndex == sampleSteps {
                 let xFraction = (Float(xIndex) / Float(sampleSteps)) - 0.5
                 let yFraction = (Float(yIndex) / Float(sampleSteps)) - 0.5
                 let outputPixel = vector_float2(
-                    xFraction * outputSize.x,
-                    yFraction * outputSize.y
+                    xFraction * context.outputSize.x,
+                    yFraction * context.outputSize.y
                 )
-                let sourcePixel = autoCropSourcePixel(
+                let sourcePixel = context.sourcePixel(
                     outputPixel: outputPixel,
                     scale: scale,
-                    transform: transform,
-                    outputSize: outputSize,
-                    masterStrength: masterStrength,
                     cropPositionPixels: cropPositionPixels
                 )
-                if sourcePixel.x < (-halfSize.x + marginPixels)
-                    || sourcePixel.x > (halfSize.x - marginPixels)
-                    || sourcePixel.y < (-halfSize.y + marginPixels)
-                    || sourcePixel.y > (halfSize.y - marginPixels) {
+                if !context.containsSourcePixel(sourcePixel) {
                     return false
                 }
             }
@@ -1619,77 +1631,30 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func autoCropScaleContainsSource(
         scale: Float,
-        transform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        masterStrength: Float,
+        context: AutoCropTransformContext,
         cropPositionPixels: vector_float2
     ) -> Bool {
         let sampleSteps = 6
-        let halfSize = outputSize * 0.5
-        let marginPixels = autoCropMarginPixels(outputSize: outputSize)
 
         for yIndex in 0...sampleSteps {
             for xIndex in 0...sampleSteps {
                 let xFraction = (Float(xIndex) / Float(sampleSteps)) - 0.5
                 let yFraction = (Float(yIndex) / Float(sampleSteps)) - 0.5
                 let outputPixel = vector_float2(
-                    xFraction * outputSize.x,
-                    yFraction * outputSize.y
+                    xFraction * context.outputSize.x,
+                    yFraction * context.outputSize.y
                 )
-                let sourcePixel = autoCropSourcePixel(
+                let sourcePixel = context.sourcePixel(
                     outputPixel: outputPixel,
                     scale: scale,
-                    transform: transform,
-                    outputSize: outputSize,
-                    masterStrength: masterStrength,
                     cropPositionPixels: cropPositionPixels
                 )
-                if sourcePixel.x < (-halfSize.x + marginPixels)
-                    || sourcePixel.x > (halfSize.x - marginPixels)
-                    || sourcePixel.y < (-halfSize.y + marginPixels)
-                    || sourcePixel.y > (halfSize.y - marginPixels) {
+                if !context.containsSourcePixel(sourcePixel) {
                     return false
                 }
             }
         }
         return true
-    }
-
-    private static func autoCropMarginPixels(outputSize: vector_float2) -> Float {
-        min(Float(1.0), max(0.0, min(outputSize.x, outputSize.y) * 0.001))
-    }
-
-    private static func autoCropSourcePixel(
-        outputPixel: vector_float2,
-        scale: Float,
-        transform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        masterStrength: Float,
-        cropPositionPixels: vector_float2
-    ) -> vector_float2 {
-        let framedPixels = (outputPixel / max(scale, 1.0)) + cropPositionPixels
-        let rotationRadians = transform.rotationDegrees * .pi / 180.0 * masterStrength
-        let sine = Darwin.sinf(-rotationRadians)
-        let cosine = Darwin.cosf(-rotationRadians)
-        let rotated = vector_float2(
-            (framedPixels.x * cosine) - (framedPixels.y * sine),
-            (framedPixels.x * sine) + (framedPixels.y * cosine)
-        )
-
-        var stabilizedPixels = rotated - (transform.pixelOffset * masterStrength)
-        let perspective = (transform.perspective + transform.yawPitchProxy) * masterStrength
-        let normalizedPixels = stabilizedPixels / outputSize
-        let perspectiveDenominator = max(
-            Float(0.35),
-            1.0 + (perspective.x * normalizedPixels.x) + (perspective.y * normalizedPixels.y)
-        )
-        stabilizedPixels /= perspectiveDenominator
-        let shear = transform.shear * masterStrength
-        stabilizedPixels -= vector_float2(
-            shear.x * stabilizedPixels.y,
-            shear.y * stabilizedPixels.x
-        )
-        return stabilizedPixels
     }
 
     private func publishHostAnalysisStatus(force: Bool = false, statusOverride: String? = nil) {
@@ -4113,7 +4078,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
            let preparedAnalysis = activePreparedAnalysis {
             autoCropFraming = Self.cachedAutoCropFraming(
                 preparedAnalysis: preparedAnalysis,
-                renderTime: hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis),
+                renderTime: activeAnalysisRenderTime ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis),
                 currentTransform: autoTransform,
                 outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
                 panSmoothSeconds: state.panSmoothSeconds,
