@@ -94,7 +94,7 @@ struct StabilizerCorrectionStrengths {
         strideWobbleX: 5.0,
         strideWobbleY: 5.0,
         strideWobbleRotation: 0.75,
-        panStabilizationStrength: 0.8,
+        panStabilizationStrength: 0.2,
         farFieldWarp: 1.0
     )
 }
