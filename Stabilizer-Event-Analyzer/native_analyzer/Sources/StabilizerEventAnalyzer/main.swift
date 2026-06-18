@@ -19,6 +19,15 @@ private let minimumTranslationAccelerationLimit: Float = 0.75
 private let minimumTranslationJerkLimit: Float = 0.5
 private let minimumRotationAccelerationLimit: Float = 0.04
 private let minimumRotationJerkLimit: Float = 0.03
+private let localSearchRadius = 5
+private let minimumAcceptedMotionBlocks = 3
+private let minimumFarFieldMotionBlocks = 3
+private let staggeredMotionBlockFarFieldThreshold: Float = 0.70
+private let staggeredMotionBlockMinimumWidth = 18
+private let staggeredMotionBlockMinimumHeight = 12
+private let maxFarFieldShear: Float = 0.008
+private let maxFarFieldYawPitchProxy: Float = 0.004
+private let maxFarFieldPerspective: Float = 0.003
 private let progressOutputIsTerminal = isatty(STDERR_FILENO) == 1
 private let analyzerVideoOutputSettings: [String: Any] = [
     kCVPixelBufferPixelFormatTypeKey as String: [
@@ -114,7 +123,40 @@ struct PairMotion {
     let dx: Float
     let dy: Float
     let residual: Float
-    let confidence: Float
+    let signedRoll: Float
+    let rollMotion: Float
+    let yawProxy: Float
+    let pitchProxy: Float
+    let shearX: Float
+    let shearY: Float
+    let perspectiveX: Float
+    let perspectiveY: Float
+    let analysisConfidence: Float
+    let warpConfidence: Float
+    let acceptedBlockCount: Int32
+    let totalBlockCount: Int32
+    let searchRadiusHitCount: Int32
+    let searchRadiusTotalCount: Int32
+
+    static let zero = PairMotion(
+        dx: 0.0,
+        dy: 0.0,
+        residual: 0.0,
+        signedRoll: 0.0,
+        rollMotion: 0.0,
+        yawProxy: 0.0,
+        pitchProxy: 0.0,
+        shearX: 0.0,
+        shearY: 0.0,
+        perspectiveX: 0.0,
+        perspectiveY: 0.0,
+        analysisConfidence: 1.0,
+        warpConfidence: 0.0,
+        acceptedBlockCount: 0,
+        totalBlockCount: 0,
+        searchRadiusHitCount: 0,
+        searchRadiusTotalCount: 0
+    )
 }
 
 private struct FrameMetrics {
@@ -892,6 +934,20 @@ private struct MetalShiftResult {
     let bestIndex: UInt32
 }
 
+private struct MotionBlock {
+    let centerX: Float
+    let centerY: Float
+    let farFieldWeight: Float
+}
+
+private struct BlockShift {
+    let block: MotionBlock
+    let dx: Float
+    let dy: Float
+    let score: Float
+    let searchRadiusHit: Bool
+}
+
 private struct MetalBlurResult {
     let total: UInt32
     let count: UInt32
@@ -916,33 +972,35 @@ private final class MetalMotionWorkspace {
     let scoreCount: Int
     let blockCount: Int
     let chunkCount: Int
+    let blocks: [MotionBlock]
     let uniformBuffer: MTLBuffer
 
     init(width: Int, height: Int, device: MTLDevice) throws {
         self.width = width
         self.height = height
-        let radius = min(24, max(4, min(width, height) / 64))
+        let radius = min(24, max(localSearchRadius, min(width, height) / 40))
         let searchStep = width > 1400 || height > 900 ? 2 : 1
-        let blockWidth = max(32, width / 4)
-        let blockHeight = max(24, height / 5)
-        let sampleStep = max(1, min(blockWidth, blockHeight) / 56)
-        let sampleColumns = max(1, (blockWidth / sampleStep) + 1)
-        let sampleRows = max(1, (blockHeight / sampleStep) + 1)
-        let chunkCount = max(8, min(128, (sampleColumns * sampleRows + 255) / 256))
-        let centers = [
-            (width / 2, max(1, height / 4)),
-            (width / 3, max(1, height / 3)),
-            ((width * 2) / 3, max(1, height / 3)),
-        ]
+        let blockSpecs = Self.motionBlocks(width: width, height: height)
+        guard !blockSpecs.isEmpty else {
+            throw AnalyzerError("could not create Event Analyzer motion blocks")
+        }
+        let maxSampleCount = blockSpecs.map { spec in
+            let sampleStep = max(1, min(spec.width, spec.height) / 56)
+            let sampleColumns = max(1, (spec.width / sampleStep) + 1)
+            let sampleRows = max(1, (spec.height / sampleStep) + 1)
+            return sampleColumns * sampleRows
+        }.max() ?? 1
+        let chunkCount = max(8, min(128, (maxSampleCount + 255) / 256))
         let scoreGridWidth = ((radius * 2) / searchStep) + 1
         let scoreGridHeight = scoreGridWidth
         let scoreCount = scoreGridWidth * scoreGridHeight
-        let uniforms = centers.map {
-            MetalBlockUniforms(
-                centerX: UInt32($0.0),
-                centerY: UInt32($0.1),
-                blockWidth: UInt32(blockWidth),
-                blockHeight: UInt32(blockHeight),
+        let uniforms = blockSpecs.map { spec in
+            let sampleStep = max(1, min(spec.width, spec.height) / 56)
+            return MetalBlockUniforms(
+                centerX: UInt32(Int(spec.centerX.rounded())),
+                centerY: UInt32(Int(spec.centerY.rounded())),
+                blockWidth: UInt32(spec.width),
+                blockHeight: UInt32(spec.height),
                 width: UInt32(width),
                 height: UInt32(height),
                 radius: UInt32(radius),
@@ -952,6 +1010,9 @@ private final class MetalMotionWorkspace {
                 scoreGridHeight: UInt32(scoreGridHeight),
                 chunkCount: UInt32(chunkCount)
             )
+        }
+        let blocks = blockSpecs.map {
+            MotionBlock(centerX: $0.centerX, centerY: $0.centerY, farFieldWeight: $0.farFieldWeight)
         }
         guard let uniformBuffer = device.makeBuffer(
             bytes: uniforms,
@@ -966,7 +1027,229 @@ private final class MetalMotionWorkspace {
         self.scoreCount = scoreCount
         self.blockCount = uniforms.count
         self.chunkCount = chunkCount
+        self.blocks = blocks
         self.uniformBuffer = uniformBuffer
+    }
+
+    private static func motionBlocks(width: Int, height: Int) -> [(centerX: Float, centerY: Float, width: Int, height: Int, farFieldWeight: Float)] {
+        let horizontalMargin = min(8, max(2, width / 12))
+        let verticalMargin = min(6, max(2, height / 10))
+        let usableWidth = max(0, width - (horizontalMargin * 2))
+        let usableHeight = max(0, height - (verticalMargin * 2))
+        let columns = max(2, min(5, usableWidth / 18))
+        let rows = max(2, min(4, usableHeight / 12))
+        guard columns > 0, rows > 0 else {
+            return []
+        }
+
+        var rowEdges: [(y0: Int, y1: Int)] = []
+        var columnEdges: [(x0: Int, x1: Int)] = []
+        rowEdges.reserveCapacity(rows)
+        columnEdges.reserveCapacity(columns)
+        for row in 0..<rows {
+            rowEdges.append((
+                y0: verticalMargin + ((usableHeight * row) / rows),
+                y1: verticalMargin + ((usableHeight * (row + 1)) / rows)
+            ))
+        }
+        for column in 0..<columns {
+            columnEdges.append((
+                x0: horizontalMargin + ((usableWidth * column) / columns),
+                x1: horizontalMargin + ((usableWidth * (column + 1)) / columns)
+            ))
+        }
+
+        var blocks: [(centerX: Float, centerY: Float, width: Int, height: Int, farFieldWeight: Float)] = []
+        func appendBlock(x0: Int, x1: Int, y0: Int, y1: Int) {
+            let blockWidth = x1 - x0
+            let blockHeight = y1 - y0
+            guard blockWidth >= staggeredMotionBlockMinimumWidth,
+                  blockHeight >= staggeredMotionBlockMinimumHeight else {
+                return
+            }
+            let centerY = Float(y0) + (Float(blockHeight) * 0.5)
+            blocks.append((
+                centerX: Float(x0) + (Float(blockWidth) * 0.5),
+                centerY: centerY,
+                width: blockWidth,
+                height: blockHeight,
+                farFieldWeight: farFieldWeight(centerY: centerY, height: height)
+            ))
+        }
+
+        for row in 0..<rows {
+            for column in 0..<columns {
+                appendBlock(
+                    x0: columnEdges[column].x0,
+                    x1: columnEdges[column].x1,
+                    y0: rowEdges[row].y0,
+                    y1: rowEdges[row].y1
+                )
+            }
+        }
+
+        if columns >= 3 {
+            for row in 0..<rows {
+                let y0 = rowEdges[row].y0
+                let y1 = rowEdges[row].y1
+                let centerY = Float(y0) + (Float(y1 - y0) * 0.5)
+                guard farFieldWeight(centerY: centerY, height: height) >= staggeredMotionBlockFarFieldThreshold else {
+                    continue
+                }
+                for column in 0..<(columns - 1) {
+                    appendBlock(
+                        x0: (columnEdges[column].x0 + columnEdges[column].x1) / 2,
+                        x1: (columnEdges[column + 1].x0 + columnEdges[column + 1].x1) / 2,
+                        y0: y0,
+                        y1: y1
+                    )
+                }
+            }
+        }
+        return blocks
+    }
+
+    private static func farFieldWeight(centerY: Float, height: Int) -> Float {
+        let normalizedY = centerY / Float(max(1, height))
+        return clamp((0.82 - normalizedY) / 0.62, 0.20, 1.0)
+    }
+
+    private static func acceptedMotionBlocks(
+        _ shifts: [BlockShift],
+        global: (dx: Float, dy: Float, score: Float)
+    ) -> [BlockShift] {
+        guard shifts.count >= minimumAcceptedMotionBlocks else {
+            return []
+        }
+        let finiteShifts = shifts.filter { $0.score.isFinite && $0.dx.isFinite && $0.dy.isFinite }
+        guard finiteShifts.count >= minimumAcceptedMotionBlocks else {
+            return []
+        }
+        let scoreMedian = median(finiteShifts.map(\.score)) ?? global.score
+        let scoreLimit = max(scoreMedian * 1.65, scoreMedian + 0.020)
+        let scoreFiltered = finiteShifts.filter { $0.score <= scoreLimit }
+        guard scoreFiltered.count >= minimumAcceptedMotionBlocks else {
+            return []
+        }
+        let farFieldFiltered = scoreFiltered.filter { $0.block.farFieldWeight >= 0.55 }
+        let clusterCandidates = farFieldFiltered.count >= minimumFarFieldMotionBlocks ? farFieldFiltered : scoreFiltered
+        let medianDx = weightedMedian(clusterCandidates.map { ($0.dx, $0.block.farFieldWeight) }) ?? global.dx
+        let medianDy = weightedMedian(clusterCandidates.map { ($0.dy, $0.block.farFieldWeight) }) ?? global.dy
+        let distances = clusterCandidates.map { hypotf($0.dx - medianDx, $0.dy - medianDy) }
+        let medianDistance = median(distances) ?? 0.0
+        let distanceLimit = max(1.25, medianDistance * 3.0)
+        let distanceAccepted = clusterCandidates.filter {
+            hypotf($0.dx - medianDx, $0.dy - medianDy) <= distanceLimit
+        }
+        guard distanceAccepted.count >= minimumAcceptedMotionBlocks else {
+            return []
+        }
+        let centerSafeAccepted = distanceAccepted.filter { !$0.searchRadiusHit }
+        if centerSafeAccepted.count >= minimumAcceptedMotionBlocks {
+            return centerSafeAccepted
+        }
+        return distanceAccepted
+    }
+
+    private static func motionBlockWeight(_ shift: BlockShift, scoreReference: Float) -> Float {
+        let baseWeight = shift.block.farFieldWeight
+        guard shift.score.isFinite else {
+            return baseWeight * 0.05
+        }
+        let reference = max(0.001, scoreReference.isFinite ? scoreReference : shift.score)
+        let scoreQuality = clamp(
+            1.0 - ((shift.score - reference) / max(0.020, reference * 1.25)),
+            0.15,
+            1.0
+        )
+        let searchHeadroom: Float = shift.searchRadiusHit ? 0.55 : 1.0
+        return baseWeight * scoreQuality * searchHeadroom
+    }
+
+    private static func farFieldWarpMotion(
+        shifts: [BlockShift],
+        robustDx: Float,
+        robustDy: Float,
+        signedRoll: Float,
+        width: Int,
+        height: Int,
+        analysisConfidence: Float
+    ) -> (yawProxy: Float, pitchProxy: Float, shearX: Float, shearY: Float, perspectiveX: Float, perspectiveY: Float, confidence: Float) {
+        let farFieldShifts = shifts.filter { $0.block.farFieldWeight >= 0.55 }
+        guard farFieldShifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        }
+
+        let halfWidth = Float(max(1, width)) * 0.5
+        let halfHeight = Float(max(1, height)) * 0.5
+        var yawCandidates: [(value: Float, weight: Float)] = []
+        var pitchCandidates: [(value: Float, weight: Float)] = []
+        var shearXCandidates: [(value: Float, weight: Float)] = []
+        var shearYCandidates: [(value: Float, weight: Float)] = []
+        var perspectiveXCandidates: [(value: Float, weight: Float)] = []
+        var perspectiveYCandidates: [(value: Float, weight: Float)] = []
+
+        for shift in farFieldShifts {
+            let x = shift.block.centerX - halfWidth
+            let y = shift.block.centerY - halfHeight
+            let residualX = shift.dx - robustDx + (signedRoll * y)
+            let residualY = shift.dy - robustDy - (signedRoll * x)
+            let scoreWeight = clamp(1.0 - (shift.score / 48.0), 0.05, 1.0)
+            let weight = shift.block.farFieldWeight * scoreWeight
+            yawCandidates.append((clamp(residualX / halfWidth, -maxFarFieldYawPitchProxy, maxFarFieldYawPitchProxy), weight))
+            pitchCandidates.append((clamp(residualY / halfHeight, -maxFarFieldYawPitchProxy, maxFarFieldYawPitchProxy), weight))
+            if abs(y) > halfHeight * 0.15 {
+                shearXCandidates.append((clamp(residualX / y, -maxFarFieldShear, maxFarFieldShear), weight))
+            }
+            if abs(x) > halfWidth * 0.15 {
+                shearYCandidates.append((clamp(residualY / x, -maxFarFieldShear, maxFarFieldShear), weight))
+            }
+            let radialDenominator = max(1.0, (x * x) + (y * y))
+            let radialResidual = (residualX * x) + (residualY * y)
+            perspectiveXCandidates.append((clamp((radialResidual * x) / (radialDenominator * halfWidth), -maxFarFieldPerspective, maxFarFieldPerspective), weight))
+            perspectiveYCandidates.append((clamp((radialResidual * y) / (radialDenominator * halfHeight), -maxFarFieldPerspective, maxFarFieldPerspective), weight))
+        }
+
+        let farFieldCoverage = Float(farFieldShifts.count) / Float(max(1, shifts.count))
+        let confidence = clamp(analysisConfidence * farFieldCoverage, 0.0, 1.0)
+        guard confidence >= 0.08 else {
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, confidence)
+        }
+        return (
+            yawProxy: (weightedMedian(yawCandidates) ?? 0.0) * confidence,
+            pitchProxy: (weightedMedian(pitchCandidates) ?? 0.0) * confidence,
+            shearX: (weightedMedian(shearXCandidates) ?? 0.0) * confidence,
+            shearY: (weightedMedian(shearYCandidates) ?? 0.0) * confidence,
+            perspectiveX: (weightedMedian(perspectiveXCandidates) ?? 0.0) * confidence,
+            perspectiveY: (weightedMedian(perspectiveYCandidates) ?? 0.0) * confidence,
+            confidence: confidence
+        )
+    }
+
+    private static func average(_ values: [Float]) -> Float {
+        guard !values.isEmpty else {
+            return 0.0
+        }
+        return values.reduce(Float(0.0), +) / Float(values.count)
+    }
+
+    private static func weightedMedian(_ values: [(value: Float, weight: Float)]) -> Float? {
+        let finiteValues = values
+            .filter { $0.value.isFinite && $0.weight.isFinite && $0.weight > 0.0 }
+            .sorted { $0.value < $1.value }
+        guard !finiteValues.isEmpty else {
+            return nil
+        }
+        let totalWeight = finiteValues.reduce(Float(0.0)) { $0 + $1.weight }
+        let midpoint = totalWeight * 0.5
+        var runningWeight: Float = 0.0
+        for entry in finiteValues {
+            runningWeight += entry.weight
+            if runningWeight >= midpoint {
+                return entry.value
+            }
+        }
+        return finiteValues.last?.value
     }
 
     var partialElementCount: Int {
@@ -978,20 +1261,78 @@ private final class MetalMotionWorkspace {
             start: resultBuffer.contents().assumingMemoryBound(to: MetalShiftResult.self),
             count: blockCount
         )
-        var dxTotal: Float = 0
-        var dyTotal: Float = 0
-        var residualTotal: Float = 0
-        for result in results {
-            dxTotal += result.dx
-            dyTotal += result.dy
-            residualTotal += result.score
+        let blockShifts = zip(blocks, results).map { block, result in
+            BlockShift(
+                block: block,
+                dx: result.dx,
+                dy: result.dy,
+                score: result.score * lumaFormat.normalizedResidualScale,
+                searchRadiusHit: abs(result.dx) >= Float(radius) || abs(result.dy) >= Float(radius)
+            )
         }
-        let divisor = Float(max(1, results.count))
-        let dx = dxTotal / divisor
-        let dy = dyTotal / divisor
-        let residual = (residualTotal / divisor) * lumaFormat.normalizedResidualScale
-        let confidence = clamp(1.0 - (residual / 48.0), 0.05, 1.0)
-        return PairMotion(dx: dx, dy: dy, residual: residual, confidence: confidence)
+        let finiteScores = blockShifts.map(\.score).filter(\.isFinite)
+        let globalDx = Self.weightedMedian(blockShifts.map { ($0.dx, $0.block.farFieldWeight) }) ?? 0.0
+        let globalDy = Self.weightedMedian(blockShifts.map { ($0.dy, $0.block.farFieldWeight) }) ?? 0.0
+        let globalScore = median(finiteScores) ?? 0.0
+        let acceptedBlocks = Self.acceptedMotionBlocks(blockShifts, global: (globalDx, globalDy, globalScore))
+        let motionBlocksForModel = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks : blockShifts
+        let modelScoreReference = median(motionBlocksForModel.map(\.score).filter(\.isFinite)) ?? globalScore
+        let robustDx = Self.weightedMedian(motionBlocksForModel.map {
+            ($0.dx, Self.motionBlockWeight($0, scoreReference: modelScoreReference))
+        }) ?? globalDx
+        let robustDy = Self.weightedMedian(motionBlocksForModel.map {
+            ($0.dy, Self.motionBlockWeight($0, scoreReference: modelScoreReference))
+        }) ?? globalDy
+        let halfWidth = Float(max(1, width)) * 0.5
+        let halfHeight = Float(max(1, height)) * 0.5
+        let rollCandidates = motionBlocksForModel.compactMap { shift -> Float? in
+            let x = shift.block.centerX - halfWidth
+            let y = shift.block.centerY - halfHeight
+            let denominator = (x * x) + (y * y)
+            guard denominator > 1.0 else {
+                return nil
+            }
+            let u = shift.dx - robustDx
+            let v = shift.dy - robustDy
+            return ((x * v) - (y * u)) / denominator
+        }
+        let signedRoll = median(rollCandidates) ?? 0.0
+        let rollMotion = rollCandidates.map { abs($0) }.max() ?? 0.0
+        let acceptedCount = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks.count : 0
+        let farFieldAgreement = motionBlocksForModel.isEmpty ? 0.0 : Self.average(motionBlocksForModel.map(\.block.farFieldWeight))
+        let blockAgreement = blockShifts.isEmpty
+            ? 0.0
+            : (Float(acceptedCount) / Float(blockShifts.count)) * clamp(farFieldAgreement, 0.35, 1.0)
+        let scoreConfidence = clamp(1.0 - (modelScoreReference / 48.0), 0.0, 1.0)
+        let analysisConfidence = clamp(blockAgreement * scoreConfidence, 0.0, 1.0)
+        let warpMotion = Self.farFieldWarpMotion(
+            shifts: motionBlocksForModel,
+            robustDx: robustDx,
+            robustDy: robustDy,
+            signedRoll: signedRoll,
+            width: width,
+            height: height,
+            analysisConfidence: analysisConfidence
+        )
+        return PairMotion(
+            dx: robustDx,
+            dy: robustDy,
+            residual: modelScoreReference,
+            signedRoll: signedRoll,
+            rollMotion: rollMotion,
+            yawProxy: warpMotion.yawProxy,
+            pitchProxy: warpMotion.pitchProxy,
+            shearX: warpMotion.shearX,
+            shearY: warpMotion.shearY,
+            perspectiveX: warpMotion.perspectiveX,
+            perspectiveY: warpMotion.perspectiveY,
+            analysisConfidence: analysisConfidence,
+            warpConfidence: warpMotion.confidence,
+            acceptedBlockCount: Int32(acceptedCount),
+            totalBlockCount: Int32(blockShifts.count),
+            searchRadiusHitCount: Int32(blockShifts.filter(\.searchRadiusHit).count),
+            searchRadiusTotalCount: Int32(blockShifts.count)
+        )
     }
 }
 
@@ -1494,7 +1835,7 @@ final class MetalAnalysisContext {
     ) {
         BlockUniforms uniforms = uniformsList[gid.y];
         uint scoreCount = uniforms.scoreGridWidth * uniforms.scoreGridHeight;
-        if (gid.x >= scoreCount || gid.y >= 3) {
+        if (gid.x >= scoreCount) {
             return;
         }
         uint gx = gid.x % uniforms.scoreGridWidth;
@@ -1544,9 +1885,6 @@ final class MetalAnalysisContext {
         constant uint &chunkCount [[buffer(4)]],
         uint gid [[thread_position_in_grid]]
     ) {
-        if (gid >= 3) {
-            return;
-        }
         BlockUniforms uniforms = uniformsList[gid];
         uint scoreCount = uniforms.scoreGridWidth * uniforms.scoreGridHeight;
         float bestScore = FLT_MAX;
@@ -1581,39 +1919,65 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     }
     var pathX: [Float] = []
     var pathY: [Float] = []
+    var rawRoll: [Float] = []
+    var yaw: [Float] = []
+    var pitch: [Float] = []
+    var shearX: [Float] = []
+    var shearY: [Float] = []
+    var perspectiveX: [Float] = []
+    var perspectiveY: [Float] = []
     var x: Float = 0
     var y: Float = 0
+    var roll: Float = 0
+    var yawValue: Float = 0
+    var pitchValue: Float = 0
+    var shearXValue: Float = 0
+    var shearYValue: Float = 0
+    var perspectiveXValue: Float = 0
+    var perspectiveYValue: Float = 0
     for motion in motions {
         x += motion.dx
         y += motion.dy
+        roll += motion.signedRoll
+        yawValue += motion.yawProxy
+        pitchValue += motion.pitchProxy
+        shearXValue += motion.shearX
+        shearYValue += motion.shearY
+        perspectiveXValue += motion.perspectiveX
+        perspectiveYValue += motion.perspectiveY
         pathX.append(x)
         pathY.append(y)
+        rawRoll.append(roll)
+        yaw.append(yawValue)
+        pitch.append(pitchValue)
+        shearX.append(shearXValue)
+        shearY.append(shearYValue)
+        perspectiveX.append(perspectiveXValue)
+        perspectiveY.append(perspectiveYValue)
     }
-    let zeros = [Float](repeating: 0, count: frames.count)
-    let rawRoll = zeros
     return PreparedAnalysis(
         frames: frames,
         residuals: motions.map(\.residual),
-        rollMotion: zeros,
+        rollMotion: motions.map(\.rollMotion),
         pathX: jerkLimitedMotionPath(pathX, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
         pathY: jerkLimitedMotionPath(pathY, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
         pathRoll: jerkLimitedMotionPath(rawRoll, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
         footstepPathX: pathX,
         footstepPathY: pathY,
         footstepPathRoll: rawRoll,
-        pathYaw: zeros,
-        pathPitch: zeros,
-        pathShearX: zeros,
-        pathShearY: zeros,
-        pathPerspectiveX: zeros,
-        pathPerspectiveY: zeros,
-        analysisConfidence: motions.map(\.confidence),
-        warpConfidence: zeros,
-        acceptedBlockCounts: [Int32](repeating: 3, count: frames.count),
-        totalBlockCounts: [Int32](repeating: 3, count: frames.count),
+        pathYaw: jerkLimitedMotionPath(yaw, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+        pathPitch: jerkLimitedMotionPath(pitch, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+        pathShearX: jerkLimitedMotionPath(shearX, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+        pathShearY: jerkLimitedMotionPath(shearY, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+        pathPerspectiveX: jerkLimitedMotionPath(perspectiveX, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+        pathPerspectiveY: jerkLimitedMotionPath(perspectiveY, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+        analysisConfidence: motions.map(\.analysisConfidence),
+        warpConfidence: motions.map(\.warpConfidence),
+        acceptedBlockCounts: motions.map(\.acceptedBlockCount),
+        totalBlockCounts: motions.map(\.totalBlockCount),
         blurAmounts: frames.map(\.blurAmount),
-        searchRadiusHitCounts: [Int32](repeating: 0, count: frames.count),
-        searchRadiusTotalCounts: [Int32](repeating: 3, count: frames.count)
+        searchRadiusHitCounts: motions.map(\.searchRadiusHitCount),
+        searchRadiusTotalCounts: motions.map(\.searchRadiusTotalCount)
     )
 }
 
@@ -1918,7 +2282,7 @@ private func readFrameChunk(
             blurAmount: frameAnalysis.metrics.blurAmount,
             fingerprint: frameAnalysis.metrics.fingerprint
         )
-        motions.append(frameAnalysis.motion ?? PairMotion(dx: 0, dy: 0, residual: 0, confidence: 1))
+        motions.append(frameAnalysis.motion ?? .zero)
         frames.append(frame)
         if let progressReporter {
             progressReporter.completeFrame()
