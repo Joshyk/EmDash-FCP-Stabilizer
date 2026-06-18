@@ -175,6 +175,7 @@
 		<target object="10036" channel="./9" name="Turn Detection Window"/>
 		<target object="10036" channel="./41" name="Remove Black Edges"/>
 		<target object="10036" channel="./42" name="Auto Crop Transition Duration"/>
+		<target object="10036" channel="./43" name="Auto Crop Lead Time"/>
 		<target object="10036" channel="./27" name="Edge Display Mode"/>
 		<target object="10036" channel="./15" name="Host Analysis Status"/>
 		<target object="10036" channel="./32" name="Sample Info"/>
@@ -282,12 +283,13 @@
 				<parameter name="Turn Detection Window" id="9" flags="12884901904" default="6" value="6"/>
 				<parameter name="Remove Black Edges" id="41" flags="12884901904" default="1" value="1"/>
 				<parameter name="Auto Crop Transition Duration" id="42" flags="12884901904" default="5" value="5"/>
+				<parameter name="Auto Crop Lead Time" id="43" flags="12884901904" default="10" value="10"/>
 				<parameter name="Sample Size" id="19" flags="12884901906" default="0" value="0"/>
 				<parameter name="Edge Display Mode" id="27" flags="12884901904" default="1" value="1"/>
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901906"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901906"/>
-				<parameter name="Host Analysis Status" id="15" flags="12884901909" default="External Analysis Required - Run Event Analyzer | FxPlug 0.3.184" value="External Analysis Required - Run Event Analyzer | FxPlug 0.3.184"/>
+				<parameter name="Host Analysis Status" id="15" flags="12884901909" default="External Analysis Required - Run Event Analyzer | FxPlug 0.3.185" value="External Analysis Required - Run Event Analyzer | FxPlug 0.3.185"/>
 					<parameter name="Sample Info" id="32" flags="12884901909" default="Sample: unknown -> - | Analysis: -" value="Sample: unknown -> - | Analysis: -"/>
 					<parameter name="Queue" id="36" flags="12884901911" default="Queue: -" value="Queue: -"/>
 				<parameter name="Host Analysis Cache Identity" id="33" flags="12884901906" default="" value=""/>

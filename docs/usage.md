@@ -144,16 +144,17 @@ fallbacks.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.
-- `Auto Crop Transition Duration`: uses the selected seconds as the Auto Crop
-  look-ahead window. Longer values begin both zoom and position changes before
-  a future steep-turn crop demand reaches the current frame, then keep recent
-  high zoom/position demands in a matching release window so zoom-out and
-  position return use the same S-curve. The current frame remains black-safe
-  when `Remove Black Edges` is on. High-quality render uses the full 17-sample
-  Auto Crop lead window; proxy, low/medium-quality playback, or scaled preview
-  uses a very light non-quantized lead/release profile for both zoom and
-  position so playback keeps the stabilizer motion visible without the old
-  coarse zoom-envelope steps.
+- `Auto Crop Lead Time`: how many seconds before an upcoming turn/crop demand
+  Auto Crop starts changing both zoom and position. Set `10` to start about 10
+  seconds before that future turn reaches the current frame, or `20` to start
+  about 20 seconds early.
+- `Auto Crop Transition Duration`: S-curve release/rounding time for the visible
+  Auto Crop framing change. The current frame remains black-safe when `Remove
+  Black Edges` is on. High-quality render uses the full 17-sample Auto Crop
+  lead window; proxy, low/medium-quality playback, or scaled preview uses a very
+  light non-quantized lead/release profile for both zoom and position so
+  playback keeps the stabilizer motion visible without the old coarse
+  zoom-envelope steps.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image. New effect

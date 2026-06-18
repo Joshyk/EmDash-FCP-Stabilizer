@@ -138,18 +138,17 @@ suppressed instead of producing a wavy image.
 path skips Auto Crop crop-safe framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
 or black. New effect instances default that menu to `Black Outside`.
-`Auto Crop Transition Duration` controls the unified zoom and framing transition.
-Longer values look that many seconds ahead and start both zoom and position
-adjustments before a future safe-crop demand reaches the current frame, so
-steep turns are framed more gradually. Recent high zoom demands are also kept
-in the transition window and released with the same S-curve so zoom-out and
-position return do not snap back immediately. With `Remove Black Edges` on, the
-render path still clamps zoom to the current frame's required safe crop so
-outside-source black is not exposed during the transition. High-quality render
-uses the full 17-sample Auto Crop lead window; proxy, low/medium-quality
-playback, or scaled preview uses a very light non-quantized lead/release profile
-for both zoom and position so playback keeps the stabilizer motion visible
-without the old coarse zoom-envelope steps.
+`Auto Crop Lead Time` controls how many seconds before an upcoming turn/crop
+demand Auto Crop starts moving zoom and position. For example, `10` starts the
+zoom/position ramp about 10 seconds before that future turn reaches the current
+frame; `20` starts it about 20 seconds early. `Auto Crop Transition Duration`
+controls the S-curve release/rounding time for the visible framing change. With
+`Remove Black Edges` on, the render path still clamps zoom to the current
+frame's required safe crop so outside-source black is not exposed during the
+transition. High-quality render uses the full 17-sample Auto Crop lead window;
+proxy, low/medium-quality playback, or scaled preview uses a very light
+non-quantized lead/release profile for both zoom and position so playback keeps
+the stabilizer motion visible without the old coarse zoom-envelope steps.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
