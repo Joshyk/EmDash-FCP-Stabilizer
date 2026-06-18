@@ -3726,6 +3726,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return "\(status) | FxPlug \(tokyoWalkingStabilizerVersion)"
     }
 
+    private static func shortRenderCacheIdentity(_ identity: String?) -> String {
+        guard let identity = identity?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !identity.isEmpty
+        else {
+            return "none"
+        }
+        if identity.count <= 18 {
+            return identity
+        }
+        return "\(identity.prefix(8))...\(identity.suffix(6))"
+    }
+
     func scheduleInputs(_ inputImageRequests: AutoreleasingUnsafeMutablePointer<NSArray?>?, withPluginState pluginState: Data?, at renderTime: CMTime) throws {
         var requests: [FxImageTileRequest] = []
         let sourceRequest = Self.sourceRequestTime(for: renderTime, pluginState: pluginState)
@@ -3766,7 +3778,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return
         }
         guard sourceImages.indices.contains(0) else {
-            hostAnalysisStore.noteSourceUnavailableForRender(
+            hostAnalysisStore.noteMediaLinkInvalidForRender(
                 reason: "Final Cut Pro did not provide an effect clip source image for render."
             )
             publishPreviewInvalidationOnMain(
@@ -3859,12 +3871,36 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             autoTransform = .identity
         }
+        let renderSourceIsProxy = renderUsesPreparedAnalysis
+            && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
+        let renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
+        let renderCacheIdentityShort = Self.shortRenderCacheIdentity(renderCacheIdentity)
+        if transformEnabled && renderUsesPreparedAnalysis {
+            if !renderSourceIsProxy {
+                hostAnalysisStore.noteStabilizationActiveForRender(
+                    debugOverlayActive: state.debugOverlay,
+                    reason: "prepared=yes debug=\(state.debugOverlay ? "on" : "off") identity=\(renderCacheIdentityShort)"
+                )
+            }
+        } else if transformEnabled {
+            let preferredIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let preferredIdentity,
+               !preferredIdentity.isEmpty,
+               !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
+                hostAnalysisStore.noteCacheRangeMismatchForRender(
+                    reason: "preferred identity \(Self.shortRenderCacheIdentity(preferredIdentity)) did not match expected render range"
+                )
+            } else if hasCompletedHostAnalysis || configuredProjectBundleCache || !(preferredIdentity ?? "").isEmpty {
+                hostAnalysisStore.noteLoadedButNotRenderingForRender(
+                    reason: "prepared=no completed=\(hasCompletedHostAnalysis ? "yes" : "no") projectCache=\(configuredProjectBundleCache ? "configured" : "not configured") debug=\(state.debugOverlay ? "on" : "off") identity=\(renderCacheIdentityShort)"
+                )
+            }
+        }
         publishRenderAnalysisDecisionIfChanged(
-            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | auto crop \(state.autoCropEnabled ? "on" : "off") | debug \(state.debugOverlay ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
+            "Render Host Analysis decision | FxPlug \(tokyoWalkingStabilizerVersion) | transform \(transformEnabled ? "on" : "off") | completed \(hasCompletedHostAnalysis ? "yes" : "no") | project cache \(configuredProjectBundleCache ? "configured" : "not configured") | prepared \(renderUsesPreparedAnalysis ? "yes" : "no") | stabilization \(renderUsesPreparedAnalysis && transformEnabled ? "active" : "inactive") | debug overlay \(state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis ? "active" : "inactive") | proxy \(renderSourceIsProxy ? "yes" : "no") | identity \(renderCacheIdentityShort) | auto crop \(state.autoCropEnabled ? "on" : "off") | frames \(state.hostAnalysisFrameCount)"
         )
         let renderInvalidationToken = hostAnalysisStore.renderInvalidationToken
         let renderStoreRevision = hostAnalysisStore.revision
-        let renderCacheIdentity = hostAnalysisStore.activeCacheIdentity
         let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
         if renderStoreChangedStatus || abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
             publishPreviewInvalidationOnMain(
@@ -3875,8 +3911,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 currentRenderRevision: state.renderRevision
             )
         }
-        let renderSourceIsProxy = renderUsesPreparedAnalysis
-            && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
         let debugOverlayScale = Self.debugOverlayScale(
             outputWidth: Int(outputWidth),
             outputHeight: Int(outputHeight),

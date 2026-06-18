@@ -28,6 +28,11 @@ private enum HostAnalysisStatus {
     case sourceMetadataUnconfirmedPreview
     case proxyNeedsOriginalValidation
     case sourceUnavailable
+    case mediaLinkInvalid
+    case loadedButNotRendering
+    case cacheRangeMismatch
+    case stabilizationActive
+    case debugOverlayActive
 }
 
 private struct PersistedHostAnalysisCache: Codable {
@@ -464,6 +469,16 @@ final class StabilizerHostAnalysisStore {
             return "Proxy Cache Unvalidated - Use Original Media"
         case .sourceUnavailable:
             return "Source Media Unavailable - Check FCP Proxy"
+        case .mediaLinkInvalid:
+            return "Media Link Invalid"
+        case .loadedButNotRendering:
+            return "Loaded But Not Rendering"
+        case .cacheRangeMismatch:
+            return "Cache Range Mismatch"
+        case .stabilizationActive:
+            return "Stabilization Active (\(frameCount) frames)"
+        case .debugOverlayActive:
+            return "Debug Overlay Active (\(frameCount) frames)"
         }
     }
 
@@ -1120,6 +1135,26 @@ final class StabilizerHostAnalysisStore {
         markSourceUnavailableForRender(reason: reason)
     }
 
+    func noteMediaLinkInvalidForRender(reason: String) {
+        markRenderStatus(.mediaLinkInvalid, info: "Media link invalid.", logReason: reason)
+    }
+
+    func noteLoadedButNotRenderingForRender(reason: String) {
+        markRenderStatus(.loadedButNotRendering, info: "Loaded cache did not render.", logReason: reason)
+    }
+
+    func noteCacheRangeMismatchForRender(reason: String) {
+        markRenderStatus(.cacheRangeMismatch, info: "Cache range mismatch.", logReason: reason)
+    }
+
+    func noteStabilizationActiveForRender(debugOverlayActive: Bool, reason: String) {
+        markRenderStatus(
+            debugOverlayActive ? .debugOverlayActive : .stabilizationActive,
+            info: debugOverlayActive ? "Debug overlay active; prepared analysis rendering." : "Prepared analysis rendering.",
+            logReason: reason
+        )
+    }
+
     func analysisRenderTime(for renderTime: CMTime, preparedAnalysis analysis: StabilizerPreparedAnalysis) -> CMTime {
         let renderSeconds = CMTimeGetSeconds(renderTime)
         guard renderSeconds.isFinite else {
@@ -1765,6 +1800,27 @@ final class StabilizerHostAnalysisStore {
             bumpRevisionLocked()
         }
         lock.unlock()
+    }
+
+    private func markRenderStatus(_ nextStatus: HostAnalysisStatus, info: String, logReason: String) {
+        lock.lock()
+        let shouldMark = status != nextStatus
+        if shouldMark {
+            status = nextStatus
+            analysisInfoText = info
+            bumpRevisionLocked()
+        }
+        lock.unlock()
+        if shouldMark {
+            NSLog("TokyoWalkingStabilizer: render status \(nextStatus): \(logReason)")
+            os_log(
+                "Render status %{public}@ reason=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: nextStatus == .loadedButNotRendering || nextStatus == .cacheRangeMismatch || nextStatus == .mediaLinkInvalid ? .error : .default,
+                String(describing: nextStatus),
+                logReason
+            )
+        }
     }
 
     private func rejectPersistentCache(reason: String) {
