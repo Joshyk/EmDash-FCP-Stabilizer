@@ -263,8 +263,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   use a linear ramp, hold samples keep the reached target for the Hold Time
   window, release samples return with a linear ramp instead of holding an
   aggressive crop envelope, and nearby local scale demands are sampled from a
-  continuous plateau window with a soft edge so the safety floor does not pulse
-  with short walking impulses. High-quality render uses the full 17-sample Auto Crop
+  seconds-based plateau window with a soft edge so the safety floor does not
+  pulse with short walking impulses even on high-frame-rate footage. High-quality render uses the full 17-sample Auto Crop
   lead window; proxy, low/medium-quality playback, or scaled preview uses a very
   light non-quantized lead/release profile with no extra playback crop padding.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug

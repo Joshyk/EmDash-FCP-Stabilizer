@@ -160,8 +160,8 @@ future samples start zoom and position with a linear ramp, position is limited
 when it would force extra current-frame zoom, hold samples keep the reached
 target for the Hold Time window, and release samples return with a linear ramp
 instead of holding an aggressive crop envelope. Nearby local scale demands are
-sampled from a continuous plateau window with a soft edge so short walking
-impulses do not create a visible zoom pulse.
+sampled from a seconds-based plateau window with a soft edge so short walking
+impulses do not create a visible zoom pulse on high-frame-rate footage.
 High-quality render uses the full 17-sample Auto Crop lead window; proxy,
 low/medium-quality playback, or scaled preview uses a very light non-quantized
 lead/release profile with no extra playback crop padding.

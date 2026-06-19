@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.241"
+private let tokyoWalkingStabilizerVersion = "0.3.242"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -2030,35 +2030,41 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 : high
         }
 
-        let localInfluenceRadius: Int
+        let plateauSeconds: Double
+        let radiusSeconds: Double
+        let outerStepSeconds: Double
         switch samplingProfile {
         case .playback:
-            localInfluenceRadius = 18
+            plateauSeconds = 0.8
+            radiusSeconds = 2.5
+            outerStepSeconds = 0.12
         case .full:
-            localInfluenceRadius = 30
+            plateauSeconds = 1.5
+            radiusSeconds = 4.0
+            outerStepSeconds = 0.10
         }
 
-        let indexOffsets = (-localInfluenceRadius...localInfluenceRadius).filter { $0 != 0 }
-        let maximumOffset = Float(localInfluenceRadius)
         var seen = Set<Int>()
         var samples: [AutoCropLocalScaleSample] = []
-        samples.reserveCapacity(indexOffsets.count)
-        for offset in indexOffsets {
-            let index = centerIndex + offset
+        samples.reserveCapacity(96)
+
+        func appendSample(at index: Int) {
             guard frames.indices.contains(index),
                   seen.insert(index).inserted
             else {
-                continue
+                return
             }
-            let distance = min(max(Float(abs(offset)) / maximumOffset, 0.0), 1.0)
-            let influence: Float
-            if distance <= 0.7 {
-                influence = 1.0
-            } else {
-                influence = easeInOutRamp((1.0 - distance) / 0.3)
+            let deltaSeconds = abs(frames[index].time - currentSeconds)
+            guard deltaSeconds <= radiusSeconds else {
+                return
             }
+            let influence = autoCropLocalScaleInfluence(
+                deltaSeconds: deltaSeconds,
+                plateauSeconds: plateauSeconds,
+                radiusSeconds: radiusSeconds
+            )
             guard influence > 0.0001 else {
-                continue
+                return
             }
             samples.append(
                 AutoCropLocalScaleSample(
@@ -2067,7 +2073,44 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 )
             )
         }
+
+        for direction in [-1, 1] {
+            var index = centerIndex + direction
+            var lastOuterSampleTime = currentSeconds
+            while frames.indices.contains(index) {
+                let deltaSeconds = abs(frames[index].time - currentSeconds)
+                guard deltaSeconds <= radiusSeconds else {
+                    break
+                }
+
+                if deltaSeconds <= plateauSeconds || abs(frames[index].time - lastOuterSampleTime) >= outerStepSeconds {
+                    appendSample(at: index)
+                    if deltaSeconds > plateauSeconds {
+                        lastOuterSampleTime = frames[index].time
+                    }
+                }
+                index += direction
+            }
+        }
         return samples
+    }
+
+    private static func autoCropLocalScaleInfluence(
+        deltaSeconds: Double,
+        plateauSeconds: Double,
+        radiusSeconds: Double
+    ) -> Float {
+        guard deltaSeconds.isFinite,
+              radiusSeconds > 0.0
+        else {
+            return 0.0
+        }
+        if deltaSeconds <= max(0.0, plateauSeconds) {
+            return 1.0
+        }
+        let fadeDuration = max(radiusSeconds - max(0.0, plateauSeconds), 0.0001)
+        let progress = Float((radiusSeconds - deltaSeconds) / fadeDuration)
+        return easeInOutRamp(progress)
     }
 
     private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32, renderSourceIsProxy: Bool) -> AutoCropSamplingProfile {
