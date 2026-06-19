@@ -642,6 +642,11 @@ enum AutoStabilizationEstimator {
         case perspectiveY
     }
 
+    private enum LocalAverageSourceRole: Hashable {
+        case footstepTurnBaseline
+        case footstepStrideCleaned
+    }
+
     private struct OuterPredictionCacheKey: Hashable {
         let kind: MotionPathKind
         let index: Int
@@ -651,6 +656,7 @@ enum AutoStabilizationEstimator {
 
     private struct LocalAverageCacheKey: Hashable {
         let kind: MotionPathKind
+        let sourceRole: LocalAverageSourceRole
         let index: Int
         let windowSeconds: UInt64
     }
@@ -738,6 +744,7 @@ enum AutoStabilizationEstimator {
 
         func locallyTimeWeightedAveragePath(
             _ kind: MotionPathKind,
+            sourceRole: LocalAverageSourceRole,
             source: EstimatedPath,
             analysis: StabilizerPreparedAnalysis,
             targetIndices: [Int],
@@ -756,6 +763,7 @@ enum AutoStabilizationEstimator {
                 }
                 return localTimeWeightedAverage(
                     kind,
+                    sourceRole: sourceRole,
                     source: source,
                     analysis: analysis,
                     index: index,
@@ -799,6 +807,7 @@ enum AutoStabilizationEstimator {
 
         private func localTimeWeightedAverage(
             _ kind: MotionPathKind,
+            sourceRole: LocalAverageSourceRole,
             source: EstimatedPath,
             analysis: StabilizerPreparedAnalysis,
             index: Int,
@@ -806,6 +815,7 @@ enum AutoStabilizationEstimator {
         ) -> Float {
             let key = LocalAverageCacheKey(
                 kind: kind,
+                sourceRole: sourceRole,
                 index: index,
                 windowSeconds: windowSeconds.bitPattern
             )
@@ -1232,6 +1242,7 @@ enum AutoStabilizationEstimator {
         )
         let turnStrideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
             .footstepX,
+            sourceRole: .footstepTurnBaseline,
             source: footstepBaselineXPath,
             analysis: analysis,
             targetIndices: sampledIndices,
@@ -1267,6 +1278,7 @@ enum AutoStabilizationEstimator {
         )
         let strideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
             .footstepX,
+            sourceRole: .footstepStrideCleaned,
             source: footstepCleanXPath,
             analysis: analysis,
             targetIndices: strideSampledIndices,
@@ -1274,6 +1286,7 @@ enum AutoStabilizationEstimator {
         )
         let strideSmoothedYPath = cache.locallyTimeWeightedAveragePath(
             .footstepY,
+            sourceRole: .footstepStrideCleaned,
             source: footstepCleanYPath,
             analysis: analysis,
             targetIndices: strideSampledIndices,
@@ -1281,6 +1294,7 @@ enum AutoStabilizationEstimator {
         )
         let strideSmoothedRollPath = cache.locallyTimeWeightedAveragePath(
             .footstepRoll,
+            sourceRole: .footstepStrideCleaned,
             source: footstepCleanRollPath,
             analysis: analysis,
             targetIndices: strideSampledIndices,
