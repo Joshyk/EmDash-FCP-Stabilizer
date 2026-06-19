@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.253"
+private let tokyoWalkingStabilizerVersion = "0.3.254"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -59,6 +59,13 @@ private let stabilizerAutoCropCurrentScaleIdentityTolerance: Float = 0.002
 private let stabilizerAutoCropLookaheadScaleDeadband: Float = 0.025
 private let stabilizerAutoCropScaleSoftKneeStart: Float = 0.004
 private let stabilizerAutoCropScaleSoftKneeEnd: Float = 0.035
+private let stabilizerAutoCropActiveScalePadding: Float = 0.006
+private let stabilizerAutoCropActiveScaleBucket: Float = 0.012
+private let stabilizerAutoCropActiveScaleMinimumDelta: Float = 0.001
+private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
+private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
+private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
+private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
@@ -1908,7 +1915,30 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputSize: outputSize,
             masterStrength: masterStrength
         )
-        let finalScale = rawScale
+        let protectedScale = max(
+            Float(1.0),
+            scaleDemand.currentRequiredScale,
+            scaleDemand.finalRequiredScale,
+            localPositionRequiredScale
+        )
+        let idleReleaseProgress = autoCropIdleScaleReleaseProgress(
+            preparedAnalysis: preparedAnalysis,
+            currentSeconds: renderSeconds,
+            currentTransform: currentTransform,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity,
+            protectedScale: protectedScale
+        )
+        let finalScale = autoCropStableActiveScale(
+            scale: rawScale,
+            protectedScale: protectedScale,
+            idleReleaseProgress: idleReleaseProgress
+        )
 
         let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
             stablePositionPixels: localPositionPixels,
@@ -2203,6 +2233,29 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return max(protectedScale, softenedScale)
     }
 
+    private static func autoCropStableActiveScale(
+        scale: Float,
+        protectedScale: Float,
+        idleReleaseProgress: Float
+    ) -> Float {
+        let finiteScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
+        let finiteProtectedScale = max(Float(1.0), protectedScale.isFinite ? protectedScale : Float(1.0))
+        let protectedDelta = finiteProtectedScale - Float(1.0)
+        let scaleDelta = max(Float(0.0), finiteScale - Float(1.0))
+        let release = min(max(idleReleaseProgress, 0.0), 1.0)
+        guard max(scaleDelta, protectedDelta) > stabilizerAutoCropActiveScaleMinimumDelta else {
+            return finiteProtectedScale
+        }
+
+        let activeDelta = max(
+            protectedDelta,
+            ceil((scaleDelta + stabilizerAutoCropActiveScalePadding) / stabilizerAutoCropActiveScaleBucket)
+                * stabilizerAutoCropActiveScaleBucket
+        )
+        let activeScale = max(finiteProtectedScale, Float(1.0) + activeDelta)
+        return max(finiteProtectedScale, activeScale + ((finiteProtectedScale - activeScale) * release))
+    }
+
     private static func autoCropTransformIsQuiet(
         _ transform: StabilizerAutoTransform,
         outputSize: vector_float2,
@@ -2217,6 +2270,93 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             && rotationActivity <= 0.05
             && shearActivity <= 0.001
             && perspectiveActivity <= 0.001
+    }
+
+    private static func autoCropIdleScaleReleaseProgress(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?,
+        protectedScale: Float
+    ) -> Float {
+        guard protectedScale <= Float(1.0) + stabilizerAutoCropIdleScaleTolerance,
+              currentSeconds.isFinite,
+              outputSize.x > 1.0,
+              outputSize.y > 1.0,
+              let firstTime = preparedAnalysis.frames.first?.time
+        else {
+            return 0.0
+        }
+
+        let maxReleaseSeconds = max(
+            stabilizerAutoCropIdleReleaseEndSeconds,
+            stabilizerAutoCropIdleSampleStepSeconds
+        )
+        let startSeconds = max(firstTime, currentSeconds - maxReleaseSeconds)
+        var quietDuration = currentSeconds - startSeconds
+        var previousSeconds = currentSeconds
+        var previousTransform = currentTransform
+        var sampleSeconds = currentSeconds - stabilizerAutoCropIdleSampleStepSeconds
+
+        while sampleSeconds >= startSeconds - 1e-9 {
+            let sampleTransform = autoCropActualSampleTransform(
+                preparedAnalysis: preparedAnalysis,
+                currentSeconds: previousSeconds,
+                sampleSeconds: sampleSeconds,
+                currentTransform: previousTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+            if !autoCropTransformDeltaIsQuiet(
+                previousTransform,
+                sampleTransform,
+                outputSize: outputSize,
+                masterStrength: masterStrength
+            ) {
+                quietDuration = currentSeconds - previousSeconds
+                break
+            }
+            previousSeconds = sampleSeconds
+            previousTransform = sampleTransform
+            sampleSeconds -= stabilizerAutoCropIdleSampleStepSeconds
+        }
+
+        let releaseSpan = max(
+            stabilizerAutoCropIdleReleaseEndSeconds - stabilizerAutoCropIdleReleaseStartSeconds,
+            0.0001
+        )
+        let releaseProgress = (quietDuration - stabilizerAutoCropIdleReleaseStartSeconds) / releaseSpan
+        return easeInOutRamp(Float(releaseProgress))
+    }
+
+    private static func autoCropTransformDeltaIsQuiet(
+        _ lhs: StabilizerAutoTransform,
+        _ rhs: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float
+    ) -> Bool {
+        let pixelTolerance = max(Float(2.0), min(outputSize.x, outputSize.y) * 0.0018)
+        let pixelDelta = simd_length((lhs.pixelOffset - rhs.pixelOffset) * masterStrength)
+        let macroDelta = simd_length((lhs.macroPixelOffset - rhs.macroPixelOffset) * masterStrength)
+        let rotationDelta = abs(lhs.rotationDegrees - rhs.rotationDegrees) * masterStrength
+        let shearDelta = simd_length((lhs.shear - rhs.shear) * masterStrength)
+        let perspectiveDelta = simd_length(
+            ((lhs.perspective + lhs.yawPitchProxy) - (rhs.perspective + rhs.yawPitchProxy)) * masterStrength
+        )
+        return max(pixelDelta, macroDelta) <= pixelTolerance
+            && rotationDelta <= 0.035
+            && shearDelta <= 0.0008
+            && perspectiveDelta <= 0.0008
     }
 
     private static func autoCropLocalScaleFloor(

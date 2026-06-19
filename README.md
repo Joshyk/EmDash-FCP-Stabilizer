@@ -171,7 +171,11 @@ moving the crop center side to side with each frame's macro offset. The same
 local scale envelope evaluates nearby planned Auto Crop scale demand from that
 smoothed center and now follows the Auto Crop Zoom-In, Hold, and Zoom-Out time
 windows so the visible crop-zoom bar does not wobble with frame-to-frame
-lookahead changes.
+lookahead changes. While the scene is actively moving, the final zoom is rounded
+slightly upward into stable safety buckets rather than tracking every tiny scale
+change. If the recent transform stays quiet and the current frame no longer
+needs extra black-edge protection, Auto Crop eases that extra zoom back toward
+identity over roughly 2.5 seconds so idle shots settle near zero crop zoom.
 When an extreme frame must clamp the crop center for black-edge safety, Auto
 Crop keeps the smoothed center if the held scale can cover it; otherwise it
 moves only the minimum distance toward the current black-safe center instead of
