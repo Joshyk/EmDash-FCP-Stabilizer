@@ -38,6 +38,9 @@ struct StabilizerAutoTransform {
     var motionConfidence: Float
     var residual: Float
     var footstepImpulse: vector_float3
+    var rawFootstepCorrection: vector_float2
+    var limitedFootstepCorrection: vector_float2
+    var footstepPulseLimited: vector_float2
     var searchRadiusHitCount: Int32
     var searchRadiusTotalCount: Int32
 
@@ -72,6 +75,9 @@ struct StabilizerAutoTransform {
         motionConfidence: 0.0,
         residual: 0.0,
         footstepImpulse: vector_float3(0.0, 0.0, 0.0),
+        rawFootstepCorrection: vector_float2(0.0, 0.0),
+        limitedFootstepCorrection: vector_float2(0.0, 0.0),
+        footstepPulseLimited: vector_float2(0.0, 0.0),
         searchRadiusHitCount: 0,
         searchRadiusTotalCount: 0
     )
@@ -581,6 +587,10 @@ enum AutoStabilizationEstimator {
     private static let footstepConfidenceCenterBlend: Float = 0.65
     private static let footstepPersistentSignWindowStartSeconds = 0.055
     private static let footstepPersistentSignWindowEndSeconds = 0.22
+    private static let footstepXYContinuityWindowSeconds = 0.15
+    private static let footstepXYContinuityMaxSamples = 9
+    private static let footstepXYContinuityMinimumSpikePixels: Float = 0.75
+    private static let footstepXYContinuityMadMultiplier: Float = 3.0
     private static let strideWobbleWindowSeconds = 2.0
     private static let strideWobbleFullScalePixels: Float = 0.75
     private static let strideWobbleFullScaleDegrees: Float = 0.16
@@ -1368,8 +1378,30 @@ enum AutoStabilizationEstimator {
         )
         let macroCompensationY: Float = 0.0
         let macroCompensationRotation: Float = 0.0
-        let microCompensationX = -(footstepPathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
-        let microCompensationY = -(footstepPathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
+        let rawMicroCompensationX = -(footstepPathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
+        let rawMicroCompensationY = -(footstepPathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
+        let limitedMicroCompensationX = footstepContinuityLimitedCorrection(
+            values: analysis.footstepPathX,
+            baselineValues: footstepBaselineXPath,
+            analysis: analysis,
+            centerTime: renderSeconds,
+            rawCorrection: rawMicroCompensationX,
+            outputScale: xScale,
+            requestedStrength: strengths.microJitterX,
+            fullImpulseScale: footstepImpulseFullScalePixels
+        )
+        let limitedMicroCompensationY = footstepContinuityLimitedCorrection(
+            values: analysis.footstepPathY,
+            baselineValues: footstepBaselineYPath,
+            analysis: analysis,
+            centerTime: renderSeconds,
+            rawCorrection: rawMicroCompensationY,
+            outputScale: yScale,
+            requestedStrength: strengths.microJitterY,
+            fullImpulseScale: footstepImpulseFullScalePixels
+        )
+        let microCompensationX = limitedMicroCompensationX.limitedCorrection
+        let microCompensationY = limitedMicroCompensationY.limitedCorrection
         let microCompensationRotation = -(footstepPathRollAtRender - microImpulseBaselineRoll) * microRotationCorrectionStrength
         let footstepImpulse = vector_float3(
             footstepPathXAtRender - microImpulseBaselineX,
@@ -1514,6 +1546,9 @@ enum AutoStabilizationEstimator {
             motionConfidence: motionConfidence,
             residual: centerResidual,
             footstepImpulse: footstepImpulse,
+            rawFootstepCorrection: vector_float2(rawMicroCompensationX, rawMicroCompensationY),
+            limitedFootstepCorrection: vector_float2(microCompensationX, microCompensationY),
+            footstepPulseLimited: vector_float2(limitedMicroCompensationX.limitedAmount, limitedMicroCompensationY.limitedAmount),
             searchRadiusHitCount: searchRadiusHitCount,
             searchRadiusTotalCount: searchRadiusTotalCount
         )
@@ -1604,6 +1639,9 @@ enum AutoStabilizationEstimator {
         smoothedTransform.motionConfidence = rawCenterTransform.motionConfidence
         smoothedTransform.residual = rawCenterTransform.residual
         smoothedTransform.footstepImpulse = rawCenterTransform.footstepImpulse
+        smoothedTransform.rawFootstepCorrection = rawCenterTransform.rawFootstepCorrection
+        smoothedTransform.limitedFootstepCorrection = rawCenterTransform.limitedFootstepCorrection
+        smoothedTransform.footstepPulseLimited = rawCenterTransform.footstepPulseLimited
         smoothedTransform.searchRadiusHitCount = rawCenterTransform.searchRadiusHitCount
         smoothedTransform.searchRadiusTotalCount = rawCenterTransform.searchRadiusTotalCount
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
@@ -1673,6 +1711,9 @@ enum AutoStabilizationEstimator {
         var motionConfidence: Float = 0.0
         var residual: Float = 0.0
         var footstepImpulse = vector_float3(0.0, 0.0, 0.0)
+        var rawFootstepCorrection = vector_float2(0.0, 0.0)
+        var limitedFootstepCorrection = vector_float2(0.0, 0.0)
+        var footstepPulseLimited = vector_float2(0.0, 0.0)
         var searchRadiusHitCount: Float = 0.0
         var searchRadiusTotalCount: Float = 0.0
 
@@ -1708,6 +1749,9 @@ enum AutoStabilizationEstimator {
             motionConfidence += transform.motionConfidence * weight
             residual += transform.residual * weight
             footstepImpulse += transform.footstepImpulse * weight
+            rawFootstepCorrection += transform.rawFootstepCorrection * weight
+            limitedFootstepCorrection += transform.limitedFootstepCorrection * weight
+            footstepPulseLimited += transform.footstepPulseLimited * weight
             searchRadiusHitCount += Float(transform.searchRadiusHitCount) * weight
             searchRadiusTotalCount += Float(transform.searchRadiusTotalCount) * weight
         }
@@ -1746,6 +1790,9 @@ enum AutoStabilizationEstimator {
             motionConfidence: motionConfidence / totalWeight,
             residual: residual / totalWeight,
             footstepImpulse: footstepImpulse / totalWeight,
+            rawFootstepCorrection: rawFootstepCorrection / totalWeight,
+            limitedFootstepCorrection: limitedFootstepCorrection / totalWeight,
+            footstepPulseLimited: footstepPulseLimited / totalWeight,
             searchRadiusHitCount: Int32(searchRadiusHitCount / totalWeight),
             searchRadiusTotalCount: Int32(searchRadiusTotalCount / totalWeight)
         )
@@ -3967,6 +4014,138 @@ enum AutoStabilizationEstimator {
             overrides[index] = rawValue - ((rawValue - baselineValue) * confidence)
         }
         return EstimatedPath(values: values, overrides: overrides)
+    }
+
+    private struct FootstepContinuityLimitResult {
+        let limitedCorrection: Float
+        let limitedAmount: Float
+    }
+
+    private static func footstepContinuityLimitedCorrection(
+        values: [Float],
+        baselineValues: EstimatedPath,
+        analysis: StabilizerPreparedAnalysis,
+        centerTime: Double,
+        rawCorrection: Float,
+        outputScale: Float,
+        requestedStrength: Double,
+        fullImpulseScale: Float
+    ) -> FootstepContinuityLimitResult {
+        guard rawCorrection.isFinite,
+              outputScale.isFinite,
+              outputScale > 0.0,
+              !values.isEmpty,
+              !analysis.frames.isEmpty
+        else {
+            return FootstepContinuityLimitResult(limitedCorrection: rawCorrection, limitedAmount: 0.0)
+        }
+
+        let halfWindow = footstepXYContinuityWindowSeconds * 0.5
+        var indices = indicesWithinTimeRadius(
+            analysis.frames,
+            centerTime: centerTime,
+            radiusSeconds: halfWindow
+        ).filter { values.indices.contains($0) && baselineValues.values.indices.contains($0) }
+        guard indices.count >= 5 else {
+            return FootstepContinuityLimitResult(limitedCorrection: rawCorrection, limitedAmount: 0.0)
+        }
+        if indices.count > footstepXYContinuityMaxSamples {
+            indices = Array(indices
+                .sorted { abs(analysis.frames[$0].time - centerTime) < abs(analysis.frames[$1].time - centerTime) }
+                .prefix(footstepXYContinuityMaxSamples))
+                .sorted()
+        }
+
+        let sigma = max(1e-6, halfWindow * 0.55)
+        var weightedCorrections: [(value: Float, weight: Float)] = []
+        weightedCorrections.reserveCapacity(indices.count)
+        for index in indices {
+            guard analysis.frames.indices.contains(index),
+                  analysis.analysisConfidence.indices.contains(index),
+                  analysis.residuals.indices.contains(index),
+                  analysis.blurAmounts.indices.contains(index),
+                  analysis.acceptedBlockCounts.indices.contains(index),
+                  analysis.totalBlockCounts.indices.contains(index)
+            else {
+                continue
+            }
+            let offset = (analysis.frames[index].time - centerTime) / sigma
+            let weight = Float(Darwin.exp(-0.5 * offset * offset))
+            guard weight > 0.0001 else {
+                continue
+            }
+            let trackingConfidence = walkingBandTrackingConfidence(
+                motionConfidence: analysis.analysisConfidence[index],
+                residual: analysis.residuals[index],
+                blurAmount: analysis.blurAmounts[index],
+                acceptedBlockCount: analysis.acceptedBlockCounts[index],
+                totalBlockCount: analysis.totalBlockCounts[index],
+                qualityModel: analysis.qualityModel
+            )
+            let confidence = footstepFrameConfidence(
+                values: values,
+                baselineValues: baselineValues,
+                frames: analysis.frames,
+                interpolation: FrameInterpolation(lowerIndex: index, upperIndex: index, fraction: 0.0),
+                trackingConfidence: trackingConfidence,
+                fullImpulseScale: fullImpulseScale
+            )
+            let correctionStrength = walkingConfidenceCompensatedCorrectionFactor(
+                requestedStrength,
+                confidence: confidence,
+                maxStrength: 10.0
+            )
+            let correction = -(values[index] - baselineValues[index]) * outputScale * correctionStrength
+            if correction.isFinite {
+                weightedCorrections.append((value: correction, weight: weight))
+            }
+        }
+
+        guard weightedCorrections.count >= 5,
+              let localMedian = weightedMedian(weightedCorrections)
+        else {
+            return FootstepContinuityLimitResult(limitedCorrection: rawCorrection, limitedAmount: 0.0)
+        }
+        let weightedDeviations = weightedCorrections.map {
+            (value: abs($0.value - localMedian), weight: $0.weight)
+        }
+        let localMad = weightedMedian(weightedDeviations) ?? 0.0
+        let spikeThreshold = max(
+            footstepXYContinuityMinimumSpikePixels,
+            localMad * footstepXYContinuityMadMultiplier
+        )
+        let rawDeviation = abs(rawCorrection - localMedian)
+        guard rawDeviation > spikeThreshold else {
+            return FootstepContinuityLimitResult(limitedCorrection: rawCorrection, limitedAmount: 0.0)
+        }
+
+        let rawSign: Float = rawCorrection >= 0.0 ? 1.0 : -1.0
+        var similarNeighborWeight: Float = 0.0
+        var totalNeighborWeight: Float = 0.0
+        for entry in weightedCorrections {
+            let value = entry.value
+            guard abs(value - rawCorrection) > Float.ulpOfOne else {
+                continue
+            }
+            totalNeighborWeight += entry.weight
+            let valueSign: Float = value >= 0.0 ? 1.0 : -1.0
+            if valueSign == rawSign,
+               abs(value - rawCorrection) <= spikeThreshold {
+                similarNeighborWeight += entry.weight
+            }
+        }
+        if totalNeighborWeight > Float.ulpOfOne,
+           similarNeighborWeight / totalNeighborWeight >= 0.35 {
+            return FootstepContinuityLimitResult(limitedCorrection: rawCorrection, limitedAmount: 0.0)
+        }
+
+        let excess = rawDeviation - spikeThreshold
+        let blend = clamp(excess / max(spikeThreshold * 2.0, Float.ulpOfOne), min: 0.35, max: 0.85)
+        let limitedCorrection = rawCorrection + ((localMedian - rawCorrection) * blend)
+        return FootstepContinuityLimitResult(
+            limitedCorrection: limitedCorrection,
+            limitedAmount: abs(rawCorrection - limitedCorrection)
+        )
     }
 
     private static func footstepFrameConfidence(

@@ -276,6 +276,18 @@ private struct FrameAssessment {
     let warpTrackingGate: Float
     let warpEdgeGate: Float
     let warpGate: Float
+    let footstepRawImpulseX: Float
+    let footstepRawImpulseY: Float
+    let footstepBaselineX: Float
+    let footstepBaselineY: Float
+    let footstepConfidenceX: Float
+    let footstepConfidenceY: Float
+    let footstepRawCorrectionX: Float
+    let footstepRawCorrectionY: Float
+    let footstepLimitedCorrectionX: Float
+    let footstepLimitedCorrectionY: Float
+    let footstepPulseLimitedX: Float
+    let footstepPulseLimitedY: Float
     let bands: [BandAssessment]
 
     var topBand: BandAssessment {
@@ -445,6 +457,10 @@ private let footstepNoiseFloorScale: Float = 0.08
 private let footstepSurroundingNoiseMultiplier: Float = 1.10
 private let footstepSurroundingNoiseFloorCapScale: Float = 0.45
 private let footstepFullResponseScale: Float = 0.65
+private let footstepXYContinuityWindowSeconds = 0.15
+private let footstepXYContinuityMaxSamples = 9
+private let footstepXYContinuityMinimumSpikePixels: Float = 0.75
+private let footstepXYContinuityMadMultiplier: Float = 3.0
 private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
 private let strideFullResponseScale: Float = 0.65
@@ -903,8 +919,30 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: context.footstepBaselineXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
     let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: context.footstepBaselineYPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
     let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: context.footstepBaselineRPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScaleDegrees)
-    let footAppliedX = abs(footX * xScale) * walkingCorrectionFactor(options.strengths.microX, confidence: footQX, maxStrength: 10.0)
-    let footAppliedY = abs(footY * yScale) * walkingCorrectionFactor(options.strengths.microY, confidence: footQY, maxStrength: 10.0)
+    let rawFootCorrectionX = -(footX * xScale) * walkingCorrectionFactor(options.strengths.microX, confidence: footQX, maxStrength: 10.0)
+    let rawFootCorrectionY = -(footY * yScale) * walkingCorrectionFactor(options.strengths.microY, confidence: footQY, maxStrength: 10.0)
+    let limitedFootCorrectionX = footstepContinuityLimitedCorrection(
+        values: analysis.footstepPathX,
+        baselineValues: context.footstepBaselineXPath,
+        analysis: analysis,
+        centerIndex: index,
+        rawCorrection: rawFootCorrectionX,
+        outputScale: xScale,
+        requestedStrength: options.strengths.microX,
+        fullImpulseScale: footstepFullScalePixels
+    )
+    let limitedFootCorrectionY = footstepContinuityLimitedCorrection(
+        values: analysis.footstepPathY,
+        baselineValues: context.footstepBaselineYPath,
+        analysis: analysis,
+        centerIndex: index,
+        rawCorrection: rawFootCorrectionY,
+        outputScale: yScale,
+        requestedStrength: options.strengths.microY,
+        fullImpulseScale: footstepFullScalePixels
+    )
+    let footAppliedX = abs(limitedFootCorrectionX)
+    let footAppliedY = abs(limitedFootCorrectionY)
     let footAppliedR = abs(footR) * walkingCorrectionFactor(options.strengths.microR, confidence: footQR)
     let footDetected = hypotf(footX * xScale, footY * yScale) + (abs(footR) * 12.0)
     let footApplied = hypotf(footAppliedX, footAppliedY) + (footAppliedR * 12.0)
@@ -955,7 +993,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             applied: footApplied,
             remaining: max(0.0, footDetected - footApplied),
             confidence: (footQX + footQY + footQR) / 3.0,
-            note: String(format: "foot raw X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f", footX, footY, footR, footQX, footQY, footQR)
+            note: String(format: "foot raw X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f corr %.3f %.3f limited %.3f %.3f", footX, footY, footR, footQX, footQY, footQR, rawFootCorrectionX, rawFootCorrectionY, limitedFootCorrectionX, limitedFootCorrectionY)
         ),
         BandAssessment(
             name: "SWOB",
@@ -1004,6 +1042,18 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         warpTrackingGate: warpGateComponents.trackingGate,
         warpEdgeGate: warpGateComponents.edgeGate,
         warpGate: warpGate,
+        footstepRawImpulseX: footX,
+        footstepRawImpulseY: footY,
+        footstepBaselineX: footstepBaseX,
+        footstepBaselineY: footstepBaseY,
+        footstepConfidenceX: footQX,
+        footstepConfidenceY: footQY,
+        footstepRawCorrectionX: rawFootCorrectionX,
+        footstepRawCorrectionY: rawFootCorrectionY,
+        footstepLimitedCorrectionX: limitedFootCorrectionX,
+        footstepLimitedCorrectionY: limitedFootCorrectionY,
+        footstepPulseLimitedX: abs(rawFootCorrectionX - limitedFootCorrectionX),
+        footstepPulseLimitedY: abs(rawFootCorrectionY - limitedFootCorrectionY),
         bands: bands
     )
 }
@@ -1270,6 +1320,131 @@ private func confidenceCleanedFootstepPath(
         cleaned[index] = values[index] - ((values[index] - baselineValues[index]) * confidence)
     }
     return cleaned
+}
+
+private func footstepContinuityLimitedCorrection(
+    values: [Float],
+    baselineValues: [Float],
+    analysis: Analysis,
+    centerIndex: Int,
+    rawCorrection: Float,
+    outputScale: Float,
+    requestedStrength: Double,
+    fullImpulseScale: Float
+) -> Float {
+    guard rawCorrection.isFinite,
+          outputScale.isFinite,
+          outputScale > 0.0,
+          values.indices.contains(centerIndex),
+          baselineValues.indices.contains(centerIndex),
+          analysis.frames.indices.contains(centerIndex)
+    else {
+        return rawCorrection
+    }
+
+    let centerTime = analysis.frames[centerIndex].time
+    let halfWindow = footstepXYContinuityWindowSeconds * 0.5
+    var indices = indicesWithinTimeRadius(
+        analysis.frames,
+        centerTime: centerTime,
+        radiusSeconds: halfWindow
+    ).filter { values.indices.contains($0) && baselineValues.indices.contains($0) }
+    guard indices.count >= 5 else {
+        return rawCorrection
+    }
+    if indices.count > footstepXYContinuityMaxSamples {
+        indices = Array(indices
+            .sorted { abs(analysis.frames[$0].time - centerTime) < abs(analysis.frames[$1].time - centerTime) }
+            .prefix(footstepXYContinuityMaxSamples))
+            .sorted()
+    }
+
+    let sigma = max(1e-6, halfWindow * 0.55)
+    var weightedCorrections: [(value: Float, weight: Float)] = []
+    weightedCorrections.reserveCapacity(indices.count)
+    for index in indices {
+        guard analysis.frames.indices.contains(index),
+              analysis.analysisConfidence.indices.contains(index),
+              analysis.residuals.indices.contains(index),
+              analysis.blurAmounts.indices.contains(index),
+              analysis.acceptedBlockCounts.indices.contains(index),
+              analysis.totalBlockCounts.indices.contains(index)
+        else {
+            continue
+        }
+        let offset = (analysis.frames[index].time - centerTime) / sigma
+        let weight = Float(Darwin.exp(-0.5 * offset * offset))
+        guard weight > 0.0001 else {
+            continue
+        }
+        let tracking = walkingBandTrackingConfidence(
+            motionConfidence: analysis.analysisConfidence[index],
+            residual: analysis.residuals[index],
+            blurAmount: analysis.blurAmounts[index],
+            acceptedBlockCount: analysis.acceptedBlockCounts[index],
+            totalBlockCount: analysis.totalBlockCounts[index],
+            qualityModel: analysis.qualityModel
+        )
+        let confidence = footstepConfidence(
+            values: values,
+            baselineValues: baselineValues,
+            frames: analysis.frames,
+            index: index,
+            trackingConfidence: tracking,
+            fullImpulseScale: fullImpulseScale
+        )
+        let correctionStrength = walkingCorrectionFactor(
+            requestedStrength,
+            confidence: confidence,
+            maxStrength: 10.0
+        )
+        let correction = -(values[index] - baselineValues[index]) * outputScale * correctionStrength
+        if correction.isFinite {
+            weightedCorrections.append((value: correction, weight: weight))
+        }
+    }
+
+    guard weightedCorrections.count >= 5,
+          let localMedian = weightedMedian(weightedCorrections)
+    else {
+        return rawCorrection
+    }
+    let weightedDeviations = weightedCorrections.map {
+        (value: abs($0.value - localMedian), weight: $0.weight)
+    }
+    let localMad = weightedMedian(weightedDeviations) ?? 0.0
+    let spikeThreshold = max(
+        footstepXYContinuityMinimumSpikePixels,
+        localMad * footstepXYContinuityMadMultiplier
+    )
+    let rawDeviation = abs(rawCorrection - localMedian)
+    guard rawDeviation > spikeThreshold else {
+        return rawCorrection
+    }
+
+    let rawSign: Float = rawCorrection >= 0.0 ? 1.0 : -1.0
+    var similarNeighborWeight: Float = 0.0
+    var totalNeighborWeight: Float = 0.0
+    for entry in weightedCorrections {
+        let value = entry.value
+        guard abs(value - rawCorrection) > Float.ulpOfOne else {
+            continue
+        }
+        totalNeighborWeight += entry.weight
+        let valueSign: Float = value >= 0.0 ? 1.0 : -1.0
+        if valueSign == rawSign,
+           abs(value - rawCorrection) <= spikeThreshold {
+            similarNeighborWeight += entry.weight
+        }
+    }
+    if totalNeighborWeight > Float.ulpOfOne,
+       similarNeighborWeight / totalNeighborWeight >= 0.35 {
+        return rawCorrection
+    }
+
+    let excess = rawDeviation - spikeThreshold
+    let blend = clamp(excess / max(spikeThreshold * 2.0, Float.ulpOfOne), min: 0.35, max: 0.85)
+    return rawCorrection + ((localMedian - rawCorrection) * blend)
 }
 
 private func footstepConfidence(values: [Float], baselineValues: [Float], frames: [AnalysisFrame], index: Int, trackingConfidence: Float, fullImpulseScale: Float) -> Float {
@@ -1576,6 +1751,25 @@ private func median(_ values: [Float]) -> Float? {
     return sorted[middle]
 }
 
+private func weightedMedian(_ values: [(value: Float, weight: Float)]) -> Float? {
+    let finiteValues = values
+        .filter { $0.value.isFinite && $0.weight.isFinite && $0.weight > 0.0 }
+        .sorted { $0.value < $1.value }
+    guard !finiteValues.isEmpty else {
+        return nil
+    }
+    let totalWeight = finiteValues.reduce(Float(0.0)) { $0 + $1.weight }
+    let midpoint = totalWeight * 0.5
+    var runningWeight: Float = 0.0
+    for entry in finiteValues {
+        runningWeight += entry.weight
+        if runningWeight >= midpoint {
+            return entry.value
+        }
+    }
+    return finiteValues.last?.value
+}
+
 private func clamp(_ value: Float, min minValue: Float, max maxValue: Float) -> Float {
     Swift.max(minValue, Swift.min(maxValue, value))
 }
@@ -1701,6 +1895,18 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
                 "warpTrackingGate": assessment.warpTrackingGate,
                 "warpEdgeGate": assessment.warpEdgeGate,
                 "warpGate": assessment.warpGate,
+                "footstepRawImpulseX": assessment.footstepRawImpulseX,
+                "footstepRawImpulseY": assessment.footstepRawImpulseY,
+                "footstepBaselineX": assessment.footstepBaselineX,
+                "footstepBaselineY": assessment.footstepBaselineY,
+                "footstepConfidenceX": assessment.footstepConfidenceX,
+                "footstepConfidenceY": assessment.footstepConfidenceY,
+                "footstepRawCorrectionX": assessment.footstepRawCorrectionX,
+                "footstepRawCorrectionY": assessment.footstepRawCorrectionY,
+                "footstepLimitedCorrectionX": assessment.footstepLimitedCorrectionX,
+                "footstepLimitedCorrectionY": assessment.footstepLimitedCorrectionY,
+                "footstepPulseLimitedX": assessment.footstepPulseLimitedX,
+                "footstepPulseLimitedY": assessment.footstepPulseLimitedY,
                 "topBand": assessment.topBand.name,
                 "bands": assessment.bands.map { band in
                     [
