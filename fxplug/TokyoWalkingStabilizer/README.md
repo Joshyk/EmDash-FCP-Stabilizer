@@ -267,9 +267,12 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   pulse with short walking impulses even on high-frame-rate footage. Auto Crop
   also prefers the lead/release-smoothed crop position instead of snapping back
   to the current frame's short-period crop center whenever the held scale has
-  enough margin. High-quality render uses the full 17-sample Auto Crop
-  lead window; proxy, low/medium-quality playback, or scaled preview uses a very
-  light non-quantized lead/release profile with no extra playback crop padding.
+  enough margin. The local scale envelope evaluates nearby planned Auto Crop
+  scale demand as well as instantaneous demand so the visible crop-zoom bar
+  does not wobble with frame-to-frame lookahead changes. High-quality render
+  uses the full 17-sample Auto Crop lead window; proxy, low/medium-quality
+  playback, or scaled preview uses a very light non-quantized lead/release
+  profile with no extra playback crop padding.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.

@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.243"
+private let tokyoWalkingStabilizerVersion = "0.3.244"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -236,6 +236,18 @@ private struct AutoCropFramingTarget {
     let isHoldSample: Bool
 }
 
+private struct AutoCropScaleDemand {
+    let currentPositionPixels: vector_float2
+    let currentRequiredScale: Float
+    let plannedScale: Float
+    let positionPixels: vector_float2
+    let finalRequiredScale: Float
+
+    var scaleFloor: Float {
+        max(Float(1.0), currentRequiredScale, plannedScale, finalRequiredScale)
+    }
+}
+
 private struct AutoCropTransformContext {
     let outputSize: vector_float2
     let halfSize: vector_float2
@@ -342,6 +354,32 @@ private struct AutoCropFramingCacheKey: Hashable {
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
     let currentTransform: AutoCropTransformSignature
+}
+
+private struct AutoCropScaleDemandCacheKey: Hashable {
+    let cacheIdentity: String?
+    let analysisRevision: UInt64
+    let centerSeconds: UInt64
+    let outputWidth: Int32
+    let outputHeight: Int32
+    let analysisFrameCount: Int
+    let analysisFirstTime: UInt64
+    let analysisLastTime: UInt64
+    let panSmoothSeconds: UInt64
+    let masterStrength: UInt32
+    let transitionDuration: UInt64
+    let leadTime: UInt64
+    let holdTime: UInt64
+    let samplingProfile: Int32
+    let microJitterX: UInt64
+    let microJitterY: UInt64
+    let microJitterRotation: UInt64
+    let strideWobbleX: UInt64
+    let strideWobbleY: UInt64
+    let strideWobbleRotation: UInt64
+    let panStabilizationStrength: UInt64
+    let farFieldWarp: UInt64
+    let centerTransform: AutoCropTransformSignature
 }
 
 private struct StabilizerAutoTransformCacheKey: Hashable {
@@ -725,6 +763,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
     private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
     private static let autoCropFramingCacheLimit = 160
+    private static let autoCropScaleDemandCacheLock = NSLock()
+    private static var autoCropScaleDemandCache: [AutoCropScaleDemandCacheKey: AutoCropScaleDemand] = [:]
+    private static var autoCropScaleDemandCacheOrder: [AutoCropScaleDemandCacheKey] = []
+    private static let autoCropScaleDemandCacheLimit = 1024
     private static let autoTransformCacheLock = NSLock()
     private static var autoTransformCache: [StabilizerAutoTransformCacheKey: StabilizerAutoTransform] = [:]
     private static var autoTransformCacheOrder: [StabilizerAutoTransformCacheKey] = []
@@ -1724,66 +1766,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let transitionDurationSeconds = autoCropTransitionDurationSeconds(transitionDuration)
         let leadTimeSeconds = autoCropLeadTimeSeconds(leadTime)
         let holdTimeSeconds = autoCropHoldTimeSeconds(holdTime)
-        let transitionSamples = autoCropTransformSamples(
+        let scaleDemand = cachedAutoCropScaleDemand(
             preparedAnalysis: preparedAnalysis,
-            startSeconds: renderSeconds,
-            durationSeconds: leadTimeSeconds,
+            centerSeconds: renderSeconds,
+            centerTransform: currentTransform,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
-            currentTransform: currentTransform,
-            samplingProfile: samplingProfile
-        )
-        let releaseSamples = autoCropReleaseTransformSamples(
-            preparedAnalysis: preparedAnalysis,
-            startSeconds: renderSeconds,
-            durationSeconds: transitionDurationSeconds,
-            holdDurationSeconds: holdTimeSeconds,
-            outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths,
-            currentTransform: currentTransform,
-            samplingProfile: samplingProfile
-        )
-        let transitionTargets = autoCropFramingTargets(
-            from: transitionSamples,
-            outputSize: outputSize,
             masterStrength: masterStrength,
-            samplingProfile: samplingProfile
-        )
-        let releaseTargets = autoCropFramingTargets(
-            from: releaseSamples,
-            outputSize: outputSize,
-            masterStrength: masterStrength,
-            samplingProfile: samplingProfile
-        )
-        let currentPositionPixels = transitionTargets.first(where: { abs($0.leadProgress - 1.0) <= 1e-6 })?.positionPixels
-            ?? transitionTargets.first?.positionPixels
-            ?? blackSafeAutoCropPosition(
-                preferredPositionPixels: currentTransform.macroPixelOffset * masterStrength,
-                context: context,
-                samplingProfile: samplingProfile
-            )
-        let currentRequiredScale = requiredAutoCropScale(
-            context: context,
-            cropPositionPixels: currentPositionPixels
-        )
-        let plannedScale = autoCropPlannedScale(
-            transitionTargets: transitionTargets,
-            releaseTargets: releaseTargets,
-            currentRequiredScale: currentRequiredScale
-        )
-        let positionPixels = autoCropBudgetedPositionPixels(
-            transitionTargets: transitionTargets,
-            releaseTargets: releaseTargets,
-            currentPositionPixels: currentPositionPixels,
-            context: context,
-            maximumScale: plannedScale,
-            samplingProfile: samplingProfile
-        )
-        let finalRequiredScale = requiredAutoCropScale(
-            context: context,
-            cropPositionPixels: positionPixels
+            transitionDurationSeconds: transitionDurationSeconds,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
         )
         let localScaleFloor = autoCropLocalScaleFloor(
             preparedAnalysis: preparedAnalysis,
@@ -1793,15 +1789,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             masterStrength: masterStrength,
+            transitionDurationSeconds: transitionDurationSeconds,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
             samplingProfile: samplingProfile,
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity,
-            initialScale: max(currentRequiredScale, plannedScale, finalRequiredScale)
+            initialScale: scaleDemand.scaleFloor
         )
         let rawScale = autoCropScaleWithQuietLookaheadDeadband(
-            scale: max(Float(1.0), finalRequiredScale, plannedScale, localScaleFloor),
-            currentRequiredScale: currentRequiredScale,
-            finalRequiredScale: finalRequiredScale,
+            scale: max(Float(1.0), scaleDemand.finalRequiredScale, scaleDemand.plannedScale, localScaleFloor),
+            currentRequiredScale: scaleDemand.currentRequiredScale,
+            finalRequiredScale: scaleDemand.finalRequiredScale,
             currentTransform: currentTransform,
             outputSize: outputSize,
             masterStrength: masterStrength
@@ -1809,8 +1808,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let finalScale = rawScale
 
         let finalPositionPixels = autoCropScaleBudgetedPositionPixels(
-            anchorPositionPixels: positionPixels,
-            fallbackPositionPixels: currentPositionPixels,
+            anchorPositionPixels: scaleDemand.positionPixels,
+            fallbackPositionPixels: scaleDemand.currentPositionPixels,
             context: context,
             scale: finalScale,
             samplingProfile: samplingProfile
@@ -1857,6 +1856,171 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func autoCropZoomOutRamp(_ progress: Float) -> Float {
         linearRamp(progress)
+    }
+
+    private static func cachedAutoCropScaleDemand(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        centerSeconds: Double,
+        centerTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        transitionDurationSeconds: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> AutoCropScaleDemand {
+        let frames = preparedAnalysis.frames
+        let key = AutoCropScaleDemandCacheKey(
+            cacheIdentity: cacheIdentity,
+            analysisRevision: analysisRevision,
+            centerSeconds: centerSeconds.bitPattern,
+            outputWidth: Int32(outputSize.x.rounded()),
+            outputHeight: Int32(outputSize.y.rounded()),
+            analysisFrameCount: frames.count,
+            analysisFirstTime: frames.first?.time.bitPattern ?? 0,
+            analysisLastTime: frames.last?.time.bitPattern ?? 0,
+            panSmoothSeconds: panSmoothSeconds.bitPattern,
+            masterStrength: masterStrength.bitPattern,
+            transitionDuration: transitionDurationSeconds.bitPattern,
+            leadTime: leadTimeSeconds.bitPattern,
+            holdTime: holdTimeSeconds.bitPattern,
+            samplingProfile: samplingProfile.rawValue,
+            microJitterX: strengths.microJitterX.bitPattern,
+            microJitterY: strengths.microJitterY.bitPattern,
+            microJitterRotation: strengths.microJitterRotation.bitPattern,
+            strideWobbleX: strengths.strideWobbleX.bitPattern,
+            strideWobbleY: strengths.strideWobbleY.bitPattern,
+            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+            farFieldWarp: strengths.farFieldWarp.bitPattern,
+            centerTransform: AutoCropTransformSignature(centerTransform)
+        )
+
+        autoCropScaleDemandCacheLock.lock()
+        if let cachedDemand = autoCropScaleDemandCache[key] {
+            autoCropScaleDemandCacheLock.unlock()
+            return cachedDemand
+        }
+        autoCropScaleDemandCacheLock.unlock()
+
+        let demand = autoCropScaleDemand(
+            preparedAnalysis: preparedAnalysis,
+            centerSeconds: centerSeconds,
+            centerTransform: centerTransform,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            transitionDurationSeconds: transitionDurationSeconds,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            samplingProfile: samplingProfile
+        )
+
+        autoCropScaleDemandCacheLock.lock()
+        defer { autoCropScaleDemandCacheLock.unlock() }
+        if let cachedDemand = autoCropScaleDemandCache[key] {
+            return cachedDemand
+        }
+        autoCropScaleDemandCache[key] = demand
+        autoCropScaleDemandCacheOrder.append(key)
+        while autoCropScaleDemandCacheOrder.count > autoCropScaleDemandCacheLimit {
+            let oldestKey = autoCropScaleDemandCacheOrder.removeFirst()
+            autoCropScaleDemandCache.removeValue(forKey: oldestKey)
+        }
+        return demand
+    }
+
+    private static func autoCropScaleDemand(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        centerSeconds: Double,
+        centerTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        transitionDurationSeconds: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
+        samplingProfile: AutoCropSamplingProfile
+    ) -> AutoCropScaleDemand {
+        let context = AutoCropTransformContext(
+            transform: centerTransform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        )
+        let transitionSamples = autoCropTransformSamples(
+            preparedAnalysis: preparedAnalysis,
+            startSeconds: centerSeconds,
+            durationSeconds: leadTimeSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            currentTransform: centerTransform,
+            samplingProfile: samplingProfile
+        )
+        let releaseSamples = autoCropReleaseTransformSamples(
+            preparedAnalysis: preparedAnalysis,
+            startSeconds: centerSeconds,
+            durationSeconds: transitionDurationSeconds,
+            holdDurationSeconds: holdTimeSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            currentTransform: centerTransform,
+            samplingProfile: samplingProfile
+        )
+        let transitionTargets = autoCropFramingTargets(
+            from: transitionSamples,
+            outputSize: outputSize,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile
+        )
+        let releaseTargets = autoCropFramingTargets(
+            from: releaseSamples,
+            outputSize: outputSize,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile
+        )
+        let currentPositionPixels = transitionTargets.first(where: { abs($0.leadProgress - 1.0) <= 1e-6 })?.positionPixels
+            ?? transitionTargets.first?.positionPixels
+            ?? blackSafeAutoCropPosition(
+                preferredPositionPixels: centerTransform.macroPixelOffset * masterStrength,
+                context: context,
+                samplingProfile: samplingProfile
+            )
+        let currentRequiredScale = requiredAutoCropScale(
+            context: context,
+            cropPositionPixels: currentPositionPixels
+        )
+        let plannedScale = autoCropPlannedScale(
+            transitionTargets: transitionTargets,
+            releaseTargets: releaseTargets,
+            currentRequiredScale: currentRequiredScale
+        )
+        let positionPixels = autoCropBudgetedPositionPixels(
+            transitionTargets: transitionTargets,
+            releaseTargets: releaseTargets,
+            currentPositionPixels: currentPositionPixels,
+            context: context,
+            maximumScale: plannedScale,
+            samplingProfile: samplingProfile
+        )
+        let finalRequiredScale = requiredAutoCropScale(
+            context: context,
+            cropPositionPixels: positionPixels
+        )
+        return AutoCropScaleDemand(
+            currentPositionPixels: currentPositionPixels,
+            currentRequiredScale: currentRequiredScale,
+            plannedScale: plannedScale,
+            positionPixels: positionPixels,
+            finalRequiredScale: finalRequiredScale
+        )
     }
 
     private static func autoCropPlannedScale(
@@ -1947,6 +2111,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         masterStrength: Float,
+        transitionDurationSeconds: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
         samplingProfile: AutoCropSamplingProfile,
         analysisRevision: UInt64,
         cacheIdentity: String?,
@@ -1975,23 +2142,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 analysisRevision: analysisRevision,
                 cacheIdentity: cacheIdentity
             )
-            let context = AutoCropTransformContext(
-                transform: sampleTransform,
+            let sampleDemand = cachedAutoCropScaleDemand(
+                preparedAnalysis: preparedAnalysis,
+                centerSeconds: sample.seconds,
+                centerTransform: sampleTransform,
                 outputSize: outputSize,
-                masterStrength: masterStrength
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                masterStrength: masterStrength,
+                transitionDurationSeconds: transitionDurationSeconds,
+                leadTimeSeconds: leadTimeSeconds,
+                holdTimeSeconds: holdTimeSeconds,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
             )
-            let positionPixels = blackSafeAutoCropPosition(
-                preferredPositionPixels: sampleTransform.macroPixelOffset * masterStrength,
-                context: context,
-                samplingProfile: samplingProfile
-            )
-            let requiredScale = requiredAutoCropScale(
-                context: context,
-                cropPositionPixels: positionPixels,
-                sampleSteps: samplingProfile.scaleSearchSampleSteps,
-                iterations: samplingProfile.scaleSearchIterations
-            )
-            let extraScale = max(Float(0.0), requiredScale - protectedScale)
+            let extraScale = max(Float(0.0), sampleDemand.scaleFloor - protectedScale)
             let weightedScale = protectedScale + (extraScale * min(max(sample.influence, 0.0), 1.0))
             return max(partial, weightedScale)
         }
