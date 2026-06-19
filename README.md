@@ -145,44 +145,24 @@ suppressed instead of producing a wavy image.
 path skips Auto Crop crop-safe framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
 or black. New effect instances default that menu to `Black Outside`.
-`Auto Crop Zoom-In Time` controls how many seconds before an upcoming turn/crop
-demand Auto Crop starts moving zoom and position. For example, `10` starts the
-zoom/position ramp about 10 seconds before that future turn reaches the current
-frame; `20` starts it about 20 seconds early. `Auto Crop Zoom-Out Time`
-controls the linear release time as Auto Crop returns from a higher zoom after
-the black-edge risk has passed. `Auto Crop Hold Time` controls the minimum time
-Auto Crop holds a reached zoom/position target before release starts; the
-default is `4` seconds. With
-`Remove Black Edges` on, the render path still clamps zoom to the current
-frame's required safe crop so outside-source black is not exposed during the
-transition. The lead/release path is budgeted from that current-frame safe crop:
-future samples start zoom and position with a linear ramp, position is limited
-when it would force extra current-frame zoom, hold samples keep the reached
-target for the Hold Time window, and release samples return with a linear ramp
-instead of holding an aggressive crop envelope. Nearby local scale demands are
-sampled from a seconds-based plateau window with a soft edge so short walking
-impulses do not create a visible zoom pulse on high-frame-rate footage; the
-plateau also samples nearby render-time offsets and analyzed frame times inside
-the Hold window so frame-level safety spikes are held instead of appearing as
-tiny zoom steps. The held scale now uses a smoothed local crop center sampled
-from regular render-time positions, separate from the exact frame samples used
-for scale safety, and absorbs black-edge safety in the scale budget instead of
-moving the crop center side to side with each frame's macro offset. The same
-local scale envelope evaluates nearby planned Auto Crop scale demand from that
-smoothed center and now follows the Auto Crop Zoom-In, Hold, and Zoom-Out time
-windows so the visible crop-zoom bar does not wobble with frame-to-frame
-lookahead changes. While the scene is actively moving, the final zoom is rounded
-slightly upward into stable safety buckets rather than tracking every tiny scale
-change. If the recent transform stays quiet and the current frame no longer
-needs extra black-edge protection, Auto Crop eases that extra zoom back toward
-identity over roughly 2.5 seconds so idle shots settle near zero crop zoom.
+`Auto Crop Zoom-In Time`, `Auto Crop Zoom-Out Time`, and `Auto Crop Hold Time`
+remain visible for parameter compatibility, but this build no longer drives
+final crop zoom from a future lead/hold/release envelope. With
+`Remove Black Edges` on, the render path clamps zoom to the current frame's
+required safe crop so outside-source black is not exposed. The local crop center
+is smoothed from trailing render-time samples instead of future lookahead, and
+black-edge safety is absorbed in the scale budget instead of moving the crop
+center side to side with each frame's macro offset. Final zoom is driven by the
+current frame's black-edge safety floor plus a fixed recent-motion envelope,
+rounded into stable safety buckets, so the visible crop-zoom bar does not track
+frame-to-frame planned scale changes. If the recent transform stays quiet and
+the current frame no longer needs extra black-edge protection, Auto Crop eases
+that extra zoom back toward identity over roughly 2.5 seconds so idle shots
+settle near zero crop zoom instead of pre-zooming for future motion.
 When an extreme frame must clamp the crop center for black-edge safety, Auto
 Crop keeps the smoothed center if the held scale can cover it; otherwise it
 moves only the minimum distance toward the current black-safe center instead of
 following the clamp side to side.
-High-quality render uses the full 17-sample Auto Crop lead window; proxy,
-low/medium-quality playback, or scaled preview uses a very light non-quantized
-lead/release profile with no extra playback crop padding.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the

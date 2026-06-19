@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.254"
+private let tokyoWalkingStabilizerVersion = "0.3.259"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -55,14 +55,12 @@ private let stabilizerDefaultAutoCropLeadTime = 10.0
 private let stabilizerMaximumAutoCropLeadTime = 120.0
 private let stabilizerDefaultAutoCropHoldTime = 4.0
 private let stabilizerMaximumAutoCropHoldTime = 30.0
-private let stabilizerAutoCropCurrentScaleIdentityTolerance: Float = 0.002
-private let stabilizerAutoCropLookaheadScaleDeadband: Float = 0.025
-private let stabilizerAutoCropScaleSoftKneeStart: Float = 0.004
-private let stabilizerAutoCropScaleSoftKneeEnd: Float = 0.035
 private let stabilizerAutoCropActiveScalePadding: Float = 0.006
 private let stabilizerAutoCropActiveScaleBucket: Float = 0.012
 private let stabilizerAutoCropActiveScaleMinimumDelta: Float = 0.001
+private let stabilizerAutoCropMotionEnvelopeScaleDelta: Float = 0.054
 private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
+private let stabilizerAutoCropIdleNeutralScaleTolerance: Float = 0.04
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
 private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
@@ -131,14 +129,6 @@ private struct AutoCropFraming {
     )
 }
 
-private struct AutoCropTransitionSample {
-    let transform: StabilizerAutoTransform
-    let weight: Float
-    let leadProgress: Float
-    let isCurrentFrame: Bool
-    let isHoldSample: Bool
-}
-
 private struct AutoCropLocalScaleSample {
     let seconds: Double
     let influence: Float
@@ -147,24 +137,6 @@ private struct AutoCropLocalScaleSample {
 private enum AutoCropSamplingProfile: Int32 {
     case playback = 0
     case full = 1
-
-    var transitionSampleCount: Int {
-        switch self {
-        case .playback:
-            return 4
-        case .full:
-            return 17
-        }
-    }
-
-    var releaseSampleCount: Int {
-        switch self {
-        case .playback:
-            return 4
-        case .full:
-            return 16
-        }
-    }
 
     var scaleSearchSampleSteps: Int {
         switch self {
@@ -220,51 +192,6 @@ private enum AutoCropSamplingProfile: Int32 {
         }
     }
 
-    var scaleEnvelopeStepSeconds: Double {
-        switch self {
-        case .playback:
-            return 0.08
-        case .full:
-            return 0.06
-        }
-    }
-
-    var scaleEnvelopeFrameSampleLimit: Int {
-        switch self {
-        case .playback:
-            return 120
-        case .full:
-            return 260
-        }
-    }
-
-    var scaleEnvelopeFrameFutureSeconds: Double {
-        switch self {
-        case .playback:
-            return 0.25
-        case .full:
-            return 0.35
-        }
-    }
-
-    var scaleEnvelopeRenderSampleLimit: Int {
-        switch self {
-        case .playback:
-            return 180
-        case .full:
-            return 360
-        }
-    }
-
-    var scaleEnvelopeRenderStepSeconds: Double {
-        switch self {
-        case .playback:
-            return 1.0 / 30.0
-        case .full:
-            return 1.0 / 60.0
-        }
-    }
-
     var positionEnvelopeSampleLimit: Int {
         switch self {
         case .playback:
@@ -297,27 +224,11 @@ private enum AutoCropSamplingProfile: Int32 {
     }
 }
 
-private struct AutoCropFramingTarget {
-    let positionPixels: vector_float2
-    let requiredScale: Float
-    let weight: Float
-    let leadProgress: Float
-    let isCurrentFrame: Bool
-    let isHoldSample: Bool
-}
-
 private struct AutoCropScaleDemand {
     let currentPositionPixels: vector_float2
     let currentRequiredScale: Float
     let neutralPositionPixels: vector_float2
     let neutralRequiredScale: Float
-    let plannedScale: Float
-    let positionPixels: vector_float2
-    let finalRequiredScale: Float
-
-    var scaleFloor: Float {
-        max(Float(1.0), currentRequiredScale, plannedScale, finalRequiredScale)
-    }
 }
 
 private struct AutoCropTransformContext {
@@ -1853,22 +1764,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity
         )
-        let localScaleFloor = autoCropLocalScaleFloor(
-            preparedAnalysis: preparedAnalysis,
-            currentSeconds: renderSeconds,
-            currentTransform: currentTransform,
-            outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths,
-            masterStrength: masterStrength,
-            transitionDurationSeconds: transitionDurationSeconds,
-            leadTimeSeconds: leadTimeSeconds,
-            holdTimeSeconds: holdTimeSeconds,
-            samplingProfile: samplingProfile,
-            analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity,
-            initialScale: scaleDemand.scaleFloor
-        )
         let localPositionPixels = autoCropLocalPositionPixels(
             preparedAnalysis: preparedAnalysis,
             currentSeconds: renderSeconds,
@@ -1883,7 +1778,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             samplingProfile: samplingProfile,
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity,
-            initialPositionPixels: scaleDemand.positionPixels
+            initialPositionPixels: scaleDemand.currentPositionPixels
         )
         let localPositionRequiredScale: Float
         if autoCropCenterIsInsideSource(cropPositionPixels: localPositionPixels, context: context) {
@@ -1896,29 +1791,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             localPositionRequiredScale = scaleDemand.currentRequiredScale
         }
-        let rawScale = autoCropScaleWithQuietLookaheadDeadband(
-            scale: max(
-                Float(1.0),
-                scaleDemand.currentRequiredScale,
-                scaleDemand.finalRequiredScale,
-                localPositionRequiredScale,
-                scaleDemand.plannedScale,
-                localScaleFloor
-            ),
-            currentRequiredScale: scaleDemand.currentRequiredScale,
-            finalRequiredScale: max(
-                scaleDemand.currentRequiredScale,
-                scaleDemand.finalRequiredScale,
-                localPositionRequiredScale
-            ),
-            currentTransform: currentTransform,
-            outputSize: outputSize,
-            masterStrength: masterStrength
-        )
-        let protectedScale = max(
+        let activeProtectedScale = max(
             Float(1.0),
             scaleDemand.currentRequiredScale,
-            scaleDemand.finalRequiredScale,
             localPositionRequiredScale
         )
         let idleReleaseProgress = autoCropIdleScaleReleaseProgress(
@@ -1932,16 +1807,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             samplingProfile: samplingProfile,
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity,
-            protectedScale: protectedScale
+            protectedScale: Float(1.0)
         )
-        let finalScale = autoCropStableActiveScale(
-            scale: rawScale,
+        let quietCurrentTransform = autoCropTransformIsQuiet(
+            currentTransform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        )
+        let release = quietCurrentTransform ? min(max(idleReleaseProgress, 0.0), 1.0) : 0.0
+        let neutralProtectedScale = autoCropIdleNeutralProtectedScale(scaleDemand.neutralRequiredScale)
+        let protectedScale = activeProtectedScale + ((neutralProtectedScale - activeProtectedScale) * release)
+        let finalScale = autoCropStableMotionEnvelopeScale(
             protectedScale: protectedScale,
             idleReleaseProgress: idleReleaseProgress
         )
+        let releasedPositionPixels = quietCurrentTransform
+            ? localPositionPixels + ((scaleDemand.neutralPositionPixels - localPositionPixels) * release)
+            : localPositionPixels
 
         let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
-            stablePositionPixels: localPositionPixels,
+            stablePositionPixels: releasedPositionPixels,
             clampPositionPixels: scaleDemand.currentPositionPixels,
             context: context,
             scale: finalScale,
@@ -1973,22 +1858,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static func easeInOutRamp(_ progress: Float) -> Float {
         let t = linearRamp(progress)
         return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
-    }
-
-    private static func autoCropZoomInScaleRamp(_ progress: Float) -> Float {
-        easeInOutRamp(progress)
-    }
-
-    private static func autoCropZoomOutScaleRamp(_ progress: Float) -> Float {
-        easeInOutRamp(progress)
-    }
-
-    private static func autoCropZoomInRamp(_ progress: Float) -> Float {
-        linearRamp(progress)
-    }
-
-    private static func autoCropZoomOutRamp(_ progress: Float) -> Float {
-        linearRamp(progress)
     }
 
     private static func cachedAutoCropScaleDemand(
@@ -2086,46 +1955,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputSize: outputSize,
             masterStrength: masterStrength
         )
-        let transitionSamples = autoCropTransformSamples(
-            preparedAnalysis: preparedAnalysis,
-            startSeconds: centerSeconds,
-            durationSeconds: leadTimeSeconds,
-            outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths,
-            currentTransform: centerTransform,
+        let currentPositionPixels = blackSafeAutoCropPosition(
+            preferredPositionPixels: centerTransform.macroPixelOffset * masterStrength,
+            context: context,
             samplingProfile: samplingProfile
         )
-        let releaseSamples = autoCropReleaseTransformSamples(
-            preparedAnalysis: preparedAnalysis,
-            startSeconds: centerSeconds,
-            durationSeconds: transitionDurationSeconds,
-            holdDurationSeconds: holdTimeSeconds,
-            outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths,
-            currentTransform: centerTransform,
-            samplingProfile: samplingProfile
-        )
-        let transitionTargets = autoCropFramingTargets(
-            from: transitionSamples,
-            outputSize: outputSize,
-            masterStrength: masterStrength,
-            samplingProfile: samplingProfile
-        )
-        let releaseTargets = autoCropFramingTargets(
-            from: releaseSamples,
-            outputSize: outputSize,
-            masterStrength: masterStrength,
-            samplingProfile: samplingProfile
-        )
-        let currentPositionPixels = transitionTargets.first(where: { abs($0.leadProgress - 1.0) <= 1e-6 })?.positionPixels
-            ?? transitionTargets.first?.positionPixels
-            ?? blackSafeAutoCropPosition(
-                preferredPositionPixels: centerTransform.macroPixelOffset * masterStrength,
-                context: context,
-                samplingProfile: samplingProfile
-            )
         let currentRequiredScale = requiredAutoCropScale(
             context: context,
             cropPositionPixels: currentPositionPixels
@@ -2141,119 +1975,39 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sampleSteps: samplingProfile.scaleSearchSampleSteps,
             iterations: samplingProfile.scaleSearchIterations
         )
-        let plannedScale = autoCropPlannedScale(
-            transitionTargets: transitionTargets,
-            releaseTargets: releaseTargets,
-            currentRequiredScale: currentRequiredScale
-        )
-        let positionPixels = autoCropBudgetedPositionPixels(
-            transitionTargets: transitionTargets,
-            releaseTargets: releaseTargets,
-            currentPositionPixels: currentPositionPixels,
-            context: context,
-            maximumScale: plannedScale,
-            samplingProfile: samplingProfile
-        )
-        let finalRequiredScale = requiredAutoCropScale(
-            context: context,
-            cropPositionPixels: positionPixels
-        )
         return AutoCropScaleDemand(
             currentPositionPixels: currentPositionPixels,
             currentRequiredScale: currentRequiredScale,
             neutralPositionPixels: neutralPositionPixels,
-            neutralRequiredScale: neutralRequiredScale,
-            plannedScale: plannedScale,
-            positionPixels: positionPixels,
-            finalRequiredScale: finalRequiredScale
+            neutralRequiredScale: neutralRequiredScale
         )
     }
 
-    private static func autoCropPlannedScale(
-        transitionTargets: [AutoCropFramingTarget],
-        releaseTargets: [AutoCropFramingTarget],
-        currentRequiredScale: Float
-    ) -> Float {
-        let transitionScale = transitionTargets.reduce(currentRequiredScale) { partial, target in
-            guard !target.isCurrentFrame else {
-                return partial
-            }
-            let easedProgress = autoCropZoomInScaleRamp(target.leadProgress)
-            let response = min(max(target.weight, 0.0), 1.0)
-            let targetScale = max(currentRequiredScale, target.requiredScale)
-            let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
-            return max(partial, easedScale)
-        }
-        return releaseTargets.reduce(transitionScale) { partial, target in
-            guard !target.isCurrentFrame else {
-                return partial
-            }
-            let easedProgress = target.isHoldSample ? Float(1.0) : autoCropZoomOutScaleRamp(target.leadProgress)
-            let response = target.isHoldSample ? Float(1.0) : (min(max(target.weight, 0.0), 1.0) * 0.65)
-            let targetScale = max(currentRequiredScale, target.requiredScale)
-            let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
-            return max(partial, easedScale)
-        }
-    }
-
-    private static func autoCropScaleWithQuietLookaheadDeadband(
-        scale: Float,
-        currentRequiredScale: Float,
-        finalRequiredScale: Float,
-        currentTransform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        masterStrength: Float
-    ) -> Float {
-        let finiteScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
-        let protectedScale = max(
-            Float(1.0),
-            currentRequiredScale.isFinite ? currentRequiredScale : Float(1.0),
-            finalRequiredScale.isFinite ? finalRequiredScale : Float(1.0)
-        )
-        let delta = finiteScale - Float(1.0)
-        guard delta > 0.0,
-              finiteScale <= Float(1.0) + stabilizerAutoCropLookaheadScaleDeadband,
-              protectedScale <= Float(1.0) + stabilizerAutoCropCurrentScaleIdentityTolerance,
-              autoCropTransformIsQuiet(
-                  currentTransform,
-                  outputSize: outputSize,
-                  masterStrength: masterStrength
-              )
-        else {
-            return finiteScale
-        }
-
-        let kneeRange = max(
-            stabilizerAutoCropScaleSoftKneeEnd - stabilizerAutoCropScaleSoftKneeStart,
-            0.0001
-        )
-        let kneeProgress = (delta - stabilizerAutoCropScaleSoftKneeStart) / kneeRange
-        let attenuation = easeInOutRamp(kneeProgress)
-        let softenedScale = Float(1.0) + (delta * attenuation)
-        return max(protectedScale, softenedScale)
-    }
-
-    private static func autoCropStableActiveScale(
-        scale: Float,
+    private static func autoCropStableMotionEnvelopeScale(
         protectedScale: Float,
         idleReleaseProgress: Float
     ) -> Float {
-        let finiteScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
         let finiteProtectedScale = max(Float(1.0), protectedScale.isFinite ? protectedScale : Float(1.0))
         let protectedDelta = finiteProtectedScale - Float(1.0)
-        let scaleDelta = max(Float(0.0), finiteScale - Float(1.0))
         let release = min(max(idleReleaseProgress, 0.0), 1.0)
-        guard max(scaleDelta, protectedDelta) > stabilizerAutoCropActiveScaleMinimumDelta else {
+        let envelopeDelta = stabilizerAutoCropMotionEnvelopeScaleDelta * (Float(1.0) - release)
+        let targetDelta = max(protectedDelta, envelopeDelta)
+        guard targetDelta > stabilizerAutoCropActiveScaleMinimumDelta else {
             return finiteProtectedScale
         }
 
-        let activeDelta = max(
-            protectedDelta,
-            ceil((scaleDelta + stabilizerAutoCropActiveScalePadding) / stabilizerAutoCropActiveScaleBucket)
-                * stabilizerAutoCropActiveScaleBucket
-        )
-        let activeScale = max(finiteProtectedScale, Float(1.0) + activeDelta)
-        return max(finiteProtectedScale, activeScale + ((finiteProtectedScale - activeScale) * release))
+        let bucketedDelta = ceil(
+            (targetDelta + stabilizerAutoCropActiveScalePadding) / stabilizerAutoCropActiveScaleBucket
+        ) * stabilizerAutoCropActiveScaleBucket
+        return max(finiteProtectedScale, Float(1.0) + bucketedDelta)
+    }
+
+    private static func autoCropIdleNeutralProtectedScale(_ scale: Float) -> Float {
+        let finiteScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
+        guard finiteScale > Float(1.0) + stabilizerAutoCropIdleNeutralScaleTolerance else {
+            return Float(1.0)
+        }
+        return finiteScale
     }
 
     private static func autoCropTransformIsQuiet(
@@ -2359,69 +2113,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             && perspectiveDelta <= 0.0008
     }
 
-    private static func autoCropLocalScaleFloor(
-        preparedAnalysis: StabilizerPreparedAnalysis,
-        currentSeconds: Double,
-        currentTransform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths,
-        masterStrength: Float,
-        transitionDurationSeconds: Double,
-        leadTimeSeconds: Double,
-        holdTimeSeconds: Double,
-        samplingProfile: AutoCropSamplingProfile,
-        analysisRevision: UInt64,
-        cacheIdentity: String?,
-        initialScale: Float
-    ) -> Float {
-        let samples = autoCropLocalScaleSamples(
-            preparedAnalysis: preparedAnalysis,
-            currentSeconds: currentSeconds,
-            transitionDurationSeconds: transitionDurationSeconds,
-            leadTimeSeconds: leadTimeSeconds,
-            holdTimeSeconds: holdTimeSeconds,
-            samplingProfile: samplingProfile
-        )
-        guard !samples.isEmpty else {
-            return initialScale
-        }
-
-        let protectedScale = max(Float(1.0), initialScale.isFinite ? initialScale : Float(1.0))
-        return samples.reduce(protectedScale) { partial, sample in
-            let sampleTransform = autoCropActualSampleTransform(
-                preparedAnalysis: preparedAnalysis,
-                currentSeconds: currentSeconds,
-                sampleSeconds: sample.seconds,
-                currentTransform: currentTransform,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                samplingProfile: samplingProfile,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
-            )
-            let sampleDemand = cachedAutoCropScaleDemand(
-                preparedAnalysis: preparedAnalysis,
-                centerSeconds: sample.seconds,
-                centerTransform: sampleTransform,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                masterStrength: masterStrength,
-                transitionDurationSeconds: transitionDurationSeconds,
-                leadTimeSeconds: leadTimeSeconds,
-                holdTimeSeconds: holdTimeSeconds,
-                samplingProfile: samplingProfile,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
-            )
-            let extraScale = max(Float(0.0), sampleDemand.scaleFloor - protectedScale)
-            let weightedScale = protectedScale + (extraScale * min(max(sample.influence, 0.0), 1.0))
-            return max(partial, weightedScale)
-        }
-    }
-
     private static func autoCropLocalPositionPixels(
         preparedAnalysis: StabilizerPreparedAnalysis,
         currentSeconds: Double,
@@ -2510,10 +2201,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             max(0.5, max(0.0, holdTimeSeconds) + (max(0.0, transitionDurationSeconds) * 0.35)),
             2.5
         )
-        let futureRadiusSeconds = min(
-            max(0.35, max(0.0, leadTimeSeconds) * 0.35),
-            1.75
-        )
+        let futureRadiusSeconds = 0.0
         let startSeconds = max(firstTime, currentSeconds - pastRadiusSeconds)
         let endSeconds = min(lastTime, currentSeconds + futureRadiusSeconds)
         guard startSeconds <= endSeconds else {
@@ -2571,188 +2259,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         return samples
-    }
-
-    private static func autoCropLocalScaleSamples(
-        preparedAnalysis: StabilizerPreparedAnalysis,
-        currentSeconds: Double,
-        transitionDurationSeconds: Double,
-        leadTimeSeconds: Double,
-        holdTimeSeconds: Double,
-        samplingProfile: AutoCropSamplingProfile
-    ) -> [AutoCropLocalScaleSample] {
-        let frames = preparedAnalysis.frames
-        guard !frames.isEmpty,
-              currentSeconds.isFinite,
-              let firstTime = frames.first?.time,
-              let lastTime = frames.last?.time
-        else {
-            return []
-        }
-
-        let pastRadiusSeconds = max(0.0, holdTimeSeconds) + max(0.0, transitionDurationSeconds)
-        let futureRadiusSeconds = max(0.0, leadTimeSeconds)
-        let startSeconds = max(firstTime, currentSeconds - pastRadiusSeconds)
-        let endSeconds = min(lastTime, currentSeconds + futureRadiusSeconds)
-        guard startSeconds <= endSeconds else {
-            return []
-        }
-        let windowSeconds = max(endSeconds - startSeconds, 0.0)
-        let maximumSampleCount: Double
-        switch samplingProfile {
-        case .playback:
-            maximumSampleCount = 220.0
-        case .full:
-            maximumSampleCount = 360.0
-        }
-        let stepSeconds = max(
-            samplingProfile.scaleEnvelopeStepSeconds,
-            windowSeconds / maximumSampleCount,
-            1.0 / 60.0
-        )
-
-        var samples: [AutoCropLocalScaleSample] = []
-        samples.reserveCapacity(Int(min(maximumSampleCount, 512.0)))
-
-        func appendSample(seconds: Double) {
-            guard seconds >= firstTime,
-                  seconds <= lastTime,
-                  abs(seconds - currentSeconds) > 1e-6
-            else {
-                return
-            }
-            let influence = autoCropLocalScaleInfluence(
-                sampleSeconds: seconds,
-                currentSeconds: currentSeconds,
-                transitionDurationSeconds: transitionDurationSeconds,
-                leadTimeSeconds: leadTimeSeconds,
-                holdTimeSeconds: holdTimeSeconds
-            )
-            guard influence > 0.0001 else {
-                return
-            }
-            if samples.contains(where: { abs($0.seconds - seconds) <= 1e-6 }) {
-                return
-            }
-            samples.append(
-                AutoCropLocalScaleSample(
-                    seconds: seconds,
-                    influence: influence
-                )
-            )
-        }
-
-        appendSample(seconds: startSeconds)
-        appendSample(seconds: endSeconds)
-
-        var sampleSeconds = ceil(startSeconds / stepSeconds) * stepSeconds
-        while sampleSeconds <= endSeconds + 1e-9 {
-            appendSample(seconds: sampleSeconds)
-            sampleSeconds += stepSeconds
-        }
-
-        let denseFutureSeconds = min(max(0.0, leadTimeSeconds), samplingProfile.scaleEnvelopeFrameFutureSeconds)
-        let renderSampleStartSeconds = max(startSeconds, currentSeconds - max(0.0, holdTimeSeconds))
-        let renderSampleEndSeconds = min(endSeconds, currentSeconds + denseFutureSeconds)
-        let renderSampleSpanSeconds = max(0.0, renderSampleEndSeconds - renderSampleStartSeconds)
-        if renderSampleSpanSeconds > 1e-9 {
-            let renderStepSeconds = max(
-                samplingProfile.scaleEnvelopeRenderStepSeconds,
-                renderSampleSpanSeconds / Double(max(1, samplingProfile.scaleEnvelopeRenderSampleLimit))
-            )
-            var pastOffsetSeconds = renderStepSeconds
-            while currentSeconds - pastOffsetSeconds >= renderSampleStartSeconds - 1e-9 {
-                appendSample(seconds: currentSeconds - pastOffsetSeconds)
-                pastOffsetSeconds += renderStepSeconds
-            }
-
-            var futureOffsetSeconds = renderStepSeconds
-            while currentSeconds + futureOffsetSeconds <= renderSampleEndSeconds + 1e-9 {
-                appendSample(seconds: currentSeconds + futureOffsetSeconds)
-                futureOffsetSeconds += renderStepSeconds
-            }
-        }
-
-        let frameSampleStartSeconds = max(startSeconds, currentSeconds - max(0.0, holdTimeSeconds))
-        let frameSampleEndSeconds = min(
-            endSeconds,
-            currentSeconds + denseFutureSeconds
-        )
-        if frameSampleStartSeconds <= frameSampleEndSeconds {
-            var firstIndex = 0
-            var searchLow = 0
-            var searchHigh = frames.count
-            while searchLow < searchHigh {
-                let mid = (searchLow + searchHigh) / 2
-                if frames[mid].time < frameSampleStartSeconds {
-                    searchLow = mid + 1
-                } else {
-                    searchHigh = mid
-                }
-            }
-            firstIndex = min(max(searchLow, 0), max(0, frames.count - 1))
-
-            var lastIndex = firstIndex
-            while lastIndex < frames.count, frames[lastIndex].time <= frameSampleEndSeconds {
-                lastIndex += 1
-            }
-            lastIndex -= 1
-
-            if lastIndex >= firstIndex {
-                let frameCount = (lastIndex - firstIndex) + 1
-                let sampleLimit = max(1, samplingProfile.scaleEnvelopeFrameSampleLimit)
-                let frameStride = max(1, Int(ceil(Double(frameCount) / Double(sampleLimit))))
-                var frameIndex = firstIndex
-                while frameIndex <= lastIndex {
-                    appendSample(seconds: frames[frameIndex].time)
-                    frameIndex += frameStride
-                }
-                appendSample(seconds: frames[lastIndex].time)
-            }
-        }
-        return samples
-    }
-
-    private static func autoCropLocalScaleInfluence(
-        sampleSeconds: Double,
-        currentSeconds: Double,
-        transitionDurationSeconds: Double,
-        leadTimeSeconds: Double,
-        holdTimeSeconds: Double
-    ) -> Float {
-        guard sampleSeconds.isFinite,
-              currentSeconds.isFinite
-        else {
-            return 0.0
-        }
-
-        let deltaSeconds = sampleSeconds - currentSeconds
-        if deltaSeconds >= 0.0 {
-            let leadSeconds = max(0.0, leadTimeSeconds)
-            guard leadSeconds > 1e-6,
-                  deltaSeconds <= leadSeconds
-            else {
-                return deltaSeconds <= 1e-6 ? 1.0 : 0.0
-            }
-            let progress = Float(1.0 - (deltaSeconds / leadSeconds))
-            return autoCropZoomInScaleRamp(progress)
-        }
-
-        let ageSeconds = -deltaSeconds
-        if ageSeconds <= max(0.0, holdTimeSeconds) {
-            return 1.0
-        }
-
-        let releaseSeconds = max(0.0, transitionDurationSeconds)
-        guard releaseSeconds > 1e-6 else {
-            return 0.0
-        }
-        let releaseAgeSeconds = ageSeconds - max(0.0, holdTimeSeconds)
-        guard releaseAgeSeconds <= releaseSeconds else {
-            return 0.0
-        }
-        let progress = Float(1.0 - (releaseAgeSeconds / releaseSeconds))
-        return autoCropZoomOutScaleRamp(progress)
     }
 
     private static func autoCropLocalPositionInfluence(
@@ -3003,318 +2509,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let upperValue = values[upperIndex]
         return lowerValue + ((upperValue - lowerValue) * fraction)
-    }
-
-    private static func autoCropTransformSamples(
-        preparedAnalysis: StabilizerPreparedAnalysis,
-        startSeconds: Double,
-        durationSeconds: Double,
-        outputSize: vector_float2,
-        panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths,
-        currentTransform: StabilizerAutoTransform,
-        samplingProfile: AutoCropSamplingProfile
-    ) -> [AutoCropTransitionSample] {
-        guard durationSeconds > 1e-6,
-              let firstTime = preparedAnalysis.frames.first?.time,
-              let lastTime = preparedAnalysis.frames.last?.time
-        else {
-            return [
-                AutoCropTransitionSample(
-                    transform: currentTransform,
-                    weight: 1.0,
-                    leadProgress: 1.0,
-                    isCurrentFrame: true,
-                    isHoldSample: false
-                )
-            ]
-        }
-
-        let sampleCount = samplingProfile.transitionSampleCount
-        var samples: [AutoCropTransitionSample] = []
-        samples.reserveCapacity(sampleCount)
-
-        for sampleIndex in 0..<sampleCount {
-            let fraction = Double(sampleIndex) / Double(max(1, sampleCount - 1))
-            let offset = fraction * durationSeconds
-            let sampleSeconds = sampleIndex == 0
-                ? startSeconds
-                : autoCropSampleTime(startSeconds + offset, samplingProfile: samplingProfile)
-            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
-                continue
-            }
-            let weight = Float(1.0 - (fraction * 0.65))
-            guard weight > 0.0001 else {
-                continue
-            }
-            let leadProgress = Float(1.0 - fraction)
-            let transform: StabilizerAutoTransform
-            if abs(offset) <= 1e-6 {
-                transform = currentTransform
-            } else {
-                transform = autoCropSampleTransform(
-                    preparedAnalysis: preparedAnalysis,
-                    currentSeconds: startSeconds,
-                    sampleSeconds: sampleSeconds,
-                    currentTransform: currentTransform,
-                    outputSize: outputSize,
-                    panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths,
-                    samplingProfile: samplingProfile
-                )
-            }
-            samples.append(
-                AutoCropTransitionSample(
-                    transform: transform,
-                    weight: weight,
-                    leadProgress: leadProgress,
-                    isCurrentFrame: abs(offset) <= 1e-6,
-                    isHoldSample: false
-                )
-            )
-        }
-
-        if samples.contains(where: { abs($0.weight - 1.0) <= 1e-6 }) {
-            return samples
-        }
-        samples.append(
-            AutoCropTransitionSample(
-                transform: currentTransform,
-                weight: 1.0,
-                leadProgress: 1.0,
-                isCurrentFrame: true,
-                isHoldSample: false
-            )
-        )
-        return samples
-    }
-
-    private static func autoCropReleaseTransformSamples(
-        preparedAnalysis: StabilizerPreparedAnalysis,
-        startSeconds: Double,
-        durationSeconds: Double,
-        holdDurationSeconds: Double,
-        outputSize: vector_float2,
-        panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths,
-        currentTransform: StabilizerAutoTransform,
-        samplingProfile: AutoCropSamplingProfile
-    ) -> [AutoCropTransitionSample] {
-        let totalDurationSeconds = durationSeconds + holdDurationSeconds
-        guard totalDurationSeconds > 1e-6,
-              let firstTime = preparedAnalysis.frames.first?.time,
-              let lastTime = preparedAnalysis.frames.last?.time
-        else {
-            return []
-        }
-
-        let releaseSampleCount = samplingProfile.releaseSampleCount
-        guard releaseSampleCount > 0 else {
-            return []
-        }
-        var samples: [AutoCropTransitionSample] = []
-        samples.reserveCapacity(releaseSampleCount * 2)
-
-        if holdDurationSeconds > 1e-6 {
-            for sampleIndex in 1...releaseSampleCount {
-                let fraction = Double(sampleIndex) / Double(max(1, releaseSampleCount))
-                let offset = fraction * fraction * holdDurationSeconds
-                let sampleSeconds = autoCropSampleTime(startSeconds - offset, samplingProfile: samplingProfile)
-                guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
-                    continue
-                }
-                samples.append(
-                    AutoCropTransitionSample(
-                        transform: autoCropSampleTransform(
-                            preparedAnalysis: preparedAnalysis,
-                            currentSeconds: startSeconds,
-                            sampleSeconds: sampleSeconds,
-                            currentTransform: currentTransform,
-                            outputSize: outputSize,
-                            panSmoothSeconds: panSmoothSeconds,
-                            strengths: strengths,
-                            samplingProfile: samplingProfile
-                        ),
-                        weight: 1.0,
-                        leadProgress: 1.0,
-                        isCurrentFrame: false,
-                        isHoldSample: true
-                    )
-                )
-            }
-        }
-
-        guard durationSeconds > 1e-6 else {
-            return samples
-        }
-
-        for sampleIndex in 1...releaseSampleCount {
-            let releaseFraction = Double(sampleIndex) / Double(max(1, releaseSampleCount))
-            let offset = holdDurationSeconds + (releaseFraction * durationSeconds)
-            let sampleSeconds = autoCropSampleTime(startSeconds - offset, samplingProfile: samplingProfile)
-            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
-                continue
-            }
-            let weight = Float(1.0 - (releaseFraction * 0.65))
-            guard weight > 0.0001 else {
-                continue
-            }
-            samples.append(
-                AutoCropTransitionSample(
-                    transform: autoCropSampleTransform(
-                        preparedAnalysis: preparedAnalysis,
-                        currentSeconds: startSeconds,
-                        sampleSeconds: sampleSeconds,
-                        currentTransform: currentTransform,
-                        outputSize: outputSize,
-                        panSmoothSeconds: panSmoothSeconds,
-                        strengths: strengths,
-                        samplingProfile: samplingProfile
-                    ),
-                    weight: weight,
-                    leadProgress: Float(1.0 - releaseFraction),
-                    isCurrentFrame: false,
-                    isHoldSample: false
-                )
-            )
-        }
-
-        return samples
-    }
-
-    private static func autoCropFramingTargets(
-        from samples: [AutoCropTransitionSample],
-        outputSize: vector_float2,
-        masterStrength: Float,
-        samplingProfile: AutoCropSamplingProfile
-    ) -> [AutoCropFramingTarget] {
-        samples.map { sample in
-            let context = AutoCropTransformContext(
-                transform: sample.transform,
-                outputSize: outputSize,
-                masterStrength: masterStrength
-            )
-            let preferredPositionPixels = sample.transform.macroPixelOffset * masterStrength
-            let positionPixels = blackSafeAutoCropPosition(
-                preferredPositionPixels: preferredPositionPixels,
-                context: context,
-                samplingProfile: samplingProfile
-            )
-            let requiredScale: Float
-            if sample.isCurrentFrame {
-                requiredScale = 1.0
-            } else {
-                requiredScale = requiredAutoCropScale(
-                    context: context,
-                    cropPositionPixels: positionPixels,
-                    sampleSteps: samplingProfile.scaleSearchSampleSteps,
-                    iterations: samplingProfile.scaleSearchIterations
-                ) + samplingProfile.scaleSafetyPadding
-            }
-            return AutoCropFramingTarget(
-                positionPixels: positionPixels,
-                requiredScale: requiredScale,
-                weight: sample.weight,
-                leadProgress: sample.leadProgress,
-                isCurrentFrame: sample.isCurrentFrame,
-                isHoldSample: sample.isHoldSample
-            )
-        }
-    }
-
-    private static func autoCropPositionPixels(
-        transitionTargets: [AutoCropFramingTarget],
-        releaseTargets: [AutoCropFramingTarget],
-        currentPositionPixels: vector_float2
-    ) -> vector_float2 {
-        let transitionContributions = autoCropPositionOffset(
-            from: transitionTargets,
-            currentPositionPixels: currentPositionPixels,
-            ramp: autoCropZoomInRamp
-        )
-        let releaseContributions = autoCropPositionOffset(
-            from: releaseTargets,
-            currentPositionPixels: currentPositionPixels,
-            ramp: autoCropZoomOutRamp,
-            responseScale: 0.65
-        )
-        let totalWeight = transitionContributions.weight + releaseContributions.weight
-        guard totalWeight > 1e-6 else {
-            return currentPositionPixels
-        }
-        return currentPositionPixels + ((transitionContributions.offset + releaseContributions.offset) / totalWeight)
-    }
-
-    private static func autoCropPositionOffset(
-        from targets: [AutoCropFramingTarget],
-        currentPositionPixels: vector_float2,
-        ramp: (Float) -> Float,
-        responseScale: Float = 1.0
-    ) -> (offset: vector_float2, weight: Float) {
-        targets.reduce((offset: vector_float2(0.0, 0.0), weight: Float(0.0))) { partial, target in
-            guard !target.isCurrentFrame else {
-                return partial
-            }
-            let response = target.isHoldSample ? Float(1.0) : min(max(target.weight * responseScale, 0.0), 1.0)
-            guard response > 0.0001 else {
-                return partial
-            }
-            let easedProgress = target.isHoldSample ? Float(1.0) : ramp(target.leadProgress)
-            let leadOffset = (target.positionPixels - currentPositionPixels) * easedProgress
-            return (
-                offset: partial.offset + (leadOffset * response),
-                weight: partial.weight + response
-            )
-        }
-    }
-
-    private static func autoCropBudgetedPositionPixels(
-        transitionTargets: [AutoCropFramingTarget],
-        releaseTargets: [AutoCropFramingTarget],
-        currentPositionPixels: vector_float2,
-        context: AutoCropTransformContext,
-        maximumScale: Float,
-        samplingProfile: AutoCropSamplingProfile
-    ) -> vector_float2 {
-        let preferredPositionPixels = autoCropPositionPixels(
-            transitionTargets: transitionTargets,
-            releaseTargets: releaseTargets,
-            currentPositionPixels: currentPositionPixels
-        )
-        let targetPositionPixels = blackSafeAutoCropPosition(
-            preferredPositionPixels: preferredPositionPixels,
-            context: context
-        )
-        guard !autoCropPosition(
-            targetPositionPixels,
-            fitsWithinScale: maximumScale,
-            context: context,
-            samplingProfile: samplingProfile
-        ) else {
-            return targetPositionPixels
-        }
-
-        var validFraction: Float = 0.0
-        var invalidFraction: Float = 1.0
-        for _ in 0..<samplingProfile.positionBudgetIterations {
-            let midpoint = (validFraction + invalidFraction) * 0.5
-            let candidate = currentPositionPixels + ((targetPositionPixels - currentPositionPixels) * midpoint)
-            if autoCropPosition(
-                candidate,
-                fitsWithinScale: maximumScale,
-                context: context,
-                samplingProfile: samplingProfile
-            ) {
-                validFraction = midpoint
-            } else {
-                invalidFraction = midpoint
-            }
-        }
-        return blackSafeAutoCropPosition(
-            preferredPositionPixels: currentPositionPixels + ((targetPositionPixels - currentPositionPixels) * validFraction),
-            context: context,
-            samplingProfile: samplingProfile
-        )
     }
 
     private static func autoCropStableScaleBudgetedPositionPixels(

@@ -247,47 +247,31 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   frames avoid outside-source pixels. Turn it off to bypass Auto Crop crop-safe
   framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
-- `Auto Crop Zoom-In Time`: default `10` seconds, range `0...120` seconds. This is
-  how many seconds before an upcoming turn/crop demand Auto Crop starts moving
-  both zoom and position; for example, `20` starts the ramp about 20 seconds
-  before that future turn reaches the current frame.
-- `Auto Crop Zoom-Out Time`: default `5` seconds, range `0...30` seconds. This is
-  the linear release time as Auto Crop returns from a higher zoom after the
-  black-edge risk has passed.
-- `Auto Crop Hold Time`: default `4` seconds, range `0...30` seconds. This is the
-  minimum time Auto Crop holds a reached zoom/position target before Zoom-Out
-  release starts.
-  With `Remove Black Edges` on, final zoom is still clamped to the current frame's
-  required safe crop so outside-source black is not exposed during the transition.
-  Auto Crop budgets zoom and position from that minimum safe crop: future samples
-  use a linear ramp, hold samples keep the reached target for the Hold Time
-  window, release samples return with a linear ramp instead of holding an
-  aggressive crop envelope, and nearby local scale demands are sampled from a
-  seconds-based plateau window with a soft edge so the safety floor does not
-  pulse with short walking impulses even on high-frame-rate footage. The plateau
-  also samples nearby render-time offsets and analyzed frame times inside the
-  Hold window so frame-level safety spikes are held instead of appearing as tiny
-  zoom steps. Auto Crop
-  uses a smoothed local crop center sampled from regular render-time positions,
-  separate from the exact frame samples used for scale safety, and absorbs
-  black-edge safety in the scale budget instead of moving the crop center side
-  to side with each frame's macro offset. The local scale envelope evaluates
-  nearby planned Auto Crop scale demand as well as instantaneous demand from
-  that smoothed center, and it follows the Auto Crop Zoom-In, Hold, and
-  Zoom-Out time windows so the visible crop-zoom bar does not wobble with
-  frame-to-frame lookahead changes. While the scene is actively moving, final
-  zoom is rounded slightly upward into stable safety buckets rather than
-  tracking every tiny scale change. If the recent transform stays quiet and the
-  current frame no longer needs extra black-edge protection, Auto Crop eases
-  that extra zoom back toward identity over roughly 2.5 seconds so idle shots
-  settle near zero crop zoom. When an
+- `Auto Crop Zoom-In Time`: default `10` seconds, range `0...120` seconds. This
+  parameter is retained for compatibility, but this build no longer pre-zooms
+  from future lookahead.
+- `Auto Crop Zoom-Out Time`: default `5` seconds, range `0...30` seconds. This
+  parameter is retained for compatibility and trailing crop-center smoothing;
+  final crop zoom no longer follows a linear lead/hold/release envelope.
+- `Auto Crop Hold Time`: default `4` seconds, range `0...30` seconds. This
+  parameter is retained for compatibility and trailing crop-center smoothing; it
+  no longer forces final crop zoom to hold a reached future lookahead target.
+  With `Remove Black Edges` on, final zoom is still clamped to the current
+  frame's required safe crop so outside-source black is not exposed. Auto Crop
+  smooths the local crop center from trailing render-time samples instead of
+  future lookahead, and absorbs black-edge safety in the scale budget instead of
+  moving the crop center side to side with each frame's macro offset. Final zoom
+  is driven by the current frame's black-edge safety floor plus a fixed
+  recent-motion envelope, rounded into stable safety buckets, so the visible
+  crop-zoom bar does not track frame-to-frame planned scale changes. If the
+  recent transform stays quiet and the current frame no longer needs extra
+  black-edge protection, Auto Crop eases that extra zoom back toward identity
+  over roughly 2.5 seconds so idle shots settle near zero crop zoom instead of
+  pre-zooming for future motion. When an
   extreme frame must clamp the crop center for black-edge safety, Auto Crop
   keeps the smoothed center if the held scale can cover it; otherwise it moves
   only the minimum distance toward the current black-safe center instead of
-  following the clamp side to side. High-quality render uses the full
-  17-sample Auto Crop lead window; proxy, low/medium-quality playback, or
-  scaled preview uses a very light non-quantized lead/release profile with no
-  extra playback crop padding.
+  following the clamp side to side.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.

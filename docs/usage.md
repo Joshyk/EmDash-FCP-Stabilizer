@@ -150,43 +150,29 @@ fallbacks.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.
-- `Auto Crop Zoom-In Time`: how many seconds before an upcoming turn/crop demand
-  Auto Crop starts changing both zoom and position. Set `10` to start about 10
-  seconds before that future turn reaches the current frame, or `20` to start
-  about 20 seconds early.
-- `Auto Crop Zoom-Out Time`: linear release time as Auto Crop returns from a
-  higher zoom after the black-edge risk has passed. The current frame
-  remains black-safe when `Remove Black Edges` is on. Auto Crop now budgets
-  zoom and position from the current frame's minimum safe crop: future samples
-  use a linear ramp, hold samples keep a reached zoom/position target for the
-  Hold Time window, and release samples slow the return with a linear ramp
-  instead of holding an aggressive crop envelope. Nearby local scale demands are
-  sampled from a seconds-based plateau window with a soft edge so short walking
-  impulses do not create visible zoom pulses on high-frame-rate footage; the
-  plateau also samples nearby render-time offsets and analyzed frame times inside
-  the Hold window so frame-level safety spikes are held instead of appearing as
-  tiny zoom steps. The held scale uses a smoothed local crop center sampled from
-  regular render-time positions, separate from the exact frame samples used for
-  scale safety, and absorbs black-edge safety in the scale budget instead of
-  moving the crop center side to side with each frame's macro offset. The local
-  scale envelope evaluates nearby planned Auto Crop scale demand from that
-  smoothed center and follows the Auto Crop Zoom-In, Hold, and Zoom-Out time
-  windows so the visible crop-zoom bar does not wobble with frame-to-frame
-  lookahead changes. While the scene is actively moving, final zoom is rounded
-  slightly upward into stable safety buckets rather than tracking every tiny
-  scale change. If the recent transform stays quiet and the current frame no
-  longer needs extra black-edge protection, Auto Crop eases that extra zoom back
-  toward identity over roughly 2.5 seconds so idle shots settle near zero crop
-  zoom. When an
+- `Auto Crop Zoom-In Time`: retained for parameter compatibility. This build no
+  longer pre-zooms from future lookahead; final crop zoom is driven from the
+  current frame's black-edge safety floor and the fixed recent-motion envelope.
+- `Auto Crop Zoom-Out Time`: retained for parameter compatibility and trailing
+  crop-center smoothing. Final crop zoom no longer follows a linear
+  lead/hold/release envelope. The current frame remains black-safe when
+  `Remove Black Edges` is on. Auto Crop smooths the local crop center from
+  trailing render-time samples instead of future lookahead, and absorbs
+  black-edge safety in the scale budget instead of moving the crop center side
+  to side with each frame's macro offset. Final zoom is driven by the current
+  frame's black-edge safety floor plus a fixed recent-motion envelope, rounded
+  into stable safety buckets, so the visible crop-zoom bar does not track
+  frame-to-frame planned scale changes. If the recent transform stays quiet and
+  the current frame no longer needs extra black-edge protection, Auto Crop eases
+  that extra zoom back toward identity over roughly 2.5 seconds so idle shots
+  settle near zero crop zoom instead of pre-zooming for future motion. When an
   extreme frame must clamp the crop center for black-edge safety, Auto Crop
   keeps the smoothed center if the held scale can cover it; otherwise it moves
   only the minimum distance toward the current black-safe center instead of
   following the clamp side to side.
-- `Auto Crop Hold Time`: minimum hold time after Auto Crop reaches a zoom/position
-  target before Zoom-Out release starts. The default is `4` seconds. High-quality
-  render uses the full 17-sample Auto Crop lead window; proxy, low/medium-quality
-  playback, or scaled preview uses a very light non-quantized lead/release
-  profile with no extra playback crop padding.
+- `Auto Crop Hold Time`: retained for parameter compatibility and trailing
+  crop-center smoothing. It no longer forces final crop zoom to hold a reached
+  future lookahead target.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image. New effect
