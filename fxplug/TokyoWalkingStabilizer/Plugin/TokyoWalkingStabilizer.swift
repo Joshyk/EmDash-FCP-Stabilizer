@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.201"
+private let tokyoWalkingStabilizerVersion = "0.3.202"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -182,6 +182,15 @@ private enum AutoCropSamplingProfile: Int32 {
             return 0.0
         case .full:
             return 0.0
+        }
+    }
+
+    var usesStabilizedSampleTransforms: Bool {
+        switch self {
+        case .playback:
+            return false
+        case .full:
+            return true
         }
     }
 
@@ -1799,10 +1808,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         currentTransform: StabilizerAutoTransform,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths
+        strengths: StabilizerCorrectionStrengths,
+        samplingProfile: AutoCropSamplingProfile
     ) -> StabilizerAutoTransform {
         guard abs(sampleSeconds - currentSeconds) > 1e-6 else {
             return currentTransform
+        }
+        guard samplingProfile.usesStabilizedSampleTransforms else {
+            return autoCropPreparedDeltaTransform(
+                preparedAnalysis: preparedAnalysis,
+                currentSeconds: currentSeconds,
+                sampleSeconds: sampleSeconds,
+                currentTransform: currentTransform,
+                outputSize: outputSize
+            )
         }
         let sampleTime = CMTimeMakeWithSeconds(sampleSeconds, preferredTimescale: 60000)
         return AutoStabilizationEstimator.autoCropWindowEstimate(
@@ -1812,6 +1831,150 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths
         )
+    }
+
+    private struct AutoCropPreparedPathSample {
+        let pathX: Float
+        let pathY: Float
+        let pathRoll: Float
+        let pathYaw: Float
+        let pathPitch: Float
+        let pathShearX: Float
+        let pathShearY: Float
+        let pathPerspectiveX: Float
+        let pathPerspectiveY: Float
+        let sampleWidth: Int
+        let sampleHeight: Int
+    }
+
+    private static func autoCropPreparedDeltaTransform(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        sampleSeconds: Double,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2
+    ) -> StabilizerAutoTransform {
+        guard let currentSample = autoCropPreparedPathSample(preparedAnalysis: preparedAnalysis, seconds: currentSeconds),
+              let targetSample = autoCropPreparedPathSample(preparedAnalysis: preparedAnalysis, seconds: sampleSeconds)
+        else {
+            return currentTransform
+        }
+
+        let xScale = outputSize.x / Float(max(1, currentSample.sampleWidth))
+        let yScale = outputSize.y / Float(max(1, currentSample.sampleHeight))
+        let macroDelta = vector_float2(
+            (targetSample.pathX - currentSample.pathX) * xScale,
+            (targetSample.pathY - currentSample.pathY) * yScale
+        )
+
+        var transform = currentTransform
+        transform.macroPixelOffset = currentTransform.macroPixelOffset - macroDelta
+        transform.pixelOffset = transform.macroPixelOffset + transform.microPixelOffset + transform.strideWobblePixelOffset
+        transform.rawPixelOffset = transform.pixelOffset
+        let rollDelta = targetSample.pathRoll - currentSample.pathRoll
+        transform.rotationDegrees = currentTransform.rotationDegrees - rollDelta
+        transform.rawRotationDegrees = currentTransform.rawRotationDegrees - rollDelta
+        transform.yawPitchProxy = currentTransform.yawPitchProxy - vector_float2(
+            targetSample.pathYaw - currentSample.pathYaw,
+            targetSample.pathPitch - currentSample.pathPitch
+        )
+        transform.shear = currentTransform.shear - vector_float2(
+            targetSample.pathShearX - currentSample.pathShearX,
+            targetSample.pathShearY - currentSample.pathShearY
+        )
+        transform.perspective = currentTransform.perspective - vector_float2(
+            targetSample.pathPerspectiveX - currentSample.pathPerspectiveX,
+            targetSample.pathPerspectiveY - currentSample.pathPerspectiveY
+        )
+        return transform
+    }
+
+    private static func autoCropPreparedPathSample(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        seconds: Double
+    ) -> AutoCropPreparedPathSample? {
+        let frames = preparedAnalysis.frames
+        guard !frames.isEmpty else {
+            return nil
+        }
+        if frames.count == 1 || seconds <= frames[0].time {
+            return autoCropPreparedPathSample(preparedAnalysis: preparedAnalysis, lowerIndex: 0, upperIndex: 0, fraction: 0.0)
+        }
+        let lastIndex = frames.count - 1
+        if seconds >= frames[lastIndex].time {
+            return autoCropPreparedPathSample(preparedAnalysis: preparedAnalysis, lowerIndex: lastIndex, upperIndex: lastIndex, fraction: 0.0)
+        }
+
+        var low = 0
+        var high = lastIndex
+        while high - low > 1 {
+            let mid = (low + high) / 2
+            if frames[mid].time <= seconds {
+                low = mid
+            } else {
+                high = mid
+            }
+        }
+
+        let lowerTime = frames[low].time
+        let upperTime = frames[high].time
+        let duration = upperTime - lowerTime
+        let fraction: Float
+        if duration > 1e-9 {
+            fraction = min(max(Float((seconds - lowerTime) / duration), 0.0), 1.0)
+        } else {
+            fraction = 0.0
+        }
+        return autoCropPreparedPathSample(
+            preparedAnalysis: preparedAnalysis,
+            lowerIndex: low,
+            upperIndex: high,
+            fraction: fraction
+        )
+    }
+
+    private static func autoCropPreparedPathSample(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        lowerIndex: Int,
+        upperIndex: Int,
+        fraction: Float
+    ) -> AutoCropPreparedPathSample? {
+        guard preparedAnalysis.frames.indices.contains(lowerIndex) else {
+            return nil
+        }
+        let lowerFrame = preparedAnalysis.frames[lowerIndex]
+        let sampleWidth = lowerFrame.sampleWidth
+        let sampleHeight = lowerFrame.sampleHeight
+        return AutoCropPreparedPathSample(
+            pathX: autoCropInterpolatedPreparedValue(preparedAnalysis.pathX, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            pathY: autoCropInterpolatedPreparedValue(preparedAnalysis.pathY, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            pathRoll: autoCropInterpolatedPreparedValue(preparedAnalysis.pathRoll, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            pathYaw: autoCropInterpolatedPreparedValue(preparedAnalysis.pathYaw, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            pathPitch: autoCropInterpolatedPreparedValue(preparedAnalysis.pathPitch, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            pathShearX: autoCropInterpolatedPreparedValue(preparedAnalysis.pathShearX, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            pathShearY: autoCropInterpolatedPreparedValue(preparedAnalysis.pathShearY, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            pathPerspectiveX: autoCropInterpolatedPreparedValue(preparedAnalysis.pathPerspectiveX, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            pathPerspectiveY: autoCropInterpolatedPreparedValue(preparedAnalysis.pathPerspectiveY, lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction),
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight
+        )
+    }
+
+    private static func autoCropInterpolatedPreparedValue(
+        _ values: [Float],
+        lowerIndex: Int,
+        upperIndex: Int,
+        fraction: Float
+    ) -> Float {
+        guard values.indices.contains(lowerIndex) else {
+            return 0.0
+        }
+        let lowerValue = values[lowerIndex]
+        guard values.indices.contains(upperIndex), upperIndex != lowerIndex else {
+            return lowerValue
+        }
+        let upperValue = values[upperIndex]
+        return lowerValue + ((upperValue - lowerValue) * fraction)
     }
 
     private static func autoCropTransformSamples(
@@ -1868,7 +2031,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     currentTransform: currentTransform,
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths
+                    strengths: strengths,
+                    samplingProfile: samplingProfile
                 )
             }
             samples.append(
@@ -1940,7 +2104,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                             currentTransform: currentTransform,
                             outputSize: outputSize,
                             panSmoothSeconds: panSmoothSeconds,
-                            strengths: strengths
+                            strengths: strengths,
+                            samplingProfile: samplingProfile
                         ),
                         weight: 1.0,
                         leadProgress: 1.0,
@@ -1975,7 +2140,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         currentTransform: currentTransform,
                         outputSize: outputSize,
                         panSmoothSeconds: panSmoothSeconds,
-                        strengths: strengths
+                        strengths: strengths,
+                        samplingProfile: samplingProfile
                     ),
                     weight: weight,
                     leadProgress: Float(1.0 - releaseFraction),
