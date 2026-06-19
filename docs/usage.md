@@ -161,8 +161,8 @@ fallbacks.
   use a linear ramp, hold samples keep a reached zoom/position target for the
   Hold Time window, and release samples slow the return with a linear ramp
   instead of holding an aggressive crop envelope. Nearby local scale demands are
-  distance-weighted so sampled frames entering or leaving the local crop window
-  do not create visible zoom pulses.
+  sampled from a continuous short window and distance-weighted so sampled frames
+  entering or leaving the local crop window do not create visible zoom pulses.
 - `Auto Crop Hold Time`: minimum hold time after Auto Crop reaches a zoom/position
   target before Zoom-Out release starts. The default is `4` seconds. High-quality
   render uses the full 17-sample Auto Crop lead window; proxy, low/medium-quality

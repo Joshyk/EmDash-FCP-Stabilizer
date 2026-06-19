@@ -2030,15 +2030,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 : high
         }
 
-        let indexOffsets: [Int]
+        let localInfluenceRadius: Int
         switch samplingProfile {
         case .playback:
-            indexOffsets = [-60, -42, -30, -18, -12, -8, -6, -4, -3, -2, -1, 1, 2, 3, 4, 6, 8, 12, 18, 30, 42, 60]
+            localInfluenceRadius = 8
         case .full:
-            indexOffsets = [-45, -30, -18, -10, -6, -4, -3, -2, -1, 1, 2, 3, 4, 6, 10, 18, 30, 45]
+            localInfluenceRadius = 12
         }
 
-        let maximumOffset = Float(indexOffsets.map { abs($0) }.max() ?? 1)
+        let indexOffsets = (-localInfluenceRadius...localInfluenceRadius).filter { $0 != 0 }
+        let maximumOffset = Float(localInfluenceRadius)
         var seen = Set<Int>()
         var samples: [AutoCropLocalScaleSample] = []
         samples.reserveCapacity(indexOffsets.count)
