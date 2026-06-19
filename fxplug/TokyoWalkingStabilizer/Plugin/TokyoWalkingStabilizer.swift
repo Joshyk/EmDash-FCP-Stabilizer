@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.199"
+private let tokyoWalkingStabilizerVersion = "0.3.200"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1667,9 +1667,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             currentTransform: currentTransform,
-            samplingProfile: samplingProfile,
-            analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity
+            samplingProfile: samplingProfile
         )
         let releaseSamples = autoCropReleaseTransformSamples(
             preparedAnalysis: preparedAnalysis,
@@ -1680,9 +1678,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             currentTransform: currentTransform,
-            samplingProfile: samplingProfile,
-            analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity
+            samplingProfile: samplingProfile
         )
         let transitionTargets = autoCropFramingTargets(
             from: transitionSamples,
@@ -1796,89 +1792,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return (seconds / step).rounded() * step
     }
 
-    private static func autoCropPredictedTransform(
+    private static func autoCropSampleTransform(
         preparedAnalysis: StabilizerPreparedAnalysis,
         currentSeconds: Double,
         sampleSeconds: Double,
         currentTransform: StabilizerAutoTransform,
-        outputSize: vector_float2
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
     ) -> StabilizerAutoTransform {
-        let frames = preparedAnalysis.frames
-        guard let firstFrame = frames.first,
-              frames.count >= 2
-        else {
+        guard abs(sampleSeconds - currentSeconds) > 1e-6 else {
             return currentTransform
         }
-
-        let xScale = outputSize.x / Float(max(1, firstFrame.sampleWidth))
-        let yScale = outputSize.y / Float(max(1, firstFrame.sampleHeight))
-        let currentPathX = autoCropInterpolatedPreparedValue(preparedAnalysis.pathX, frames: frames, seconds: currentSeconds)
-        let currentPathY = autoCropInterpolatedPreparedValue(preparedAnalysis.pathY, frames: frames, seconds: currentSeconds)
-        let currentPathRoll = autoCropInterpolatedPreparedValue(preparedAnalysis.pathRoll, frames: frames, seconds: currentSeconds)
-        let samplePathX = autoCropInterpolatedPreparedValue(preparedAnalysis.pathX, frames: frames, seconds: sampleSeconds)
-        let samplePathY = autoCropInterpolatedPreparedValue(preparedAnalysis.pathY, frames: frames, seconds: sampleSeconds)
-        let samplePathRoll = autoCropInterpolatedPreparedValue(preparedAnalysis.pathRoll, frames: frames, seconds: sampleSeconds)
-
-        let pathDeltaPixels = vector_float2(
-            -(samplePathX - currentPathX) * xScale,
-            -(samplePathY - currentPathY) * yScale
+        let sampleTime = CMTimeMakeWithSeconds(sampleSeconds, preferredTimescale: 60000)
+        return AutoStabilizationEstimator.autoCropWindowEstimate(
+            preparedAnalysis: preparedAnalysis,
+            renderTime: sampleTime,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
         )
-        let rotationDeltaDegrees = -(samplePathRoll - currentPathRoll)
-
-        var transform = currentTransform
-        transform.pixelOffset = currentTransform.pixelOffset + pathDeltaPixels
-        transform.macroPixelOffset = currentTransform.macroPixelOffset + pathDeltaPixels
-        transform.rotationDegrees = currentTransform.rotationDegrees + rotationDeltaDegrees
-        transform.rawPixelOffset = transform.pixelOffset
-        transform.rawRotationDegrees = transform.rotationDegrees
-        return transform
-    }
-
-    private static func autoCropInterpolatedPreparedValue(
-        _ values: [Float],
-        frames: [StabilizerAnalysisFrame],
-        seconds: Double
-    ) -> Float {
-        guard let firstFrame = frames.first,
-              let lastFrame = frames.last,
-              !values.isEmpty
-        else {
-            return 0.0
-        }
-        if seconds <= firstFrame.time {
-            return values[values.startIndex]
-        }
-        let lastIndex = min(frames.count, values.count) - 1
-        guard lastIndex >= 0 else {
-            return 0.0
-        }
-        if seconds >= lastFrame.time {
-            return values[lastIndex]
-        }
-
-        var low = 0
-        var high = lastIndex
-        while low < high {
-            let mid = (low + high) / 2
-            if frames[mid].time < seconds {
-                low = mid + 1
-            } else {
-                high = mid
-            }
-        }
-
-        let upperIndex = min(max(low, 1), lastIndex)
-        let lowerIndex = upperIndex - 1
-        let lowerTime = frames[lowerIndex].time
-        let upperTime = frames[upperIndex].time
-        let duration = upperTime - lowerTime
-        guard duration > 1e-9 else {
-            return values[lowerIndex]
-        }
-        let fraction = Float(min(max((seconds - lowerTime) / duration, 0.0), 1.0))
-        let lowerValue = values[lowerIndex]
-        let upperValue = values[upperIndex]
-        return lowerValue + ((upperValue - lowerValue) * fraction)
     }
 
     private static func autoCropTransformSamples(
@@ -1889,9 +1822,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         currentTransform: StabilizerAutoTransform,
-        samplingProfile: AutoCropSamplingProfile,
-        analysisRevision: UInt64,
-        cacheIdentity: String?
+        samplingProfile: AutoCropSamplingProfile
     ) -> [AutoCropTransitionSample] {
         guard durationSeconds > 1e-6,
               let firstTime = preparedAnalysis.frames.first?.time,
@@ -1930,12 +1861,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             if abs(offset) <= 1e-6 {
                 transform = currentTransform
             } else {
-                transform = autoCropPredictedTransform(
+                transform = autoCropSampleTransform(
                     preparedAnalysis: preparedAnalysis,
                     currentSeconds: startSeconds,
                     sampleSeconds: sampleSeconds,
                     currentTransform: currentTransform,
-                    outputSize: outputSize
+                    outputSize: outputSize,
+                    panSmoothSeconds: panSmoothSeconds,
+                    strengths: strengths
                 )
             }
             samples.append(
@@ -1973,9 +1906,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         currentTransform: StabilizerAutoTransform,
-        samplingProfile: AutoCropSamplingProfile,
-        analysisRevision: UInt64,
-        cacheIdentity: String?
+        samplingProfile: AutoCropSamplingProfile
     ) -> [AutoCropTransitionSample] {
         let totalDurationSeconds = durationSeconds + holdDurationSeconds
         guard totalDurationSeconds > 1e-6,
@@ -2002,12 +1933,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 }
                 samples.append(
                     AutoCropTransitionSample(
-                        transform: autoCropPredictedTransform(
+                        transform: autoCropSampleTransform(
                             preparedAnalysis: preparedAnalysis,
                             currentSeconds: startSeconds,
                             sampleSeconds: sampleSeconds,
                             currentTransform: currentTransform,
-                            outputSize: outputSize
+                            outputSize: outputSize,
+                            panSmoothSeconds: panSmoothSeconds,
+                            strengths: strengths
                         ),
                         weight: 1.0,
                         leadProgress: 1.0,
@@ -2035,12 +1968,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             }
             samples.append(
                 AutoCropTransitionSample(
-                    transform: autoCropPredictedTransform(
+                    transform: autoCropSampleTransform(
                         preparedAnalysis: preparedAnalysis,
                         currentSeconds: startSeconds,
                         sampleSeconds: sampleSeconds,
                         currentTransform: currentTransform,
-                        outputSize: outputSize
+                        outputSize: outputSize,
+                        panSmoothSeconds: panSmoothSeconds,
+                        strengths: strengths
                     ),
                     weight: weight,
                     leadProgress: Float(1.0 - releaseFraction),

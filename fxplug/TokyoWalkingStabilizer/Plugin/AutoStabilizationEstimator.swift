@@ -1086,7 +1086,7 @@ enum AutoStabilizationEstimator {
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
-            cache: RenderEstimateCache()
+            cache: renderEstimateCache(for: analysis)
         )
     }
 
