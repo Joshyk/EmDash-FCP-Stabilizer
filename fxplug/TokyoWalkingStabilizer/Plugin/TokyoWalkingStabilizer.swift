@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.238"
+private let tokyoWalkingStabilizerVersion = "0.3.239"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1497,6 +1497,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let panelRows: Float = 18.0
         let rowHeight: Float = 13.0
         return max(Float(height) * 0.5 / (panelRows * rowHeight), 0.25)
+    }
+
+    private static func renderSourceAppearsProxy(
+        sourceImage: FxImageTile,
+        preparedAnalysis: StabilizerPreparedAnalysis
+    ) -> Bool {
+        guard let frameInfo = StabilizerOriginalMediaPolicy.frameInfo(for: sourceImage),
+              let analysisFrame = preparedAnalysis.frames.first
+        else {
+            return false
+        }
+        let analysisWidth = Float(max(1, analysisFrame.sampleWidth))
+        let analysisHeight = Float(max(1, analysisFrame.sampleHeight))
+        let sourceWidth = Float(max(1, frameInfo.sourceWidth))
+        let sourceHeight = Float(max(1, frameInfo.sourceHeight))
+        let widthRatio = sourceWidth / analysisWidth
+        let heightRatio = sourceHeight / analysisHeight
+        return widthRatio < 0.90 || heightRatio < 0.90
     }
 
     private static func debugMatchQuality(residual: Float, preparedAnalysis: StabilizerPreparedAnalysis?) -> Float {
@@ -5114,13 +5132,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let halfOutputWidth = Float(outputWidth) * 0.5
         let halfOutputHeight = Float(outputHeight) * 0.5
         var viewportSize = simd_uint2(UInt32(outputWidth), UInt32(outputHeight))
-        let sourceMediaIsProxy = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
-        let usesLightweightPreviewStabilization = sourceMediaIsProxy || state.renderQualityLevel == 0
         let masterStrength = Float(max(0.0, state.strength))
         let transformEnabled = masterStrength > 0.0001
         let autoTransform: StabilizerAutoTransform
         var activePreparedAnalysis: StabilizerPreparedAnalysis?
         var activeAnalysisRenderTime: CMTime?
+        var renderSourceIsProxy = false
         var renderUsesPreparedAnalysis = false
         let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
@@ -5160,6 +5177,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             publishHostAnalysisCacheIdentityOnMain(renderCacheIdentity, force: false)
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             activeAnalysisRenderTime = analysisRenderTime
+            renderSourceIsProxy = Self.renderSourceAppearsProxy(
+                sourceImage: sourceImage,
+                preparedAnalysis: preparedAnalysis
+            )
+            let usesLightweightPreviewStabilization = renderSourceIsProxy || state.renderQualityLevel == 0
             if usesLightweightPreviewStabilization {
                 autoTransform = AutoStabilizationEstimator.proxyPlaybackEstimate(
                     preparedAnalysis: preparedAnalysis,
@@ -5182,7 +5204,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             autoTransform = .identity
         }
-        let renderSourceIsProxy = renderUsesPreparedAnalysis && sourceMediaIsProxy
         let debugOverlayActive = state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis
         if renderCacheIdentity == nil {
             renderCacheIdentity = storeSnapshot.activeCacheIdentity
