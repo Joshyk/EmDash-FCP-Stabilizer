@@ -165,12 +165,14 @@ fallbacks.
   impulses do not create visible zoom pulses on high-frame-rate footage; the
   plateau also samples nearby render-time offsets and analyzed frame times inside
   the Hold window so frame-level safety spikes are held instead of appearing as
-  tiny zoom steps. The held scale uses a smoothed local crop center and absorbs
-  black-edge safety in the scale budget instead of moving the crop center side
-  to side with each frame's macro offset. The local scale envelope evaluates
-  nearby planned Auto Crop scale demand from that smoothed center and follows
-  the Auto Crop Zoom-In, Hold, and Zoom-Out time windows so the visible
-  crop-zoom bar does not wobble with frame-to-frame lookahead changes. When an
+  tiny zoom steps. The held scale uses a smoothed local crop center sampled from
+  regular render-time positions, separate from the exact frame samples used for
+  scale safety, and absorbs black-edge safety in the scale budget instead of
+  moving the crop center side to side with each frame's macro offset. The local
+  scale envelope evaluates nearby planned Auto Crop scale demand from that
+  smoothed center and follows the Auto Crop Zoom-In, Hold, and Zoom-Out time
+  windows so the visible crop-zoom bar does not wobble with frame-to-frame
+  lookahead changes. When an
   extreme frame must clamp the crop center for black-edge safety, Auto Crop
   keeps the smoothed center if the held scale can cover it; otherwise it moves
   only the minimum distance toward the current black-safe center instead of

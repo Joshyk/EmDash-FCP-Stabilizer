@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.252"
+private let tokyoWalkingStabilizerVersion = "0.3.253"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -250,6 +250,24 @@ private enum AutoCropSamplingProfile: Int32 {
     }
 
     var scaleEnvelopeRenderStepSeconds: Double {
+        switch self {
+        case .playback:
+            return 1.0 / 30.0
+        case .full:
+            return 1.0 / 60.0
+        }
+    }
+
+    var positionEnvelopeSampleLimit: Int {
+        switch self {
+        case .playback:
+            return 120
+        case .full:
+            return 240
+        }
+    }
+
+    var positionEnvelopeStepSeconds: Double {
         switch self {
         case .playback:
             return 1.0 / 30.0
@@ -2280,7 +2298,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         cacheIdentity: String?,
         initialPositionPixels: vector_float2
     ) -> vector_float2 {
-        let samples = autoCropLocalScaleSamples(
+        let samples = autoCropLocalPositionSamples(
             preparedAnalysis: preparedAnalysis,
             currentSeconds: currentSeconds,
             transitionDurationSeconds: transitionDurationSeconds,
@@ -2307,26 +2325,21 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 analysisRevision: analysisRevision,
                 cacheIdentity: cacheIdentity
             )
-            let sampleDemand = cachedAutoCropScaleDemand(
-                preparedAnalysis: preparedAnalysis,
-                centerSeconds: sample.seconds,
-                centerTransform: sampleTransform,
+            let sampleContext = AutoCropTransformContext(
+                transform: sampleTransform,
                 outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                masterStrength: masterStrength,
-                transitionDurationSeconds: transitionDurationSeconds,
-                leadTimeSeconds: leadTimeSeconds,
-                holdTimeSeconds: holdTimeSeconds,
-                samplingProfile: samplingProfile,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
+                masterStrength: masterStrength
+            )
+            let samplePosition = blackSafeAutoCropPosition(
+                preferredPositionPixels: sampleTransform.macroPixelOffset * masterStrength,
+                context: sampleContext,
+                samplingProfile: samplingProfile
             )
             let weight = min(max(sample.influence, 0.0), 1.0)
             guard weight > 0.0001 else {
                 continue
             }
-            weightedPosition += sampleDemand.positionPixels * weight
+            weightedPosition += samplePosition * weight
             totalWeight += weight
         }
 
@@ -2334,6 +2347,90 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return initialPositionPixels
         }
         return weightedPosition / totalWeight
+    }
+
+    private static func autoCropLocalPositionSamples(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        transitionDurationSeconds: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
+        samplingProfile: AutoCropSamplingProfile
+    ) -> [AutoCropLocalScaleSample] {
+        let frames = preparedAnalysis.frames
+        guard !frames.isEmpty,
+              currentSeconds.isFinite,
+              let firstTime = frames.first?.time,
+              let lastTime = frames.last?.time
+        else {
+            return []
+        }
+
+        let pastRadiusSeconds = min(
+            max(0.5, max(0.0, holdTimeSeconds) + (max(0.0, transitionDurationSeconds) * 0.35)),
+            2.5
+        )
+        let futureRadiusSeconds = min(
+            max(0.35, max(0.0, leadTimeSeconds) * 0.35),
+            1.75
+        )
+        let startSeconds = max(firstTime, currentSeconds - pastRadiusSeconds)
+        let endSeconds = min(lastTime, currentSeconds + futureRadiusSeconds)
+        guard startSeconds <= endSeconds else {
+            return []
+        }
+
+        let spanSeconds = max(0.0, endSeconds - startSeconds)
+        let stepSeconds = max(
+            samplingProfile.positionEnvelopeStepSeconds,
+            spanSeconds / Double(max(1, samplingProfile.positionEnvelopeSampleLimit))
+        )
+        var samples: [AutoCropLocalScaleSample] = []
+        samples.reserveCapacity(min(samplingProfile.positionEnvelopeSampleLimit + 2, 320))
+
+        func appendSample(seconds: Double) {
+            guard seconds >= firstTime,
+                  seconds <= lastTime,
+                  abs(seconds - currentSeconds) > 1e-6
+            else {
+                return
+            }
+            let influence = autoCropLocalPositionInfluence(
+                sampleSeconds: seconds,
+                currentSeconds: currentSeconds,
+                pastRadiusSeconds: pastRadiusSeconds,
+                futureRadiusSeconds: futureRadiusSeconds
+            )
+            guard influence > 0.0001 else {
+                return
+            }
+            if samples.contains(where: { abs($0.seconds - seconds) <= 1e-6 }) {
+                return
+            }
+            samples.append(
+                AutoCropLocalScaleSample(
+                    seconds: seconds,
+                    influence: influence
+                )
+            )
+        }
+
+        appendSample(seconds: startSeconds)
+        appendSample(seconds: endSeconds)
+
+        var sampleSeconds = currentSeconds - stepSeconds
+        while sampleSeconds >= startSeconds - 1e-9 {
+            appendSample(seconds: sampleSeconds)
+            sampleSeconds -= stepSeconds
+        }
+
+        sampleSeconds = currentSeconds + stepSeconds
+        while sampleSeconds <= endSeconds + 1e-9 {
+            appendSample(seconds: sampleSeconds)
+            sampleSeconds += stepSeconds
+        }
+
+        return samples
     }
 
     private static func autoCropLocalScaleSamples(
@@ -2516,6 +2613,27 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let progress = Float(1.0 - (releaseAgeSeconds / releaseSeconds))
         return autoCropZoomOutScaleRamp(progress)
+    }
+
+    private static func autoCropLocalPositionInfluence(
+        sampleSeconds: Double,
+        currentSeconds: Double,
+        pastRadiusSeconds: Double,
+        futureRadiusSeconds: Double
+    ) -> Float {
+        guard sampleSeconds.isFinite,
+              currentSeconds.isFinite
+        else {
+            return 0.0
+        }
+
+        let deltaSeconds = sampleSeconds - currentSeconds
+        let radiusSeconds = deltaSeconds < 0.0 ? pastRadiusSeconds : futureRadiusSeconds
+        guard radiusSeconds > 1e-6 else {
+            return 0.0
+        }
+        let progress = 1.0 - (abs(deltaSeconds) / radiusSeconds)
+        return easeInOutRamp(Float(progress))
     }
 
     private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32, renderSourceIsProxy: Bool) -> AutoCropSamplingProfile {
