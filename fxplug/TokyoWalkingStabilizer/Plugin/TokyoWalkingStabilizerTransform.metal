@@ -203,7 +203,7 @@ static uint debugLabelChar(uint row, uint index, float debugMode) {
         case 16:
             return debugLabelCharAt(index, 87, 65, 76, 75, 0, 67, 79, 78, 70, 0, 0, 0); // WALK CONF
         case 17:
-            return debugLabelCharAt(index, 90, 79, 79, 77, 0, 0, 0, 0, 0, 0, 0, 0); // ZOOM
+            return debugLabelCharAt(index, 67, 82, 79, 80, 0, 90, 79, 79, 77, 0, 0, 0); // CROP ZOOM
         case 18:
             return debugModeLabelChar(debugMode, index);
         default:
