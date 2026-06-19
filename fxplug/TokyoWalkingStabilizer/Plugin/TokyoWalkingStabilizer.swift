@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.234"
+private let tokyoWalkingStabilizerVersion = "0.3.235"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1812,7 +1812,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let rawScale = autoCropScaleWithQuietLookaheadDeadband(
             scale: max(Float(1.0), finalRequiredScale, plannedScale, localScaleFloor),
             currentRequiredScale: currentRequiredScale,
-            finalRequiredScale: finalRequiredScale
+            finalRequiredScale: finalRequiredScale,
+            currentTransform: currentTransform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
         )
         let heldScale = autoCropHeldScale(
             rawScale: rawScale,
@@ -1910,9 +1913,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static func autoCropScaleWithQuietLookaheadDeadband(
         scale: Float,
         currentRequiredScale: Float,
-        finalRequiredScale: Float
+        finalRequiredScale: Float,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float
     ) -> Float {
         let finiteScale = scale.isFinite ? scale : Float(1.0)
+        if autoCropTransformIsQuiet(
+            currentTransform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        ),
+           finiteScale <= Float(1.0) + stabilizerAutoCropLookaheadScaleDeadband {
+            return Float(1.0)
+        }
         guard currentRequiredScale <= Float(1.0) + stabilizerAutoCropCurrentScaleIdentityTolerance,
               finalRequiredScale <= Float(1.0) + stabilizerAutoCropCurrentScaleIdentityTolerance,
               finiteScale <= Float(1.0) + stabilizerAutoCropLookaheadScaleDeadband
@@ -1920,6 +1934,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return max(Float(1.0), finiteScale)
         }
         return Float(1.0)
+    }
+
+    private static func autoCropTransformIsQuiet(
+        _ transform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float
+    ) -> Bool {
+        let pixelTolerance = max(Float(1.0), min(outputSize.x, outputSize.y) * 0.002)
+        let pixelActivity = simd_length(transform.pixelOffset * masterStrength)
+        let rotationActivity = abs(transform.rotationDegrees * masterStrength)
+        let shearActivity = simd_length(transform.shear * masterStrength)
+        let perspectiveActivity = simd_length((transform.perspective + transform.yawPitchProxy) * masterStrength)
+        return pixelActivity <= pixelTolerance
+            && rotationActivity <= 0.05
+            && shearActivity <= 0.001
+            && perspectiveActivity <= 0.001
     }
 
     private static func autoCropHeldScale(
