@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.215"
+private let tokyoWalkingStabilizerVersion = "0.3.216"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -333,6 +333,38 @@ private struct AutoCropFramingCacheKey: Hashable {
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
     let currentTransform: AutoCropTransformSignature
+}
+
+private struct AutoCropScaleHoldKey: Hashable {
+    let cacheIdentity: String?
+    let outputWidth: Int32
+    let outputHeight: Int32
+    let analysisFrameCount: Int
+    let analysisFirstTime: UInt64
+    let analysisLastTime: UInt64
+    let masterStrength: UInt32
+    let transitionDuration: UInt64
+    let leadTime: UInt64
+    let holdTime: UInt64
+    let samplingProfile: Int32
+    let renderQualityLevel: UInt32
+    let microJitterX: UInt64
+    let microJitterY: UInt64
+    let microJitterRotation: UInt64
+    let strideWobbleX: UInt64
+    let strideWobbleY: UInt64
+    let strideWobbleRotation: UInt64
+    let panStabilizationStrength: UInt64
+    let farFieldWarp: UInt64
+}
+
+private struct AutoCropScaleHoldState {
+    var lastRenderSeconds: Double
+    var lastScale: Float
+    var holdUntilSeconds: Double
+    var releaseStartSeconds: Double?
+    var releaseStartScale: Float
+    var releaseTargetScale: Float
 }
 
 private struct StabilizerAutoTransformCacheKey: Hashable {
@@ -716,6 +748,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
     private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
     private static let autoCropFramingCacheLimit = 160
+    private static let autoCropScaleHoldCacheLock = NSLock()
+    private static var autoCropScaleHoldCache: [AutoCropScaleHoldKey: AutoCropScaleHoldState] = [:]
+    private static var autoCropScaleHoldCacheOrder: [AutoCropScaleHoldKey] = []
+    private static let autoCropScaleHoldCacheLimit = 64
     private static let autoTransformCacheLock = NSLock()
     private static var autoTransformCache: [StabilizerAutoTransformCacheKey: StabilizerAutoTransform] = [:]
     private static var autoTransformCacheOrder: [StabilizerAutoTransformCacheKey] = []
@@ -1631,6 +1667,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             leadTime: leadTime,
             holdTime: holdTime,
             samplingProfile: samplingProfile,
+            renderQualityLevel: renderQualityLevel,
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity
         )
@@ -1661,6 +1698,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         leadTime: Double,
         holdTime: Double,
         samplingProfile: AutoCropSamplingProfile,
+        renderQualityLevel: UInt32,
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> AutoCropFraming {
@@ -1758,9 +1796,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cacheIdentity: cacheIdentity,
             initialScale: max(currentRequiredScale, plannedScale, finalRequiredScale)
         )
+        let rawScale = max(Float(1.0), finalRequiredScale, plannedScale, localScaleFloor)
+        let heldScale = autoCropHeldScale(
+            rawScale: rawScale,
+            preparedAnalysis: preparedAnalysis,
+            renderSeconds: renderSeconds,
+            outputSize: outputSize,
+            masterStrength: masterStrength,
+            transitionDuration: transitionDuration,
+            leadTime: leadTime,
+            holdTime: holdTime,
+            samplingProfile: samplingProfile,
+            renderQualityLevel: renderQualityLevel,
+            strengths: strengths,
+            cacheIdentity: cacheIdentity
+        )
 
         return AutoCropFraming(
-            scale: max(Float(1.0), finalRequiredScale, plannedScale, localScaleFloor),
+            scale: heldScale,
             positionPixels: positionPixels
         )
     }
@@ -1814,6 +1867,114 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
             return max(partial, easedScale)
         }
+    }
+
+    private static func autoCropHeldScale(
+        rawScale: Float,
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        masterStrength: Float,
+        transitionDuration: Double,
+        leadTime: Double,
+        holdTime: Double,
+        samplingProfile: AutoCropSamplingProfile,
+        renderQualityLevel: UInt32,
+        strengths: StabilizerCorrectionStrengths,
+        cacheIdentity: String?
+    ) -> Float {
+        let clampedRawScale = max(Float(1.0), rawScale.isFinite ? rawScale : Float(1.0))
+        guard renderSeconds.isFinite else {
+            return clampedRawScale
+        }
+
+        let key = AutoCropScaleHoldKey(
+            cacheIdentity: cacheIdentity,
+            outputWidth: Int32(clamping: Int(outputSize.x.rounded())),
+            outputHeight: Int32(clamping: Int(outputSize.y.rounded())),
+            analysisFrameCount: preparedAnalysis.frames.count,
+            analysisFirstTime: preparedAnalysis.frames.first?.time.bitPattern ?? 0,
+            analysisLastTime: preparedAnalysis.frames.last?.time.bitPattern ?? 0,
+            masterStrength: masterStrength.bitPattern,
+            transitionDuration: transitionDuration.bitPattern,
+            leadTime: leadTime.bitPattern,
+            holdTime: holdTime.bitPattern,
+            samplingProfile: samplingProfile.rawValue,
+            renderQualityLevel: renderQualityLevel,
+            microJitterX: strengths.microJitterX.bitPattern,
+            microJitterY: strengths.microJitterY.bitPattern,
+            microJitterRotation: strengths.microJitterRotation.bitPattern,
+            strideWobbleX: strengths.strideWobbleX.bitPattern,
+            strideWobbleY: strengths.strideWobbleY.bitPattern,
+            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+            farFieldWarp: strengths.farFieldWarp.bitPattern
+        )
+        let holdSeconds = autoCropHoldTimeSeconds(holdTime)
+        let releaseSeconds = autoCropTransitionDurationSeconds(transitionDuration)
+        let epsilon: Float = 0.0005
+
+        autoCropScaleHoldCacheLock.lock()
+        defer { autoCropScaleHoldCacheLock.unlock() }
+
+        guard var state = autoCropScaleHoldCache[key],
+              renderSeconds > state.lastRenderSeconds,
+              renderSeconds - state.lastRenderSeconds <= 1.0
+        else {
+            let shouldAppendKey = autoCropScaleHoldCache[key] == nil
+            autoCropScaleHoldCache[key] = AutoCropScaleHoldState(
+                lastRenderSeconds: renderSeconds,
+                lastScale: clampedRawScale,
+                holdUntilSeconds: renderSeconds + holdSeconds,
+                releaseStartSeconds: nil,
+                releaseStartScale: clampedRawScale,
+                releaseTargetScale: clampedRawScale
+            )
+            if shouldAppendKey {
+                autoCropScaleHoldCacheOrder.append(key)
+            }
+            while autoCropScaleHoldCacheOrder.count > autoCropScaleHoldCacheLimit {
+                let oldestKey = autoCropScaleHoldCacheOrder.removeFirst()
+                autoCropScaleHoldCache.removeValue(forKey: oldestKey)
+            }
+            return clampedRawScale
+        }
+
+        let outputScale: Float
+        if clampedRawScale >= state.lastScale - epsilon {
+            outputScale = clampedRawScale
+            state.holdUntilSeconds = max(state.holdUntilSeconds, renderSeconds + holdSeconds)
+            state.releaseStartSeconds = nil
+            state.releaseStartScale = outputScale
+            state.releaseTargetScale = outputScale
+        } else if renderSeconds <= state.holdUntilSeconds {
+            outputScale = state.lastScale
+            state.releaseStartSeconds = nil
+            state.releaseStartScale = outputScale
+            state.releaseTargetScale = clampedRawScale
+        } else if releaseSeconds <= 1e-6 {
+            outputScale = clampedRawScale
+            state.releaseStartSeconds = nil
+            state.releaseStartScale = outputScale
+            state.releaseTargetScale = outputScale
+        } else {
+            if state.releaseStartSeconds == nil {
+                state.releaseStartSeconds = renderSeconds
+                state.releaseStartScale = state.lastScale
+                state.releaseTargetScale = clampedRawScale
+            } else {
+                state.releaseTargetScale = min(state.releaseTargetScale, clampedRawScale)
+            }
+            let startSeconds = state.releaseStartSeconds ?? renderSeconds
+            let progress = min(max((renderSeconds - startSeconds) / releaseSeconds, 0.0), 1.0)
+            let releasedScale = state.releaseStartScale + ((state.releaseTargetScale - state.releaseStartScale) * Float(progress))
+            outputScale = max(clampedRawScale, releasedScale)
+        }
+
+        state.lastRenderSeconds = renderSeconds
+        state.lastScale = outputScale
+        autoCropScaleHoldCache[key] = state
+        return max(Float(1.0), outputScale)
     }
 
     private static func autoCropLocalScaleFloor(
