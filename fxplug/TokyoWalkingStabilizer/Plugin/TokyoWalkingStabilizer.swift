@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.214"
+private let tokyoWalkingStabilizerVersion = "0.3.215"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1829,25 +1829,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         cacheIdentity: String?,
         initialScale: Float
     ) -> Float {
-        guard let firstTime = preparedAnalysis.frames.first?.time,
-              let lastTime = preparedAnalysis.frames.last?.time
-        else {
+        let sampleSecondsList = autoCropLocalScaleSampleSeconds(
+            preparedAnalysis: preparedAnalysis,
+            currentSeconds: currentSeconds,
+            samplingProfile: samplingProfile
+        )
+        guard !sampleSecondsList.isEmpty else {
             return initialScale
         }
 
-        let offsets: [Double]
-        switch samplingProfile {
-        case .playback:
-            offsets = [-1.00, -0.70, -0.45, -0.25, -0.10, 0.10, 0.25, 0.45, 0.70, 1.00]
-        case .full:
-            offsets = [-0.75, -0.50, -0.30, -0.15, 0.15, 0.30, 0.50, 0.75]
-        }
-
-        return offsets.reduce(initialScale) { partial, offset in
-            let sampleSeconds = currentSeconds + offset
-            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
-                return partial
-            }
+        return sampleSecondsList.reduce(initialScale) { partial, sampleSeconds in
             let sampleTransform = autoCropActualSampleTransform(
                 preparedAnalysis: preparedAnalysis,
                 currentSeconds: currentSeconds,
@@ -1878,6 +1869,62 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
             return max(partial, requiredScale)
         }
+    }
+
+    private static func autoCropLocalScaleSampleSeconds(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        samplingProfile: AutoCropSamplingProfile
+    ) -> [Double] {
+        let frames = preparedAnalysis.frames
+        guard !frames.isEmpty,
+              currentSeconds.isFinite
+        else {
+            return []
+        }
+
+        let centerIndex: Int
+        if frames.count == 1 || currentSeconds <= frames[0].time {
+            centerIndex = 0
+        } else if currentSeconds >= frames[frames.count - 1].time {
+            centerIndex = frames.count - 1
+        } else {
+            var low = 0
+            var high = frames.count - 1
+            while high - low > 1 {
+                let mid = (low + high) / 2
+                if frames[mid].time <= currentSeconds {
+                    low = mid
+                } else {
+                    high = mid
+                }
+            }
+            centerIndex = abs(frames[low].time - currentSeconds) <= abs(frames[high].time - currentSeconds)
+                ? low
+                : high
+        }
+
+        let indexOffsets: [Int]
+        switch samplingProfile {
+        case .playback:
+            indexOffsets = [-60, -42, -30, -18, -12, -8, -6, -4, -3, -2, -1, 1, 2, 3, 4, 6, 8, 12, 18, 30, 42, 60]
+        case .full:
+            indexOffsets = [-45, -30, -18, -10, -6, -4, -3, -2, -1, 1, 2, 3, 4, 6, 10, 18, 30, 45]
+        }
+
+        var seen = Set<Int>()
+        var sampleSeconds: [Double] = []
+        sampleSeconds.reserveCapacity(indexOffsets.count)
+        for offset in indexOffsets {
+            let index = centerIndex + offset
+            guard frames.indices.contains(index),
+                  seen.insert(index).inserted
+            else {
+                continue
+            }
+            sampleSeconds.append(frames[index].time)
+        }
+        return sampleSeconds
     }
 
     private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32, renderSourceIsProxy: Bool) -> AutoCropSamplingProfile {
