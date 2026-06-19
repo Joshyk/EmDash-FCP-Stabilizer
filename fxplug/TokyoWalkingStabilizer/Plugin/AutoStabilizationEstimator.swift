@@ -662,6 +662,22 @@ enum AutoStabilizationEstimator {
         let windowSeconds: UInt64
     }
 
+    private struct RawTransformCacheKey: Hashable {
+        let index: Int
+        let outputWidth: UInt32
+        let outputHeight: UInt32
+        let panSmoothSeconds: UInt64
+        let microJitterX: UInt64
+        let microJitterY: UInt64
+        let microJitterRotation: UInt64
+        let strideWobbleX: UInt64
+        let strideWobbleY: UInt64
+        let strideWobbleRotation: UInt64
+        let panStabilizationStrength: UInt64
+        let farFieldWarp: UInt64
+        let limitFootstepContinuity: Bool
+    }
+
     private struct RenderEstimateCacheStoreKey: Hashable {
         let frameCount: Int
         let firstTime: UInt64
@@ -713,6 +729,66 @@ enum AutoStabilizationEstimator {
         private let lock = NSLock()
         private var outerPredictions: [OuterPredictionCacheKey: Float] = [:]
         private var localAverages: [LocalAverageCacheKey: Float] = [:]
+        private var rawTransforms: [RawTransformCacheKey: StabilizerAutoTransform] = [:]
+        private var rawTransformOrder: [RawTransformCacheKey] = []
+        private let rawTransformLimit = 4096
+
+        func rawTransform(
+            analysis: StabilizerPreparedAnalysis,
+            index: Int,
+            outputSize: vector_float2,
+            panSmoothSeconds: Double,
+            strengths: StabilizerCorrectionStrengths,
+            limitFootstepContinuity: Bool
+        ) -> StabilizerAutoTransform {
+            guard analysis.frames.indices.contains(index) else {
+                return .identity
+            }
+            let key = RawTransformCacheKey(
+                index: index,
+                outputWidth: outputSize.x.bitPattern,
+                outputHeight: outputSize.y.bitPattern,
+                panSmoothSeconds: panSmoothSeconds.bitPattern,
+                microJitterX: strengths.microJitterX.bitPattern,
+                microJitterY: strengths.microJitterY.bitPattern,
+                microJitterRotation: strengths.microJitterRotation.bitPattern,
+                strideWobbleX: strengths.strideWobbleX.bitPattern,
+                strideWobbleY: strengths.strideWobbleY.bitPattern,
+                strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+                panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+                farFieldWarp: strengths.farFieldWarp.bitPattern,
+                limitFootstepContinuity: limitFootstepContinuity
+            )
+            lock.lock()
+            if let cached = rawTransforms[key] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+
+            let transform = AutoStabilizationEstimator.rawEstimate(
+                preparedAnalysis: analysis,
+                renderSeconds: analysis.frames[index].time,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                cache: self,
+                limitFootstepContinuity: limitFootstepContinuity
+            )
+
+            lock.lock()
+            if rawTransforms[key] == nil {
+                rawTransforms[key] = transform
+                rawTransformOrder.append(key)
+                while rawTransformOrder.count > rawTransformLimit {
+                    let oldestKey = rawTransformOrder.removeFirst()
+                    rawTransforms.removeValue(forKey: oldestKey)
+                }
+            }
+            let stored = rawTransforms[key] ?? transform
+            lock.unlock()
+            return stored
+        }
 
         func outerLinearPredictionPath(
             _ kind: MotionPathKind,
@@ -1655,17 +1731,20 @@ enum AutoStabilizationEstimator {
             guard weight > 0.0001 else {
                 continue
             }
-            let transform = sampleIndex == centerSample
-                ? rawCenterTransform
-                : rawEstimate(
-                    preparedAnalysis: analysis,
-                    renderSeconds: sampleSeconds,
+            let transform: StabilizerAutoTransform
+            if sampleIndex == centerSample {
+                transform = rawCenterTransform
+            } else {
+                let sampleFrameIndex = frameLookup(at: sampleSeconds, in: frames).centerIndex
+                transform = renderEstimateCache.rawTransform(
+                    analysis: analysis,
+                    index: sampleFrameIndex,
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
                     strengths: strengths,
-                    cache: renderEstimateCache,
                     limitFootstepContinuity: false
                 )
+            }
             weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
         }
 
