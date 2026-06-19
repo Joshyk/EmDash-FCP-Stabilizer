@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.232"
+private let tokyoWalkingStabilizerVersion = "0.3.233"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1853,6 +1853,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         min(max(progress, 0.0), 1.0)
     }
 
+    private static func easeInOutRamp(_ progress: Float) -> Float {
+        let t = linearRamp(progress)
+        return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
+    }
+
+    private static func autoCropZoomInScaleRamp(_ progress: Float) -> Float {
+        easeInOutRamp(progress)
+    }
+
+    private static func autoCropZoomOutScaleRamp(_ progress: Float) -> Float {
+        easeInOutRamp(progress)
+    }
+
     private static func autoCropZoomInRamp(_ progress: Float) -> Float {
         linearRamp(progress)
     }
@@ -1870,7 +1883,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             guard !target.isCurrentFrame else {
                 return partial
             }
-            let easedProgress = autoCropZoomInRamp(target.leadProgress)
+            let easedProgress = autoCropZoomInScaleRamp(target.leadProgress)
             let response = min(max(target.weight, 0.0), 1.0)
             let targetScale = max(currentRequiredScale, target.requiredScale)
             let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
@@ -1880,7 +1893,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             guard !target.isCurrentFrame else {
                 return partial
             }
-            let easedProgress = target.isHoldSample ? Float(1.0) : autoCropZoomOutRamp(target.leadProgress)
+            let easedProgress = target.isHoldSample ? Float(1.0) : autoCropZoomOutScaleRamp(target.leadProgress)
             let response = target.isHoldSample ? Float(1.0) : (min(max(target.weight, 0.0), 1.0) * 0.65)
             let targetScale = max(currentRequiredScale, target.requiredScale)
             let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
@@ -1986,7 +1999,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             }
             let startSeconds = state.releaseStartSeconds ?? renderSeconds
             let progress = min(max((renderSeconds - startSeconds) / releaseSeconds, 0.0), 1.0)
-            let releasedScale = state.releaseStartScale + ((state.releaseTargetScale - state.releaseStartScale) * Float(progress))
+            let easedProgress = easeInOutRamp(Float(progress))
+            let releasedScale = state.releaseStartScale + ((state.releaseTargetScale - state.releaseStartScale) * easedProgress)
             outputScale = max(clampedRawScale, releasedScale)
         }
 
