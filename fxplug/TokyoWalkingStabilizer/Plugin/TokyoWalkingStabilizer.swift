@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.225"
+private let tokyoWalkingStabilizerVersion = "0.3.226"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -5279,7 +5279,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
             let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
             let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
-            let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.03)
+            let turnScaleX = max(1.0, Float(outputWidth) * 0.01)
+            let turnScaleY = max(1.0, Float(outputHeight) * 0.01)
+            let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.01)
             let searchRadiusQuality: Float
             if autoTransform.searchRadiusTotalCount > 0 {
                 let searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
@@ -5287,7 +5289,21 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             } else {
                 searchRadiusQuality = 0.0
             }
-            let residualQuality = max(0.0, 1.0 - min(1.0, autoTransform.residual * 50.0))
+            let residualActivity = min(1.0, max(0.0, autoTransform.residual * 50.0))
+            let rotationActivity = min(1.0, max(
+                abs(autoTransform.rotationDegrees),
+                abs(autoTransform.rawRotationDegrees),
+                abs(autoTransform.footstepJitterRotationDegrees) + abs(autoTransform.strideWobbleRotationDegrees),
+                abs(autoTransform.temporalSmoothingRotationDelta)
+            ) / 0.05)
+            let turnActivity = min(1.0, simd_length(vector_float2(
+                autoTransform.macroPixelOffset.x / turnScaleX,
+                autoTransform.macroPixelOffset.y / turnScaleY
+            )))
+            let temporalSmoothingActivity = min(1.0, max(
+                simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale,
+                abs(autoTransform.temporalSmoothingRotationDelta) / 0.05
+            ))
             let footstepJitterActivity = min(1.0, max(
                 simd_length(vector_float2(
                     autoTransform.limitedFootstepCorrection.x / diagnosticScaleX,
@@ -5310,17 +5326,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic = vector_float4(
                 min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
                 min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
-                min(1.0, abs(autoTransform.rotationDegrees) / 5.0),
+                rotationActivity,
                 searchRadiusQuality
             )
             diagnostic2 = vector_float4(
-                min(1.0, simd_length(vector_float2(autoTransform.macroPixelOffset.x / diagnosticScaleX, autoTransform.macroPixelOffset.y / diagnosticScaleY))),
+                turnActivity,
                 footstepJitterActivity,
                 strideWobbleActivity,
                 farFieldWarpActivity
             )
             diagnostic3 = vector_float4(
-                min(1.0, simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale),
+                temporalSmoothingActivity,
                 min(1.0, autoTransform.microConfidence),
                 min(1.0, autoTransform.strideConfidence),
                 min(1.0, autoTransform.warpConfidence)
@@ -5329,7 +5345,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 min(1.0, autoTransform.turnConfidence),
                 min(1.0, autoTransform.trackingConfidence),
                 AutoStabilizationEstimator.blurEvidenceQuality(autoTransform.blurAmount),
-                residualQuality
+                residualActivity
             )
             diagnostic5 = vector_float4(
                 min(1.0, autoTransform.walkingTrackingConfidence),
