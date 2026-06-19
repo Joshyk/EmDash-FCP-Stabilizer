@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.194"
+private let tokyoWalkingStabilizerVersion = "0.3.195"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -52,7 +52,6 @@ private let stabilizerDefaultAutoCropTransitionDuration = 5.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
 private let stabilizerDefaultAutoCropLeadTime = 10.0
 private let stabilizerMaximumAutoCropLeadTime = 120.0
-private let stabilizerAutoCropZoomInSoftEdgeFraction: Float = 0.15
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
@@ -1716,35 +1715,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
+    private static func linearRamp(_ progress: Float) -> Float {
+        min(max(progress, 0.0), 1.0)
+    }
+
     private static func autoCropZoomInRamp(_ progress: Float) -> Float {
-        autoCropPercentSoftenedRamp(
-            progress,
-            softEdgeFraction: stabilizerAutoCropZoomInSoftEdgeFraction
-        )
+        linearRamp(progress)
     }
 
     private static func autoCropZoomOutRamp(_ progress: Float) -> Float {
-        smoothStep(progress)
-    }
-
-    private static func autoCropPercentSoftenedRamp(
-        _ progress: Float,
-        softEdgeFraction: Float
-    ) -> Float {
-        let p = min(max(progress, 0.0), 1.0)
-        let edge = min(max(softEdgeFraction, 0.0), 0.45)
-        guard edge > 1e-6 else {
-            return p
-        }
-        let denominator = edge * (1.0 - edge)
-        if p < edge {
-            return 0.5 * p * p / denominator
-        }
-        if p > 1.0 - edge {
-            let remaining = 1.0 - p
-            return 1.0 - (0.5 * remaining * remaining / denominator)
-        }
-        return (p - (0.5 * edge)) / (1.0 - edge)
+        linearRamp(progress)
     }
 
     private static func autoCropPlannedScale(

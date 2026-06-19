@@ -246,17 +246,16 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   both zoom and position; for example, `20` starts the ramp about 20 seconds
   before that future turn reaches the current frame.
 - `Auto Crop Zoom-Out Time`: default `5` seconds, range `0...30` seconds. This is
-  the S-curve release/rounding time as Auto Crop returns from a higher zoom after
-  the black-edge risk has passed.
+  the linear release time as Auto Crop returns from a higher zoom after the
+  black-edge risk has passed.
   With `Remove Black Edges` on, final zoom is still clamped to the current frame's
   required safe crop so outside-source black is not exposed during the transition.
   Auto Crop budgets zoom and position from that minimum safe crop: future samples
-  use a mostly linear ramp that only softens the first/last 15% of the chosen
-  Zoom-In time, while release samples slow the return without holding an
-  aggressive crop envelope. High-quality render uses the full 17-sample Auto
-  Crop lead window; proxy, low/medium-quality playback, or scaled preview uses a
-  very light non-quantized lead/release profile with no extra playback crop
-  padding.
+  use a linear ramp, while release samples slow the return with a linear ramp
+  instead of holding an aggressive crop envelope. High-quality render uses the
+  full 17-sample Auto Crop lead window; proxy, low/medium-quality playback, or
+  scaled preview uses a very light non-quantized lead/release profile with no
+  extra playback crop padding.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.

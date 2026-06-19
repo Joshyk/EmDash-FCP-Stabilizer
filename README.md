@@ -142,18 +142,17 @@ or black. New effect instances default that menu to `Black Outside`.
 demand Auto Crop starts moving zoom and position. For example, `10` starts the
 zoom/position ramp about 10 seconds before that future turn reaches the current
 frame; `20` starts it about 20 seconds early. `Auto Crop Zoom-Out Time`
-controls the S-curve release/rounding time as Auto Crop returns from a higher
-zoom after the black-edge risk has passed. With
+controls the linear release time as Auto Crop returns from a higher zoom after
+the black-edge risk has passed. With
 `Remove Black Edges` on, the render path still clamps zoom to the current
 frame's required safe crop so outside-source black is not exposed during the
 transition. The lead/release path is budgeted from that current-frame safe crop:
-future samples start zoom and position with a mostly linear ramp that only
-softens the first/last 15% of the chosen Zoom-In time, position is limited when
-it would force extra current-frame zoom, and release samples only slow the
-return instead of holding an aggressive crop envelope. High-quality render uses
-the full 17-sample Auto Crop lead window; proxy, low/medium-quality playback, or
-scaled preview uses a very light non-quantized lead/release profile with no
-extra playback crop padding.
+future samples start zoom and position with a linear ramp, position is limited
+when it would force extra current-frame zoom, and release samples slow the
+return with a linear ramp instead of holding an aggressive crop envelope.
+High-quality render uses the full 17-sample Auto Crop lead window; proxy,
+low/medium-quality playback, or scaled preview uses a very light non-quantized
+lead/release profile with no extra playback crop padding.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
