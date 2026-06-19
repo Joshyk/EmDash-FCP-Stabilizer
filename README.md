@@ -167,7 +167,9 @@ scale budget instead of moving the crop center side to side with each frame's
 macro offset. The same local scale envelope evaluates nearby planned Auto Crop
 scale demand and now follows the Auto Crop Zoom-In, Hold, and Zoom-Out time
 windows so the visible crop-zoom bar does not wobble with frame-to-frame
-lookahead changes.
+lookahead changes; when an extreme frame must clamp the crop center for
+black-edge safety, that clamp is averaged through the same local envelope
+instead of snapping side to side.
 High-quality render uses the full 17-sample Auto Crop lead window; proxy,
 low/medium-quality playback, or scaled preview uses a very light non-quantized
 lead/release profile with no extra playback crop padding.

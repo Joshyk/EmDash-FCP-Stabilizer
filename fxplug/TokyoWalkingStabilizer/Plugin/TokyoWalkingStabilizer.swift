@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.246"
+private let tokyoWalkingStabilizerVersion = "0.3.247"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1808,16 +1808,48 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cacheIdentity: cacheIdentity,
             initialScale: scaleDemand.scaleFloor
         )
+        let localPositionPixels = autoCropLocalPositionPixels(
+            preparedAnalysis: preparedAnalysis,
+            currentSeconds: renderSeconds,
+            currentTransform: currentTransform,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            transitionDurationSeconds: transitionDurationSeconds,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity,
+            initialPositionPixels: scaleDemand.neutralPositionPixels
+        )
+        let localPositionRequiredScale: Float
+        if autoCropCenterIsInsideSource(cropPositionPixels: localPositionPixels, context: context) {
+            localPositionRequiredScale = requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: localPositionPixels,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            )
+        } else {
+            localPositionRequiredScale = scaleDemand.neutralRequiredScale
+        }
         let rawScale = autoCropScaleWithQuietLookaheadDeadband(
             scale: max(
                 Float(1.0),
                 scaleDemand.neutralRequiredScale,
+                localPositionRequiredScale,
                 scaleDemand.finalRequiredScale,
                 scaleDemand.plannedScale,
                 localScaleFloor
             ),
             currentRequiredScale: scaleDemand.currentRequiredScale,
-            finalRequiredScale: max(scaleDemand.neutralRequiredScale, scaleDemand.finalRequiredScale),
+            finalRequiredScale: max(
+                scaleDemand.neutralRequiredScale,
+                localPositionRequiredScale,
+                scaleDemand.finalRequiredScale
+            ),
             currentTransform: currentTransform,
             outputSize: outputSize,
             masterStrength: masterStrength
@@ -1825,8 +1857,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let finalScale = rawScale
 
         let finalPositionPixels = autoCropScaleBudgetedPositionPixels(
-            anchorPositionPixels: scaleDemand.neutralPositionPixels,
-            fallbackPositionPixels: scaleDemand.positionPixels,
+            anchorPositionPixels: localPositionPixels,
+            fallbackPositionPixels: scaleDemand.neutralPositionPixels,
             context: context,
             scale: finalScale,
             samplingProfile: samplingProfile
@@ -2194,6 +2226,78 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let weightedScale = protectedScale + (extraScale * min(max(sample.influence, 0.0), 1.0))
             return max(partial, weightedScale)
         }
+    }
+
+    private static func autoCropLocalPositionPixels(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        transitionDurationSeconds: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?,
+        initialPositionPixels: vector_float2
+    ) -> vector_float2 {
+        let samples = autoCropLocalScaleSamples(
+            preparedAnalysis: preparedAnalysis,
+            currentSeconds: currentSeconds,
+            transitionDurationSeconds: transitionDurationSeconds,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            samplingProfile: samplingProfile
+        )
+        guard !samples.isEmpty else {
+            return initialPositionPixels
+        }
+
+        var weightedPosition = initialPositionPixels * 2.0
+        var totalWeight = Float(2.0)
+        for sample in samples {
+            let sampleTransform = autoCropActualSampleTransform(
+                preparedAnalysis: preparedAnalysis,
+                currentSeconds: currentSeconds,
+                sampleSeconds: sample.seconds,
+                currentTransform: currentTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+            let sampleDemand = cachedAutoCropScaleDemand(
+                preparedAnalysis: preparedAnalysis,
+                centerSeconds: sample.seconds,
+                centerTransform: sampleTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                masterStrength: masterStrength,
+                transitionDurationSeconds: transitionDurationSeconds,
+                leadTimeSeconds: leadTimeSeconds,
+                holdTimeSeconds: holdTimeSeconds,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+            let weight = min(max(sample.influence, 0.0), 1.0)
+            guard weight > 0.0001 else {
+                continue
+            }
+            weightedPosition += sampleDemand.neutralPositionPixels * weight
+            totalWeight += weight
+        }
+
+        guard totalWeight > 0.0001 else {
+            return initialPositionPixels
+        }
+        return weightedPosition / totalWeight
     }
 
     private static func autoCropLocalScaleSamples(
