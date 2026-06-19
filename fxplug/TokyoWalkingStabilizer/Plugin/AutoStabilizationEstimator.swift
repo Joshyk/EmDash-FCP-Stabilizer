@@ -1149,6 +1149,116 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    static func proxyPlaybackEstimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths = .defaultStrengths
+    ) -> StabilizerAutoTransform {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        let frames = analysis.frames
+        guard renderSeconds.isFinite, frames.count >= 3 else {
+            return .identity
+        }
+
+        let lookup = frameLookup(at: renderSeconds, in: frames)
+        let centerIndex = lookup.centerIndex
+        guard frames.indices.contains(centerIndex) else {
+            return .identity
+        }
+        let frame = frames[centerIndex]
+        let xScale = outputSize.x / Float(max(1, frame.sampleWidth))
+        let yScale = outputSize.y / Float(max(1, frame.sampleHeight))
+        let smoothingWindow = min(max(panSmoothSeconds, renderTemporalSmoothingWindowSeconds), 3.0)
+        let localIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: smoothingWindow * 0.5
+        )
+        let activeIndices = localIndices.isEmpty ? [centerIndex] : localIndices
+
+        let currentX = interpolatedValue(analysis.footstepPathX, using: lookup.interpolation)
+        let currentY = interpolatedValue(analysis.footstepPathY, using: lookup.interpolation)
+        let currentRoll = interpolatedValue(analysis.footstepPathRoll, using: lookup.interpolation)
+        let baselineX = timeWeightedAverage(
+            analysis.footstepPathX,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothingWindow
+        )
+        let baselineY = timeWeightedAverage(
+            analysis.footstepPathY,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothingWindow
+        )
+        let baselineRoll = timeWeightedAverage(
+            analysis.footstepPathRoll,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothingWindow
+        )
+
+        let xStrength = clamp(Float(max(strengths.microJitterX, strengths.strideWobbleX, strengths.panStabilizationStrength)), min: 0.0, max: 1.0)
+        let yStrength = clamp(Float(max(strengths.microJitterY, strengths.strideWobbleY)), min: 0.0, max: 1.0)
+        let rotationStrength = clamp(Float(max(strengths.microJitterRotation, strengths.strideWobbleRotation)), min: 0.0, max: 1.0)
+        let pixelOffset = vector_float2(
+            -(currentX - baselineX) * xScale * xStrength,
+            -(currentY - baselineY) * yScale * yStrength
+        )
+        let rotationDegrees = -(currentRoll - baselineRoll) * rotationStrength
+        let trackingConfidence = interpolatedValue(analysis.analysisConfidence, using: lookup.interpolation)
+        let warpConfidence = interpolatedValue(analysis.warpConfidence, using: lookup.interpolation)
+        let blurAmount = interpolatedValue(analysis.blurAmounts, using: lookup.interpolation)
+        let residual = interpolatedValue(analysis.residuals, using: lookup.interpolation)
+        let acceptedBlockCount = analysis.acceptedBlockCounts.indices.contains(centerIndex) ? analysis.acceptedBlockCounts[centerIndex] : 0
+        let totalBlockCount = analysis.totalBlockCounts.indices.contains(centerIndex) ? analysis.totalBlockCounts[centerIndex] : 0
+        let searchRadiusHitCount = analysis.searchRadiusHitCounts.indices.contains(centerIndex) ? analysis.searchRadiusHitCounts[centerIndex] : 0
+        let searchRadiusTotalCount = analysis.searchRadiusTotalCounts.indices.contains(centerIndex) ? analysis.searchRadiusTotalCounts[centerIndex] : 0
+
+        return StabilizerAutoTransform(
+            pixelOffset: pixelOffset,
+            macroPixelOffset: pixelOffset,
+            microPixelOffset: vector_float2(0.0, 0.0),
+            strideWobblePixelOffset: vector_float2(0.0, 0.0),
+            footstepJitterRotationDegrees: 0.0,
+            strideWobbleRotationDegrees: rotationDegrees,
+            rotationDegrees: rotationDegrees,
+            rawPixelOffset: pixelOffset,
+            rawRotationDegrees: rotationDegrees,
+            temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
+            temporalSmoothingRotationDelta: 0.0,
+            temporalSmoothingSampleCount: Int32(activeIndices.count),
+            temporalSmoothingWindowSeconds: Float(smoothingWindow),
+            effectiveMicroJitterStrength: vector_float3(xStrength, yStrength, rotationStrength),
+            effectiveStrideWobbleStrength: vector_float3(xStrength, yStrength, rotationStrength),
+            warpConfidence: warpConfidence,
+            microConfidence: xStrength,
+            strideConfidence: xStrength,
+            turnConfidence: clamp(Float(strengths.panStabilizationStrength), min: 0.0, max: 1.0),
+            acceptedBlockCount: acceptedBlockCount,
+            totalBlockCount: totalBlockCount,
+            yawPitchProxy: vector_float2(0.0, 0.0),
+            shear: vector_float2(0.0, 0.0),
+            perspective: vector_float2(0.0, 0.0),
+            blurAmount: blurAmount,
+            trackingConfidence: trackingConfidence,
+            walkingTrackingConfidence: trackingConfidence,
+            motionConfidence: trackingConfidence,
+            residual: residual,
+            footstepImpulse: vector_float3(currentX - baselineX, currentY - baselineY, currentRoll - baselineRoll),
+            rawFootstepCorrection: pixelOffset,
+            limitedFootstepCorrection: pixelOffset,
+            footstepPulseLimited: vector_float2(0.0, 0.0),
+            searchRadiusHitCount: searchRadiusHitCount,
+            searchRadiusTotalCount: searchRadiusTotalCount
+        )
+    }
+
     static func autoCropWindowEstimate(
         preparedAnalysis analysis: StabilizerPreparedAnalysis,
         renderTime: CMTime,

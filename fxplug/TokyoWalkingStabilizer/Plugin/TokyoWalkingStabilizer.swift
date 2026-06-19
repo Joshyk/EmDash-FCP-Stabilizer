@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.208"
+private let tokyoWalkingStabilizerVersion = "0.3.209"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -4766,6 +4766,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let halfOutputWidth = Float(outputWidth) * 0.5
         let halfOutputHeight = Float(outputHeight) * 0.5
         var viewportSize = simd_uint2(UInt32(outputWidth), UInt32(outputHeight))
+        let sourceMediaIsProxy = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
         let masterStrength = Float(max(0.0, state.strength))
         let transformEnabled = masterStrength > 0.0001
         let autoTransform: StabilizerAutoTransform
@@ -4810,20 +4811,29 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             publishHostAnalysisCacheIdentityOnMain(renderCacheIdentity, force: false)
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             activeAnalysisRenderTime = analysisRenderTime
-            autoTransform = Self.cachedAutoTransform(
-                preparedAnalysis: preparedAnalysis,
-                renderTime: analysisRenderTime,
-                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                panSmoothSeconds: state.panSmoothSeconds,
-                strengths: correctionStrengths,
-                analysisRevision: renderStoreRevision,
-                cacheIdentity: renderCacheIdentity
-            )
+            if sourceMediaIsProxy {
+                autoTransform = AutoStabilizationEstimator.proxyPlaybackEstimate(
+                    preparedAnalysis: preparedAnalysis,
+                    renderTime: analysisRenderTime,
+                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                    panSmoothSeconds: state.panSmoothSeconds,
+                    strengths: correctionStrengths
+                )
+            } else {
+                autoTransform = Self.cachedAutoTransform(
+                    preparedAnalysis: preparedAnalysis,
+                    renderTime: analysisRenderTime,
+                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                    panSmoothSeconds: state.panSmoothSeconds,
+                    strengths: correctionStrengths,
+                    analysisRevision: renderStoreRevision,
+                    cacheIdentity: renderCacheIdentity
+                )
+            }
         } else {
             autoTransform = .identity
         }
-        let renderSourceIsProxy = renderUsesPreparedAnalysis
-            && StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
+        let renderSourceIsProxy = renderUsesPreparedAnalysis && sourceMediaIsProxy
         let debugOverlayActive = state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis
         if renderCacheIdentity == nil {
             renderCacheIdentity = storeSnapshot.activeCacheIdentity
