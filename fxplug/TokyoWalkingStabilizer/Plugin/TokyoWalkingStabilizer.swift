@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.192"
+private let tokyoWalkingStabilizerVersion = "0.3.193"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -165,7 +165,7 @@ private enum AutoCropSamplingProfile: Int32 {
     var scaleSafetyPadding: Float {
         switch self {
         case .playback:
-            return 0.002
+            return 0.0
         case .full:
             return 0.0
         }
@@ -1674,26 +1674,29 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 preferredPositionPixels: currentTransform.macroPixelOffset * masterStrength,
                 context: context
             )
-        let leadPositionPixels = autoCropPositionPixels(
-            from: transitionTargets + releaseTargets,
-            currentPositionPixels: currentPositionPixels
-        )
-        let positionPixels = blackSafeAutoCropPosition(
-            preferredPositionPixels: leadPositionPixels,
-            context: context
-        )
-
         let currentRequiredScale = requiredAutoCropScale(
+            context: context,
+            cropPositionPixels: currentPositionPixels
+        )
+        let plannedScale = autoCropPlannedScale(
+            transitionTargets: transitionTargets,
+            releaseTargets: releaseTargets,
+            currentRequiredScale: currentRequiredScale
+        )
+        let positionPixels = autoCropBudgetedPositionPixels(
+            from: transitionTargets + releaseTargets,
+            currentPositionPixels: currentPositionPixels,
+            context: context,
+            maximumScale: plannedScale,
+            samplingProfile: samplingProfile
+        )
+        let finalRequiredScale = requiredAutoCropScale(
             context: context,
             cropPositionPixels: positionPixels
         )
-        let transitionScale = autoCropTransitionScale(
-            from: transitionTargets + releaseTargets,
-            currentRequiredScale: currentRequiredScale
-        )
 
         return AutoCropFraming(
-            scale: max(Float(1.0), currentRequiredScale, transitionScale),
+            scale: max(Float(1.0), finalRequiredScale, plannedScale),
             positionPixels: positionPixels
         )
     }
@@ -1711,17 +1714,29 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
-    private static func autoCropTransitionScale(
-        from targets: [AutoCropFramingTarget],
+    private static func autoCropPlannedScale(
+        transitionTargets: [AutoCropFramingTarget],
+        releaseTargets: [AutoCropFramingTarget],
         currentRequiredScale: Float
     ) -> Float {
-        targets.reduce(currentRequiredScale) { partial, target in
+        let transitionScale = transitionTargets.reduce(currentRequiredScale) { partial, target in
             guard target.leadProgress < 1.0 - 1e-6 else {
                 return partial
             }
             let easedProgress = smoothStep(target.leadProgress)
+            let response = min(max(target.weight, 0.0), 1.0)
             let targetScale = max(currentRequiredScale, target.requiredScale)
-            let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress)
+            let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
+            return max(partial, easedScale)
+        }
+        return releaseTargets.reduce(transitionScale) { partial, target in
+            guard target.leadProgress < 1.0 - 1e-6 else {
+                return partial
+            }
+            let easedProgress = smoothStep(target.leadProgress)
+            let response = min(max(target.weight, 0.0), 1.0) * 0.65
+            let targetScale = max(currentRequiredScale, target.requiredScale)
+            let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
             return max(partial, easedScale)
         }
     }
@@ -2010,6 +2025,72 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return partial + (leadOffset * target.weight)
         }
         return currentPositionPixels + (weightedOffset / totalWeight)
+    }
+
+    private static func autoCropBudgetedPositionPixels(
+        from targets: [AutoCropFramingTarget],
+        currentPositionPixels: vector_float2,
+        context: AutoCropTransformContext,
+        maximumScale: Float,
+        samplingProfile: AutoCropSamplingProfile
+    ) -> vector_float2 {
+        let preferredPositionPixels = autoCropPositionPixels(
+            from: targets,
+            currentPositionPixels: currentPositionPixels
+        )
+        let targetPositionPixels = blackSafeAutoCropPosition(
+            preferredPositionPixels: preferredPositionPixels,
+            context: context
+        )
+        guard !autoCropPosition(
+            targetPositionPixels,
+            fitsWithinScale: maximumScale,
+            context: context,
+            samplingProfile: samplingProfile
+        ) else {
+            return targetPositionPixels
+        }
+
+        var validFraction: Float = 0.0
+        var invalidFraction: Float = 1.0
+        for _ in 0..<12 {
+            let midpoint = (validFraction + invalidFraction) * 0.5
+            let candidate = currentPositionPixels + ((targetPositionPixels - currentPositionPixels) * midpoint)
+            if autoCropPosition(
+                candidate,
+                fitsWithinScale: maximumScale,
+                context: context,
+                samplingProfile: samplingProfile
+            ) {
+                validFraction = midpoint
+            } else {
+                invalidFraction = midpoint
+            }
+        }
+        return blackSafeAutoCropPosition(
+            preferredPositionPixels: currentPositionPixels + ((targetPositionPixels - currentPositionPixels) * validFraction),
+            context: context
+        )
+    }
+
+    private static func autoCropPosition(
+        _ positionPixels: vector_float2,
+        fitsWithinScale maximumScale: Float,
+        context: AutoCropTransformContext,
+        samplingProfile: AutoCropSamplingProfile
+    ) -> Bool {
+        guard autoCropCenterIsInsideSource(
+            cropPositionPixels: positionPixels,
+            context: context
+        ) else {
+            return false
+        }
+        return autoCropScaleContainsSource(
+            scale: max(maximumScale, 1.0),
+            context: context,
+            cropPositionPixels: positionPixels,
+            sampleSteps: samplingProfile.scaleSearchSampleSteps
+        )
     }
 
     private static func blackSafeAutoCropPosition(

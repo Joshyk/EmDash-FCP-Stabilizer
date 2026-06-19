@@ -146,10 +146,13 @@ controls the S-curve release/rounding time as Auto Crop returns from a higher
 zoom after the black-edge risk has passed. With
 `Remove Black Edges` on, the render path still clamps zoom to the current
 frame's required safe crop so outside-source black is not exposed during the
-transition. High-quality render uses the full 17-sample Auto Crop lead window;
-proxy, low/medium-quality playback, or scaled preview uses a very light
-non-quantized lead/release profile for both zoom and position so playback keeps
-the stabilizer motion visible without the old coarse zoom-envelope steps.
+transition. The lead/release path is budgeted from that current-frame safe crop:
+future samples can start zoom and position early, but position is limited when
+it would force extra current-frame zoom, and release samples only slow the
+return instead of holding an aggressive crop envelope. High-quality render uses
+the full 17-sample Auto Crop lead window; proxy, low/medium-quality playback, or
+scaled preview uses a very light non-quantized lead/release profile with no
+extra playback crop padding.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the

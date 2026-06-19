@@ -150,11 +150,13 @@ fallbacks.
   about 20 seconds early.
 - `Auto Crop Zoom-Out Time`: S-curve release/rounding time as Auto Crop returns
   from a higher zoom after the black-edge risk has passed. The current frame
-  remains black-safe when `Remove Black Edges` is on. High-quality render uses the full 17-sample Auto Crop
-  lead window; proxy, low/medium-quality playback, or scaled preview uses a very
-  light non-quantized lead/release profile for both zoom and position so
-  playback keeps the stabilizer motion visible without the old coarse
-  zoom-envelope steps.
+  remains black-safe when `Remove Black Edges` is on. Auto Crop now budgets
+  zoom and position from the current frame's minimum safe crop: future samples
+  can start the ramp early, while release samples slow the return without
+  holding an aggressive crop envelope. High-quality render uses the full
+  17-sample Auto Crop lead window; proxy, low/medium-quality playback, or scaled
+  preview uses a very light non-quantized lead/release profile with no extra
+  playback crop padding.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image. New effect

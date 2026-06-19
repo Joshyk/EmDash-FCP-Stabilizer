@@ -250,10 +250,12 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   the black-edge risk has passed.
   With `Remove Black Edges` on, final zoom is still clamped to the current frame's
   required safe crop so outside-source black is not exposed during the transition.
-  High-quality render uses the full 17-sample Auto Crop lead window; proxy,
-  low/medium-quality playback, or scaled preview uses a very light non-quantized
-  lead/release profile for both zoom and position so playback keeps the stabilizer
-  motion visible without the old coarse zoom-envelope steps.
+  Auto Crop budgets zoom and position from that minimum safe crop: future samples
+  can start the ramp early, while release samples slow the return without holding
+  an aggressive crop envelope. High-quality render uses the full 17-sample Auto
+  Crop lead window; proxy, low/medium-quality playback, or scaled preview uses a
+  very light non-quantized lead/release profile with no extra playback crop
+  padding.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.
