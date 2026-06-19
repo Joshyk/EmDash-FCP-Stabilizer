@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.231"
+private let tokyoWalkingStabilizerVersion = "0.3.232"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1823,9 +1823,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cacheIdentity: cacheIdentity
         )
 
+        let finalPositionPixels = autoCropScaleBudgetedPositionPixels(
+            anchorPositionPixels: currentPositionPixels,
+            fallbackPositionPixels: positionPixels,
+            context: context,
+            scale: heldScale,
+            samplingProfile: samplingProfile
+        )
+
         return AutoCropFraming(
             scale: heldScale,
-            positionPixels: positionPixels
+            positionPixels: finalPositionPixels
         )
     }
 
@@ -2638,6 +2646,50 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             context: context,
             samplingProfile: samplingProfile
         )
+    }
+
+    private static func autoCropScaleBudgetedPositionPixels(
+        anchorPositionPixels: vector_float2,
+        fallbackPositionPixels: vector_float2,
+        context: AutoCropTransformContext,
+        scale: Float,
+        samplingProfile: AutoCropSamplingProfile
+    ) -> vector_float2 {
+        if autoCropPosition(
+            anchorPositionPixels,
+            fitsWithinScale: scale,
+            context: context,
+            samplingProfile: samplingProfile
+        ) {
+            return anchorPositionPixels
+        }
+
+        guard autoCropPosition(
+            fallbackPositionPixels,
+            fitsWithinScale: scale,
+            context: context,
+            samplingProfile: samplingProfile
+        ) else {
+            return fallbackPositionPixels
+        }
+
+        var invalidFraction: Float = 0.0
+        var validFraction: Float = 1.0
+        for _ in 0..<samplingProfile.positionBudgetIterations {
+            let midpoint = (invalidFraction + validFraction) * 0.5
+            let candidate = anchorPositionPixels + ((fallbackPositionPixels - anchorPositionPixels) * midpoint)
+            if autoCropPosition(
+                candidate,
+                fitsWithinScale: scale,
+                context: context,
+                samplingProfile: samplingProfile
+            ) {
+                validFraction = midpoint
+            } else {
+                invalidFraction = midpoint
+            }
+        }
+        return anchorPositionPixels + ((fallbackPositionPixels - anchorPositionPixels) * validFraction)
     }
 
     private static func autoCropPosition(
@@ -4932,6 +4984,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         frameCount: Int,
         cacheIdentityShort: String,
         autoTransform: StabilizerAutoTransform,
+        autoCropFraming: AutoCropFraming,
         diagnostic: vector_float4,
         diagnostic2: vector_float4,
         diagnostic3: vector_float4,
@@ -5005,7 +5058,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform.effectiveStrideWobbleStrength.z
         )
         os_log(
-            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f FOOT STEP %.3f STRIDE %.3f FAR WARP %.3f TURN %.3f SMOOTH %.3f CROP ZOOM %.3f",
+            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f FOOT STEP %.3f STRIDE %.3f FAR WARP %.3f TURN %.3f SMOOTH %.3f CROP ZOOM %.3f CROP X %.2f CROP Y %.2f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -5017,7 +5070,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic2.w,
             diagnostic2.x,
             diagnostic3.x,
-            diagnostic5.y
+            diagnostic5.y,
+            autoCropFraming.positionPixels.x,
+            autoCropFraming.positionPixels.y
         )
         os_log(
             "Debug Overlay bars quality | FxPlug %{public}@ | FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f MATCH QUAL %.3f EDGE HIT %.3f WALK CONF %.3f",
@@ -5425,6 +5480,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 frameCount: Int(state.hostAnalysisFrameCount),
                 cacheIdentityShort: renderCacheIdentityShort,
                 autoTransform: autoTransform,
+                autoCropFraming: autoCropFraming,
                 diagnostic: diagnostic,
                 diagnostic2: diagnostic2,
                 diagnostic3: diagnostic3,
