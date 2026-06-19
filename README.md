@@ -164,8 +164,9 @@ sampled from a seconds-based plateau window with a soft edge so short walking
 impulses do not create a visible zoom pulse on high-frame-rate footage. The
 held scale now keeps the lead/release-smoothed crop position when it fits,
 instead of snapping the crop center back to the current frame. The same local
-scale envelope also evaluates nearby planned Auto Crop scale demand so the
-visible crop-zoom bar does not wobble with frame-to-frame lookahead changes.
+scale envelope evaluates nearby planned Auto Crop scale demand and now follows
+the Auto Crop Zoom-In, Hold, and Zoom-Out time windows so the visible crop-zoom
+bar does not wobble with frame-to-frame lookahead changes.
 High-quality render uses the full 17-sample Auto Crop lead window; proxy,
 low/medium-quality playback, or scaled preview uses a very light non-quantized
 lead/release profile with no extra playback crop padding.

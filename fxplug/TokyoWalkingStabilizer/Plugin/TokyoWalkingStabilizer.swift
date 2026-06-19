@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.244"
+private let tokyoWalkingStabilizerVersion = "0.3.245"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -210,6 +210,15 @@ private enum AutoCropSamplingProfile: Int32 {
             return 0.0
         case .full:
             return 0.0
+        }
+    }
+
+    var scaleEnvelopeStepSeconds: Double {
+        switch self {
+        case .playback:
+            return 0.08
+        case .full:
+            return 0.06
         }
     }
 
@@ -2122,6 +2131,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let samples = autoCropLocalScaleSamples(
             preparedAnalysis: preparedAnalysis,
             currentSeconds: currentSeconds,
+            transitionDurationSeconds: transitionDurationSeconds,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
             samplingProfile: samplingProfile
         )
         guard !samples.isEmpty else {
@@ -2166,117 +2178,123 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static func autoCropLocalScaleSamples(
         preparedAnalysis: StabilizerPreparedAnalysis,
         currentSeconds: Double,
+        transitionDurationSeconds: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
         samplingProfile: AutoCropSamplingProfile
     ) -> [AutoCropLocalScaleSample] {
         let frames = preparedAnalysis.frames
         guard !frames.isEmpty,
-              currentSeconds.isFinite
+              currentSeconds.isFinite,
+              let firstTime = frames.first?.time,
+              let lastTime = frames.last?.time
         else {
             return []
         }
 
-        let centerIndex: Int
-        if frames.count == 1 || currentSeconds <= frames[0].time {
-            centerIndex = 0
-        } else if currentSeconds >= frames[frames.count - 1].time {
-            centerIndex = frames.count - 1
-        } else {
-            var low = 0
-            var high = frames.count - 1
-            while high - low > 1 {
-                let mid = (low + high) / 2
-                if frames[mid].time <= currentSeconds {
-                    low = mid
-                } else {
-                    high = mid
-                }
-            }
-            centerIndex = abs(frames[low].time - currentSeconds) <= abs(frames[high].time - currentSeconds)
-                ? low
-                : high
+        let pastRadiusSeconds = max(0.0, holdTimeSeconds) + max(0.0, transitionDurationSeconds)
+        let futureRadiusSeconds = max(0.0, leadTimeSeconds)
+        let startSeconds = max(firstTime, currentSeconds - pastRadiusSeconds)
+        let endSeconds = min(lastTime, currentSeconds + futureRadiusSeconds)
+        guard startSeconds <= endSeconds else {
+            return []
         }
-
-        let plateauSeconds: Double
-        let radiusSeconds: Double
-        let outerStepSeconds: Double
+        let windowSeconds = max(endSeconds - startSeconds, 0.0)
+        let maximumSampleCount: Double
         switch samplingProfile {
         case .playback:
-            plateauSeconds = 0.8
-            radiusSeconds = 2.5
-            outerStepSeconds = 0.12
+            maximumSampleCount = 220.0
         case .full:
-            plateauSeconds = 1.5
-            radiusSeconds = 4.0
-            outerStepSeconds = 0.10
+            maximumSampleCount = 360.0
         }
+        let stepSeconds = max(
+            samplingProfile.scaleEnvelopeStepSeconds,
+            windowSeconds / maximumSampleCount,
+            1.0 / 60.0
+        )
 
-        var seen = Set<Int>()
         var samples: [AutoCropLocalScaleSample] = []
-        samples.reserveCapacity(96)
+        samples.reserveCapacity(Int(min(maximumSampleCount, 512.0)))
 
-        func appendSample(at index: Int) {
-            guard frames.indices.contains(index),
-                  seen.insert(index).inserted
+        func appendSample(seconds: Double) {
+            guard seconds >= firstTime,
+                  seconds <= lastTime,
+                  abs(seconds - currentSeconds) > 1e-6
             else {
                 return
             }
-            let deltaSeconds = abs(frames[index].time - currentSeconds)
-            guard deltaSeconds <= radiusSeconds else {
-                return
-            }
             let influence = autoCropLocalScaleInfluence(
-                deltaSeconds: deltaSeconds,
-                plateauSeconds: plateauSeconds,
-                radiusSeconds: radiusSeconds
+                sampleSeconds: seconds,
+                currentSeconds: currentSeconds,
+                transitionDurationSeconds: transitionDurationSeconds,
+                leadTimeSeconds: leadTimeSeconds,
+                holdTimeSeconds: holdTimeSeconds
             )
             guard influence > 0.0001 else {
                 return
             }
+            if samples.contains(where: { abs($0.seconds - seconds) <= 1e-6 }) {
+                return
+            }
             samples.append(
                 AutoCropLocalScaleSample(
-                    seconds: frames[index].time,
+                    seconds: seconds,
                     influence: influence
                 )
             )
         }
 
-        for direction in [-1, 1] {
-            var index = centerIndex + direction
-            var lastOuterSampleTime = currentSeconds
-            while frames.indices.contains(index) {
-                let deltaSeconds = abs(frames[index].time - currentSeconds)
-                guard deltaSeconds <= radiusSeconds else {
-                    break
-                }
+        appendSample(seconds: startSeconds)
+        appendSample(seconds: endSeconds)
 
-                if deltaSeconds <= plateauSeconds || abs(frames[index].time - lastOuterSampleTime) >= outerStepSeconds {
-                    appendSample(at: index)
-                    if deltaSeconds > plateauSeconds {
-                        lastOuterSampleTime = frames[index].time
-                    }
-                }
-                index += direction
-            }
+        var sampleSeconds = ceil(startSeconds / stepSeconds) * stepSeconds
+        while sampleSeconds <= endSeconds + 1e-9 {
+            appendSample(seconds: sampleSeconds)
+            sampleSeconds += stepSeconds
         }
         return samples
     }
 
     private static func autoCropLocalScaleInfluence(
-        deltaSeconds: Double,
-        plateauSeconds: Double,
-        radiusSeconds: Double
+        sampleSeconds: Double,
+        currentSeconds: Double,
+        transitionDurationSeconds: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double
     ) -> Float {
-        guard deltaSeconds.isFinite,
-              radiusSeconds > 0.0
+        guard sampleSeconds.isFinite,
+              currentSeconds.isFinite
         else {
             return 0.0
         }
-        if deltaSeconds <= max(0.0, plateauSeconds) {
+
+        let deltaSeconds = sampleSeconds - currentSeconds
+        if deltaSeconds >= 0.0 {
+            let leadSeconds = max(0.0, leadTimeSeconds)
+            guard leadSeconds > 1e-6,
+                  deltaSeconds <= leadSeconds
+            else {
+                return deltaSeconds <= 1e-6 ? 1.0 : 0.0
+            }
+            let progress = Float(1.0 - (deltaSeconds / leadSeconds))
+            return autoCropZoomInScaleRamp(progress)
+        }
+
+        let ageSeconds = -deltaSeconds
+        if ageSeconds <= max(0.0, holdTimeSeconds) {
             return 1.0
         }
-        let fadeDuration = max(radiusSeconds - max(0.0, plateauSeconds), 0.0001)
-        let progress = Float((radiusSeconds - deltaSeconds) / fadeDuration)
-        return easeInOutRamp(progress)
+
+        let releaseSeconds = max(0.0, transitionDurationSeconds)
+        guard releaseSeconds > 1e-6 else {
+            return 0.0
+        }
+        let releaseAgeSeconds = ageSeconds - max(0.0, holdTimeSeconds)
+        guard releaseAgeSeconds <= releaseSeconds else {
+            return 0.0
+        }
+        let progress = Float(1.0 - (releaseAgeSeconds / releaseSeconds))
+        return autoCropZoomOutScaleRamp(progress)
     }
 
     private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32, renderSourceIsProxy: Bool) -> AutoCropSamplingProfile {
