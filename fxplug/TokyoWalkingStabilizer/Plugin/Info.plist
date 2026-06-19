@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.205</string>
+	<string>0.3.206</string>
 	<key>CFBundleVersion</key>
-	<string>487</string>
+	<string>488</string>
 	<key>PlugInKit</key>
 	<dict>
 		<key>Attributes</key>
