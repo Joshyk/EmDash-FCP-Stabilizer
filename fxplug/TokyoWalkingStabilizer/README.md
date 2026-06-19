@@ -265,17 +265,19 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   aggressive crop envelope, and nearby local scale demands are sampled from a
   seconds-based plateau window with a soft edge so the safety floor does not
   pulse with short walking impulses even on high-frame-rate footage. The plateau
-  also samples nearby analyzed frame times inside the Hold window so frame-level
-  safety spikes are held instead of appearing as tiny zoom steps. Auto Crop
-  keeps a stable crop center and absorbs black-edge safety in the scale budget
-  instead of moving the crop center side to side with each frame's macro offset.
-  The local scale envelope evaluates nearby planned Auto Crop scale demand as
-  well as instantaneous demand, and it follows the Auto Crop Zoom-In, Hold, and
-  Zoom-Out time windows so the visible crop-zoom bar does not wobble with
-  frame-to-frame lookahead changes. When an extreme frame must clamp the crop
-  center for black-edge safety, Auto Crop keeps the stable center if the held
-  scale can cover it; otherwise it moves only the minimum distance toward the
-  averaged local clamp instead of following the clamp side to side. High-quality render uses the full
+  also samples nearby render-time offsets and analyzed frame times inside the
+  Hold window so frame-level safety spikes are held instead of appearing as tiny
+  zoom steps. Auto Crop
+  uses a smoothed local crop center and absorbs black-edge safety in the scale
+  budget instead of moving the crop center side to side with each frame's macro
+  offset. The local scale envelope evaluates nearby planned Auto Crop scale
+  demand as well as instantaneous demand from that smoothed center, and it
+  follows the Auto Crop Zoom-In, Hold, and Zoom-Out time windows so the visible
+  crop-zoom bar does not wobble with frame-to-frame lookahead changes. When an
+  extreme frame must clamp the crop center for black-edge safety, Auto Crop
+  keeps the smoothed center if the held scale can cover it; otherwise it moves
+  only the minimum distance toward the current black-safe center instead of
+  following the clamp side to side. High-quality render uses the full
   17-sample Auto Crop lead window; proxy, low/medium-quality playback, or
   scaled preview uses a very light non-quantized lead/release profile with no
   extra playback crop padding.

@@ -162,17 +162,18 @@ target for the Hold Time window, and release samples return with a linear ramp
 instead of holding an aggressive crop envelope. Nearby local scale demands are
 sampled from a seconds-based plateau window with a soft edge so short walking
 impulses do not create a visible zoom pulse on high-frame-rate footage; the
-plateau also samples nearby analyzed frame times inside the Hold window so
-frame-level safety spikes are held instead of appearing as tiny zoom steps. The
-held scale now keeps a stable crop center and absorbs black-edge safety in the
-scale budget instead of moving the crop center side to side with each frame's
-macro offset. The same local scale envelope evaluates nearby planned Auto Crop
-scale demand and now follows the Auto Crop Zoom-In, Hold, and Zoom-Out time
-windows so the visible crop-zoom bar does not wobble with frame-to-frame
-lookahead changes. When an extreme frame must clamp the crop center for
-black-edge safety, Auto Crop keeps the stable center if the held scale can
-cover it; otherwise it moves only the minimum distance toward the averaged
-local clamp instead of following the clamp side to side.
+plateau also samples nearby render-time offsets and analyzed frame times inside
+the Hold window so frame-level safety spikes are held instead of appearing as
+tiny zoom steps. The held scale now uses a smoothed local crop center and
+absorbs black-edge safety in the scale budget instead of moving the crop center
+side to side with each frame's macro offset. The same local scale envelope
+evaluates nearby planned Auto Crop scale demand from that smoothed center and
+now follows the Auto Crop Zoom-In, Hold, and Zoom-Out time windows so the
+visible crop-zoom bar does not wobble with frame-to-frame lookahead changes.
+When an extreme frame must clamp the crop center for black-edge safety, Auto
+Crop keeps the smoothed center if the held scale can cover it; otherwise it
+moves only the minimum distance toward the current black-safe center instead of
+following the clamp side to side.
 High-quality render uses the full 17-sample Auto Crop lead window; proxy,
 low/medium-quality playback, or scaled preview uses a very light non-quantized
 lead/release profile with no extra playback crop padding.

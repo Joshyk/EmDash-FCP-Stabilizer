@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.249"
+private let tokyoWalkingStabilizerVersion = "0.3.252"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -240,6 +240,24 @@ private enum AutoCropSamplingProfile: Int32 {
         }
     }
 
+    var scaleEnvelopeRenderSampleLimit: Int {
+        switch self {
+        case .playback:
+            return 180
+        case .full:
+            return 360
+        }
+    }
+
+    var scaleEnvelopeRenderStepSeconds: Double {
+        switch self {
+        case .playback:
+            return 1.0 / 30.0
+        case .full:
+            return 1.0 / 60.0
+        }
+    }
+
     var usesStabilizedSampleTransforms: Bool {
         false
     }
@@ -273,7 +291,7 @@ private struct AutoCropScaleDemand {
     let finalRequiredScale: Float
 
     var scaleFloor: Float {
-        max(Float(1.0), currentRequiredScale, neutralRequiredScale, plannedScale, finalRequiredScale)
+        max(Float(1.0), currentRequiredScale, plannedScale, finalRequiredScale)
     }
 }
 
@@ -1840,7 +1858,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             samplingProfile: samplingProfile,
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity,
-            initialPositionPixels: scaleDemand.neutralPositionPixels
+            initialPositionPixels: scaleDemand.positionPixels
         )
         let localPositionRequiredScale: Float
         if autoCropCenterIsInsideSource(cropPositionPixels: localPositionPixels, context: context) {
@@ -1851,22 +1869,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 iterations: samplingProfile.scaleSearchIterations
             )
         } else {
-            localPositionRequiredScale = scaleDemand.neutralRequiredScale
+            localPositionRequiredScale = scaleDemand.currentRequiredScale
         }
         let rawScale = autoCropScaleWithQuietLookaheadDeadband(
             scale: max(
                 Float(1.0),
-                scaleDemand.neutralRequiredScale,
-                localPositionRequiredScale,
+                scaleDemand.currentRequiredScale,
                 scaleDemand.finalRequiredScale,
+                localPositionRequiredScale,
                 scaleDemand.plannedScale,
                 localScaleFloor
             ),
             currentRequiredScale: scaleDemand.currentRequiredScale,
             finalRequiredScale: max(
-                scaleDemand.neutralRequiredScale,
-                localPositionRequiredScale,
-                scaleDemand.finalRequiredScale
+                scaleDemand.currentRequiredScale,
+                scaleDemand.finalRequiredScale,
+                localPositionRequiredScale
             ),
             currentTransform: currentTransform,
             outputSize: outputSize,
@@ -1875,8 +1893,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let finalScale = rawScale
 
         let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
-            stablePositionPixels: scaleDemand.neutralPositionPixels,
-            clampPositionPixels: localPositionPixels,
+            stablePositionPixels: localPositionPixels,
+            clampPositionPixels: scaleDemand.currentPositionPixels,
             context: context,
             scale: finalScale,
             samplingProfile: samplingProfile
@@ -2308,7 +2326,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             guard weight > 0.0001 else {
                 continue
             }
-            weightedPosition += sampleDemand.neutralPositionPixels * weight
+            weightedPosition += sampleDemand.positionPixels * weight
             totalWeight += weight
         }
 
@@ -2396,10 +2414,32 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sampleSeconds += stepSeconds
         }
 
+        let denseFutureSeconds = min(max(0.0, leadTimeSeconds), samplingProfile.scaleEnvelopeFrameFutureSeconds)
+        let renderSampleStartSeconds = max(startSeconds, currentSeconds - max(0.0, holdTimeSeconds))
+        let renderSampleEndSeconds = min(endSeconds, currentSeconds + denseFutureSeconds)
+        let renderSampleSpanSeconds = max(0.0, renderSampleEndSeconds - renderSampleStartSeconds)
+        if renderSampleSpanSeconds > 1e-9 {
+            let renderStepSeconds = max(
+                samplingProfile.scaleEnvelopeRenderStepSeconds,
+                renderSampleSpanSeconds / Double(max(1, samplingProfile.scaleEnvelopeRenderSampleLimit))
+            )
+            var pastOffsetSeconds = renderStepSeconds
+            while currentSeconds - pastOffsetSeconds >= renderSampleStartSeconds - 1e-9 {
+                appendSample(seconds: currentSeconds - pastOffsetSeconds)
+                pastOffsetSeconds += renderStepSeconds
+            }
+
+            var futureOffsetSeconds = renderStepSeconds
+            while currentSeconds + futureOffsetSeconds <= renderSampleEndSeconds + 1e-9 {
+                appendSample(seconds: currentSeconds + futureOffsetSeconds)
+                futureOffsetSeconds += renderStepSeconds
+            }
+        }
+
         let frameSampleStartSeconds = max(startSeconds, currentSeconds - max(0.0, holdTimeSeconds))
         let frameSampleEndSeconds = min(
             endSeconds,
-            currentSeconds + min(max(0.0, leadTimeSeconds), samplingProfile.scaleEnvelopeFrameFutureSeconds)
+            currentSeconds + denseFutureSeconds
         )
         if frameSampleStartSeconds <= frameSampleEndSeconds {
             var firstIndex = 0
