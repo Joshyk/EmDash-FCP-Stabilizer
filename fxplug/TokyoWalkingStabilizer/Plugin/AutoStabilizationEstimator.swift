@@ -657,6 +657,7 @@ enum AutoStabilizationEstimator {
     private struct LocalAverageCacheKey: Hashable {
         let kind: MotionPathKind
         let sourceRole: LocalAverageSourceRole
+        let sourceVariant: UInt64
         let index: Int
         let windowSeconds: UInt64
     }
@@ -745,6 +746,7 @@ enum AutoStabilizationEstimator {
         func locallyTimeWeightedAveragePath(
             _ kind: MotionPathKind,
             sourceRole: LocalAverageSourceRole,
+            sourceVariant: UInt64 = 0,
             source: EstimatedPath,
             analysis: StabilizerPreparedAnalysis,
             targetIndices: [Int],
@@ -764,6 +766,7 @@ enum AutoStabilizationEstimator {
                 return localTimeWeightedAverage(
                     kind,
                     sourceRole: sourceRole,
+                    sourceVariant: sourceVariant,
                     source: source,
                     analysis: analysis,
                     index: index,
@@ -808,6 +811,7 @@ enum AutoStabilizationEstimator {
         private func localTimeWeightedAverage(
             _ kind: MotionPathKind,
             sourceRole: LocalAverageSourceRole,
+            sourceVariant: UInt64,
             source: EstimatedPath,
             analysis: StabilizerPreparedAnalysis,
             index: Int,
@@ -816,6 +820,7 @@ enum AutoStabilizationEstimator {
             let key = LocalAverageCacheKey(
                 kind: kind,
                 sourceRole: sourceRole,
+                sourceVariant: sourceVariant,
                 index: index,
                 windowSeconds: windowSeconds.bitPattern
             )
@@ -1240,6 +1245,19 @@ enum AutoStabilizationEstimator {
             strideWobbleActiveIndices + [centerIndex] + frameInterpolation.indices,
             validCount: frames.count
         )
+        let strideSupportIndices = uniqueSortedIndices(
+            strideSampledIndices + strideSampledIndices.flatMap { sampleIndex -> [Int] in
+                guard frames.indices.contains(sampleIndex) else {
+                    return []
+                }
+                return indicesWithinTimeRadius(
+                    frames,
+                    centerTime: frames[sampleIndex].time,
+                    radiusSeconds: effectiveStrideWobbleWindowSeconds * 0.5
+                )
+            },
+            validCount: frames.count
+        )
         let turnStrideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
             .footstepX,
             sourceRole: .footstepTurnBaseline,
@@ -1251,14 +1269,14 @@ enum AutoStabilizationEstimator {
         let footstepXTurnGateScales = turnOwnershipGateScales(
             values: turnStrideSmoothedXPath,
             analysis: analysis,
-            targetIndices: strideWobbleActiveIndices,
+            targetIndices: strideSupportIndices,
             windowSeconds: smoothWindowSeconds
         )
         let footstepCleanXPath = confidenceCleanedFootstepPath(
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
             analysis: analysis,
-            indices: strideWobbleActiveIndices,
+            indices: strideSupportIndices,
             fullImpulseScale: footstepImpulseFullScalePixels,
             confidenceScales: footstepXTurnGateScales
         )
@@ -1266,19 +1284,20 @@ enum AutoStabilizationEstimator {
             values: analysis.footstepPathY,
             baselineValues: footstepBaselineYPath,
             analysis: analysis,
-            indices: strideWobbleActiveIndices,
+            indices: strideSupportIndices,
             fullImpulseScale: footstepImpulseFullScalePixels
         )
         let footstepCleanRollPath = confidenceCleanedFootstepPath(
             values: analysis.footstepPathRoll,
             baselineValues: footstepBaselineRollPath,
             analysis: analysis,
-            indices: strideWobbleActiveIndices,
+            indices: strideSupportIndices,
             fullImpulseScale: footstepImpulseFullScaleDegrees
         )
         let strideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
             .footstepX,
             sourceRole: .footstepStrideCleaned,
+            sourceVariant: smoothWindowSeconds.bitPattern,
             source: footstepCleanXPath,
             analysis: analysis,
             targetIndices: strideSampledIndices,
