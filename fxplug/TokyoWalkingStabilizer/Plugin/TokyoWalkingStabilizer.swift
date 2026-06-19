@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.242"
+private let tokyoWalkingStabilizerVersion = "0.3.243"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1809,8 +1809,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let finalScale = rawScale
 
         let finalPositionPixels = autoCropScaleBudgetedPositionPixels(
-            anchorPositionPixels: currentPositionPixels,
-            fallbackPositionPixels: positionPixels,
+            anchorPositionPixels: positionPixels,
+            fallbackPositionPixels: currentPositionPixels,
             context: context,
             scale: finalScale,
             samplingProfile: samplingProfile
