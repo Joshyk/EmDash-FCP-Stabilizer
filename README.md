@@ -159,7 +159,9 @@ transition. The lead/release path is budgeted from that current-frame safe crop:
 future samples start zoom and position with a linear ramp, position is limited
 when it would force extra current-frame zoom, hold samples keep the reached
 target for the Hold Time window, and release samples return with a linear ramp
-instead of holding an aggressive crop envelope.
+instead of holding an aggressive crop envelope. Nearby local scale demands are
+distance-weighted so a single sampled frame entering or leaving the local crop
+window does not create a visible zoom pulse.
 High-quality render uses the full 17-sample Auto Crop lead window; proxy,
 low/medium-quality playback, or scaled preview uses a very light non-quantized
 lead/release profile with no extra playback crop padding.

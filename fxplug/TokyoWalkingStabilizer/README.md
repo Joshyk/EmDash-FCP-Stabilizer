@@ -261,8 +261,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   required safe crop so outside-source black is not exposed during the transition.
   Auto Crop budgets zoom and position from that minimum safe crop: future samples
   use a linear ramp, hold samples keep the reached target for the Hold Time
-  window, and release samples return with a linear ramp instead of holding an
-  aggressive crop envelope. High-quality render uses the full 17-sample Auto Crop
+  window, release samples return with a linear ramp instead of holding an
+  aggressive crop envelope, and nearby local scale demands fade in by distance so
+  the safety floor does not pulse when a sampled frame enters or leaves the
+  local window. High-quality render uses the full 17-sample Auto Crop
   lead window; proxy, low/medium-quality playback, or scaled preview uses a very
   light non-quantized lead/release profile with no extra playback crop padding.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
