@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.193"
+private let tokyoWalkingStabilizerVersion = "0.3.194"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -52,6 +52,7 @@ private let stabilizerDefaultAutoCropTransitionDuration = 5.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
 private let stabilizerDefaultAutoCropLeadTime = 10.0
 private let stabilizerMaximumAutoCropLeadTime = 120.0
+private let stabilizerAutoCropZoomInSoftEdgeFraction: Float = 0.15
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
@@ -1684,7 +1685,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             currentRequiredScale: currentRequiredScale
         )
         let positionPixels = autoCropBudgetedPositionPixels(
-            from: transitionTargets + releaseTargets,
+            transitionTargets: transitionTargets,
+            releaseTargets: releaseTargets,
             currentPositionPixels: currentPositionPixels,
             context: context,
             maximumScale: plannedScale,
@@ -1714,6 +1716,37 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
+    private static func autoCropZoomInRamp(_ progress: Float) -> Float {
+        autoCropPercentSoftenedRamp(
+            progress,
+            softEdgeFraction: stabilizerAutoCropZoomInSoftEdgeFraction
+        )
+    }
+
+    private static func autoCropZoomOutRamp(_ progress: Float) -> Float {
+        smoothStep(progress)
+    }
+
+    private static func autoCropPercentSoftenedRamp(
+        _ progress: Float,
+        softEdgeFraction: Float
+    ) -> Float {
+        let p = min(max(progress, 0.0), 1.0)
+        let edge = min(max(softEdgeFraction, 0.0), 0.45)
+        guard edge > 1e-6 else {
+            return p
+        }
+        let denominator = edge * (1.0 - edge)
+        if p < edge {
+            return 0.5 * p * p / denominator
+        }
+        if p > 1.0 - edge {
+            let remaining = 1.0 - p
+            return 1.0 - (0.5 * remaining * remaining / denominator)
+        }
+        return (p - (0.5 * edge)) / (1.0 - edge)
+    }
+
     private static func autoCropPlannedScale(
         transitionTargets: [AutoCropFramingTarget],
         releaseTargets: [AutoCropFramingTarget],
@@ -1723,7 +1756,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             guard target.leadProgress < 1.0 - 1e-6 else {
                 return partial
             }
-            let easedProgress = smoothStep(target.leadProgress)
+            let easedProgress = autoCropZoomInRamp(target.leadProgress)
             let response = min(max(target.weight, 0.0), 1.0)
             let targetScale = max(currentRequiredScale, target.requiredScale)
             let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
@@ -1733,7 +1766,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             guard target.leadProgress < 1.0 - 1e-6 else {
                 return partial
             }
-            let easedProgress = smoothStep(target.leadProgress)
+            let easedProgress = autoCropZoomOutRamp(target.leadProgress)
             let response = min(max(target.weight, 0.0), 1.0) * 0.65
             let targetScale = max(currentRequiredScale, target.requiredScale)
             let easedScale = currentRequiredScale + ((targetScale - currentRequiredScale) * easedProgress * response)
@@ -2011,31 +2044,62 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func autoCropPositionPixels(
-        from targets: [AutoCropFramingTarget],
+        transitionTargets: [AutoCropFramingTarget],
+        releaseTargets: [AutoCropFramingTarget],
         currentPositionPixels: vector_float2
     ) -> vector_float2 {
-        let leadTargets = targets.filter { $0.leadProgress < 1.0 - 1e-6 }
-        let totalWeight = leadTargets.reduce(Float(0.0)) { $0 + $1.weight }
+        let transitionContributions = autoCropPositionOffset(
+            from: transitionTargets,
+            currentPositionPixels: currentPositionPixels,
+            ramp: autoCropZoomInRamp
+        )
+        let releaseContributions = autoCropPositionOffset(
+            from: releaseTargets,
+            currentPositionPixels: currentPositionPixels,
+            ramp: autoCropZoomOutRamp,
+            responseScale: 0.65
+        )
+        let totalWeight = transitionContributions.weight + releaseContributions.weight
         guard totalWeight > 1e-6 else {
             return currentPositionPixels
         }
-        let weightedOffset = leadTargets.reduce(vector_float2(0.0, 0.0)) { partial, target in
-            let easedProgress = smoothStep(target.leadProgress)
+        return currentPositionPixels + ((transitionContributions.offset + releaseContributions.offset) / totalWeight)
+    }
+
+    private static func autoCropPositionOffset(
+        from targets: [AutoCropFramingTarget],
+        currentPositionPixels: vector_float2,
+        ramp: (Float) -> Float,
+        responseScale: Float = 1.0
+    ) -> (offset: vector_float2, weight: Float) {
+        targets.reduce((offset: vector_float2(0.0, 0.0), weight: Float(0.0))) { partial, target in
+            guard target.leadProgress < 1.0 - 1e-6 else {
+                return partial
+            }
+            let response = min(max(target.weight * responseScale, 0.0), 1.0)
+            guard response > 0.0001 else {
+                return partial
+            }
+            let easedProgress = ramp(target.leadProgress)
             let leadOffset = (target.positionPixels - currentPositionPixels) * easedProgress
-            return partial + (leadOffset * target.weight)
+            return (
+                offset: partial.offset + (leadOffset * response),
+                weight: partial.weight + response
+            )
         }
-        return currentPositionPixels + (weightedOffset / totalWeight)
     }
 
     private static func autoCropBudgetedPositionPixels(
-        from targets: [AutoCropFramingTarget],
+        transitionTargets: [AutoCropFramingTarget],
+        releaseTargets: [AutoCropFramingTarget],
         currentPositionPixels: vector_float2,
         context: AutoCropTransformContext,
         maximumScale: Float,
         samplingProfile: AutoCropSamplingProfile
     ) -> vector_float2 {
         let preferredPositionPixels = autoCropPositionPixels(
-            from: targets,
+            transitionTargets: transitionTargets,
+            releaseTargets: releaseTargets,
             currentPositionPixels: currentPositionPixels
         )
         let targetPositionPixels = blackSafeAutoCropPosition(

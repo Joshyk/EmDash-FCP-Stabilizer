@@ -147,7 +147,8 @@ zoom after the black-edge risk has passed. With
 `Remove Black Edges` on, the render path still clamps zoom to the current
 frame's required safe crop so outside-source black is not exposed during the
 transition. The lead/release path is budgeted from that current-frame safe crop:
-future samples can start zoom and position early, but position is limited when
+future samples start zoom and position with a mostly linear ramp that only
+softens the first/last 15% of the chosen Zoom-In time, position is limited when
 it would force extra current-frame zoom, and release samples only slow the
 return instead of holding an aggressive crop envelope. High-quality render uses
 the full 17-sample Auto Crop lead window; proxy, low/medium-quality playback, or
