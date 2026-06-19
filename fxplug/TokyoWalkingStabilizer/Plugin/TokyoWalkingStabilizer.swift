@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.204"
+private let tokyoWalkingStabilizerVersion = "0.3.205"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -55,6 +55,7 @@ private let stabilizerDefaultAutoCropLeadTime = 10.0
 private let stabilizerMaximumAutoCropLeadTime = 120.0
 private let stabilizerDefaultAutoCropHoldTime = 4.0
 private let stabilizerMaximumAutoCropHoldTime = 30.0
+private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
 let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Active Libraries"
@@ -710,6 +711,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedSampleInfo = ""
     private var lastPublishedQueueInfo = ""
     private var lastPublishedRenderRevision: Double?
+    private var lastRenderRevisionPublishAttemptRevision: Double?
+    private var lastRenderRevisionPublishAttemptWallTime: TimeInterval = 0.0
     private var lastPublishedHostAnalysisCacheIdentity: String?
     private var lastScheduledPostAnalysisPublishRevision: Double?
     private var lastRenderAnalysisDecision = ""
@@ -2604,8 +2607,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             statusLock.unlock()
             return
         }
+        let now = Date().timeIntervalSinceReferenceDate
         statusLock.lock()
-        let shouldPublish = force || parameterNeedsUpdate || lastPublishedRenderRevision != revision
+        let recentlyAttempted = lastRenderRevisionPublishAttemptRevision == revision
+            && (now - lastRenderRevisionPublishAttemptWallTime) < stabilizerRenderRevisionRetryIntervalSeconds
+        let shouldPublish = force || ((parameterNeedsUpdate || lastPublishedRenderRevision != revision) && !recentlyAttempted)
+        if shouldPublish {
+            lastRenderRevisionPublishAttemptRevision = revision
+            lastRenderRevisionPublishAttemptWallTime = now
+        }
         statusLock.unlock()
         guard shouldPublish,
               let settingAPI = apiManager.api(for: FxParameterSettingAPI_v5.self) as? FxParameterSettingAPI_v5
@@ -2619,6 +2629,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             NSLog("TokyoWalkingStabilizer: failed to update Render Revision parameter.")
         }
+    }
+
+    private func shouldRetryRenderRevisionPublish(_ revision: Double) -> Bool {
+        guard revision > 0.0 else {
+            return false
+        }
+        let now = Date().timeIntervalSinceReferenceDate
+        statusLock.lock()
+        defer { statusLock.unlock() }
+        if lastRenderRevisionPublishAttemptRevision == revision,
+           (now - lastRenderRevisionPublishAttemptWallTime) < stabilizerRenderRevisionRetryIntervalSeconds {
+            return false
+        }
+        lastRenderRevisionPublishAttemptRevision = revision
+        lastRenderRevisionPublishAttemptWallTime = now
+        return true
     }
 
     @discardableResult
@@ -4856,12 +4882,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let renderInvalidationToken = storeSnapshot.renderInvalidationToken
         renderStoreRevision = storeSnapshot.revision
         let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
-        if renderStoreChangedStatus || abs(renderInvalidationToken - state.renderRevision) >= 0.5 {
+        let renderRevisionNeedsRetry = abs(renderInvalidationToken - state.renderRevision) >= 0.5
+            && shouldRetryRenderRevisionPublish(renderInvalidationToken)
+        if renderStoreChangedStatus || renderRevisionNeedsRetry {
             publishPreviewInvalidationOnMain(
                 statusForce: true,
                 infoForce: true,
                 revision: renderInvalidationToken,
-                revisionForce: renderStoreChangedStatus,
+                revisionForce: renderStoreChangedStatus || renderRevisionNeedsRetry,
                 currentRenderRevision: state.renderRevision
             )
         }
