@@ -102,7 +102,10 @@ FJIT and SWOB use a walking-band tracking gate that slightly eases block coverag
 when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
 avoid swimming or false turn smoothing. On X, render-time turn ownership reduces
 FJIT/SWOB confidence during monotonic walking turns so broad horizontal motion is
-owned by TURN instead of split into many tiny walking corrections.
+owned by TURN instead of split into many tiny walking corrections. The same gate
+also limits how much Footstep Jitter X is removed before that path feeds Stride
+Wobble, so Stride does not inherit a turn that Footstep already chopped into
+small X corrections.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation

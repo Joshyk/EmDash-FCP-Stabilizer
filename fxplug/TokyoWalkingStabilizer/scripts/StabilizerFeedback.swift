@@ -313,7 +313,7 @@ private struct AssessmentContext {
     let turnStrideSmoothedXPath: [Float]
     let warpMagnitudes: [Float]
 
-    init(analysis: Analysis) {
+    init(analysis: Analysis, turnWindowSeconds: Double) {
         self.analysis = analysis
         let allIndices = Array(analysis.frames.indices)
         let baselineX = outerLinearPredictionPath(
@@ -337,12 +337,25 @@ private struct AssessmentContext {
             innerWindowSeconds: footstepInnerWindowSeconds,
             outerWindowSeconds: footstepOuterWindowSeconds
         )
+        let turnStrideSmoothedX = locallyTimeWeightedAveragePath(
+            baselineX,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            windowSeconds: strideWindowSeconds
+        )
+        let footstepXTurnGateScales = turnOwnershipGateScales(
+            values: turnStrideSmoothedX,
+            analysis: analysis,
+            targetIndices: allIndices,
+            windowSeconds: turnWindowSeconds
+        )
         let cleanX = confidenceCleanedFootstepPath(
             values: analysis.footstepPathX,
             baselineValues: baselineX,
             analysis: analysis,
             targetIndices: allIndices,
-            fullImpulseScale: footstepFullScalePixels
+            fullImpulseScale: footstepFullScalePixels,
+            confidenceScales: footstepXTurnGateScales
         )
         let cleanY = confidenceCleanedFootstepPath(
             values: analysis.footstepPathY,
@@ -382,12 +395,7 @@ private struct AssessmentContext {
             targetIndices: allIndices,
             windowSeconds: strideWindowSeconds
         )
-        turnStrideSmoothedXPath = locallyTimeWeightedAveragePath(
-            baselineX,
-            frames: analysis.frames,
-            targetIndices: allIndices,
-            windowSeconds: strideWindowSeconds
-        )
+        turnStrideSmoothedXPath = turnStrideSmoothedX
 
         let baselineYaw = outerLinearPredictionPath(
             analysis.pathYaw,
@@ -1295,7 +1303,8 @@ private func confidenceCleanedFootstepPath(
     baselineValues: [Float],
     analysis: Analysis,
     targetIndices: [Int],
-    fullImpulseScale: Float
+    fullImpulseScale: Float,
+    confidenceScales: [Int: Float] = [:]
 ) -> [Float] {
     guard !values.isEmpty else {
         return values
@@ -1329,7 +1338,9 @@ private func confidenceCleanedFootstepPath(
             trackingConfidence: tracking,
             fullImpulseScale: fullImpulseScale
         )
-        cleaned[index] = values[index] - ((values[index] - baselineValues[index]) * confidence)
+        let confidenceScale = clamp(confidenceScales[index] ?? 1.0, min: 0.0, max: 1.0)
+        let effectiveConfidence = confidence * confidenceScale
+        cleaned[index] = values[index] - ((values[index] - baselineValues[index]) * effectiveConfidence)
     }
     return cleaned
 }
@@ -1550,6 +1561,83 @@ private func turnOwnershipConfidence(
     )
     let trackingQuality = confidenceRamp(trackingConfidence, start: 0.22, full: 0.62)
     return clamp(max(monotonicQuality, endpointQuality) * bandQuality * trackingQuality, min: 0.0, max: 1.0)
+}
+
+private func turnOwnershipGateScales(
+    values: [Float],
+    analysis: Analysis,
+    targetIndices: [Int],
+    windowSeconds: Double
+) -> [Int: Float] {
+    guard !targetIndices.isEmpty else {
+        return [:]
+    }
+    let frames = analysis.frames
+    let halfWindow = max(0.0, windowSeconds * 0.5)
+    var scales: [Int: Float] = [:]
+    scales.reserveCapacity(targetIndices.count)
+
+    for index in targetIndices {
+        guard values.indices.contains(index),
+              frames.indices.contains(index),
+              analysis.analysisConfidence.indices.contains(index),
+              analysis.residuals.indices.contains(index),
+              analysis.blurAmounts.indices.contains(index),
+              analysis.acceptedBlockCounts.indices.contains(index),
+              analysis.totalBlockCounts.indices.contains(index)
+        else {
+            continue
+        }
+
+        let centerTime = frames[index].time
+        let activeIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindow)
+        guard !activeIndices.isEmpty else {
+            continue
+        }
+
+        let turnSmooth = timeWeightedMonotonicSCurveValue(
+            values,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: centerTime,
+            windowSeconds: windowSeconds
+        ) ?? timeWeightedAverage(
+            values,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: centerTime,
+            windowSeconds: windowSeconds
+        )
+        let turnBand = values[index] - turnSmooth
+        let residual = percentileValue(analysis.residuals, indices: activeIndices, percentile: 0.75)
+        let trackingQuality = frameTrackingQuality(
+            motionConfidence: analysis.analysisConfidence[index],
+            residual: analysis.residuals[index],
+            blurAmount: analysis.blurAmounts[index],
+            acceptedBlockCount: analysis.acceptedBlockCounts[index],
+            totalBlockCount: analysis.totalBlockCounts[index],
+            qualityModel: analysis.qualityModel
+        )
+        let turnTracking = residualAdjustedTrackingConfidence(
+            frameTrackingConfidence(trackingQuality),
+            residual: residual,
+            multiplier: 0.9,
+            qualityModel: analysis.qualityModel
+        )
+        let ownership = turnOwnershipConfidence(
+            values: values,
+            frames: frames,
+            indices: activeIndices,
+            turnBandValue: turnBand,
+            trackingConfidence: turnTracking
+        )
+        let gate = clamp(1.0 - (ownership * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
+        if gate < 0.9999 {
+            scales[index] = gate
+        }
+    }
+
+    return scales
 }
 
 private func farFieldWarpGateComponents(
@@ -1843,7 +1931,7 @@ private func nearestIndex(in analysis: Analysis, absoluteTime: Double) -> Int {
 }
 
 private func chooseAssessments(analysis: Analysis, options: Options) throws -> [FrameAssessment] {
-    let context = AssessmentContext(analysis: analysis)
+    let context = AssessmentContext(analysis: analysis, turnWindowSeconds: options.turnWindowSeconds)
     if let relativeTime = options.relativeTime {
         let absoluteTime = analysis.rangeStartSeconds + relativeTime
         let firstTime = analysis.frames[0].time

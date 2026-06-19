@@ -161,7 +161,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   surrounding-noise floor capped below full response so repeated walking motion does not bury
   a real center-frame landing impulse. On X, monotonic broad walking turns reduce
   Footstep Jitter confidence so TURN owns that motion instead of splitting it
-  into many tiny footstep corrections.
+  into many tiny footstep corrections. The same gate limits Footstep Jitter X removal
+  before Stride Wobble reads the footstep-cleaned path, so Stride does not inherit a turn
+  that Footstep already chopped into small X corrections.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
   The default is `5.0`, and the maximum is `10.0`.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center

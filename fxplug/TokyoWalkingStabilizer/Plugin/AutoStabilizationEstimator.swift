@@ -1230,12 +1230,26 @@ enum AutoStabilizationEstimator {
             strideWobbleActiveIndices + [centerIndex] + frameInterpolation.indices,
             validCount: frames.count
         )
+        let turnStrideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
+            .footstepX,
+            source: footstepBaselineXPath,
+            analysis: analysis,
+            targetIndices: sampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let footstepXTurnGateScales = turnOwnershipGateScales(
+            values: turnStrideSmoothedXPath,
+            analysis: analysis,
+            targetIndices: strideWobbleActiveIndices,
+            windowSeconds: smoothWindowSeconds
+        )
         let footstepCleanXPath = confidenceCleanedFootstepPath(
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
             analysis: analysis,
             indices: strideWobbleActiveIndices,
-            fullImpulseScale: footstepImpulseFullScalePixels
+            fullImpulseScale: footstepImpulseFullScalePixels,
+            confidenceScales: footstepXTurnGateScales
         )
         let footstepCleanYPath = confidenceCleanedFootstepPath(
             values: analysis.footstepPathY,
@@ -1272,14 +1286,6 @@ enum AutoStabilizationEstimator {
             targetIndices: strideSampledIndices,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
-        let turnStrideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
-            .footstepX,
-            source: footstepBaselineXPath,
-            analysis: analysis,
-            targetIndices: sampledIndices,
-            windowSeconds: effectiveStrideWobbleWindowSeconds
-        )
-
         let turnSmoothX = timeWeightedMonotonicSCurveValue(
             turnStrideSmoothedXPath,
             frames: frames,
@@ -3957,6 +3963,88 @@ enum AutoStabilizationEstimator {
         return clamp(max(monotonicQuality, endpointQuality) * bandQuality * trackingQuality, min: 0.0, max: 1.0)
     }
 
+    private static func turnOwnershipGateScales(
+        values: EstimatedPath,
+        analysis: StabilizerPreparedAnalysis,
+        targetIndices: [Int],
+        windowSeconds: Double
+    ) -> [Int: Float] {
+        guard !targetIndices.isEmpty else {
+            return [:]
+        }
+        let frames = analysis.frames
+        let halfWindowSeconds = max(0.0, windowSeconds * 0.5)
+        var scales: [Int: Float] = [:]
+        scales.reserveCapacity(targetIndices.count)
+
+        for index in targetIndices {
+            guard values.values.indices.contains(index),
+                  frames.indices.contains(index),
+                  analysis.analysisConfidence.indices.contains(index),
+                  analysis.residuals.indices.contains(index),
+                  analysis.blurAmounts.indices.contains(index),
+                  analysis.acceptedBlockCounts.indices.contains(index),
+                  analysis.totalBlockCounts.indices.contains(index)
+            else {
+                continue
+            }
+
+            let centerTime = frames[index].time
+            let activeIndices = indicesWithinTimeRadius(
+                frames,
+                centerTime: centerTime,
+                radiusSeconds: halfWindowSeconds
+            )
+            guard !activeIndices.isEmpty else {
+                continue
+            }
+
+            let turnSmooth = timeWeightedMonotonicSCurveValue(
+                values,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: centerTime,
+                windowSeconds: windowSeconds
+            ) ??
+                timeWeightedAverage(
+                    values,
+                    frames: frames,
+                    indices: activeIndices,
+                    centerTime: centerTime,
+                    windowSeconds: windowSeconds
+                )
+            let turnBand = values[index] - turnSmooth
+            let residual = percentileValue(analysis.residuals, indices: activeIndices, percentile: 0.75)
+            let trackingConfidence = frameTrackingConfidence(
+                motionConfidence: analysis.analysisConfidence[index],
+                residual: analysis.residuals[index],
+                blurAmount: analysis.blurAmounts[index],
+                acceptedBlockCount: analysis.acceptedBlockCounts[index],
+                totalBlockCount: analysis.totalBlockCounts[index],
+                qualityModel: analysis.qualityModel
+            )
+            let turnTrackingConfidence = residualAdjustedTrackingConfidence(
+                trackingConfidence,
+                residual: residual,
+                multiplier: 0.9,
+                qualityModel: analysis.qualityModel
+            )
+            let ownership = turnOwnershipConfidence(
+                values: values,
+                frames: frames,
+                indices: activeIndices,
+                turnBandValue: turnBand,
+                trackingConfidence: turnTrackingConfidence
+            )
+            let gate = clamp(1.0 - (ownership * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
+            if gate < 0.9999 {
+                scales[index] = gate
+            }
+        }
+
+        return scales
+    }
+
     private static func residualAdjustedTrackingConfidence(
         _ trackingConfidence: Float,
         residual: Float,
@@ -4045,7 +4133,8 @@ enum AutoStabilizationEstimator {
         baselineValues: EstimatedPath,
         analysis: StabilizerPreparedAnalysis,
         indices: [Int],
-        fullImpulseScale: Float
+        fullImpulseScale: Float,
+        confidenceScales: [Int: Float] = [:]
     ) -> EstimatedPath {
         guard !values.isEmpty else {
             return EstimatedPath(values: values)
@@ -4082,7 +4171,9 @@ enum AutoStabilizationEstimator {
                 trackingConfidence: trackingConfidence,
                 fullImpulseScale: fullImpulseScale
             )
-            overrides[index] = rawValue - ((rawValue - baselineValue) * confidence)
+            let confidenceScale = clamp(confidenceScales[index] ?? 1.0, min: 0.0, max: 1.0)
+            let effectiveConfidence = confidence * confidenceScale
+            overrides[index] = rawValue - ((rawValue - baselineValue) * effectiveConfidence)
         }
         return EstimatedPath(values: values, overrides: overrides)
     }
