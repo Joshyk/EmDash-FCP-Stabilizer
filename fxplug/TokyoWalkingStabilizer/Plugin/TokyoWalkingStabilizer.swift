@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.230"
+private let tokyoWalkingStabilizerVersion = "0.3.231"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1529,6 +1529,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let panelRows: Float = 18.0
         let rowHeight: Float = 13.0
         return max(Float(height) * 0.5 / (panelRows * rowHeight), 0.25)
+    }
+
+    private static func debugMatchQuality(residual: Float, preparedAnalysis: StabilizerPreparedAnalysis?) -> Float {
+        guard residual.isFinite else {
+            return 0.0
+        }
+        switch preparedAnalysis?.qualityModel {
+        case .eventAnalyzerCache:
+            return max(0.0, min(1.0, 1.0 - (residual / 48.0)))
+        case .fxplugHostAnalysis, .none:
+            return max(0.0, min(1.0, 1.0 - (residual * 0.7)))
+        }
     }
 
     private static func cachedAutoTransform(
@@ -5289,7 +5301,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             } else {
                 searchRadiusQuality = 0.0
             }
-            let fitQuality = max(0.0, 1.0 - min(1.0, autoTransform.residual * 50.0))
+            let fitQuality = Self.debugMatchQuality(
+                residual: autoTransform.residual,
+                preparedAnalysis: activePreparedAnalysis
+            )
             let rotationActivity = min(1.0, max(
                 abs(autoTransform.rotationDegrees),
                 abs(autoTransform.rawRotationDegrees),
