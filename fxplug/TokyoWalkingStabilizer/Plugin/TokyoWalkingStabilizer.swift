@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.217"
+private let tokyoWalkingStabilizerVersion = "0.3.218"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -4956,7 +4956,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         os_log(
-            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | FJIT %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f rawCorr %.3f %.3f limitedCorr %.3f %.3f pulseLimited %.3f %.3f | SWOB %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f | bars XYZ %.3f %.3f %.3f HIT %.3f TURN %.3f FJIT %.3f SWOB %.3f WARP %.3f SMD %.3f FQ %.3f SQ %.3f WQ %.3f TQ %.3f CON %.3f SHRP %.3f RES %.3f WLK %.3f",
+            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | FJIT %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f rawCorr %.3f %.3f limitedCorr %.3f %.3f pulseLimited %.3f %.3f | SWOB %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f | bars XYZ %.3f %.3f %.3f HIT %.3f TURN %.3f FJIT %.3f SWOB %.3f WARP %.3f SMD %.3f FQ %.3f SQ %.3f WQ %.3f TQ %.3f CONF %.3f SHRP %.3f RES %.3f WLK %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,

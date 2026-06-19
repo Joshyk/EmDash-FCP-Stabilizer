@@ -196,6 +196,7 @@ static uint debugLabelChar(uint row, uint index, float debugMode) {
             if (index == 0) { return 67; } // C
             if (index == 1) { return 79; } // O
             if (index == 2) { return 78; } // N
+            if (index == 3) { return 70; } // F
             return 0;
         case 13:
             if (index == 0) { return 83; } // S
