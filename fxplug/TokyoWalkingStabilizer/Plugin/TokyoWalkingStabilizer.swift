@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.211"
+private let tokyoWalkingStabilizerVersion = "0.3.212"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -5054,6 +5054,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         var transform = TokyoWalkingStabilizerTransformUniforms(
             pixelOffset: autoTransform.pixelOffset * masterStrength,
             rotationRadians: autoTransform.rotationDegrees * .pi / 180.0 * masterStrength,
+            rotationSinCos: vector_float2(
+                Darwin.sinf(-autoTransform.rotationDegrees * .pi / 180.0 * masterStrength),
+                Darwin.cosf(-autoTransform.rotationDegrees * .pi / 180.0 * masterStrength)
+            ),
             strength: 1.0,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
             diagnostic: diagnostic,

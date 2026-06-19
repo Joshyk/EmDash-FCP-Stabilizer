@@ -94,6 +94,7 @@ typedef struct StabilizerShiftResolveUniforms {
 typedef struct TokyoWalkingStabilizerTransformUniforms {
     vector_float2 pixelOffset;
     float rotationRadians;
+    vector_float2 rotationSinCos;
     float strength;
     vector_float2 outputSize;
     vector_float4 diagnostic;
