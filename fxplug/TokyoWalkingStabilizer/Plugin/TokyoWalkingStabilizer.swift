@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.237"
+private let tokyoWalkingStabilizerVersion = "0.3.238"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -5182,7 +5182,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             autoTransform = .identity
         }
-        let renderSourceIsProxy = renderUsesPreparedAnalysis && usesLightweightPreviewStabilization
+        let renderSourceIsProxy = renderUsesPreparedAnalysis && sourceMediaIsProxy
         let debugOverlayActive = state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis
         if renderCacheIdentity == nil {
             renderCacheIdentity = storeSnapshot.activeCacheIdentity
