@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.210"
+private let tokyoWalkingStabilizerVersion = "0.3.211"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -4793,6 +4793,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let halfOutputHeight = Float(outputHeight) * 0.5
         var viewportSize = simd_uint2(UInt32(outputWidth), UInt32(outputHeight))
         let sourceMediaIsProxy = StabilizerOriginalMediaPolicy.proxyRejectionReason(for: sourceImage) != nil
+        let usesLightweightPreviewStabilization = sourceMediaIsProxy || state.renderQualityLevel == 0
         let masterStrength = Float(max(0.0, state.strength))
         let transformEnabled = masterStrength > 0.0001
         let autoTransform: StabilizerAutoTransform
@@ -4837,7 +4838,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             publishHostAnalysisCacheIdentityOnMain(renderCacheIdentity, force: false)
             let analysisRenderTime = hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             activeAnalysisRenderTime = analysisRenderTime
-            if sourceMediaIsProxy {
+            if usesLightweightPreviewStabilization {
                 autoTransform = AutoStabilizationEstimator.proxyPlaybackEstimate(
                     preparedAnalysis: preparedAnalysis,
                     renderTime: analysisRenderTime,
@@ -4859,7 +4860,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             autoTransform = .identity
         }
-        let renderSourceIsProxy = renderUsesPreparedAnalysis && sourceMediaIsProxy
+        let renderSourceIsProxy = renderUsesPreparedAnalysis && usesLightweightPreviewStabilization
         let debugOverlayActive = state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis
         if renderCacheIdentity == nil {
             renderCacheIdentity = storeSnapshot.activeCacheIdentity
