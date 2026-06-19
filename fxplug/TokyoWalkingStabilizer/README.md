@@ -159,7 +159,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   still produces zero correction.
   Confidence also checks local baseline support and surrounding footstep noise, with the
   surrounding-noise floor capped below full response so repeated walking motion does not bury
-  a real center-frame landing impulse.
+  a real center-frame landing impulse. On X, monotonic broad walking turns reduce
+  Footstep Jitter confidence so TURN owns that motion instead of splitting it
+  into many tiny footstep corrections.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
   The default is `5.0`, and the maximum is `10.0`.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
@@ -178,7 +180,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
   worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale.
   X and Y default to `5.0` and run up to `10.0`; the rotation default is `0.2` to protect
-  the horizon while step follow-through is handled by the stride stage. FJIT and SWOB use a
+  the horizon while step follow-through is handled by the stride stage. The X band
+  uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
+  does not fight broad Turn Smoothing during real horizontal turns. FJIT and SWOB use a
   count-aware walking-band tracking gate; WARP and TURN keep the stricter tracking gate.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug

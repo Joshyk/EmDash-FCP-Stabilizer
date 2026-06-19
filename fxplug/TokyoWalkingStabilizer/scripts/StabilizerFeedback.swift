@@ -465,6 +465,8 @@ private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
 private let strideFullResponseScale: Float = 0.65
 private let turnFullScalePixels: Float = 2.0
+private let turnOwnershipFootstepXSuppression: Float = 0.90
+private let turnOwnershipStrideXSuppression: Float = 1.0
 private let farFieldWarpTrackingGateStart: Float = 0.26
 private let farFieldWarpTrackingGateFull: Float = 0.56
 private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
@@ -912,11 +914,21 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         multiplier: 0.9,
         qualityModel: analysis.qualityModel
     )
+    let turnBandX = turnStrideSmoothX - turnSmoothX
+    let turnOwnershipX = turnOwnershipConfidence(
+        values: context.turnStrideSmoothedXPath,
+        frames: analysis.frames,
+        indices: turnIndices,
+        turnBandValue: turnBandX,
+        trackingConfidence: turnTracking
+    )
+    let footstepXTurnGate = clamp(1.0 - (turnOwnershipX * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
+    let strideXTurnGate = clamp(1.0 - (turnOwnershipX * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
 
     let footX = analysis.footstepPathX[index] - footstepBaseX
     let footY = analysis.footstepPathY[index] - footstepBaseY
     let footR = analysis.footstepPathRoll[index] - footstepBaseR
-    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: context.footstepBaselineXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
+    let footQX = footstepConfidence(values: analysis.footstepPathX, baselineValues: context.footstepBaselineXPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels) * footstepXTurnGate
     let footQY = footstepConfidence(values: analysis.footstepPathY, baselineValues: context.footstepBaselineYPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScalePixels)
     let footQR = footstepConfidence(values: analysis.footstepPathRoll, baselineValues: context.footstepBaselineRPath, frames: analysis.frames, index: index, trackingConfidence: walkingTracking, fullImpulseScale: footstepFullScaleDegrees)
     let rawFootCorrectionX = -(footX * xScale) * walkingCorrectionFactor(options.strengths.microX, confidence: footQX, maxStrength: 10.0)
@@ -929,7 +941,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         rawCorrection: rawFootCorrectionX,
         outputScale: xScale,
         requestedStrength: options.strengths.microX,
-        fullImpulseScale: footstepFullScalePixels
+        fullImpulseScale: footstepFullScalePixels,
+        confidenceScale: footstepXTurnGate
     )
     let limitedFootCorrectionY = footstepContinuityLimitedCorrection(
         values: analysis.footstepPathY,
@@ -950,7 +963,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideX = footstepCleanX - strideSmoothX
     let strideY = footstepCleanY - strideSmoothY
     let strideR = footstepCleanR - strideSmoothR
-    let strideQX = strideConfidence(bandValue: strideX, trackingConfidence: strideTracking, fullScale: strideFullScalePixels)
+    let strideQX = strideConfidence(bandValue: strideX, trackingConfidence: strideTracking, fullScale: strideFullScalePixels) * strideXTurnGate
     let strideQY = strideConfidence(bandValue: strideY, trackingConfidence: strideTracking, fullScale: strideFullScalePixels)
     let strideQR = strideConfidence(bandValue: strideR, trackingConfidence: strideTracking, fullScale: strideFullScaleDegrees)
     let strideAppliedX = abs(strideX * xScale) * walkingCorrectionFactor(options.strengths.strideX, confidence: strideQX, maxStrength: 10.0)
@@ -959,7 +972,6 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideDetected = hypotf(strideX * xScale, strideY * yScale) + (abs(strideR) * 12.0)
     let strideApplied = hypotf(strideAppliedX, strideAppliedY) + (strideAppliedR * 12.0)
 
-    let turnBandX = turnStrideSmoothX - turnSmoothX
     let turnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking)
     let turnDetected = abs(turnBandX * xScale)
     let turnApplied = turnDetected * correctionFactor(options.strengths.turn, confidence: turnQ)
@@ -1330,7 +1342,8 @@ private func footstepContinuityLimitedCorrection(
     rawCorrection: Float,
     outputScale: Float,
     requestedStrength: Double,
-    fullImpulseScale: Float
+    fullImpulseScale: Float,
+    confidenceScale: Float = 1.0
 ) -> Float {
     guard rawCorrection.isFinite,
           outputScale.isFinite,
@@ -1395,7 +1408,7 @@ private func footstepContinuityLimitedCorrection(
         )
         let correctionStrength = walkingCorrectionFactor(
             requestedStrength,
-            confidence: confidence,
+            confidence: confidence * clamp(confidenceScale, min: 0.0, max: 1.0),
             maxStrength: 10.0
         )
         let correction = -(values[index] - baselineValues[index]) * outputScale * correctionStrength
@@ -1488,6 +1501,55 @@ private func turnConfidence(bandValue: Float, trackingConfidence: Float) -> Floa
     let noiseFloor = turnFullScalePixels * 0.08
     let bandQuality = confidenceRamp(magnitude, start: noiseFloor, full: max(noiseFloor + Float.ulpOfOne, turnFullScalePixels))
     return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
+}
+
+private func turnOwnershipConfidence(
+    values: [Float],
+    frames: [AnalysisFrame],
+    indices: [Int],
+    turnBandValue: Float,
+    trackingConfidence: Float
+) -> Float {
+    let sortedIndices = indices.sorted().filter { values.indices.contains($0) && frames.indices.contains($0) }
+    guard sortedIndices.count >= 3 else {
+        return 0.0
+    }
+    var positiveTravel: Float = 0.0
+    var negativeTravel: Float = 0.0
+    for position in 1..<sortedIndices.count {
+        let previousValue = values[sortedIndices[position - 1]]
+        let currentValue = values[sortedIndices[position]]
+        let delta = currentValue - previousValue
+        if delta >= 0.0 {
+            positiveTravel += delta
+        } else {
+            negativeTravel += -delta
+        }
+    }
+
+    let totalTravel = positiveTravel + negativeTravel
+    guard totalTravel > footstepFullScalePixels else {
+        return 0.0
+    }
+
+    guard let firstIndex = sortedIndices.first,
+          let lastIndex = sortedIndices.last
+    else {
+        return 0.0
+    }
+    let endpointDelta = values[lastIndex] - values[firstIndex]
+    let dominantTravel = max(positiveTravel, negativeTravel)
+    let dominantRatio = dominantTravel / max(totalTravel, Float.ulpOfOne)
+    let endpointRatio = abs(endpointDelta) / max(dominantTravel, Float.ulpOfOne)
+    let monotonicQuality = confidenceRamp(dominantRatio, start: 0.58, full: 0.82)
+    let endpointQuality = confidenceRamp(endpointRatio, start: 0.22, full: 0.55)
+    let bandQuality = confidenceRamp(
+        abs(turnBandValue),
+        start: footstepFullScalePixels * 0.70,
+        full: max((footstepFullScalePixels * 0.70) + Float.ulpOfOne, turnFullScalePixels * 0.65)
+    )
+    let trackingQuality = confidenceRamp(trackingConfidence, start: 0.22, full: 0.62)
+    return clamp(max(monotonicQuality, endpointQuality) * bandQuality * trackingQuality, min: 0.0, max: 1.0)
 }
 
 private func farFieldWarpGateComponents(

@@ -596,6 +596,8 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleFullScaleDegrees: Float = 0.16
     private static let strideWobbleFullResponseScale: Float = 0.65
     private static let turnSmoothingFullScalePixels: Float = 2.0
+    private static let turnOwnershipFootstepXSuppression: Float = 0.90
+    private static let turnOwnershipStrideXSuppression: Float = 1.0
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
@@ -1299,7 +1301,7 @@ enum AutoStabilizationEstimator {
         let strideSmoothY = interpolatedValue(strideSmoothedYPath, using: frameInterpolation)
         let strideSmoothRoll = interpolatedValue(strideSmoothedRollPath, using: frameInterpolation)
         let turnStrideSmoothX = interpolatedValue(turnStrideSmoothedXPath, using: frameInterpolation)
-        let footstepXConfidence = footstepFrameConfidence(
+        let rawFootstepXConfidence = footstepFrameConfidence(
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
             frames: frames,
@@ -1323,7 +1325,6 @@ enum AutoStabilizationEstimator {
             trackingConfidence: walkingTrackingConfidence,
             fullImpulseScale: footstepImpulseFullScaleDegrees
         )
-        let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideBandX = footstepCleanXAtRender - strideSmoothX
         let strideBandY = footstepCleanYAtRender - strideSmoothY
         let strideBandRoll = footstepCleanRollAtRender - strideSmoothRoll
@@ -1334,7 +1335,7 @@ enum AutoStabilizationEstimator {
             multiplier: 0.6,
             qualityModel: analysis.qualityModel
         )
-        let strideXConfidence = strideWobbleConfidence(
+        let rawStrideXConfidence = strideWobbleConfidence(
             bandValue: strideBandX,
             trackingConfidence: strideTrackingConfidence,
             fullScale: strideWobbleFullScalePixels
@@ -1349,7 +1350,6 @@ enum AutoStabilizationEstimator {
             trackingConfidence: strideTrackingConfidence,
             fullScale: strideWobbleFullScaleDegrees
         )
-        let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
         let turnTrackingConfidence = residualAdjustedTrackingConfidence(
             trackingConfidence,
             residual: turnResidual,
@@ -1360,6 +1360,19 @@ enum AutoStabilizationEstimator {
             bandValue: panBandX,
             trackingConfidence: turnTrackingConfidence
         )
+        let turnOwnershipX = turnOwnershipConfidence(
+            values: turnStrideSmoothedXPath,
+            frames: frames,
+            indices: activeIndices,
+            turnBandValue: panBandX,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let footstepXTurnGate = clamp(1.0 - (turnOwnershipX * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
+        let strideXTurnGate = clamp(1.0 - (turnOwnershipX * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
+        let footstepXConfidence = rawFootstepXConfidence * footstepXTurnGate
+        let strideXConfidence = rawStrideXConfidence * strideXTurnGate
+        let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
+        let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
         let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
@@ -1390,7 +1403,8 @@ enum AutoStabilizationEstimator {
                 rawCorrection: rawMicroCompensationX,
                 outputScale: xScale,
                 requestedStrength: strengths.microJitterX,
-                fullImpulseScale: footstepImpulseFullScalePixels
+                fullImpulseScale: footstepImpulseFullScalePixels,
+                confidenceScale: footstepXTurnGate
             )
             : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationX, limitedAmount: 0.0)
         let limitedMicroCompensationY = limitFootstepContinuity && strengths.microJitterY > 0.0
@@ -3892,6 +3906,57 @@ enum AutoStabilizationEstimator {
         return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
     }
 
+    private static func turnOwnershipConfidence(
+        values: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        turnBandValue: Float,
+        trackingConfidence: Float
+    ) -> Float {
+        let sortedIndices = (indicesAreStrictlyAscending(indices) ? indices : indices.sorted())
+            .filter { values.values.indices.contains($0) && frames.indices.contains($0) }
+        guard sortedIndices.count >= 3 else {
+            return 0.0
+        }
+
+        var positiveTravel: Float = 0.0
+        var negativeTravel: Float = 0.0
+        for position in 1..<sortedIndices.count {
+            let previousValue = values[sortedIndices[position - 1]]
+            let currentValue = values[sortedIndices[position]]
+            let delta = currentValue - previousValue
+            if delta >= 0.0 {
+                positiveTravel += delta
+            } else {
+                negativeTravel += -delta
+            }
+        }
+
+        let totalTravel = positiveTravel + negativeTravel
+        guard totalTravel > footstepImpulseFullScalePixels else {
+            return 0.0
+        }
+
+        guard let firstIndex = sortedIndices.first,
+              let lastIndex = sortedIndices.last
+        else {
+            return 0.0
+        }
+        let endpointDelta = values[lastIndex] - values[firstIndex]
+        let dominantTravel = max(positiveTravel, negativeTravel)
+        let dominantRatio = dominantTravel / max(totalTravel, Float.ulpOfOne)
+        let endpointRatio = abs(endpointDelta) / max(dominantTravel, Float.ulpOfOne)
+        let monotonicQuality = confidenceRamp(dominantRatio, start: 0.58, full: 0.82)
+        let endpointQuality = confidenceRamp(endpointRatio, start: 0.22, full: 0.55)
+        let bandQuality = confidenceRamp(
+            abs(turnBandValue),
+            start: footstepImpulseFullScalePixels * 0.70,
+            full: max((footstepImpulseFullScalePixels * 0.70) + Float.ulpOfOne, turnSmoothingFullScalePixels * 0.65)
+        )
+        let trackingQuality = confidenceRamp(trackingConfidence, start: 0.22, full: 0.62)
+        return clamp(max(monotonicQuality, endpointQuality) * bandQuality * trackingQuality, min: 0.0, max: 1.0)
+    }
+
     private static func residualAdjustedTrackingConfidence(
         _ trackingConfidence: Float,
         residual: Float,
@@ -4035,7 +4100,8 @@ enum AutoStabilizationEstimator {
         rawCorrection: Float,
         outputScale: Float,
         requestedStrength: Double,
-        fullImpulseScale: Float
+        fullImpulseScale: Float,
+        confidenceScale: Float = 1.0
     ) -> FootstepContinuityLimitResult {
         guard rawCorrection.isFinite,
               outputScale.isFinite,
@@ -4098,7 +4164,7 @@ enum AutoStabilizationEstimator {
             )
             let correctionStrength = walkingConfidenceCompensatedCorrectionFactor(
                 requestedStrength,
-                confidence: confidence,
+                confidence: confidence * clamp(confidenceScale, min: 0.0, max: 1.0),
                 maxStrength: 10.0
             )
             let correction = -(values[index] - baselineValues[index]) * outputScale * correctionStrength

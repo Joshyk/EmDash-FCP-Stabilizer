@@ -100,7 +100,9 @@ produce zero correction. The surrounding-noise floor is capped below the full-re
 so repeated walking motion does not bury a real center-frame landing shock.
 FJIT and SWOB use a walking-band tracking gate that slightly eases block coverage only
 when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
-avoid swimming or false turn smoothing.
+avoid swimming or false turn smoothing. On X, render-time turn ownership reduces
+FJIT/SWOB confidence during monotonic walking turns so broad horizontal motion is
+owned by TURN instead of split into many tiny walking corrections.
 
 `Stride Wobble` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
@@ -111,7 +113,9 @@ broad path as its band input. Its residual gate uses robust window percentiles
 instead of letting a single bad frame suppress the whole band. Medium stride
 bands reach full confidence earlier than the broad UI scale so real walking
 follow-through is corrected by the stride stage. X and Y default to `5.0` and run
-up to `10.0`; the rotation default is `0.2` to protect the horizon.
+up to `10.0`; the rotation default is `0.2` to protect the horizon. The X band
+uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
+does not fight broad Turn Smoothing during real horizontal turns.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change

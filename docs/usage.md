@@ -84,7 +84,9 @@ fallbacks.
   center-frame landing shock. Zero evidence remains zero. Walking-band correction eases block coverage only when enough blocks were accepted;
   Far-field Warp and Turn Smoothing keep the stricter gate. Values above `1.0` can compensate when that
   frame-local score makes the detected impulse visibly under-corrected, but render output
-  still clamps at full detected-impulse removal to avoid inverse shake.
+  still clamps at full detected-impulse removal to avoid inverse shake. On X,
+  monotonic broad walking turns reduce Footstep Jitter confidence so TURN owns
+  that motion instead of letting many small footstep corrections modulate crop.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
   default is `0.2` and the maximum is `4.0`. The default is intentionally conservative so
   walking footage does not lose a stable horizon. Values above `1.0` can compensate when
@@ -98,7 +100,9 @@ fallbacks.
   Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
   user-facing Stride Wobble window. Its residual gate uses robust window percentiles instead
   of the single worst residual in the window, and its confidence reaches full response
-  earlier for detected medium bands than for broad pan/turn bands.
+  earlier for detected medium bands than for broad pan/turn bands. On X, the
+  same turn ownership gate suppresses stride correction during monotonic broad
+  turns so the medium band does not fight Turn Smoothing.
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
   is `0.2` and the maximum is `4.0`. The conservative default protects the horizon in
   walking footage. The correction is measured from the
@@ -318,6 +322,8 @@ FxPlug.
   handled by Footstep Jitter first and Stride Wobble second; Turn Smoothing does not apply to Y.
   This keeps horizontal segmented turns, fine high-frequency shake, medium walking wobble,
   and vertical walking wobble tunable without rerunning Host Analysis.
+  During monotonic X turns, a render-time turn ownership gate reduces Footstep Jitter X and
+  Stride Wobble X confidence so broad turn motion is not split into small walking corrections.
   Footstep Jitter confidence is evaluated on the current render frame instead of inheriting
   the worst residual from the wider turn-detection window.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
