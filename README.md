@@ -143,13 +143,16 @@ demand Auto Crop starts moving zoom and position. For example, `10` starts the
 zoom/position ramp about 10 seconds before that future turn reaches the current
 frame; `20` starts it about 20 seconds early. `Auto Crop Zoom-Out Time`
 controls the linear release time as Auto Crop returns from a higher zoom after
-the black-edge risk has passed. With
+the black-edge risk has passed. `Auto Crop Hold Time` controls the minimum time
+Auto Crop holds a reached zoom/position target before release starts; the
+default is `4` seconds. With
 `Remove Black Edges` on, the render path still clamps zoom to the current
 frame's required safe crop so outside-source black is not exposed during the
 transition. The lead/release path is budgeted from that current-frame safe crop:
 future samples start zoom and position with a linear ramp, position is limited
-when it would force extra current-frame zoom, and release samples slow the
-return with a linear ramp instead of holding an aggressive crop envelope.
+when it would force extra current-frame zoom, hold samples keep the reached
+target for the Hold Time window, and release samples return with a linear ramp
+instead of holding an aggressive crop envelope.
 High-quality render uses the full 17-sample Auto Crop lead window; proxy,
 low/medium-quality playback, or scaled preview uses a very light non-quantized
 lead/release profile with no extra playback crop padding.
