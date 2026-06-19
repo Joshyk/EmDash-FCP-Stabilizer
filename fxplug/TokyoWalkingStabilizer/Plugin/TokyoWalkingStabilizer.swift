@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.247"
+private let tokyoWalkingStabilizerVersion = "0.3.248"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1856,9 +1856,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         let finalScale = rawScale
 
-        let finalPositionPixels = autoCropScaleBudgetedPositionPixels(
-            anchorPositionPixels: localPositionPixels,
-            fallbackPositionPixels: scaleDemand.neutralPositionPixels,
+        let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
+            stablePositionPixels: scaleDemand.neutralPositionPixels,
+            clampPositionPixels: localPositionPixels,
             context: context,
             scale: finalScale,
             samplingProfile: samplingProfile
@@ -2963,36 +2963,36 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
     }
 
-    private static func autoCropScaleBudgetedPositionPixels(
-        anchorPositionPixels: vector_float2,
-        fallbackPositionPixels: vector_float2,
+    private static func autoCropStableScaleBudgetedPositionPixels(
+        stablePositionPixels: vector_float2,
+        clampPositionPixels: vector_float2,
         context: AutoCropTransformContext,
         scale: Float,
         samplingProfile: AutoCropSamplingProfile
     ) -> vector_float2 {
         if autoCropPosition(
-            anchorPositionPixels,
+            stablePositionPixels,
             fitsWithinScale: scale,
             context: context,
             samplingProfile: samplingProfile
         ) {
-            return anchorPositionPixels
+            return stablePositionPixels
         }
 
         guard autoCropPosition(
-            fallbackPositionPixels,
+            clampPositionPixels,
             fitsWithinScale: scale,
             context: context,
             samplingProfile: samplingProfile
         ) else {
-            return fallbackPositionPixels
+            return stablePositionPixels
         }
 
         var invalidFraction: Float = 0.0
         var validFraction: Float = 1.0
         for _ in 0..<samplingProfile.positionBudgetIterations {
             let midpoint = (invalidFraction + validFraction) * 0.5
-            let candidate = anchorPositionPixels + ((fallbackPositionPixels - anchorPositionPixels) * midpoint)
+            let candidate = stablePositionPixels + ((clampPositionPixels - stablePositionPixels) * midpoint)
             if autoCropPosition(
                 candidate,
                 fitsWithinScale: scale,
@@ -3004,7 +3004,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 invalidFraction = midpoint
             }
         }
-        return anchorPositionPixels + ((fallbackPositionPixels - anchorPositionPixels) * validFraction)
+        return stablePositionPixels + ((clampPositionPixels - stablePositionPixels) * validFraction)
     }
 
     private static func autoCropPosition(

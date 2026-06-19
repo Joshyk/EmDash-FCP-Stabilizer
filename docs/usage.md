@@ -169,8 +169,9 @@ fallbacks.
   scale demand and follows the Auto Crop Zoom-In, Hold, and Zoom-Out time
   windows so the visible crop-zoom bar does not wobble with frame-to-frame
   lookahead changes. When an extreme frame must clamp the crop center for
-  black-edge safety, that clamp is averaged through the same local envelope
-  instead of snapping side to side.
+  black-edge safety, Auto Crop keeps the stable center if the held scale can
+  cover it; otherwise it moves only the minimum distance toward the averaged
+  local clamp instead of following the clamp side to side.
 - `Auto Crop Hold Time`: minimum hold time after Auto Crop reaches a zoom/position
   target before Zoom-Out release starts. The default is `4` seconds. High-quality
   render uses the full 17-sample Auto Crop lead window; proxy, low/medium-quality
