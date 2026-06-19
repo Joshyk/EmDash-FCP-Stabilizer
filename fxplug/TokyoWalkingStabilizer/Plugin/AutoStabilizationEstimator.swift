@@ -1215,6 +1215,16 @@ enum AutoStabilizationEstimator {
         let warpConfidence = interpolatedValue(analysis.warpConfidence, using: lookup.interpolation)
         let blurAmount = interpolatedValue(analysis.blurAmounts, using: lookup.interpolation)
         let residual = interpolatedValue(analysis.residuals, using: lookup.interpolation)
+        let turnTrackingConfidence = residualAdjustedTrackingConfidence(
+            trackingConfidence,
+            residual: residual,
+            multiplier: 0.9,
+            qualityModel: analysis.qualityModel
+        )
+        let turnConfidence = turnSmoothingConfidence(
+            bandValue: currentX - baselineX,
+            trackingConfidence: turnTrackingConfidence
+        )
         let acceptedBlockCount = analysis.acceptedBlockCounts.indices.contains(centerIndex) ? analysis.acceptedBlockCounts[centerIndex] : 0
         let totalBlockCount = analysis.totalBlockCounts.indices.contains(centerIndex) ? analysis.totalBlockCounts[centerIndex] : 0
         let searchRadiusHitCount = analysis.searchRadiusHitCounts.indices.contains(centerIndex) ? analysis.searchRadiusHitCounts[centerIndex] : 0
@@ -1239,7 +1249,7 @@ enum AutoStabilizationEstimator {
             warpConfidence: warpConfidence,
             microConfidence: xStrength,
             strideConfidence: xStrength,
-            turnConfidence: clamp(Float(strengths.panStabilizationStrength), min: 0.0, max: 1.0),
+            turnConfidence: turnConfidence,
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount,
             yawPitchProxy: vector_float2(0.0, 0.0),
