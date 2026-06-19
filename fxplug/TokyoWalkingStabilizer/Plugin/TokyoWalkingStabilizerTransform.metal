@@ -34,6 +34,10 @@ static uint debugLabelRowBits(uint code, uint y) {
         case 66: // B
             if (y == 0 || y == 2 || y == 4) { return 0x6; }
             return 0x5;
+        case 67: // C
+            return (y == 0 || y == 4) ? 0x7 : 0x4;
+        case 68: // D
+            return (y == 0 || y == 4) ? 0x6 : 0x5;
         case 69: // E
             if (y == 0 || y == 4) { return 0x7; }
             if (y == 2) { return 0x6; }
@@ -42,6 +46,10 @@ static uint debugLabelRowBits(uint code, uint y) {
             if (y == 0) { return 0x7; }
             if (y == 2) { return 0x6; }
             return 0x4;
+        case 71: // G
+            if (y == 0 || y == 4) { return 0x7; }
+            if (y == 1) { return 0x4; }
+            return 0x5;
         case 72: // H
             if (y == 2) { return 0x7; }
             return 0x5;
@@ -135,90 +143,58 @@ static uint debugModeLabelChar(float debugMode, uint index) {
     return 0;
 }
 
+static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uint c4, uint c5, uint c6, uint c7, uint c8, uint c9) {
+    switch (index) {
+        case 0: return c0;
+        case 1: return c1;
+        case 2: return c2;
+        case 3: return c3;
+        case 4: return c4;
+        case 5: return c5;
+        case 6: return c6;
+        case 7: return c7;
+        case 8: return c8;
+        case 9: return c9;
+        default: return 0;
+    }
+}
+
 static uint debugLabelChar(uint row, uint index, float debugMode) {
     switch (row) {
         case 0:
-            return index == 0 ? 88 : 0; // X
+            return debugLabelCharAt(index, 88, 79, 70, 70, 83, 69, 84, 0, 0, 0); // XOFFSET
         case 1:
-            return index == 0 ? 89 : 0; // Y
+            return debugLabelCharAt(index, 89, 79, 70, 70, 83, 69, 84, 0, 0, 0); // YOFFSET
         case 2:
-            if (index == 0) { return 82; } // R
-            if (index == 1) { return 79; } // O
-            if (index == 2 || index == 3) { return 76; } // L
-            return 0;
+            return debugLabelCharAt(index, 82, 79, 76, 76, 0, 0, 0, 0, 0, 0); // ROLL
         case 3:
-            if (index == 0) { return 70; } // F
-            if (index == 1) { return 74; } // J
-            if (index == 2) { return 73; } // I
-            if (index == 3) { return 84; } // T
-            return 0;
+            return debugLabelCharAt(index, 70, 79, 79, 84, 83, 84, 69, 80, 0, 0); // FOOTSTEP
         case 4:
-            if (index == 0) { return 83; } // S
-            if (index == 1) { return 87; } // W
-            if (index == 2) { return 79; } // O
-            if (index == 3) { return 66; } // B
-            return 0;
+            return debugLabelCharAt(index, 83, 84, 82, 73, 68, 69, 0, 0, 0, 0); // STRIDE
         case 5:
-            if (index == 0) { return 87; } // W
-            if (index == 1) { return 65; } // A
-            if (index == 2) { return 82; } // R
-            if (index == 3) { return 80; } // P
-            return 0;
+            return debugLabelCharAt(index, 70, 65, 82, 87, 65, 82, 80, 0, 0, 0); // FARWARP
         case 6:
-            if (index == 0) { return 84; } // T
-            if (index == 1) { return 85; } // U
-            if (index == 2) { return 82; } // R
-            if (index == 3) { return 78; } // N
-            return 0;
+            return debugLabelCharAt(index, 84, 85, 82, 78, 0, 0, 0, 0, 0, 0); // TURN
         case 7:
-            if (index == 0) { return 70; } // F
-            if (index == 2) { return 81; } // Q
-            return 0;
+            return debugLabelCharAt(index, 70, 79, 79, 84, 67, 79, 78, 70, 0, 0); // FOOTCONF
         case 8:
-            if (index == 0) { return 83; } // S
-            if (index == 2) { return 81; } // Q
-            return 0;
+            return debugLabelCharAt(index, 83, 84, 82, 73, 68, 69, 67, 79, 78, 70); // STRIDECONF
         case 9:
-            if (index == 0) { return 87; } // W
-            if (index == 2) { return 81; } // Q
-            return 0;
+            return debugLabelCharAt(index, 87, 65, 82, 80, 67, 79, 78, 70, 0, 0); // WARPCONF
         case 10:
-            if (index == 0) { return 84; } // T
-            if (index == 2) { return 81; } // Q
-            return 0;
+            return debugLabelCharAt(index, 84, 85, 82, 78, 67, 79, 78, 70, 0, 0); // TURNCONF
         case 11:
-            if (index == 0) { return 83; } // S
-            if (index == 1) { return 77; } // M
-            if (index == 2) { return 84; } // T
-            if (index == 3) { return 72; } // H
-            return 0;
+            return debugLabelCharAt(index, 83, 77, 79, 79, 84, 72, 0, 0, 0, 0); // SMOOTH
         case 12:
-            if (index == 0) { return 67; } // C
-            if (index == 1) { return 79; } // O
-            if (index == 2) { return 78; } // N
-            if (index == 3) { return 70; } // F
-            return 0;
+            return debugLabelCharAt(index, 84, 82, 65, 67, 75, 67, 79, 78, 70, 0); // TRACKCONF
         case 13:
-            if (index == 0) { return 83; } // S
-            if (index == 1) { return 72; } // H
-            if (index == 2) { return 82; } // R
-            if (index == 3) { return 80; } // P
-            return 0;
+            return debugLabelCharAt(index, 83, 72, 65, 82, 80, 78, 69, 83, 83, 0); // SHARPNESS
         case 14:
-            if (index == 0) { return 82; } // R
-            if (index == 1) { return 69; } // E
-            if (index == 2) { return 83; } // S
-            return 0;
+            return debugLabelCharAt(index, 82, 69, 83, 73, 68, 85, 65, 76, 0, 0); // RESIDUAL
         case 15:
-            if (index == 0) { return 72; } // H
-            if (index == 1) { return 73; } // I
-            if (index == 2) { return 84; } // T
-            return 0;
+            return debugLabelCharAt(index, 69, 68, 71, 69, 72, 73, 84, 0, 0, 0); // EDGEHIT
         case 16:
-            if (index == 0) { return 87; } // W
-            if (index == 1) { return 76; } // L
-            if (index == 2) { return 75; } // K
-            return 0;
+            return debugLabelCharAt(index, 87, 65, 76, 75, 67, 79, 78, 70, 0, 0); // WALKCONF
         case 17:
             return debugModeLabelChar(debugMode, index);
         default:
@@ -239,7 +215,7 @@ static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlay
     }
 
     uint index = uint(floor(textX / glyphAdvance));
-    if (index >= 4) {
+    if (index >= 10) {
         return false;
     }
 
@@ -298,7 +274,7 @@ fragment float4 fragmentShader(
         float overlayScale = clamp(transform->debugOverlayScale, 0.25, 8.0);
         float panelX = pixel.x - (16.0 * overlayScale);
         float panelY = pixel.y - (16.0 * overlayScale);
-        float labelWidth = 44.0 * overlayScale;
+        float labelWidth = 92.0 * overlayScale;
         float labelGap = 6.0 * overlayScale;
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;
