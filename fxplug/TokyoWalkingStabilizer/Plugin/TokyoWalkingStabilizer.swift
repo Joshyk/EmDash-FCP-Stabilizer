@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.229"
+private let tokyoWalkingStabilizerVersion = "0.3.230"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -5296,13 +5296,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 abs(autoTransform.footstepJitterRotationDegrees) + abs(autoTransform.strideWobbleRotationDegrees),
                 abs(autoTransform.temporalSmoothingRotationDelta)
             ) / 0.05)
-            let turnActivity = min(1.0, simd_length(vector_float2(
+            let separatedTurnActivity = simd_length(vector_float2(
                 autoTransform.macroPixelOffset.x / turnScaleX,
                 autoTransform.macroPixelOffset.y / turnScaleY
-            )))
-            let temporalSmoothingActivity = min(1.0, max(
+            ))
+            let collapsedProxyTurnActivity = abs(autoTransform.pixelOffset.x) / turnScaleX
+                * min(1.0, autoTransform.turnConfidence)
+            let turnActivity = min(1.0, max(separatedTurnActivity, collapsedProxyTurnActivity))
+            let separatedTemporalSmoothingActivity = max(
                 simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale,
                 abs(autoTransform.temporalSmoothingRotationDelta) / 0.05
+            )
+            let collapsedProxySmoothingActivity = autoTransform.temporalSmoothingSampleCount > 1
+                ? max(
+                    simd_length(autoTransform.pixelOffset) / temporalSmoothingScale,
+                    abs(autoTransform.rotationDegrees) / 0.05
+                )
+                : 0.0
+            let temporalSmoothingActivity = min(1.0, max(
+                separatedTemporalSmoothingActivity,
+                collapsedProxySmoothingActivity
             ))
             let footstepJitterActivity = min(1.0, max(
                 simd_length(vector_float2(
