@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.213"
+private let tokyoWalkingStabilizerVersion = "0.3.214"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1838,9 +1838,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let offsets: [Double]
         switch samplingProfile {
         case .playback:
-            offsets = [-0.30, -0.15, 0.15, 0.30]
+            offsets = [-1.00, -0.70, -0.45, -0.25, -0.10, 0.10, 0.25, 0.45, 0.70, 1.00]
         case .full:
-            offsets = [-0.25, -0.125, 0.125, 0.25]
+            offsets = [-0.75, -0.50, -0.30, -0.15, 0.15, 0.30, 0.50, 0.75]
         }
 
         return offsets.reduce(initialScale) { partial, offset in
