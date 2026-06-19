@@ -170,9 +170,8 @@ active render runtime and current source mode: `R360` means FxPlug `0.3.60`
 is rendering original/optimized frames, and `P360` means proxy playback is using
 the saved Host Analysis path. It does not control black outside-source pixels;
 `Edge Display Mode` controls that separately.
-The overlay scales from the current render output with a lower proxy minimum so
-Final Cut Pro proxy playback keeps roughly the same viewer footprint as original
-media, while staying larger than the old compact panel.
+The overlay scales from the current render output so the top-left panel occupies
+roughly half of the viewer height in original, optimized, and proxy playback.
 
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep

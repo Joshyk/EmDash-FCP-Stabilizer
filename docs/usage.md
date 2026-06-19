@@ -193,8 +193,8 @@ fallbacks.
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
   checking runtime behavior. `R360` means FxPlug `0.3.60` is rendering original/optimized
   frames, while `P360` means proxy playback is using the saved Host Analysis path.
-  The overlay scales from the current render output with a lower proxy minimum so proxy
-  playback keeps roughly the same viewer footprint as original media, while staying larger than the old compact panel.
+  The overlay scales from the current render output so the top-left panel occupies roughly
+  half of the viewer height in original, optimized, and proxy playback.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When

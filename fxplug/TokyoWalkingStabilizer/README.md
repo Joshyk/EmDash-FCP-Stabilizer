@@ -282,9 +282,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
   runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R361` means
   FxPlug `0.3.61` is rendering original/optimized frames, and `P361` means proxy playback is
-  using the saved Host Analysis path. The overlay scales from the current render output with
-  a lower proxy minimum so proxy playback keeps roughly the same viewer footprint as original
-  media, while staying larger than the old compact panel. These labels are raw English control/diagnostic
+  using the saved Host Analysis path. The overlay scales from the current render output so
+  the top-left panel occupies roughly half of the viewer height in original, optimized, and
+  proxy playback. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,

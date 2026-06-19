@@ -1524,12 +1524,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func debugOverlayScale(outputWidth: Int, outputHeight: Int, renderSourceIsProxy: Bool) -> Float {
-        let width = max(1, outputWidth)
+    private static func debugOverlayScale(outputWidth _: Int, outputHeight: Int, renderSourceIsProxy _: Bool) -> Float {
         let height = max(1, outputHeight)
-        let baseScale = min(Float(width) / 3840.0, Float(height) / 2160.0) * 1.35
-        let minimumScale: Float = renderSourceIsProxy ? 0.25 : 0.75
-        return min(max(baseScale, minimumScale), 2.25)
+        let panelRows: Float = 18.0
+        let rowHeight: Float = 13.0
+        return max(Float(height) * 0.5 / (panelRows * rowHeight), 0.25)
     }
 
     private static func cachedAutoTransform(
