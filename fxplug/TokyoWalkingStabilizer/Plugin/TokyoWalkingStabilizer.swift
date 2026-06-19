@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.212"
+private let tokyoWalkingStabilizerVersion = "0.3.213"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1745,9 +1745,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             context: context,
             cropPositionPixels: positionPixels
         )
+        let localScaleFloor = autoCropLocalScaleFloor(
+            preparedAnalysis: preparedAnalysis,
+            currentSeconds: renderSeconds,
+            currentTransform: currentTransform,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity,
+            initialScale: max(currentRequiredScale, plannedScale, finalRequiredScale)
+        )
 
         return AutoCropFraming(
-            scale: max(Float(1.0), finalRequiredScale, plannedScale),
+            scale: max(Float(1.0), finalRequiredScale, plannedScale, localScaleFloor),
             positionPixels: positionPixels
         )
     }
@@ -1803,6 +1816,70 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
+    private static func autoCropLocalScaleFloor(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?,
+        initialScale: Float
+    ) -> Float {
+        guard let firstTime = preparedAnalysis.frames.first?.time,
+              let lastTime = preparedAnalysis.frames.last?.time
+        else {
+            return initialScale
+        }
+
+        let offsets: [Double]
+        switch samplingProfile {
+        case .playback:
+            offsets = [-0.30, -0.15, 0.15, 0.30]
+        case .full:
+            offsets = [-0.25, -0.125, 0.125, 0.25]
+        }
+
+        return offsets.reduce(initialScale) { partial, offset in
+            let sampleSeconds = currentSeconds + offset
+            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                return partial
+            }
+            let sampleTransform = autoCropActualSampleTransform(
+                preparedAnalysis: preparedAnalysis,
+                currentSeconds: currentSeconds,
+                sampleSeconds: sampleSeconds,
+                currentTransform: currentTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+            let context = AutoCropTransformContext(
+                transform: sampleTransform,
+                outputSize: outputSize,
+                masterStrength: masterStrength
+            )
+            let positionPixels = blackSafeAutoCropPosition(
+                preferredPositionPixels: sampleTransform.macroPixelOffset * masterStrength,
+                context: context,
+                samplingProfile: samplingProfile
+            )
+            let requiredScale = requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: positionPixels,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            )
+            return max(partial, requiredScale)
+        }
+    }
+
     private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32, renderSourceIsProxy: Bool) -> AutoCropSamplingProfile {
         if renderSourceIsProxy || qualityLevel == 0 {
             return .playback
@@ -1816,6 +1893,44 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return seconds
         }
         return (seconds / step).rounded() * step
+    }
+
+    private static func autoCropActualSampleTransform(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        sampleSeconds: Double,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> StabilizerAutoTransform {
+        guard abs(sampleSeconds - currentSeconds) > 1e-6 else {
+            return currentTransform
+        }
+        let sampleTime = CMTimeMakeWithSeconds(sampleSeconds, preferredTimescale: 60000)
+        switch samplingProfile {
+        case .playback:
+            return AutoStabilizationEstimator.proxyPlaybackEstimate(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: sampleTime,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths
+            )
+        case .full:
+            return cachedAutoTransform(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: sampleTime,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+        }
     }
 
     private static func autoCropSampleTransform(

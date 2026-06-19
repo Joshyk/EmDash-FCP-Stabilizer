@@ -1222,9 +1222,9 @@ enum AutoStabilizationEstimator {
 
         return StabilizerAutoTransform(
             pixelOffset: pixelOffset,
-            macroPixelOffset: pixelOffset,
+            macroPixelOffset: vector_float2(0.0, 0.0),
             microPixelOffset: vector_float2(0.0, 0.0),
-            strideWobblePixelOffset: vector_float2(0.0, 0.0),
+            strideWobblePixelOffset: pixelOffset,
             footstepJitterRotationDegrees: 0.0,
             strideWobbleRotationDegrees: rotationDegrees,
             rotationDegrees: rotationDegrees,
