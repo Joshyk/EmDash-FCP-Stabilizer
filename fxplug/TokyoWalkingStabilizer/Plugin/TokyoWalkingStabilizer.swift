@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.203"
+private let tokyoWalkingStabilizerVersion = "0.3.204"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -2357,67 +2357,83 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         iterations: Int = 18
     ) -> Float {
         let clampedSampleSteps = max(2, sampleSteps)
-        let clampedIterations = max(4, iterations)
-        var upper: Float = 1.0
-        while upper < 128.0,
-              !autoCropBoundaryScaleContainsSource(
-                  scale: upper,
-                  context: context,
-                  cropPositionPixels: cropPositionPixels,
-                  sampleSteps: clampedSampleSteps
-              ) {
-            upper *= 2.0
-        }
-
-        var lower: Float = 1.0
-        for _ in 0..<clampedIterations {
-            let midpoint = (lower + upper) * 0.5
-            if autoCropBoundaryScaleContainsSource(
-                scale: midpoint,
-                context: context,
-                cropPositionPixels: cropPositionPixels,
-                sampleSteps: clampedSampleSteps
-            ) {
-                upper = midpoint
-            } else {
-                lower = midpoint
-            }
-        }
-        if autoCropScaleContainsSource(
-            scale: upper,
+        let estimatedScale = directAutoCropScaleEstimate(
             context: context,
             cropPositionPixels: cropPositionPixels,
             sampleSteps: clampedSampleSteps
-        ) {
-            return upper
+        )
+        guard estimatedScale.isFinite else {
+            return 128.0
         }
 
-        var fullUpper = max(upper, Float(1.0))
-        while fullUpper < 128.0,
-              !autoCropScaleContainsSource(
-                  scale: fullUpper,
-                  context: context,
-                  cropPositionPixels: cropPositionPixels,
-                  sampleSteps: clampedSampleSteps
-              ) {
-            fullUpper *= 2.0
-        }
-
-        var fullLower: Float = 1.0
-        for _ in 0..<clampedIterations {
-            let midpoint = (fullLower + fullUpper) * 0.5
+        var scale = min(max(estimatedScale, Float(1.0)), Float(128.0))
+        for _ in 0..<4 {
             if autoCropScaleContainsSource(
-                scale: midpoint,
+                scale: scale,
                 context: context,
                 cropPositionPixels: cropPositionPixels,
                 sampleSteps: clampedSampleSteps
             ) {
-                fullUpper = midpoint
-            } else {
-                fullLower = midpoint
+                return scale
+            }
+            scale = min(128.0, (scale * 1.015) + 0.002)
+        }
+
+        while scale < 128.0,
+              !autoCropScaleContainsSource(
+                  scale: scale,
+                  context: context,
+                  cropPositionPixels: cropPositionPixels,
+                  sampleSteps: clampedSampleSteps
+              ) {
+            scale = min(128.0, scale * 1.08)
+        }
+        return scale
+    }
+
+    private static func directAutoCropScaleEstimate(
+        context: AutoCropTransformContext,
+        cropPositionPixels: vector_float2,
+        sampleSteps: Int
+    ) -> Float {
+        let sourceCenter = context.sourcePixel(
+            outputPixel: vector_float2(0.0, 0.0),
+            scale: 1.0,
+            cropPositionPixels: cropPositionPixels
+        )
+        guard context.containsSourcePixel(sourceCenter) else {
+            return 128.0
+        }
+
+        let availableX = (context.halfSize.x - context.marginPixels) - abs(sourceCenter.x)
+        let availableY = (context.halfSize.y - context.marginPixels) - abs(sourceCenter.y)
+        guard availableX > 0.0001, availableY > 0.0001 else {
+            return 128.0
+        }
+
+        var requiredScale: Float = 1.0
+        for yIndex in 0...sampleSteps {
+            for xIndex in 0...sampleSteps {
+                let xFraction = (Float(xIndex) / Float(sampleSteps)) - 0.5
+                let yFraction = (Float(yIndex) / Float(sampleSteps)) - 0.5
+                let outputPixel = vector_float2(
+                    xFraction * context.outputSize.x,
+                    yFraction * context.outputSize.y
+                )
+                let sourcePixel = context.sourcePixel(
+                    outputPixel: outputPixel,
+                    scale: 1.0,
+                    cropPositionPixels: cropPositionPixels
+                )
+                let delta = sourcePixel - sourceCenter
+                requiredScale = max(
+                    requiredScale,
+                    abs(delta.x) / availableX,
+                    abs(delta.y) / availableY
+                )
             }
         }
-        return fullUpper
+        return min(max(requiredScale, Float(1.0)), Float(128.0))
     }
 
     private static func autoCropBoundaryScaleContainsSource(
