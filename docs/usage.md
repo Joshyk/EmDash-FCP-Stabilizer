@@ -163,11 +163,12 @@ fallbacks.
   instead of holding an aggressive crop envelope. Nearby local scale demands are
   sampled from a seconds-based plateau window with a soft edge so short walking
   impulses do not create visible zoom pulses on high-frame-rate footage. The
-  held scale keeps the lead/release-smoothed crop position when it fits instead
-  of snapping the crop center back to the current frame. The local scale
-  envelope evaluates nearby planned Auto Crop scale demand and follows the Auto
-  Crop Zoom-In, Hold, and Zoom-Out time windows so the visible crop-zoom bar
-  does not wobble with frame-to-frame lookahead changes.
+  held scale keeps a stable crop center and absorbs black-edge safety in the
+  scale budget instead of moving the crop center side to side with each frame's
+  macro offset. The local scale envelope evaluates nearby planned Auto Crop
+  scale demand and follows the Auto Crop Zoom-In, Hold, and Zoom-Out time
+  windows so the visible crop-zoom bar does not wobble with frame-to-frame
+  lookahead changes.
 - `Auto Crop Hold Time`: minimum hold time after Auto Crop reaches a zoom/position
   target before Zoom-Out release starts. The default is `4` seconds. High-quality
   render uses the full 17-sample Auto Crop lead window; proxy, low/medium-quality

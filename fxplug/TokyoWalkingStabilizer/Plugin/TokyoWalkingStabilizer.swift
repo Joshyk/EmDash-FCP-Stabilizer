@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.245"
+private let tokyoWalkingStabilizerVersion = "0.3.246"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -248,12 +248,14 @@ private struct AutoCropFramingTarget {
 private struct AutoCropScaleDemand {
     let currentPositionPixels: vector_float2
     let currentRequiredScale: Float
+    let neutralPositionPixels: vector_float2
+    let neutralRequiredScale: Float
     let plannedScale: Float
     let positionPixels: vector_float2
     let finalRequiredScale: Float
 
     var scaleFloor: Float {
-        max(Float(1.0), currentRequiredScale, plannedScale, finalRequiredScale)
+        max(Float(1.0), currentRequiredScale, neutralRequiredScale, plannedScale, finalRequiredScale)
     }
 }
 
@@ -1807,9 +1809,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             initialScale: scaleDemand.scaleFloor
         )
         let rawScale = autoCropScaleWithQuietLookaheadDeadband(
-            scale: max(Float(1.0), scaleDemand.finalRequiredScale, scaleDemand.plannedScale, localScaleFloor),
+            scale: max(
+                Float(1.0),
+                scaleDemand.neutralRequiredScale,
+                scaleDemand.finalRequiredScale,
+                scaleDemand.plannedScale,
+                localScaleFloor
+            ),
             currentRequiredScale: scaleDemand.currentRequiredScale,
-            finalRequiredScale: scaleDemand.finalRequiredScale,
+            finalRequiredScale: max(scaleDemand.neutralRequiredScale, scaleDemand.finalRequiredScale),
             currentTransform: currentTransform,
             outputSize: outputSize,
             masterStrength: masterStrength
@@ -1817,8 +1825,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let finalScale = rawScale
 
         let finalPositionPixels = autoCropScaleBudgetedPositionPixels(
-            anchorPositionPixels: scaleDemand.positionPixels,
-            fallbackPositionPixels: scaleDemand.currentPositionPixels,
+            anchorPositionPixels: scaleDemand.neutralPositionPixels,
+            fallbackPositionPixels: scaleDemand.positionPixels,
             context: context,
             scale: finalScale,
             samplingProfile: samplingProfile
@@ -2006,6 +2014,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             context: context,
             cropPositionPixels: currentPositionPixels
         )
+        let neutralPositionPixels = blackSafeAutoCropPosition(
+            preferredPositionPixels: vector_float2(0.0, 0.0),
+            context: context,
+            samplingProfile: samplingProfile
+        )
+        let neutralRequiredScale = requiredAutoCropScale(
+            context: context,
+            cropPositionPixels: neutralPositionPixels,
+            sampleSteps: samplingProfile.scaleSearchSampleSteps,
+            iterations: samplingProfile.scaleSearchIterations
+        )
         let plannedScale = autoCropPlannedScale(
             transitionTargets: transitionTargets,
             releaseTargets: releaseTargets,
@@ -2026,6 +2045,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return AutoCropScaleDemand(
             currentPositionPixels: currentPositionPixels,
             currentRequiredScale: currentRequiredScale,
+            neutralPositionPixels: neutralPositionPixels,
+            neutralRequiredScale: neutralRequiredScale,
             plannedScale: plannedScale,
             positionPixels: positionPixels,
             finalRequiredScale: finalRequiredScale
