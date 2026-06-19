@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.233"
+private let tokyoWalkingStabilizerVersion = "0.3.234"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -55,6 +55,8 @@ private let stabilizerDefaultAutoCropLeadTime = 10.0
 private let stabilizerMaximumAutoCropLeadTime = 120.0
 private let stabilizerDefaultAutoCropHoldTime = 4.0
 private let stabilizerMaximumAutoCropHoldTime = 30.0
+private let stabilizerAutoCropCurrentScaleIdentityTolerance: Float = 0.002
+private let stabilizerAutoCropLookaheadScaleDeadband: Float = 0.025
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
@@ -1807,7 +1809,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cacheIdentity: cacheIdentity,
             initialScale: max(currentRequiredScale, plannedScale, finalRequiredScale)
         )
-        let rawScale = max(Float(1.0), finalRequiredScale, plannedScale, localScaleFloor)
+        let rawScale = autoCropScaleWithQuietLookaheadDeadband(
+            scale: max(Float(1.0), finalRequiredScale, plannedScale, localScaleFloor),
+            currentRequiredScale: currentRequiredScale,
+            finalRequiredScale: finalRequiredScale
+        )
         let heldScale = autoCropHeldScale(
             rawScale: rawScale,
             preparedAnalysis: preparedAnalysis,
@@ -1901,6 +1907,21 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
+    private static func autoCropScaleWithQuietLookaheadDeadband(
+        scale: Float,
+        currentRequiredScale: Float,
+        finalRequiredScale: Float
+    ) -> Float {
+        let finiteScale = scale.isFinite ? scale : Float(1.0)
+        guard currentRequiredScale <= Float(1.0) + stabilizerAutoCropCurrentScaleIdentityTolerance,
+              finalRequiredScale <= Float(1.0) + stabilizerAutoCropCurrentScaleIdentityTolerance,
+              finiteScale <= Float(1.0) + stabilizerAutoCropLookaheadScaleDeadband
+        else {
+            return max(Float(1.0), finiteScale)
+        }
+        return Float(1.0)
+    }
+
     private static func autoCropHeldScale(
         rawScale: Float,
         preparedAnalysis: StabilizerPreparedAnalysis,
@@ -1948,6 +1969,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         autoCropScaleHoldCacheLock.lock()
         defer { autoCropScaleHoldCacheLock.unlock() }
+
+        if clampedRawScale <= Float(1.0) + stabilizerAutoCropCurrentScaleIdentityTolerance {
+            let shouldAppendKey = autoCropScaleHoldCache[key] == nil
+            autoCropScaleHoldCache[key] = AutoCropScaleHoldState(
+                lastRenderSeconds: renderSeconds,
+                lastScale: Float(1.0),
+                holdUntilSeconds: renderSeconds,
+                releaseStartSeconds: nil,
+                releaseStartScale: Float(1.0),
+                releaseTargetScale: Float(1.0)
+            )
+            if shouldAppendKey {
+                autoCropScaleHoldCacheOrder.append(key)
+            }
+            while autoCropScaleHoldCacheOrder.count > autoCropScaleHoldCacheLimit {
+                let oldestKey = autoCropScaleHoldCacheOrder.removeFirst()
+                autoCropScaleHoldCache.removeValue(forKey: oldestKey)
+            }
+            return Float(1.0)
+        }
 
         guard var state = autoCropScaleHoldCache[key],
               renderSeconds > state.lastRenderSeconds,
