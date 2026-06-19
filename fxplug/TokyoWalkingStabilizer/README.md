@@ -252,7 +252,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   from future lookahead.
 - `Auto Crop Zoom-Out Time`: default `5` seconds, range `0...30` seconds. This
   parameter is retained for compatibility and trailing crop-center smoothing;
-  final crop zoom no longer follows a linear lead/hold/release envelope.
+  final crop zoom no longer follows a future lead/hold/release envelope.
 - `Auto Crop Hold Time`: default `4` seconds, range `0...30` seconds. This
   parameter is retained for compatibility and trailing crop-center smoothing; it
   no longer forces final crop zoom to hold a reached future lookahead target.
@@ -261,13 +261,14 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   smooths the local crop center from trailing render-time samples instead of
   future lookahead, and absorbs black-edge safety in the scale budget instead of
   moving the crop center side to side with each frame's macro offset. Final zoom
-  is driven by the current frame's black-edge safety floor plus a fixed
-  recent-motion envelope, rounded into stable safety buckets, so the visible
-  crop-zoom bar does not track frame-to-frame planned scale changes. If the
-  recent transform stays quiet and the current frame no longer needs extra
-  black-edge protection, Auto Crop eases that extra zoom back toward identity
-  over roughly 2.5 seconds so idle shots settle near zero crop zoom instead of
-  pre-zooming for future motion. When an
+  is driven by the current frame's black-edge safety floor, the maximum needed
+  scale from a trailing several-second plateau window, and a fixed recent-motion
+  envelope, rounded into stable safety buckets. The visible crop-zoom bar
+  therefore follows the held plateau instead of frame-to-frame planned scale
+  changes. If the recent transform stays quiet and the current frame no longer
+  needs extra black-edge protection, Auto Crop eases that extra zoom back toward
+  identity over roughly 2.5 seconds so idle shots settle near zero crop zoom
+  instead of pre-zooming for future motion. When an
   extreme frame must clamp the crop center for black-edge safety, Auto Crop
   keeps the smoothed center if the held scale can cover it; otherwise it moves
   only the minimum distance toward the current black-safe center instead of

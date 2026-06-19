@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.259"
+private let tokyoWalkingStabilizerVersion = "0.3.260"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -59,6 +59,9 @@ private let stabilizerAutoCropActiveScalePadding: Float = 0.006
 private let stabilizerAutoCropActiveScaleBucket: Float = 0.012
 private let stabilizerAutoCropActiveScaleMinimumDelta: Float = 0.001
 private let stabilizerAutoCropMotionEnvelopeScaleDelta: Float = 0.054
+private let stabilizerAutoCropScalePlateauMinimumSeconds = 2.0
+private let stabilizerAutoCropScalePlateauMaximumSeconds = 5.5
+private let stabilizerAutoCropScalePlateauReleaseSeconds = 1.5
 private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleNeutralScaleTolerance: Float = 0.04
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
@@ -207,6 +210,24 @@ private enum AutoCropSamplingProfile: Int32 {
             return 1.0 / 30.0
         case .full:
             return 1.0 / 60.0
+        }
+    }
+
+    var scalePlateauSampleLimit: Int {
+        switch self {
+        case .playback:
+            return 96
+        case .full:
+            return 180
+        }
+    }
+
+    var scalePlateauStepSeconds: Double {
+        switch self {
+        case .playback:
+            return 1.0 / 24.0
+        case .full:
+            return 1.0 / 36.0
         }
     }
 
@@ -1796,6 +1817,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             scaleDemand.currentRequiredScale,
             localPositionRequiredScale
         )
+        let plateauProtectedScale = autoCropLocalScalePlateau(
+            preparedAnalysis: preparedAnalysis,
+            currentSeconds: renderSeconds,
+            currentTransform: currentTransform,
+            stablePositionPixels: localPositionPixels,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            transitionDurationSeconds: transitionDurationSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity,
+            initialScale: activeProtectedScale
+        )
         let idleReleaseProgress = autoCropIdleScaleReleaseProgress(
             preparedAnalysis: preparedAnalysis,
             currentSeconds: renderSeconds,
@@ -1816,7 +1853,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         let release = quietCurrentTransform ? min(max(idleReleaseProgress, 0.0), 1.0) : 0.0
         let neutralProtectedScale = autoCropIdleNeutralProtectedScale(scaleDemand.neutralRequiredScale)
-        let protectedScale = activeProtectedScale + ((neutralProtectedScale - activeProtectedScale) * release)
+        let protectedScale = plateauProtectedScale + ((neutralProtectedScale - plateauProtectedScale) * release)
         let finalScale = autoCropStableMotionEnvelopeScale(
             protectedScale: protectedScale,
             idleReleaseProgress: idleReleaseProgress
@@ -2008,6 +2045,179 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return Float(1.0)
         }
         return finiteScale
+    }
+
+    private static func autoCropLocalScalePlateau(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        currentTransform: StabilizerAutoTransform,
+        stablePositionPixels: vector_float2,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        transitionDurationSeconds: Double,
+        holdTimeSeconds: Double,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?,
+        initialScale: Float
+    ) -> Float {
+        let samples = autoCropLocalScalePlateauSamples(
+            preparedAnalysis: preparedAnalysis,
+            currentSeconds: currentSeconds,
+            transitionDurationSeconds: transitionDurationSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            samplingProfile: samplingProfile
+        )
+        guard !samples.isEmpty else {
+            return initialScale
+        }
+
+        let protectedScale = max(Float(1.0), initialScale.isFinite ? initialScale : Float(1.0))
+        return samples.reduce(protectedScale) { partial, sample in
+            let sampleTransform = autoCropActualSampleTransform(
+                preparedAnalysis: preparedAnalysis,
+                currentSeconds: currentSeconds,
+                sampleSeconds: sample.seconds,
+                currentTransform: currentTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+            let sampleContext = AutoCropTransformContext(
+                transform: sampleTransform,
+                outputSize: outputSize,
+                masterStrength: masterStrength
+            )
+            let samplePreferredPosition = sampleTransform.macroPixelOffset * masterStrength
+            let sampleBlackSafePosition = blackSafeAutoCropPosition(
+                preferredPositionPixels: samplePreferredPosition,
+                context: sampleContext,
+                samplingProfile: samplingProfile
+            )
+            let sampleStablePosition = autoCropCenterIsInsideSource(
+                cropPositionPixels: stablePositionPixels,
+                context: sampleContext
+            ) ? stablePositionPixels : sampleBlackSafePosition
+            let sampleScale = requiredAutoCropScale(
+                context: sampleContext,
+                cropPositionPixels: sampleStablePosition,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            ) + samplingProfile.scaleSafetyPadding
+            let weightedScale = Float(1.0) + (max(Float(0.0), sampleScale - Float(1.0)) * min(max(sample.influence, 0.0), 1.0))
+            return max(partial, weightedScale)
+        }
+    }
+
+    private static func autoCropLocalScalePlateauSamples(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        transitionDurationSeconds: Double,
+        holdTimeSeconds: Double,
+        samplingProfile: AutoCropSamplingProfile
+    ) -> [AutoCropLocalScaleSample] {
+        let frames = preparedAnalysis.frames
+        guard !frames.isEmpty,
+              currentSeconds.isFinite,
+              let firstTime = frames.first?.time,
+              let lastTime = frames.last?.time
+        else {
+            return []
+        }
+
+        let coreSeconds = min(
+            max(stabilizerAutoCropScalePlateauMinimumSeconds, max(0.0, holdTimeSeconds)),
+            stabilizerAutoCropScalePlateauMaximumSeconds
+        )
+        let releaseSeconds = min(
+            max(stabilizerAutoCropScalePlateauReleaseSeconds, max(0.0, transitionDurationSeconds) * 0.35),
+            stabilizerAutoCropScalePlateauReleaseSeconds * 2.0
+        )
+        let pastRadiusSeconds = min(coreSeconds + releaseSeconds, stabilizerAutoCropScalePlateauMaximumSeconds)
+        let startSeconds = max(firstTime, currentSeconds - pastRadiusSeconds)
+        let endSeconds = min(lastTime, currentSeconds)
+        guard startSeconds < endSeconds else {
+            return []
+        }
+
+        let spanSeconds = max(0.0, endSeconds - startSeconds)
+        let sampleLimit = max(1, samplingProfile.scalePlateauSampleLimit)
+        let stepSeconds = max(
+            samplingProfile.scalePlateauStepSeconds,
+            spanSeconds / Double(sampleLimit)
+        )
+        var samples: [AutoCropLocalScaleSample] = []
+        samples.reserveCapacity(min(sampleLimit + 2, 256))
+
+        func appendSample(seconds: Double) {
+            guard seconds >= firstTime,
+                  seconds <= lastTime,
+                  seconds < currentSeconds - 1e-6
+            else {
+                return
+            }
+            let influence = autoCropScalePlateauInfluence(
+                sampleSeconds: seconds,
+                currentSeconds: currentSeconds,
+                coreSeconds: coreSeconds,
+                releaseSeconds: releaseSeconds
+            )
+            guard influence > 0.0001 else {
+                return
+            }
+            if samples.contains(where: { abs($0.seconds - seconds) <= 1e-6 }) {
+                return
+            }
+            samples.append(
+                AutoCropLocalScaleSample(
+                    seconds: seconds,
+                    influence: influence
+                )
+            )
+        }
+
+        appendSample(seconds: startSeconds)
+        appendSample(seconds: endSeconds)
+
+        var sampleSeconds = currentSeconds - stepSeconds
+        while sampleSeconds >= startSeconds - 1e-9 {
+            appendSample(seconds: sampleSeconds)
+            sampleSeconds -= stepSeconds
+        }
+
+        return samples
+    }
+
+    private static func autoCropScalePlateauInfluence(
+        sampleSeconds: Double,
+        currentSeconds: Double,
+        coreSeconds: Double,
+        releaseSeconds: Double
+    ) -> Float {
+        guard sampleSeconds.isFinite,
+              currentSeconds.isFinite,
+              sampleSeconds <= currentSeconds
+        else {
+            return 0.0
+        }
+        let ageSeconds = currentSeconds - sampleSeconds
+        guard ageSeconds >= 0.0 else {
+            return 0.0
+        }
+        if ageSeconds <= max(0.0, coreSeconds) {
+            return 1.0
+        }
+        let edgeSeconds = max(0.0, releaseSeconds)
+        guard edgeSeconds > 1e-6 else {
+            return 0.0
+        }
+        let progress = 1.0 - ((ageSeconds - max(0.0, coreSeconds)) / edgeSeconds)
+        return easeInOutRamp(Float(progress))
     }
 
     private static func autoCropTransformIsQuiet(
