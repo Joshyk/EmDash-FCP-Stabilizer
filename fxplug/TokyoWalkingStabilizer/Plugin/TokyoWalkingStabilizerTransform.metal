@@ -148,8 +148,8 @@ static uint debugModeLabelChar(float debugMode, uint index) {
         return debugMode > 1.5 ? 80 : 82; // P or R
     }
     if (index == 1) { return 53; } // 5
-    if (index == 2) { return 48; } // 0
-    if (index == 3) { return 57; } // 9
+    if (index == 2) { return 49; } // 1
+    if (index == 3) { return 48; } // 0
     return 0;
 }
 
@@ -223,7 +223,7 @@ static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlay
     float glyphAdvance = 4.0 * textScale;
 
     float textX = panelX - 6.0;
-    float textY = rowY - 2.0;
+    float textY = rowY - (1.5 * overlayScale);
     if (textX < 0.0 || textY < 0.0 || textY >= glyphHeight * textScale) {
         return false;
     }
@@ -360,8 +360,8 @@ fragment float4 fragmentShader(
             float barX = panelX - labelWidth - labelGap;
             bool inBar = barX >= 0.0
                 && barX <= barWidth
-                && rowY >= (2.0 * overlayScale)
-                && rowY <= (11.0 * overlayScale);
+                && rowY >= (1.5 * overlayScale)
+                && rowY <= (11.5 * overlayScale);
             float activeWidth = barWidth * fill;
             float3 background = float3(0.02, 0.02, 0.02);
             float3 overlay = background;
