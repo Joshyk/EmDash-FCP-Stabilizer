@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.222"
+private let tokyoWalkingStabilizerVersion = "0.3.223"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -4956,7 +4956,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         os_log(
-            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | FJIT %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f rawCorr %.3f %.3f limitedCorr %.3f %.3f pulseLimited %.3f %.3f | SWOB %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f | bars X OFFSET %.3f Y OFFSET %.3f ROLL %.3f EDGE HIT %.3f TURN %.3f FOOT STEP %.3f STRIDE %.3f FAR WARP %.3f SMOOTH %.3f FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f RESIDUAL %.3f WALK CONF %.3f ZOOM %.3f",
+            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | FJIT %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f rawCorr %.3f %.3f limitedCorr %.3f %.3f pulseLimited %.3f %.3f | SWOB %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f | bars X OFFSET %.3f Y OFFSET %.3f ROLL %.3f FOOT STEP %.3f STRIDE %.3f FAR WARP %.3f TURN %.3f FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f SMOOTH %.3f TRACK CONF %.3f SHARPNESS %.3f RESIDUAL %.3f EDGE HIT %.3f WALK CONF %.3f ZOOM %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -4994,19 +4994,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic.x,
             diagnostic.y,
             diagnostic.z,
-            diagnostic.w,
-            diagnostic2.x,
             diagnostic2.y,
             diagnostic2.z,
             diagnostic2.w,
-            diagnostic3.x,
+            diagnostic2.x,
             diagnostic3.y,
             diagnostic3.z,
             diagnostic3.w,
             diagnostic4.x,
+            diagnostic3.x,
             diagnostic4.y,
             diagnostic4.z,
             diagnostic4.w,
+            diagnostic.w,
             diagnostic5.x,
             diagnostic5.y
         )

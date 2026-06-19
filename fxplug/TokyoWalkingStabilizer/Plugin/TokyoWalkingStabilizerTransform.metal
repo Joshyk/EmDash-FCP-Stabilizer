@@ -142,9 +142,9 @@ static uint debugModeLabelChar(float debugMode, uint index) {
     if (index == 0) {
         return debugMode > 1.5 ? 80 : 82; // P or R
     }
-    if (index == 1) { return 51; } // 3
-    if (index == 2) { return 53; } // 5
-    if (index == 3) { return 52; } // 4
+    if (index == 1) { return 53; } // 5
+    if (index == 2) { return 48; } // 0
+    if (index == 3) { return 53; } // 5
     return 0;
 }
 
