@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.240"
+private let tokyoWalkingStabilizerVersion = "0.3.241"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -2033,9 +2033,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let localInfluenceRadius: Int
         switch samplingProfile {
         case .playback:
-            localInfluenceRadius = 8
+            localInfluenceRadius = 18
         case .full:
-            localInfluenceRadius = 12
+            localInfluenceRadius = 30
         }
 
         let indexOffsets = (-localInfluenceRadius...localInfluenceRadius).filter { $0 != 0 }
@@ -2051,7 +2051,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 continue
             }
             let distance = min(max(Float(abs(offset)) / maximumOffset, 0.0), 1.0)
-            let influence = easeInOutRamp(1.0 - distance)
+            let influence: Float
+            if distance <= 0.7 {
+                influence = 1.0
+            } else {
+                influence = easeInOutRamp((1.0 - distance) / 0.3)
+            }
             guard influence > 0.0001 else {
                 continue
             }
