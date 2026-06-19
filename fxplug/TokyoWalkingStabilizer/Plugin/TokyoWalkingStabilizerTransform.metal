@@ -143,7 +143,7 @@ static uint debugModeLabelChar(float debugMode, uint index) {
     return 0;
 }
 
-static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uint c4, uint c5, uint c6, uint c7, uint c8, uint c9) {
+static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uint c4, uint c5, uint c6, uint c7, uint c8, uint c9, uint c10, uint c11) {
     switch (index) {
         case 0: return c0;
         case 1: return c1;
@@ -155,6 +155,8 @@ static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uin
         case 7: return c7;
         case 8: return c8;
         case 9: return c9;
+        case 10: return c10;
+        case 11: return c11;
         default: return 0;
     }
 }
@@ -162,39 +164,39 @@ static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uin
 static uint debugLabelChar(uint row, uint index, float debugMode) {
     switch (row) {
         case 0:
-            return debugLabelCharAt(index, 88, 79, 70, 70, 83, 69, 84, 0, 0, 0); // XOFFSET
+            return debugLabelCharAt(index, 88, 0, 79, 70, 70, 83, 69, 84, 0, 0, 0, 0); // X OFFSET
         case 1:
-            return debugLabelCharAt(index, 89, 79, 70, 70, 83, 69, 84, 0, 0, 0); // YOFFSET
+            return debugLabelCharAt(index, 89, 0, 79, 70, 70, 83, 69, 84, 0, 0, 0, 0); // Y OFFSET
         case 2:
-            return debugLabelCharAt(index, 82, 79, 76, 76, 0, 0, 0, 0, 0, 0); // ROLL
+            return debugLabelCharAt(index, 82, 79, 76, 76, 0, 0, 0, 0, 0, 0, 0, 0); // ROLL
         case 3:
-            return debugLabelCharAt(index, 70, 79, 79, 84, 83, 84, 69, 80, 0, 0); // FOOTSTEP
+            return debugLabelCharAt(index, 70, 79, 79, 84, 0, 83, 84, 69, 80, 0, 0, 0); // FOOT STEP
         case 4:
-            return debugLabelCharAt(index, 83, 84, 82, 73, 68, 69, 0, 0, 0, 0); // STRIDE
+            return debugLabelCharAt(index, 83, 84, 82, 73, 68, 69, 0, 0, 0, 0, 0, 0); // STRIDE
         case 5:
-            return debugLabelCharAt(index, 70, 65, 82, 87, 65, 82, 80, 0, 0, 0); // FARWARP
+            return debugLabelCharAt(index, 70, 65, 82, 0, 87, 65, 82, 80, 0, 0, 0, 0); // FAR WARP
         case 6:
-            return debugLabelCharAt(index, 84, 85, 82, 78, 0, 0, 0, 0, 0, 0); // TURN
+            return debugLabelCharAt(index, 84, 85, 82, 78, 0, 0, 0, 0, 0, 0, 0, 0); // TURN
         case 7:
-            return debugLabelCharAt(index, 70, 79, 79, 84, 67, 79, 78, 70, 0, 0); // FOOTCONF
+            return debugLabelCharAt(index, 70, 79, 79, 84, 0, 67, 79, 78, 70, 0, 0, 0); // FOOT CONF
         case 8:
-            return debugLabelCharAt(index, 83, 84, 82, 73, 68, 69, 67, 79, 78, 70); // STRIDECONF
+            return debugLabelCharAt(index, 83, 84, 82, 73, 68, 69, 0, 67, 79, 78, 70, 0); // STRIDE CONF
         case 9:
-            return debugLabelCharAt(index, 87, 65, 82, 80, 67, 79, 78, 70, 0, 0); // WARPCONF
+            return debugLabelCharAt(index, 87, 65, 82, 80, 0, 67, 79, 78, 70, 0, 0, 0); // WARP CONF
         case 10:
-            return debugLabelCharAt(index, 84, 85, 82, 78, 67, 79, 78, 70, 0, 0); // TURNCONF
+            return debugLabelCharAt(index, 84, 85, 82, 78, 0, 67, 79, 78, 70, 0, 0, 0); // TURN CONF
         case 11:
-            return debugLabelCharAt(index, 83, 77, 79, 79, 84, 72, 0, 0, 0, 0); // SMOOTH
+            return debugLabelCharAt(index, 83, 77, 79, 79, 84, 72, 0, 0, 0, 0, 0, 0); // SMOOTH
         case 12:
-            return debugLabelCharAt(index, 84, 82, 65, 67, 75, 67, 79, 78, 70, 0); // TRACKCONF
+            return debugLabelCharAt(index, 84, 82, 65, 67, 75, 0, 67, 79, 78, 70, 0, 0); // TRACK CONF
         case 13:
-            return debugLabelCharAt(index, 83, 72, 65, 82, 80, 78, 69, 83, 83, 0); // SHARPNESS
+            return debugLabelCharAt(index, 83, 72, 65, 82, 80, 78, 69, 83, 83, 0, 0, 0); // SHARPNESS
         case 14:
-            return debugLabelCharAt(index, 82, 69, 83, 73, 68, 85, 65, 76, 0, 0); // RESIDUAL
+            return debugLabelCharAt(index, 82, 69, 83, 73, 68, 85, 65, 76, 0, 0, 0, 0); // RESIDUAL
         case 15:
-            return debugLabelCharAt(index, 69, 68, 71, 69, 72, 73, 84, 0, 0, 0); // EDGEHIT
+            return debugLabelCharAt(index, 69, 68, 71, 69, 0, 72, 73, 84, 0, 0, 0, 0); // EDGE HIT
         case 16:
-            return debugLabelCharAt(index, 87, 65, 76, 75, 67, 79, 78, 70, 0, 0); // WALKCONF
+            return debugLabelCharAt(index, 87, 65, 76, 75, 0, 67, 79, 78, 70, 0, 0, 0); // WALK CONF
         case 17:
             return debugModeLabelChar(debugMode, index);
         default:
@@ -215,7 +217,7 @@ static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlay
     }
 
     uint index = uint(floor(textX / glyphAdvance));
-    if (index >= 10) {
+    if (index >= 12) {
         return false;
     }
 
@@ -274,7 +276,7 @@ fragment float4 fragmentShader(
         float overlayScale = clamp(transform->debugOverlayScale, 0.25, 8.0);
         float panelX = pixel.x - (16.0 * overlayScale);
         float panelY = pixel.y - (16.0 * overlayScale);
-        float labelWidth = 92.0 * overlayScale;
+        float labelWidth = 112.0 * overlayScale;
         float labelGap = 6.0 * overlayScale;
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;
