@@ -264,7 +264,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   window, release samples return with a linear ramp instead of holding an
   aggressive crop envelope, and nearby local scale demands are sampled from a
   seconds-based plateau window with a soft edge so the safety floor does not
-  pulse with short walking impulses even on high-frame-rate footage. Auto Crop
+  pulse with short walking impulses even on high-frame-rate footage. The plateau
+  also samples nearby analyzed frame times inside the Hold window so frame-level
+  safety spikes are held instead of appearing as tiny zoom steps. Auto Crop
   keeps a stable crop center and absorbs black-edge safety in the scale budget
   instead of moving the crop center side to side with each frame's macro offset.
   The local scale envelope evaluates nearby planned Auto Crop scale demand as

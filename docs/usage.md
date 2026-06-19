@@ -162,7 +162,9 @@ fallbacks.
   Hold Time window, and release samples slow the return with a linear ramp
   instead of holding an aggressive crop envelope. Nearby local scale demands are
   sampled from a seconds-based plateau window with a soft edge so short walking
-  impulses do not create visible zoom pulses on high-frame-rate footage. The
+  impulses do not create visible zoom pulses on high-frame-rate footage; the
+  plateau also samples nearby analyzed frame times inside the Hold window so
+  frame-level safety spikes are held instead of appearing as tiny zoom steps. The
   held scale keeps a stable crop center and absorbs black-edge safety in the
   scale budget instead of moving the crop center side to side with each frame's
   macro offset. The local scale envelope evaluates nearby planned Auto Crop

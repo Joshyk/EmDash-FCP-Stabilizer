@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.248"
+private let tokyoWalkingStabilizerVersion = "0.3.249"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -219,6 +219,24 @@ private enum AutoCropSamplingProfile: Int32 {
             return 0.08
         case .full:
             return 0.06
+        }
+    }
+
+    var scaleEnvelopeFrameSampleLimit: Int {
+        switch self {
+        case .playback:
+            return 120
+        case .full:
+            return 260
+        }
+    }
+
+    var scaleEnvelopeFrameFutureSeconds: Double {
+        switch self {
+        case .playback:
+            return 0.25
+        case .full:
+            return 0.35
         }
     }
 
@@ -2376,6 +2394,44 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         while sampleSeconds <= endSeconds + 1e-9 {
             appendSample(seconds: sampleSeconds)
             sampleSeconds += stepSeconds
+        }
+
+        let frameSampleStartSeconds = max(startSeconds, currentSeconds - max(0.0, holdTimeSeconds))
+        let frameSampleEndSeconds = min(
+            endSeconds,
+            currentSeconds + min(max(0.0, leadTimeSeconds), samplingProfile.scaleEnvelopeFrameFutureSeconds)
+        )
+        if frameSampleStartSeconds <= frameSampleEndSeconds {
+            var firstIndex = 0
+            var searchLow = 0
+            var searchHigh = frames.count
+            while searchLow < searchHigh {
+                let mid = (searchLow + searchHigh) / 2
+                if frames[mid].time < frameSampleStartSeconds {
+                    searchLow = mid + 1
+                } else {
+                    searchHigh = mid
+                }
+            }
+            firstIndex = min(max(searchLow, 0), max(0, frames.count - 1))
+
+            var lastIndex = firstIndex
+            while lastIndex < frames.count, frames[lastIndex].time <= frameSampleEndSeconds {
+                lastIndex += 1
+            }
+            lastIndex -= 1
+
+            if lastIndex >= firstIndex {
+                let frameCount = (lastIndex - firstIndex) + 1
+                let sampleLimit = max(1, samplingProfile.scaleEnvelopeFrameSampleLimit)
+                let frameStride = max(1, Int(ceil(Double(frameCount) / Double(sampleLimit))))
+                var frameIndex = firstIndex
+                while frameIndex <= lastIndex {
+                    appendSample(seconds: frames[frameIndex].time)
+                    frameIndex += frameStride
+                }
+                appendSample(seconds: frames[lastIndex].time)
+            }
         }
         return samples
     }
