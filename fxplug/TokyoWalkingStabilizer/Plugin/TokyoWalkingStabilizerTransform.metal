@@ -144,7 +144,7 @@ static uint debugModeLabelChar(float debugMode, uint index) {
     }
     if (index == 1) { return 53; } // 5
     if (index == 2) { return 48; } // 0
-    if (index == 3) { return 53; } // 5
+    if (index == 3) { return 55; } // 7
     return 0;
 }
 
@@ -283,8 +283,8 @@ fragment float4 fragmentShader(
         float overlayScale = clamp(transform->debugOverlayScale, 0.25, 8.0);
         float panelX = pixel.x - (16.0 * overlayScale);
         float panelY = pixel.y - (16.0 * overlayScale);
-        float labelWidth = 112.0 * overlayScale;
-        float labelGap = 6.0 * overlayScale;
+        float labelWidth = 104.0 * overlayScale;
+        float labelGap = 4.0 * overlayScale;
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;
         float panelWidth = labelWidth + labelGap + barWidth;
