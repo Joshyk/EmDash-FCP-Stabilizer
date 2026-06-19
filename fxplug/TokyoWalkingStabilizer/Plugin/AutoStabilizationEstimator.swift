@@ -94,12 +94,12 @@ struct StabilizerCorrectionStrengths {
     let farFieldWarp: Double
 
     static let defaultStrengths = StabilizerCorrectionStrengths(
-        microJitterX: 5.0,
-        microJitterY: 5.0,
-        microJitterRotation: 1.0,
-        strideWobbleX: 5.0,
-        strideWobbleY: 5.0,
-        strideWobbleRotation: 0.75,
+        microJitterX: 1.0,
+        microJitterY: 0.0,
+        microJitterRotation: 0.0,
+        strideWobbleX: 1.0,
+        strideWobbleY: 0.0,
+        strideWobbleRotation: 0.0,
         panStabilizationStrength: 0.2,
         farFieldWarp: 1.0
     )
@@ -1084,7 +1084,8 @@ enum AutoStabilizationEstimator {
         outputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
-        cache: RenderEstimateCache
+        cache: RenderEstimateCache,
+        limitFootstepContinuity: Bool = true
     ) -> StabilizerAutoTransform {
         let frames = analysis.frames
         guard frames.count >= 3 else {
@@ -1380,26 +1381,30 @@ enum AutoStabilizationEstimator {
         let macroCompensationRotation: Float = 0.0
         let rawMicroCompensationX = -(footstepPathXAtRender - microImpulseBaselineX) * xScale * microXCorrectionStrength
         let rawMicroCompensationY = -(footstepPathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
-        let limitedMicroCompensationX = footstepContinuityLimitedCorrection(
-            values: analysis.footstepPathX,
-            baselineValues: footstepBaselineXPath,
-            analysis: analysis,
-            centerTime: renderSeconds,
-            rawCorrection: rawMicroCompensationX,
-            outputScale: xScale,
-            requestedStrength: strengths.microJitterX,
-            fullImpulseScale: footstepImpulseFullScalePixels
-        )
-        let limitedMicroCompensationY = footstepContinuityLimitedCorrection(
-            values: analysis.footstepPathY,
-            baselineValues: footstepBaselineYPath,
-            analysis: analysis,
-            centerTime: renderSeconds,
-            rawCorrection: rawMicroCompensationY,
-            outputScale: yScale,
-            requestedStrength: strengths.microJitterY,
-            fullImpulseScale: footstepImpulseFullScalePixels
-        )
+        let limitedMicroCompensationX = limitFootstepContinuity && strengths.microJitterX > 0.0
+            ? footstepContinuityLimitedCorrection(
+                values: analysis.footstepPathX,
+                baselineValues: footstepBaselineXPath,
+                analysis: analysis,
+                centerTime: renderSeconds,
+                rawCorrection: rawMicroCompensationX,
+                outputScale: xScale,
+                requestedStrength: strengths.microJitterX,
+                fullImpulseScale: footstepImpulseFullScalePixels
+            )
+            : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationX, limitedAmount: 0.0)
+        let limitedMicroCompensationY = limitFootstepContinuity && strengths.microJitterY > 0.0
+            ? footstepContinuityLimitedCorrection(
+                values: analysis.footstepPathY,
+                baselineValues: footstepBaselineYPath,
+                analysis: analysis,
+                centerTime: renderSeconds,
+                rawCorrection: rawMicroCompensationY,
+                outputScale: yScale,
+                requestedStrength: strengths.microJitterY,
+                fullImpulseScale: footstepImpulseFullScalePixels
+            )
+            : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationY, limitedAmount: 0.0)
         let microCompensationX = limitedMicroCompensationX.limitedCorrection
         let microCompensationY = limitedMicroCompensationY.limitedCorrection
         let microCompensationRotation = -(footstepPathRollAtRender - microImpulseBaselineRoll) * microRotationCorrectionStrength
@@ -1605,7 +1610,8 @@ enum AutoStabilizationEstimator {
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
                     strengths: strengths,
-                    cache: renderEstimateCache
+                    cache: renderEstimateCache,
+                    limitFootstepContinuity: false
                 )
             weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
         }
