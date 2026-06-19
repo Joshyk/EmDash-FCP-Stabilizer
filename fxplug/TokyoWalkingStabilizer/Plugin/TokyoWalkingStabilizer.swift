@@ -43,7 +43,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.191"
+private let tokyoWalkingStabilizerVersion = "0.3.192"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -852,7 +852,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Auto Crop Transition Duration",
+            withName: "Auto Crop Zoom-Out Time",
             parameterID: ParameterID.autoCropTransitionDuration.rawValue,
             defaultValue: stabilizerDefaultAutoCropTransitionDuration,
             parameterMin: 0.0,
@@ -863,7 +863,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Auto Crop Lead Time",
+            withName: "Auto Crop Zoom-In Time",
             parameterID: ParameterID.autoCropLeadTime.rawValue,
             defaultValue: stabilizerDefaultAutoCropLeadTime,
             parameterMin: 0.0,

@@ -138,11 +138,12 @@ suppressed instead of producing a wavy image.
 path skips Auto Crop crop-safe framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
 or black. New effect instances default that menu to `Black Outside`.
-`Auto Crop Lead Time` controls how many seconds before an upcoming turn/crop
+`Auto Crop Zoom-In Time` controls how many seconds before an upcoming turn/crop
 demand Auto Crop starts moving zoom and position. For example, `10` starts the
 zoom/position ramp about 10 seconds before that future turn reaches the current
-frame; `20` starts it about 20 seconds early. `Auto Crop Transition Duration`
-controls the S-curve release/rounding time for the visible framing change. With
+frame; `20` starts it about 20 seconds early. `Auto Crop Zoom-Out Time`
+controls the S-curve release/rounding time as Auto Crop returns from a higher
+zoom after the black-edge risk has passed. With
 `Remove Black Edges` on, the render path still clamps zoom to the current
 frame's required safe crop so outside-source black is not exposed during the
 transition. High-quality render uses the full 17-sample Auto Crop lead window;

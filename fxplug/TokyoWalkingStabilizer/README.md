@@ -241,12 +241,13 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   frames avoid outside-source pixels. Turn it off to bypass Auto Crop crop-safe
   framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
-- `Auto Crop Lead Time`: default `10` seconds, range `0...120` seconds. This is
+- `Auto Crop Zoom-In Time`: default `10` seconds, range `0...120` seconds. This is
   how many seconds before an upcoming turn/crop demand Auto Crop starts moving
   both zoom and position; for example, `20` starts the ramp about 20 seconds
   before that future turn reaches the current frame.
-- `Auto Crop Transition Duration`: default `5` seconds, range `0...30` seconds.
-  This is the S-curve release/rounding time for visible Auto Crop framing changes.
+- `Auto Crop Zoom-Out Time`: default `5` seconds, range `0...30` seconds. This is
+  the S-curve release/rounding time as Auto Crop returns from a higher zoom after
+  the black-edge risk has passed.
   With `Remove Black Edges` on, final zoom is still clamped to the current frame's
   required safe crop so outside-source black is not exposed during the transition.
   High-quality render uses the full 17-sample Auto Crop lead window; proxy,
