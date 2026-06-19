@@ -1873,13 +1873,13 @@ enum AutoStabilizationEstimator {
         let centerWarpConfidence = clamp(rawCenterTransform.warpConfidence, min: 0.0, max: 1.0)
         let cappedWarpConfidence = min(smoothedWarpConfidence, centerWarpConfidence)
         let centerWarpScale = smoothedWarpConfidence > 1e-6 ? cappedWarpConfidence / smoothedWarpConfidence : 0.0
-        smoothedTransform.warpConfidence = cappedWarpConfidence
+        smoothedTransform.warpConfidence = smoothedWarpConfidence
         smoothedTransform.yawPitchProxy = smoothedWarpTransform.yawPitchProxy * centerWarpScale
         smoothedTransform.shear = smoothedWarpTransform.shear * centerWarpScale
         smoothedTransform.perspective = smoothedWarpTransform.perspective * centerWarpScale
-        smoothedTransform.trackingConfidence = rawCenterTransform.trackingConfidence
-        smoothedTransform.walkingTrackingConfidence = rawCenterTransform.walkingTrackingConfidence
-        smoothedTransform.motionConfidence = rawCenterTransform.motionConfidence
+        smoothedTransform.trackingConfidence = clamp(smoothedTransform.trackingConfidence, min: 0.0, max: 1.0)
+        smoothedTransform.walkingTrackingConfidence = clamp(smoothedTransform.walkingTrackingConfidence, min: 0.0, max: 1.0)
+        smoothedTransform.motionConfidence = clamp(smoothedTransform.motionConfidence, min: 0.0, max: 1.0)
         smoothedTransform.residual = rawCenterTransform.residual
         smoothedTransform.searchRadiusHitCount = rawCenterTransform.searchRadiusHitCount
         smoothedTransform.searchRadiusTotalCount = rawCenterTransform.searchRadiusTotalCount

@@ -99,6 +99,11 @@ static uint debugLabelRowBits(uint code, uint y) {
             return y == 2 ? 0x2 : 0x5;
         case 89: // Y
             return y < 2 ? 0x5 : 0x2;
+        case 90: // Z
+            if (y == 0 || y == 4) { return 0x7; }
+            if (y == 1) { return 0x1; }
+            if (y == 2) { return 0x2; }
+            return 0x4;
         case 48: // 0
             return (y == 0 || y == 4) ? 0x7 : 0x5;
         case 49: // 1
@@ -198,6 +203,8 @@ static uint debugLabelChar(uint row, uint index, float debugMode) {
         case 16:
             return debugLabelCharAt(index, 87, 65, 76, 75, 0, 67, 79, 78, 70, 0, 0, 0); // WALK CONF
         case 17:
+            return debugLabelCharAt(index, 90, 79, 79, 77, 0, 0, 0, 0, 0, 0, 0, 0); // ZOOM
+        case 18:
             return debugModeLabelChar(debugMode, index);
         default:
             return 0;
@@ -281,7 +288,7 @@ fragment float4 fragmentShader(
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;
         float panelWidth = labelWidth + labelGap + barWidth;
-        float panelHeight = 18.0 * rowHeight;
+        float panelHeight = 19.0 * rowHeight;
         if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
@@ -339,6 +346,9 @@ fragment float4 fragmentShader(
                 fill = saturate(transform->diagnostic5.x);
                 color = float3(0.2, 1.0, 0.75);
             } else if (row == 17) {
+                fill = saturate(transform->diagnostic5.y);
+                color = float3(1.0, 0.75, 0.15);
+            } else if (row == 18) {
                 fill = 1.0;
                 color = transform->debugMode > 1.5 ? float3(0.2, 0.95, 1.0) : float3(0.2, 1.0, 0.55);
             }
