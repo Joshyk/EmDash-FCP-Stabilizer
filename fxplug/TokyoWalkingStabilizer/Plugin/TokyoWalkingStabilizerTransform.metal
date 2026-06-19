@@ -125,6 +125,11 @@ static uint debugLabelRowBits(uint code, uint y) {
             return y == 1 ? 0x4 : 0x5;
         case 55: // 7
             return y == 0 ? 0x7 : 0x1;
+        case 56: // 8
+            return (y == 0 || y == 2 || y == 4) ? 0x7 : 0x5;
+        case 57: // 9
+            if (y == 0 || y == 2 || y == 4) { return 0x7; }
+            return y == 1 ? 0x5 : 0x1;
         default:
             return 0x0;
     }
@@ -144,7 +149,7 @@ static uint debugModeLabelChar(float debugMode, uint index) {
     }
     if (index == 1) { return 53; } // 5
     if (index == 2) { return 48; } // 0
-    if (index == 3) { return 56; } // 8
+    if (index == 3) { return 57; } // 9
     return 0;
 }
 
@@ -197,7 +202,7 @@ static uint debugLabelChar(uint row, uint index, float debugMode) {
         case 13:
             return debugLabelCharAt(index, 83, 72, 65, 82, 80, 78, 69, 83, 83, 0, 0, 0); // SHARPNESS
         case 14:
-            return debugLabelCharAt(index, 82, 69, 83, 73, 68, 85, 65, 76, 0, 0, 0, 0); // RESIDUAL
+            return debugLabelCharAt(index, 77, 65, 84, 67, 72, 0, 81, 85, 65, 76, 0, 0); // MATCH QUAL
         case 15:
             return debugLabelCharAt(index, 69, 68, 71, 69, 0, 72, 73, 84, 0, 0, 0, 0); // EDGE HIT
         case 16:

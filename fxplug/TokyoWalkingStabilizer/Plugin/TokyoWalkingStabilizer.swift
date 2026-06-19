@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.226"
+private let tokyoWalkingStabilizerVersion = "0.3.227"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -5008,7 +5008,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic5.y
         )
         os_log(
-            "Debug Overlay bars quality | FxPlug %{public}@ | FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f RESIDUAL %.3f EDGE HIT %.3f WALK CONF %.3f",
+            "Debug Overlay bars quality | FxPlug %{public}@ | FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f MATCH QUAL %.3f EDGE HIT %.3f WALK CONF %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -5289,7 +5289,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             } else {
                 searchRadiusQuality = 0.0
             }
-            let residualActivity = min(1.0, max(0.0, autoTransform.residual * 50.0))
+            let fitQuality = max(0.0, 1.0 - min(1.0, autoTransform.residual * 50.0))
             let rotationActivity = min(1.0, max(
                 abs(autoTransform.rotationDegrees),
                 abs(autoTransform.rawRotationDegrees),
@@ -5345,7 +5345,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 min(1.0, autoTransform.turnConfidence),
                 min(1.0, autoTransform.trackingConfidence),
                 AutoStabilizationEstimator.blurEvidenceQuality(autoTransform.blurAmount),
-                residualActivity
+                fitQuality
             )
             diagnostic5 = vector_float4(
                 min(1.0, autoTransform.walkingTrackingConfidence),
