@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.202"
+private let tokyoWalkingStabilizerVersion = "0.3.203"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -186,12 +186,7 @@ private enum AutoCropSamplingProfile: Int32 {
     }
 
     var usesStabilizedSampleTransforms: Bool {
-        switch self {
-        case .playback:
-            return false
-        case .full:
-            return true
-        }
+        false
     }
 
     var displayName: String {
