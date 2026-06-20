@@ -381,7 +381,7 @@ should use robust window evidence instead of the single worst frame in the windo
 bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
 full confidence sooner than the broad UI scale, and the default Y strength should remain high
 enough to remove step follow-through. Stride Wobble
-Rotation Strength should default to `0.5`.
+Rotation Strength should default to `1.0`.
 Footstep Jitter and Stride Wobble may use a count-aware walking-band tracking
 gate that eases block coverage only when enough motion blocks were accepted. Far-field Warp
 and Turn Smoothing should keep the stricter tracking gate so weak evidence does not create
@@ -416,7 +416,7 @@ Inspector control, debug row, feedback band, or cache-derived diagnostic path.
 
 `Far-field Warp Strength` should expose one bundled small-clamp control for deskew/shear,
 yaw/pitch proxy, and perspective/distort trim. It is intended only for distant ridge-line
-shake in walking landscape footage. Keep the default at `1.0`, expose up to `12.0`, keep the
+shake in walking landscape footage. Keep the default at `0.5`, expose up to `12.0`, keep the
 previous `4.0` strength response unchanged, keep each unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
 debug/status output, and render the correction from the current frame's local deviation from
 its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long-term drift

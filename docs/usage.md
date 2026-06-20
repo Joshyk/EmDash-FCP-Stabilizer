@@ -106,8 +106,7 @@ fallbacks.
   same turn ownership gate suppresses stride correction during monotonic broad
   turns so the medium band does not fight Turn Smoothing.
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
-  is `0.2` and the maximum is `4.0`. The conservative default protects the horizon in
-  walking footage. The correction is measured from the
+  is `1.0` and the maximum is `4.0`. The correction is measured from the
   footstep-cleaned baseline and clamped at full detected-band removal during render, so high
   values do not add inverse shake. It is not measured from the raw or jerk-limited broad path,
   so Footstep Jitter shock is not removed a second time.
@@ -124,7 +123,7 @@ fallbacks.
   uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
   trim after translation and roll are removed. Render uses only the current frame's local
   deviation from its own `0.10`/`1.0` second outer-frame linear warp baseline, so
-  accumulated drift does not turn into a fixed deskew. The default is `1.0`, the previous
+  accumulated drift does not turn into a fixed deskew. The default is `0.5`, the previous
   `4.0` strength response is unchanged, the maximum is `12.0`, and `0` fully disables warp.
   Render gates warp with walking-footage tracking
   quality and search-radius headroom. The tracking gate starts early enough for moderate
@@ -337,7 +336,7 @@ FxPlug.
   of that broad motion through the whole walking-band chain.
   Footstep Jitter confidence is evaluated on the current render frame instead of inheriting
   the worst residual from the wider turn-detection window.
-- `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
+- `Far-field Warp Strength` defaults to `0.5` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps keep the
   previous cap of shear `0.016`, yaw/pitch proxy `0.010`, and perspective `0.006`; values up
   to `12` extend the same slope for extra headroom. The applied value is the local warp band

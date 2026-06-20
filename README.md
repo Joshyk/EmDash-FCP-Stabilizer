@@ -116,7 +116,7 @@ broad path as its band input. Its residual gate uses robust window percentiles
 instead of letting a single bad frame suppress the whole band. Medium stride
 bands reach full confidence earlier than the broad UI scale so real walking
 follow-through is corrected by the stride stage. X and Y default to `1.0` and run
-up to `10.0`; the rotation default is `0.5`. The X band
+up to `10.0`; the rotation default is `1.0`. The X band
 uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
 does not fight broad Turn Smoothing during real horizontal turns.
 
@@ -132,7 +132,7 @@ low-evidence frames do not get a hidden minimum turn correction.
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
 frame's local deviation from its own `1.0` second outer-frame linear baseline,
-so long-term drift does not become a fixed deskew. The default is `1.0`, the
+so long-term drift does not become a fixed deskew. The default is `0.5`, the
 previous `4.0` strength response is unchanged, and the maximum is now `12.0`.
 The render path gates warp with walking-footage tracking quality and
 search-radius headroom. The tracking gate starts early enough for moderate

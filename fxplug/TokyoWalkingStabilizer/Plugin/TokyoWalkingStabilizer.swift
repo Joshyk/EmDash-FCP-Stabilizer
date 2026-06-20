@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.4.1"
+private let tokyoWalkingStabilizerVersion = "0.4.2"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -971,7 +971,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Stride Wobble Rotation Strength",
             parameterID: ParameterID.strideWobbleRotationStrength.rawValue,
-            defaultValue: 0.5,
+            defaultValue: 1.0,
             parameterMin: 0.0,
             parameterMax: 4.0,
             sliderMin: 0.0,
@@ -982,7 +982,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Far-field Warp Strength",
             parameterID: ParameterID.farFieldWarpStrength.rawValue,
-            defaultValue: 1.0,
+            defaultValue: 0.5,
             parameterMin: 0.0,
             parameterMax: stabilizerMaximumFarFieldWarpStrength,
             sliderMin: 0.0,
@@ -1154,9 +1154,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             microJitterRotationStrength: 0.5,
             strideWobbleXStrength: 1.0,
             strideWobbleYStrength: 1.0,
-            strideWobbleRotationStrength: 0.5,
+            strideWobbleRotationStrength: 1.0,
             panStabilizationStrength: 0.2,
-            farFieldWarpStrength: 1.0,
+            farFieldWarpStrength: 0.5,
             panSmoothSeconds: stabilizerDefaultTurnDetectionWindowSeconds,
             autoCropTransitionDuration: stabilizerDefaultAutoCropTransitionDuration,
             autoCropLeadTime: stabilizerDefaultAutoCropLeadTime,
