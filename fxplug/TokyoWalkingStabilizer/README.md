@@ -182,7 +182,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
   worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale.
-  X and Y default to `1.0` and run up to `10.0`; the rotation default is `1.0`.
+  X and Y default to `1.0` and run up to `10.0`; the rotation default is `0.5`.
   The X band
   uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
   does not fight broad Turn Smoothing during real horizontal turns. FJIT and SWOB use a

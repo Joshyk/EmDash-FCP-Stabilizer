@@ -383,7 +383,7 @@ should use robust window evidence instead of the single worst frame in the windo
 bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
 full confidence sooner than the broad UI scale, and the default Y strength should remain high
 enough to remove step follow-through. Stride Wobble
-Rotation Strength should default to `1.0`.
+Rotation Strength should default to `0.5`.
 Footstep Jitter and Stride Wobble may use a count-aware walking-band tracking
 gate that eases block coverage only when enough motion blocks were accepted. Far-field Warp
 and Turn Smoothing should keep the stricter tracking gate so weak evidence does not create

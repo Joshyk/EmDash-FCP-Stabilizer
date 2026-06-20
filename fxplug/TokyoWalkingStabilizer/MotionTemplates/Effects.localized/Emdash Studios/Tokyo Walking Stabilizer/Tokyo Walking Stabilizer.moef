@@ -277,7 +277,7 @@
 				<parameter name="Footstep Jitter Rotation Strength" id="8" flags="12884901904" default="0.5" value="0.5"/>
 				<parameter name="Stride Wobble X Strength" id="29" flags="12884901904" default="1" value="1"/>
 					<parameter name="Stride Wobble Y Strength" id="30" flags="12884901904" default="1" value="1"/>
-				<parameter name="Stride Wobble Rotation Strength" id="31" flags="12884901904" default="1" value="1"/>
+				<parameter name="Stride Wobble Rotation Strength" id="31" flags="12884901904" default="0.5" value="0.5"/>
 				<parameter name="Overall Strength" id="1" flags="12884901904" default="1" value="1"/>
 				<parameter name="Far-field Warp Strength" id="45" flags="12884901904" default="0.5" value="0.5"/>
 					<parameter name="Turn Smoothing Strength" id="23" flags="12884901904" default="0.2" value="0.2"/>

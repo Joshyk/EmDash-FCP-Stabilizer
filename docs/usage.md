@@ -90,7 +90,7 @@ fallbacks.
   ownership gate is applied before the footstep-cleaned X path feeds Stride Wobble, so
   Stride does not inherit turn motion already chopped by Footstep Jitter.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
-  default is `0.2` and the maximum is `4.0`. The default is intentionally conservative so
+  default is `0.5` and the maximum is `4.0`. The default is intentionally conservative so
   walking footage does not lose a stable horizon. Values above `1.0` can compensate when
   frame-local confidence makes the detected impulse visibly under-corrected, but render
   output still clamps at full detected-impulse removal to avoid inverse shake.
@@ -106,7 +106,7 @@ fallbacks.
   same turn ownership gate suppresses stride correction during monotonic broad
   turns so the medium band does not fight Turn Smoothing.
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
-  is `1.0` and the maximum is `4.0`. The correction is measured from the
+  is `0.5` and the maximum is `4.0`. The correction is measured from the
   footstep-cleaned baseline and clamped at full detected-band removal during render, so high
   values do not add inverse shake. It is not measured from the raw or jerk-limited broad path,
   so Footstep Jitter shock is not removed a second time.
