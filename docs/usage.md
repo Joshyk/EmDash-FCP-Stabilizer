@@ -230,7 +230,7 @@ Analysis range starts. For bundle-local caches, pass
 `--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache` for a range-specific file under that root's `caches/` directory. Add
 `--json` for structured output, `--window 0.5` to inspect the strongest frame near
-the note, `--turn-window` to match a non-default Inspector `Turn Detection Window`, and
+the note, `--turn-window` to match a non-default Inspector `Turn Detection Window` when it is not `6.0`, and
 `--output-size 1920x1080` to scale translation estimates to a preview size.
 
 Use `--list-caches` with the bundle cache root to inspect saved cache readiness before

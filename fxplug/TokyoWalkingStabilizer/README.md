@@ -204,8 +204,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   It does not change Y or roll, and the macro correction is soft-limited to a small
   output-edge budget.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
-  motion paths. The UI value is used as the TURN window, and the UI minimum is the fixed
-  `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
+  motion paths. The default is `6.0` seconds. The UI value is used as the TURN window,
+  and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run
+  shorter than SWOB.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available. The render
@@ -338,7 +339,7 @@ without repairing, promoting, or deleting them.
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining shake from the prepared motion paths and tracking diagnostics, then
 prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order. Pass
-`--turn-window` when the Inspector `Turn Detection Window` is not the default `2.0`.
+`--turn-window` when the Inspector `Turn Detection Window` is not the default `6.0`.
 It uses the same footstep-first band split as render, so `SWOB` and `TURN`
 diagnostics are computed from the footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band

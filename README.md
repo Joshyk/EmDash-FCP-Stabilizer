@@ -123,7 +123,7 @@ does not fight broad Turn Smoothing during real horizontal turns.
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
 Y or roll, and is soft-limited to a small output-edge budget during render.
-`Turn Detection Window` defaults to `2.0` seconds and comes from the Inspector UI
+`Turn Detection Window` defaults to `6.0` seconds and comes from the Inspector UI
 value. Its UI minimum is the fixed `2.0` second Stride Wobble window, so TURN
 cannot run shorter than SWOB.
 TURN confidence now requires both tracking evidence and a real X turn band, so
@@ -414,7 +414,7 @@ requested `--window` and prints the selected clip time separately from the
 requested note time. For bundle-local caches, pass
 `--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache /path/to/host-analysis-v2.json`. Use `--json` for machine-readable output,
-`--turn-window` to match a non-default Inspector `Turn Detection Window`, and
+`--turn-window` to match a non-default Inspector `Turn Detection Window` when it is not `6.0`, and
 `--output-size 1920x1080` when you want pixel estimates scaled to a target preview size.
 
 Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"`
