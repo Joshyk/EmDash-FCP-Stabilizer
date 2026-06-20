@@ -192,7 +192,7 @@ measure Footstep Jitter against the outer-frame baseline first, then compute Str
 and Turn diagnostics from the footstep-cleaned path.
 The feedback report should print bands in Debug Overlay/render order (`FJIT`, `SWOB`,
 `WARP`, `TURN`) and choose the top remaining band separately. Its `--turn-window` option should
-match the Inspector `Turn Detection Window` when that UI value is not the default `3.0`.
+match the Inspector `Turn Detection Window` when that UI value is not the default `2.0`.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,
 reject outlier blocks, and expose low block-confidence states in status/debug output instead
 of silently falling back to a coarse global shift. Walking landscape analysis should
@@ -366,23 +366,22 @@ correction. Moderate landing impulses should not be buried by an overly high
 surrounding-noise threshold.
 The surrounding-noise floor should be capped below the full impulse response point so repeated
 walking motion does not hide a real center-frame landing impulse.
-Footstep Jitter strength values should be direct removal amounts with an exposed maximum of
-`4.0`. Values above `1.0` may compensate when frame-local confidence makes correction too
-weak, but applied correction must clamp at full detected-impulse removal during render so
-high slider values do not add inverse shake. Footstep Jitter Rotation Strength should
-default to `0.2` so walking footage keeps a stable horizon unless the user explicitly asks
-for stronger roll correction.
+Footstep Jitter strength values should be direct removal amounts with exposed X/Y maximums
+of `10.0` and an exposed Rotation maximum of `4.0`. Values above `1.0` may compensate when
+frame-local confidence makes correction too weak, but applied correction must clamp at full
+detected-impulse removal during render so high slider values do not add inverse shake.
+Footstep Jitter Rotation Strength should default to `0.5`.
 Medium-period walking shake that is longer than Footstep Jitter should be handled by the
 render-time `Stride Wobble` stage. Keep its time window fixed
 inside the implementation at `2.0` seconds, expose only X/Y/Rotation strength controls with
-maximum `4.0`, do not add a user-facing Stride Wobble window, compute it from the
-footstep-cleaned baseline, and feed Turn Smoothing from the stride-smoothed path so the same
-band is not removed twice. Stride Wobble residual gating
+X/Y maximums of `10.0` and a Rotation maximum of `4.0`, do not add a user-facing Stride
+Wobble window, compute it from the footstep-cleaned baseline, and feed Turn Smoothing from
+the stride-smoothed path so the same band is not removed twice. Stride Wobble residual gating
 should use robust window evidence instead of the single worst frame in the window, so one
 bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
 full confidence sooner than the broad UI scale, and the default Y strength should remain high
 enough to remove step follow-through. Stride Wobble
-Rotation Strength should default to `0.2` for the same horizon-preserving reason.
+Rotation Strength should default to `0.5`.
 Footstep Jitter and Stride Wobble may use a count-aware walking-band tracking
 gate that eases block coverage only when enough motion blocks were accepted. Far-field Warp
 and Turn Smoothing should keep the stricter tracking gate so weak evidence does not create

@@ -153,7 +153,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 ## Stabilization Model
 
 - `Footstep Jitter X Strength`: direct amount for horizontal frame-local footstep correction.
-  The default is `5.0`; values above `1.0` can compensate for weak frame confidence but are
+  The default is `1.0`; values above `1.0` can compensate for weak frame confidence but are
   clamped during render to avoid inverse shake. The maximum is `10.0`. The walking-band confidence response is more
   assertive than TURN and WARP for medium-confidence frame evidence, but zero confidence
   still produces zero correction.
@@ -165,7 +165,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   before Stride Wobble reads the footstep-cleaned path, so Stride does not inherit a turn
   that Footstep already chopped into small X corrections.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
-  The default is `5.0`, and the maximum is `10.0`.
+  The default is `1.0`, and the maximum is `10.0`.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
   `0.10` second shock region and predicts from outer samples up to `1.0` second away for
   X/Y/rotation, so landing shock is treated as a frame-level impulse instead of being
@@ -173,7 +173,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   a little sooner, while zero evidence and noisy unsupported frames still produce zero
   correction.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep correction. It
-  defaults to `0.2` to protect the horizon in walking footage. Values above `1.0` can
+  defaults to `0.5`. Values above `1.0` can
   compensate when frame-local confidence makes the detected impulse visibly under-corrected,
   but output remains clamped at full detected-impulse removal.
 - `Stride Wobble X/Y/Rotation Strength`: direct amount for medium-period walking wobble. The
@@ -181,8 +181,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
   worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale.
-  X and Y default to `5.0` and run up to `10.0`; the rotation default is `0.2` to protect
-  the horizon while step follow-through is handled by the stride stage. The X band
+  X and Y default to `1.0` and run up to `10.0`; the rotation default is `0.5`.
+  The X band
   uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
   does not fight broad Turn Smoothing during real horizontal turns. FJIT and SWOB use a
   count-aware walking-band tracking gate; WARP and TURN keep the stricter tracking gate.
@@ -252,10 +252,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   parameter is retained for compatibility and now acts as the maximum lead time
   into a strong internal Auto Crop zoom keypoint. Smaller zoom keypoints scale
   the effective lead down from their zoom delta.
-- `Auto Crop Zoom-Out Time`: default `5` seconds, range `0...30` seconds. This
+- `Auto Crop Zoom-Out Time`: default `10` seconds, range `0...30` seconds. This
   parameter is retained for compatibility and now defines the maximum release
   length after a strong Auto Crop zoom keypoint.
-- `Auto Crop Hold Time`: default `4` seconds, range `0...30` seconds. This
+- `Auto Crop Hold Time`: default `2` seconds, range `0...30` seconds. This
   parameter is retained for compatibility and now defines the maximum hold after
   a strong Auto Crop zoom keypoint peak. With `Remove Black Edges` on, final crop
   zoom is read from a cached keypoint plan built from prepared analysis instead
@@ -336,7 +336,7 @@ without repairing, promoting, or deleting them.
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining shake from the prepared motion paths and tracking diagnostics, then
 prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order. Pass
-`--turn-window` when the Inspector `Turn Detection Window` is not the default `6.0`.
+`--turn-window` when the Inspector `Turn Detection Window` is not the default `2.0`.
 It uses the same footstep-first band split as render, so `SWOB` and `TURN`
 diagnostics are computed from the footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band
