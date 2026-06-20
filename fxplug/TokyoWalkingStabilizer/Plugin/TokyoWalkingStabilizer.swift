@@ -72,6 +72,7 @@ private let stabilizerAutoCropKeypointCoveragePassLimit = 64
 private let stabilizerAutoCropSubtleZoomMaximumDelta: Float = 0.08
 private let stabilizerAutoCropSubtleZoomMultiplier: Float = 0.5
 private let stabilizerAutoCropDurationScaleReferenceDelta: Float = 0.10
+private let stabilizerAutoCropMinimumDurationScale = 0.5
 private let stabilizerAutoCropMinimumScaledDurationSeconds = 0.25
 private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
@@ -2422,7 +2423,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return 0.0
         }
         let normalized = delta / stabilizerAutoCropDurationScaleReferenceDelta
-        return Double(min(max(normalized, Float(0.0)), Float(1.0)))
+        let scaled = Double(min(max(normalized, Float(0.0)), Float(1.0)))
+        return max(stabilizerAutoCropMinimumDurationScale, scaled)
     }
 
     private static func autoCropScaledZoomDuration(
