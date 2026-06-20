@@ -327,9 +327,9 @@ cache.
 
 Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, and fingerprints instead of
-every frame's full luma sample. Schema 22 analysis keeps the dense `9 x 7` motion
-grid and adds narrower upper-row far-field detail blocks before sub-pixel block
-shift refinement for higher precision prepared warp paths.
+every frame's full luma sample. Schema 23 analysis keeps the dense `9 x 7` motion
+grid, adds narrower upper-row far-field detail blocks, and uses denser in-block
+sampling for those high far-field blocks before sub-pixel block shift refinement.
 Cache writing uses the prepared analysis frame set as the authoritative timeline,
 so a reduced retained source-frame map does not prevent a completed prepared path
 from being saved.
