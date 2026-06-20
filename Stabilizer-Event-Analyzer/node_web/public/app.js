@@ -42,6 +42,7 @@ const el = {
 function renderAppVersion(version, config = {}) {
   const parts = [];
   if (version) parts.push(`v${version}`);
+  if (config.cacheSchemaVersion) parts.push(`schema ${config.cacheSchemaVersion}`);
   if (config.gitCommit) parts.push(config.gitCommit);
   if (config.worktreeName) parts.push(config.worktreeName);
   el.versionText.textContent = parts.join(" / ");
@@ -102,7 +103,10 @@ function jobStatusText(job) {
   const stage = job.stage || job.status || "";
   const message = /^progress\s+/.test(job.message || "") ? "" : (job.message || "");
   const status = message ? `${stage}: ${message}` : stage;
-  return withProgress(job, status);
+  const schemaVersion = (job && job.cacheSchemaVersion) || (state.config && state.config.cacheSchemaVersion);
+  const statusText = withProgress(job, status);
+  if (!schemaVersion) return statusText;
+  return `Writer schema: ${schemaVersion}\n${statusText}`;
 }
 
 function renderBatchSummary(result) {
@@ -364,7 +368,8 @@ async function loadConfig() {
   renderAppVersion(state.config.appVersion || window.STABILIZER_EVENT_ANALYZER_VERSION, state.config);
   el.cacheRootInput.value = state.config.cacheRoot || "";
   el.sampleScaleInput.value = String(state.config.defaultSampleScalePercent || 100);
-  el.configText.textContent = `Imports: same folder as selected export | ${state.config.repoRoot || ""}`;
+  const schemaText = state.config.cacheSchemaVersion ? ` | Writer schema: ${state.config.cacheSchemaVersion}` : "";
+  el.configText.textContent = `Imports: same folder as selected export${schemaText} | ${state.config.repoRoot || ""}`;
   renderExports([]);
   updateLastAnalysisState();
   updateRunState();

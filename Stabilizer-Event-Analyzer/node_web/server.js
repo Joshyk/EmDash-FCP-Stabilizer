@@ -20,6 +20,8 @@ const PORT = Number(process.env.STABILIZER_WEB_PORT || 3091);
 const OUTPUT_DIR = expandPath(process.env.STABILIZER_OUTPUT_DIR || path.join(REPO_ROOT, "xml", "fcpxml_imports"));
 const CACHE_ROOT = expandPath(process.env.STABILIZER_CACHE_ROOT || "");
 const JOB_DIR = path.join(REPO_ROOT, ".cache", "node_web_jobs");
+const NATIVE_ANALYZER_SOURCE = path.join(REPO_ROOT, "native_analyzer", "Sources", "StabilizerEventAnalyzer", "main.swift");
+const CACHE_SCHEMA_VERSION = readNativeAnalyzerCacheSchemaVersion();
 const SAMPLE_SCALE_PERCENT_CHOICES = [100, 75, 50, 25, 10];
 const DEFAULT_SAMPLE_SCALE_PERCENT = 100;
 const jobs = new Map();
@@ -68,6 +70,16 @@ function shortGitCommit(cwd) {
     }).trim();
   } catch {
     return "";
+  }
+}
+
+function readNativeAnalyzerCacheSchemaVersion() {
+  try {
+    const source = fs.readFileSync(NATIVE_ANALYZER_SOURCE, "utf8");
+    const match = /^\s*private\s+let\s+cacheSchemaVersion\s*=\s*(\d+)\s*$/m.exec(source);
+    return match ? Number(match[1]) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -122,6 +134,7 @@ function publicJob(job) {
     updatedAt: job.updatedAt,
     elapsedSeconds: Math.max(0, Math.round((elapsedUntil - job.startedAt) / 1000)),
     cancellable: job.status === "running" || job.status === "cancelling",
+    cacheSchemaVersion: job.cacheSchemaVersion || CACHE_SCHEMA_VERSION,
     progress: job.progress,
     result: job.result,
     error: job.error,
@@ -646,6 +659,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
   return {
     status: "ok",
     jobId: id,
+    cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     sourcePath,
     cacheRoot: analysisCacheRoot,
     importsDir,
@@ -724,7 +738,12 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
 
 function startRunJob(body) {
   const id = jobId();
-  updateJob(id, { status: "running", stage: "queued", message: "Queued Stabilizer Event analysis." });
+  updateJob(id, {
+    status: "running",
+    stage: "queued",
+    message: "Queued Stabilizer Event analysis.",
+    cacheSchemaVersion: CACHE_SCHEMA_VERSION,
+  });
   setImmediate(async () => {
     try {
       const result = await runAnalyzer(body, (stage, message, patch = {}) => {
@@ -797,6 +816,7 @@ async function handleApi(req, res, pathname) {
         outputDir: OUTPUT_DIR,
         defaultImportsDir: "",
         cacheRoot: CACHE_ROOT,
+        cacheSchemaVersion: CACHE_SCHEMA_VERSION,
         sampleScalePercentChoices: SAMPLE_SCALE_PERCENT_CHOICES,
         defaultSampleScalePercent: DEFAULT_SAMPLE_SCALE_PERCENT,
         python: PYTHON,
@@ -914,4 +934,5 @@ module.exports = {
   parseAnalyzerProgressLine,
   processFailureDetails,
   processFailureMessage,
+  readNativeAnalyzerCacheSchemaVersion,
 };

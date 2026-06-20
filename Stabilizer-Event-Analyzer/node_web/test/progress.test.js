@@ -9,6 +9,7 @@ const {
   parseAnalyzerProgressLine,
   processFailureDetails,
   processFailureMessage,
+  readNativeAnalyzerCacheSchemaVersion,
 } = require("../server.js");
 
 test("buildCacheRootFromAnalysis requires analyzer-normalized cache root", () => {
@@ -20,6 +21,12 @@ test("buildCacheRootFromAnalysis requires analyzer-normalized cache root", () =>
     () => buildCacheRootFromAnalysis({}),
     /analyzer did not return a normalized cache root/
   );
+});
+
+test("readNativeAnalyzerCacheSchemaVersion exposes frontend writer schema", () => {
+  const schemaVersion = readNativeAnalyzerCacheSchemaVersion();
+  assert.equal(Number.isInteger(schemaVersion), true);
+  assert.ok(schemaVersion >= 1);
 });
 
 test("parseAnalyzerProgressLine parses frame progress", () => {
