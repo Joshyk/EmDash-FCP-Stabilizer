@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.263"
+private let tokyoWalkingStabilizerVersion = "0.3.264"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -65,7 +65,8 @@ private let stabilizerAutoCropKeypointCoverageToleranceDelta: Float = 0.002
 private let stabilizerAutoCropKeypointDuplicateSeconds = 0.125
 private let stabilizerAutoCropKeypointCoveragePassLimit = 64
 private let stabilizerAutoCropSubtleZoomMaximumDelta: Float = 0.08
-private let stabilizerAutoCropSubtleZoomMultiplier: Float = 0.5
+private let stabilizerAutoCropSubtleZoomMultiplier: Float = 0.25
+private let stabilizerAutoCropSubtleZoomSafetyToleranceDelta: Float = 0.008
 private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
@@ -2377,7 +2378,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return paddedScale
         }
         let attenuatedScale = Float(1.0) + (paddedDelta * stabilizerAutoCropSubtleZoomMultiplier)
-        let safetyFloor = max(Float(1.0), safeDemandScale - stabilizerAutoCropKeypointCoverageToleranceDelta)
+        let safetyFloor = max(Float(1.0), safeDemandScale - stabilizerAutoCropSubtleZoomSafetyToleranceDelta)
         return max(attenuatedScale, safetyFloor)
     }
 

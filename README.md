@@ -158,10 +158,11 @@ the crop center inside the planned scale. A coverage repair pass checks the
 prepared analysis against that curve and adds only the keypoints needed to keep
 the curve above black-edge safety demand, so occasional outside-source boxes do
 not force frame-by-frame zoom calculation. Low-demand keypoints that sit near
-identity halve their zoom delta, so subtle or nearly idle sections do not remain
-as visibly cropped while strong turn peaks keep their full planned zoom. When no
-keypoint is active and the transform stays quiet for a couple seconds, Auto Crop
-returns to identity so idle shots settle near zero crop zoom.
+identity trim their residual zoom delta to about one quarter, so subtle or nearly
+idle sections do not remain as visibly cropped while strong turn peaks keep
+their full planned zoom. When no keypoint is active and the transform stays
+quiet for a couple seconds, Auto Crop returns to identity so idle shots settle
+near zero crop zoom.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
