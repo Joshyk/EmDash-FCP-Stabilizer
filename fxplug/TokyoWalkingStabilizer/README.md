@@ -261,8 +261,11 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   recalculating zoom every render frame. Each local peak safe-crop demand becomes
   an internal zoom keypoint; the visible crop-zoom bar follows that smooth curve,
   while the current render frame is used only to clamp the crop center inside the
-  planned scale. When no keypoint is active and the transform stays quiet for a
-  couple seconds, Auto Crop returns to identity so idle shots settle near zero
+  planned scale. A coverage repair pass checks the prepared analysis against that
+  curve and adds only the keypoints needed to keep the curve above black-edge
+  safety demand, so occasional outside-source boxes do not force frame-by-frame
+  zoom calculation. When no keypoint is active and the transform stays quiet for
+  a couple seconds, Auto Crop returns to identity so idle shots settle near zero
   crop zoom.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis

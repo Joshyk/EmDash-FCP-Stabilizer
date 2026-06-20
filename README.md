@@ -154,7 +154,10 @@ the lead time to that peak, so a peak at `1:32:26` with the default `10` seconds
 starts ramping at `1:32:16`; `Auto Crop Hold Time` and `Auto Crop Zoom-Out Time`
 define the hold and release after the peak. The visible crop-zoom bar follows
 that smooth keypoint curve, while the current render frame is used only to clamp
-the crop center inside the planned scale. When no keypoint is active and the
+the crop center inside the planned scale. A coverage repair pass checks the
+prepared analysis against that curve and adds only the keypoints needed to keep
+the curve above black-edge safety demand, so occasional outside-source boxes do
+not force frame-by-frame zoom calculation. When no keypoint is active and the
 transform stays quiet for a couple seconds, Auto Crop returns to identity so
 idle shots settle near zero crop zoom.
 

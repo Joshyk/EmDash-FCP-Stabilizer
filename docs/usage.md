@@ -161,7 +161,10 @@ fallbacks.
   hold after a keypoint peak. When `Remove Black Edges` is on, each local peak
   safe-crop demand becomes an internal zoom keypoint; the visible crop-zoom bar
   follows that smooth keypoint curve, while the current render frame is used only
-  to clamp the crop center inside the planned scale. When no keypoint is active
+  to clamp the crop center inside the planned scale. A coverage repair pass checks
+  the prepared analysis against that curve and adds only the keypoints needed to
+  keep the curve above black-edge safety demand, so occasional outside-source
+  boxes do not force frame-by-frame zoom calculation. When no keypoint is active
   and the transform stays quiet for a couple seconds, Auto Crop returns to
   identity so idle shots settle near zero crop zoom.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending

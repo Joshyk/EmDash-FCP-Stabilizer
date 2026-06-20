@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.261"
+private let tokyoWalkingStabilizerVersion = "0.3.262"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -61,6 +61,9 @@ private let stabilizerAutoCropKeypointRefineRadiusSeconds = 2.0
 private let stabilizerAutoCropKeypointRefineStepSeconds = 0.25
 private let stabilizerAutoCropKeypointMaximumCount = 64
 private let stabilizerAutoCropKeypointLogLimit = 6
+private let stabilizerAutoCropKeypointCoverageToleranceDelta: Float = 0.002
+private let stabilizerAutoCropKeypointDuplicateSeconds = 0.125
+private let stabilizerAutoCropKeypointCoveragePassLimit = 64
 private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
@@ -250,6 +253,15 @@ private enum AutoCropSamplingProfile: Int32 {
             return 2.5
         case .full:
             return 2.0
+        }
+    }
+
+    var zoomKeypointCoverageStepSeconds: Double {
+        switch self {
+        case .playback:
+            return 0.25
+        case .full:
+            return 0.20
         }
     }
 
@@ -1894,6 +1906,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             scale: finalScale,
             samplingProfile: samplingProfile
         )
+        if !autoCropPosition(
+            finalPositionPixels,
+            fitsWithinScale: finalScale,
+            context: context,
+            samplingProfile: samplingProfile
+        ) {
+            os_log(
+                "Auto Crop coverage miss | render %.3f scale %.4f plannedScale %.4f peak %.3f",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                renderSeconds,
+                finalScale,
+                plannedFraming.scale,
+                plannedFraming.peakSeconds ?? -1.0
+            )
+        }
 
         return AutoCropFraming(
             scale: finalScale,
@@ -2145,6 +2173,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard !coarseSamples.isEmpty else {
             return AutoCropZoomPlan(keypoints: [])
         }
+        let coverageSamples = autoCropZoomDemandSamples(
+            preparedAnalysis: preparedAnalysis,
+            startSeconds: firstTime,
+            endSeconds: lastTime,
+            stepSeconds: samplingProfile.zoomKeypointCoverageStepSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
+        let safetySamples = coverageSamples.isEmpty ? coarseSamples : coverageSamples
 
         let localMaxima = autoCropZoomLocalMaxima(
             coarseSamples,
@@ -2185,19 +2227,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 break
             }
         }
+        selected = autoCropCoverageRepairedZoomSamples(
+            selected,
+            coverageSamples: safetySamples,
+            firstTime: firstTime,
+            lastTime: lastTime,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            transitionDurationSeconds: transitionDurationSeconds
+        )
 
-        let keypoints = selected
-            .sorted { $0.seconds < $1.seconds }
-            .map { sample in
-                AutoCropZoomKeypoint(
-                    peakSeconds: sample.seconds,
-                    startSeconds: max(firstTime, sample.seconds - max(0.0, leadTimeSeconds)),
-                    holdEndSeconds: min(lastTime, sample.seconds + max(0.0, holdTimeSeconds)),
-                    endSeconds: min(lastTime, sample.seconds + max(0.0, holdTimeSeconds) + max(0.0, transitionDurationSeconds)),
-                    scale: sample.scale + stabilizerAutoCropActiveScalePadding,
-                    positionPixels: sample.positionPixels
-                )
-            }
+        let keypoints = autoCropZoomKeypoints(
+            from: selected,
+            firstTime: firstTime,
+            lastTime: lastTime,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            transitionDurationSeconds: transitionDurationSeconds
+        )
 
         if let strongest = keypoints.max(by: { $0.scale < $1.scale }) {
             os_log(
@@ -2240,6 +2287,84 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         return AutoCropZoomPlan(keypoints: keypoints)
+    }
+
+    private static func autoCropCoverageRepairedZoomSamples(
+        _ initialSamples: [AutoCropZoomDemandSample],
+        coverageSamples: [AutoCropZoomDemandSample],
+        firstTime: Double,
+        lastTime: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
+        transitionDurationSeconds: Double
+    ) -> [AutoCropZoomDemandSample] {
+        guard !coverageSamples.isEmpty else {
+            return initialSamples
+        }
+        let requiredSamples = coverageSamples
+            .filter { $0.scale > Float(1.0) + stabilizerAutoCropKeypointScaleThresholdDelta }
+            .sorted { $0.scale > $1.scale }
+        guard !requiredSamples.isEmpty else {
+            return initialSamples
+        }
+
+        var selected = initialSamples
+        var passCount = 0
+        while selected.count < stabilizerAutoCropKeypointMaximumCount,
+              passCount < stabilizerAutoCropKeypointCoveragePassLimit {
+            passCount += 1
+            let plan = AutoCropZoomPlan(
+                keypoints: autoCropZoomKeypoints(
+                    from: selected,
+                    firstTime: firstTime,
+                    lastTime: lastTime,
+                    leadTimeSeconds: leadTimeSeconds,
+                    holdTimeSeconds: holdTimeSeconds,
+                    transitionDurationSeconds: transitionDurationSeconds
+                )
+            )
+
+            var uncoveredSample: AutoCropZoomDemandSample?
+            for sample in requiredSamples {
+                if selected.contains(where: { abs($0.seconds - sample.seconds) < stabilizerAutoCropKeypointDuplicateSeconds }) {
+                    continue
+                }
+                let plannedScale = autoCropZoomPlanSample(plan, at: sample.seconds).scale
+                let requiredScale = sample.scale + stabilizerAutoCropActiveScalePadding
+                guard plannedScale + stabilizerAutoCropKeypointCoverageToleranceDelta < requiredScale else {
+                    continue
+                }
+                uncoveredSample = sample
+                break
+            }
+            guard let sample = uncoveredSample else {
+                break
+            }
+            selected.append(sample)
+        }
+        return selected
+    }
+
+    private static func autoCropZoomKeypoints(
+        from samples: [AutoCropZoomDemandSample],
+        firstTime: Double,
+        lastTime: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
+        transitionDurationSeconds: Double
+    ) -> [AutoCropZoomKeypoint] {
+        samples
+            .sorted { $0.seconds < $1.seconds }
+            .map { sample in
+                AutoCropZoomKeypoint(
+                    peakSeconds: sample.seconds,
+                    startSeconds: max(firstTime, sample.seconds - max(0.0, leadTimeSeconds)),
+                    holdEndSeconds: min(lastTime, sample.seconds + max(0.0, holdTimeSeconds)),
+                    endSeconds: min(lastTime, sample.seconds + max(0.0, holdTimeSeconds) + max(0.0, transitionDurationSeconds)),
+                    scale: sample.scale + stabilizerAutoCropActiveScalePadding,
+                    positionPixels: sample.positionPixels
+                )
+            }
     }
 
     private static func autoCropZoomDemandSamples(
