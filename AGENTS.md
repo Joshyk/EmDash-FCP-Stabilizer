@@ -529,9 +529,10 @@ repo unless the user explicitly asks for repo-local divergence.
 Keep `tokyoWalkingStabilizerVersion` in
 `fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizer.swift` aligned with
 `CFBundleShortVersionString` in the wrapper app and plug-in plist files. User-visible
-FxPlug behavior changes should also bump the plist `CFBundleVersion`, Motion Template
-`pluginVersion`, the version value used by `Host Analysis Status`, and the compact Debug
-Overlay runtime row so Final Cut Pro and PlugInKit do not keep stale parameter metadata.
+FxPlug behavior changes should also bump the plist `CFBundleVersion`, the
+`ProPlugPlugInList` effect `version`, Motion Template `pluginVersion`, the version value
+used by `Host Analysis Status`, and the compact Debug Overlay runtime row so Final Cut Pro
+and PlugInKit do not keep stale parameter metadata.
 
 ## Verification
 

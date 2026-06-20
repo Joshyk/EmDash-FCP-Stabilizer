@@ -22,7 +22,9 @@ private enum ParameterID: UInt32 {
     case renderRevision = 20
     case panStabilizationStrength = 23
     case edgeDisplayMode = 27
-    case farFieldWarpStrength = 28
+    // ID 28 is retired because existing FCP effect instances can persist the
+    // old 0-4 slider range for that parameter ID.
+    case legacyFarFieldWarpStrength = 28
     case strideWobbleXStrength = 29
     case strideWobbleYStrength = 30
     case strideWobbleRotationStrength = 31
@@ -37,6 +39,7 @@ private enum ParameterID: UInt32 {
     case autoCropTransitionDuration = 42
     case autoCropLeadTime = 43
     case autoCropHoldTime = 44
+    case farFieldWarpStrength = 45
 }
 
 private struct StabilizerInfoFields {
@@ -44,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.269"
+private let tokyoWalkingStabilizerVersion = "0.3.271"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -1048,6 +1051,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         let hiddenAnalysisControlFlags = FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
+        paramAPI.addFloatSlider(
+            withName: "Legacy Far-field Warp Strength",
+            parameterID: ParameterID.legacyFarFieldWarpStrength.rawValue,
+            defaultValue: 1.0,
+            parameterMin: 0.0,
+            parameterMax: 4.0,
+            sliderMin: 0.0,
+            sliderMax: 4.0,
+            delta: 0.01,
+            parameterFlags: hiddenAnalysisControlFlags
+        )
         paramAPI.addPopupMenu(
             withName: "Sample Size",
             parameterID: ParameterID.sampleScale.rawValue,
