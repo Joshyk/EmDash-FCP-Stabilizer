@@ -248,27 +248,29 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
 - `Auto Crop Zoom-In Time`: default `10` seconds, range `0...120` seconds. This
-  parameter is retained for compatibility and now acts as the lead time into an
-  internal Auto Crop zoom keypoint. A peak safe-crop demand at `1:32:26` starts
-  ramping at `1:32:16` when the slider is `10` seconds.
+  parameter is retained for compatibility and now acts as the maximum lead time
+  into a strong internal Auto Crop zoom keypoint. Smaller zoom keypoints scale
+  the effective lead down from their zoom delta.
 - `Auto Crop Zoom-Out Time`: default `5` seconds, range `0...30` seconds. This
-  parameter is retained for compatibility and now defines the release length
-  after an Auto Crop zoom keypoint.
+  parameter is retained for compatibility and now defines the maximum release
+  length after a strong Auto Crop zoom keypoint.
 - `Auto Crop Hold Time`: default `4` seconds, range `0...30` seconds. This
-  parameter is retained for compatibility and now defines the hold after an Auto
-  Crop zoom keypoint peak. With `Remove Black Edges` on, final crop zoom is read
-  from a cached keypoint plan built from prepared analysis instead of
-  recalculating zoom every render frame. Each local peak safe-crop demand becomes
-  an internal zoom keypoint; the visible crop-zoom bar follows that smooth curve,
-  while the current render frame is used only to clamp the crop center inside the
-  planned scale. A coverage repair pass checks the prepared analysis against that
-  curve and adds only the keypoints needed to keep the curve above black-edge
-  safety demand, so occasional outside-source boxes do not force frame-by-frame
-  zoom calculation. Low-demand keypoints that sit near identity halve their zoom
-  delta, so subtle or nearly idle sections do not remain as visibly cropped while
-  strong turn peaks keep their full planned zoom. When no keypoint is active and
-  the transform stays quiet for a couple seconds, Auto Crop returns to identity
-  so idle shots settle near zero crop zoom.
+  parameter is retained for compatibility and now defines the maximum hold after
+  a strong Auto Crop zoom keypoint peak. With `Remove Black Edges` on, final crop
+  zoom is read from a cached keypoint plan built from prepared analysis instead
+  of recalculating zoom every render frame. Each local peak safe-crop demand
+  becomes an internal zoom keypoint; subtle keypoints scale their timing down
+  from their zoom delta so the visible crop-zoom bar does not stay zoomed across
+  the full default window. The current render frame is used only to clamp the
+  crop center inside the planned scale. A coverage repair pass checks the
+  prepared analysis against that curve and adds only the keypoints needed to keep
+  the curve above black-edge safety demand, so occasional outside-source boxes do
+  not force frame-by-frame zoom calculation. Low-demand keypoints that sit near
+  identity halve their zoom delta and use shorter keypoint timing, so subtle or
+  nearly idle sections do not remain as visibly cropped while strong turn peaks
+  keep their full planned zoom. When no keypoint is active and the transform
+  stays quiet for a couple seconds, Auto Crop returns to identity so idle shots
+  settle near zero crop zoom.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.

@@ -149,17 +149,19 @@ or black. New effect instances default that menu to `Black Outside`.
 remain visible for parameter compatibility. With `Remove Black Edges` on, the
 render path builds a cached Auto Crop zoom keypoint plan from the prepared
 analysis instead of recalculating final zoom every render frame. Each local peak
-safe-crop demand becomes an internal zoom keypoint. `Auto Crop Zoom-In Time` is
-the lead time to that peak, so a peak at `1:32:26` with the default `10` seconds
-starts ramping at `1:32:16`; `Auto Crop Hold Time` and `Auto Crop Zoom-Out Time`
-define the hold and release after the peak. The visible crop-zoom bar follows
-that smooth keypoint curve, while the current render frame is used only to clamp
-the crop center inside the planned scale. A coverage repair pass checks the
+safe-crop demand becomes an internal zoom keypoint. `Auto Crop Zoom-In Time`,
+`Auto Crop Hold Time`, and `Auto Crop Zoom-Out Time` define the maximum lead,
+hold, and release for strong zoom keypoints. Smaller keypoints scale those
+durations down from the zoom delta, so subtle crop changes do not stay stretched
+across the full default window. The visible crop-zoom bar follows that smooth
+keypoint curve, while the current render frame is used only to clamp the crop
+center inside the planned scale. A coverage repair pass checks the
 prepared analysis against that curve and adds only the keypoints needed to keep
 the curve above black-edge safety demand, so occasional outside-source boxes do
 not force frame-by-frame zoom calculation. Low-demand keypoints that sit near
-identity halve their zoom delta, so subtle or nearly idle sections do not remain
-as visibly cropped while strong turn peaks keep their full planned zoom. When no
+identity halve their zoom delta and use shorter keypoint timing, so subtle or
+nearly idle sections do not remain as visibly cropped while strong turn peaks
+keep their full planned zoom. When no
 keypoint is active and the transform stays quiet for a couple seconds, Auto Crop
 returns to identity so idle shots settle near zero crop zoom.
 

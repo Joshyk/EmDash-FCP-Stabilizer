@@ -151,24 +151,25 @@ fallbacks.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.
 - `Auto Crop Zoom-In Time`: retained for parameter compatibility and now acts as
-  the lead time into an internal Auto Crop zoom keypoint. A peak safe-crop demand
-  at `1:32:26` with the default `10` seconds starts ramping at `1:32:16`.
+  the maximum lead time into a strong internal Auto Crop zoom keypoint. Smaller
+  zoom keypoints scale the effective lead down from their zoom delta.
 - `Auto Crop Zoom-Out Time`: retained for parameter compatibility and now defines
-  the release length after an Auto Crop zoom keypoint. Final zoom is read from a
-  cached keypoint plan built from the prepared analysis, not recalculated from
-  each render frame's safe-crop scale.
+  the maximum release length after a strong Auto Crop zoom keypoint. Final zoom
+  is read from a cached keypoint plan built from the prepared analysis, not
+  recalculated from each render frame's safe-crop scale.
 - `Auto Crop Hold Time`: retained for parameter compatibility and now defines the
-  hold after a keypoint peak. When `Remove Black Edges` is on, each local peak
-  safe-crop demand becomes an internal zoom keypoint; the visible crop-zoom bar
-  follows that smooth keypoint curve, while the current render frame is used only
-  to clamp the crop center inside the planned scale. A coverage repair pass checks
-  the prepared analysis against that curve and adds only the keypoints needed to
-  keep the curve above black-edge safety demand, so occasional outside-source
-  boxes do not force frame-by-frame zoom calculation. Low-demand keypoints that
-  sit near identity halve their zoom delta, so subtle or nearly idle sections do
-  not remain as visibly cropped while strong turn peaks keep their full planned
-  zoom. When no keypoint is active and the transform stays quiet for a couple
-  seconds, Auto Crop returns to identity so idle shots settle near zero crop zoom.
+  maximum hold after a strong keypoint peak. When `Remove Black Edges` is on,
+  each local peak safe-crop demand becomes an internal zoom keypoint; the visible
+  crop-zoom bar follows that smooth keypoint curve, while subtle keypoints scale
+  their timing down so they do not stay zoomed across the full default window. A
+  coverage repair pass checks the prepared analysis against that curve and adds
+  only the keypoints needed to keep the curve above black-edge safety demand, so
+  occasional outside-source boxes do not force frame-by-frame zoom calculation.
+  Low-demand keypoints that sit near identity halve their zoom delta and use
+  shorter timing, so subtle or nearly idle sections do not remain as visibly
+  cropped while strong turn peaks keep their full planned zoom. When no keypoint
+  is active and the transform stays quiet for a couple seconds, Auto Crop returns
+  to identity so idle shots settle near zero crop zoom.
 - `Edge Display Mode`: `Stretch Edges` keeps the previous preview behavior by extending
   edge pixels outside the transformed source image. `Black Outside` draws those outside
   pixels black so the viewer shows how far stabilization is moving the image. New effect

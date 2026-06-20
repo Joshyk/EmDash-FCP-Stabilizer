@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.266"
+private let tokyoWalkingStabilizerVersion = "0.3.267"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -66,6 +66,8 @@ private let stabilizerAutoCropKeypointDuplicateSeconds = 0.125
 private let stabilizerAutoCropKeypointCoveragePassLimit = 64
 private let stabilizerAutoCropSubtleZoomMaximumDelta: Float = 0.08
 private let stabilizerAutoCropSubtleZoomMultiplier: Float = 0.5
+private let stabilizerAutoCropDurationScaleReferenceDelta: Float = 0.10
+private let stabilizerAutoCropMinimumScaledDurationSeconds = 0.25
 private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
@@ -2358,15 +2360,58 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         samples
             .sorted { $0.seconds < $1.seconds }
             .map { sample in
-                AutoCropZoomKeypoint(
+                let keypointScale = autoCropZoomKeypointScale(forDemandScale: sample.scale)
+                let durationScale = autoCropZoomDurationScale(forKeypointScale: keypointScale)
+                let effectiveLeadTime = autoCropScaledZoomDuration(
+                    leadTimeSeconds,
+                    durationScale: durationScale
+                )
+                let effectiveHoldTime = autoCropScaledZoomDuration(
+                    holdTimeSeconds,
+                    durationScale: durationScale
+                )
+                let effectiveTransitionDuration = autoCropScaledZoomDuration(
+                    transitionDurationSeconds,
+                    durationScale: durationScale
+                )
+                return AutoCropZoomKeypoint(
                     peakSeconds: sample.seconds,
-                    startSeconds: max(firstTime, sample.seconds - max(0.0, leadTimeSeconds)),
-                    holdEndSeconds: min(lastTime, sample.seconds + max(0.0, holdTimeSeconds)),
-                    endSeconds: min(lastTime, sample.seconds + max(0.0, holdTimeSeconds) + max(0.0, transitionDurationSeconds)),
-                    scale: autoCropZoomKeypointScale(forDemandScale: sample.scale),
+                    startSeconds: max(firstTime, sample.seconds - effectiveLeadTime),
+                    holdEndSeconds: min(lastTime, sample.seconds + effectiveHoldTime),
+                    endSeconds: min(
+                        lastTime,
+                        sample.seconds + effectiveHoldTime + effectiveTransitionDuration
+                    ),
+                    scale: keypointScale,
                     positionPixels: sample.positionPixels
                 )
             }
+    }
+
+    private static func autoCropZoomDurationScale(forKeypointScale scale: Float) -> Double {
+        let safeScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
+        let delta = max(Float(0.0), safeScale - Float(1.0))
+        guard delta > 0.0 else {
+            return 0.0
+        }
+        let normalized = delta / stabilizerAutoCropDurationScaleReferenceDelta
+        return Double(min(max(normalized, Float(0.0)), Float(1.0)))
+    }
+
+    private static func autoCropScaledZoomDuration(
+        _ duration: Double,
+        durationScale: Double
+    ) -> Double {
+        let safeDuration = duration.isFinite ? max(0.0, duration) : 0.0
+        let safeScale = durationScale.isFinite ? min(max(durationScale, 0.0), 1.0) : 0.0
+        guard safeDuration > 0.0, safeScale > 0.0 else {
+            return 0.0
+        }
+        let scaledDuration = safeDuration * safeScale
+        return min(
+            safeDuration,
+            max(stabilizerAutoCropMinimumScaledDurationSeconds, scaledDuration)
+        )
     }
 
     private static func autoCropZoomKeypointScale(forDemandScale demandScale: Float) -> Float {
