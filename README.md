@@ -146,24 +146,17 @@ path skips Auto Crop crop-safe framing completely, so
 `Edge Display Mode` directly controls whether outside-source pixels are stretched
 or black. New effect instances default that menu to `Black Outside`.
 `Auto Crop Zoom-In Time`, `Auto Crop Zoom-Out Time`, and `Auto Crop Hold Time`
-remain visible for parameter compatibility, but this build no longer pre-zooms
-from future lookahead. With `Remove Black Edges` on, the render path clamps zoom
-to the current frame's required safe crop so outside-source black is not
-exposed. The local crop center is smoothed from trailing render-time samples,
-and black-edge safety is absorbed in the scale budget instead of moving the crop
-center side to side with each frame's macro offset. Final zoom is driven by the
-current frame's black-edge safety floor, the maximum needed scale from a
-trailing several-second plateau window, and a fixed recent-motion envelope,
-rounded into stable safety buckets. The visible crop-zoom bar therefore follows
-the held plateau instead of frame-to-frame planned scale changes. If the recent
-transform stays quiet and the current frame no longer needs extra black-edge
-protection, Auto Crop eases that extra zoom back toward identity over roughly
-2.5 seconds so idle shots settle near zero crop zoom instead of pre-zooming for
-future motion.
-When an extreme frame must clamp the crop center for black-edge safety, Auto
-Crop keeps the smoothed center if the held scale can cover it; otherwise it
-moves only the minimum distance toward the current black-safe center instead of
-following the clamp side to side.
+remain visible for parameter compatibility. With `Remove Black Edges` on, the
+render path builds a cached Auto Crop zoom keypoint plan from the prepared
+analysis instead of recalculating final zoom every render frame. Each local peak
+safe-crop demand becomes an internal zoom keypoint. `Auto Crop Zoom-In Time` is
+the lead time to that peak, so a peak at `1:32:26` with the default `10` seconds
+starts ramping at `1:32:16`; `Auto Crop Hold Time` and `Auto Crop Zoom-Out Time`
+define the hold and release after the peak. The visible crop-zoom bar follows
+that smooth keypoint curve, while the current render frame is used only to clamp
+the crop center inside the planned scale. When no keypoint is active and the
+transform stays quiet for a couple seconds, Auto Crop returns to identity so
+idle shots settle near zero crop zoom.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
