@@ -1690,75 +1690,63 @@ enum AutoStabilizationEstimator {
         )
         let appliedWarpConfidence = clamp(warpConfidence * farFieldWarpGate, min: 0.0, max: 1.0)
         let yawPitchProxy = vector_float2(
-            clamp(
-                farFieldWarpBandValue(
-                    values: analysis.pathYaw,
-                    baselineValues: farFieldBaselineYawPath,
-                    interpolation: frameInterpolation,
-                    deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
-                    confidence: appliedWarpConfidence
-                ),
-                min: -maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength,
-                max: maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathYaw,
+                baselineValues: farFieldBaselineYawPath,
+                interpolation: frameInterpolation,
+                deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldYawPitchProxy
             ),
-            clamp(
-                farFieldWarpBandValue(
-                    values: analysis.pathPitch,
-                    baselineValues: farFieldBaselinePitchPath,
-                    interpolation: frameInterpolation,
-                    deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
-                    confidence: appliedWarpConfidence
-                ),
-                min: -maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength,
-                max: maxRenderedFarFieldYawPitchProxy * farFieldWarpStrength
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathPitch,
+                baselineValues: farFieldBaselinePitchPath,
+                interpolation: frameInterpolation,
+                deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldYawPitchProxy
             )
         )
         let shear = vector_float2(
-            clamp(
-                farFieldWarpBandValue(
-                    values: analysis.pathShearX,
-                    baselineValues: farFieldBaselineShearXPath,
-                    interpolation: frameInterpolation,
-                    deadband: maxRenderedFarFieldShear * 0.08,
-                    confidence: appliedWarpConfidence
-                ),
-                min: -maxRenderedFarFieldShear * farFieldWarpStrength,
-                max: maxRenderedFarFieldShear * farFieldWarpStrength
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathShearX,
+                baselineValues: farFieldBaselineShearXPath,
+                interpolation: frameInterpolation,
+                deadband: maxRenderedFarFieldShear * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldShear
             ),
-            clamp(
-                farFieldWarpBandValue(
-                    values: analysis.pathShearY,
-                    baselineValues: farFieldBaselineShearYPath,
-                    interpolation: frameInterpolation,
-                    deadband: maxRenderedFarFieldShear * 0.08,
-                    confidence: appliedWarpConfidence
-                ),
-                min: -maxRenderedFarFieldShear * farFieldWarpStrength,
-                max: maxRenderedFarFieldShear * farFieldWarpStrength
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathShearY,
+                baselineValues: farFieldBaselineShearYPath,
+                interpolation: frameInterpolation,
+                deadband: maxRenderedFarFieldShear * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldShear
             )
         )
         let perspective = vector_float2(
-            clamp(
-                farFieldWarpBandValue(
-                    values: analysis.pathPerspectiveX,
-                    baselineValues: farFieldBaselinePerspectiveXPath,
-                    interpolation: frameInterpolation,
-                    deadband: maxRenderedFarFieldPerspective * 0.08,
-                    confidence: appliedWarpConfidence
-                ),
-                min: -maxRenderedFarFieldPerspective * farFieldWarpStrength,
-                max: maxRenderedFarFieldPerspective * farFieldWarpStrength
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathPerspectiveX,
+                baselineValues: farFieldBaselinePerspectiveXPath,
+                interpolation: frameInterpolation,
+                deadband: maxRenderedFarFieldPerspective * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldPerspective
             ),
-            clamp(
-                farFieldWarpBandValue(
-                    values: analysis.pathPerspectiveY,
-                    baselineValues: farFieldBaselinePerspectiveYPath,
-                    interpolation: frameInterpolation,
-                    deadband: maxRenderedFarFieldPerspective * 0.08,
-                    confidence: appliedWarpConfidence
-                ),
-                min: -maxRenderedFarFieldPerspective * farFieldWarpStrength,
-                max: maxRenderedFarFieldPerspective * farFieldWarpStrength
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathPerspectiveY,
+                baselineValues: farFieldBaselinePerspectiveYPath,
+                interpolation: frameInterpolation,
+                deadband: maxRenderedFarFieldPerspective * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldPerspective
             )
         )
         return StabilizerAutoTransform(
@@ -3613,6 +3601,25 @@ enum AutoStabilizationEstimator {
         let currentValue = interpolatedValue(values, using: interpolation)
         let baselineValue = interpolatedValue(baselineValues, using: interpolation)
         return softDeadband(currentValue - baselineValue, threshold: deadband) * confidence
+    }
+
+    private static func strengthScaledFarFieldWarpBandValue(
+        values: [Float],
+        baselineValues: EstimatedPath,
+        interpolation: FrameInterpolation,
+        deadband: Float,
+        confidence: Float,
+        strength: Float,
+        limit: Float
+    ) -> Float {
+        let scaledValue = farFieldWarpBandValue(
+            values: values,
+            baselineValues: baselineValues,
+            interpolation: interpolation,
+            deadband: deadband,
+            confidence: confidence
+        ) * strength
+        return clamp(scaledValue, min: -limit * strength, max: limit * strength)
     }
 
     private static func median(_ values: [Float], indices: [Int]) -> Float? {
