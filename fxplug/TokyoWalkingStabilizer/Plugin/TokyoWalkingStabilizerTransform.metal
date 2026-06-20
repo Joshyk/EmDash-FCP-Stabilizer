@@ -263,15 +263,13 @@ fragment float4 fragmentShader(
     );
 
     float2 stabilizedPixels = rotated - (transform->pixelOffset * transform->strength);
-    if (transform->debugMode < 1.5) {
-        float2 normalizedPixels = stabilizedPixels / transform->outputSize;
-        float perspectiveDenominator = max(0.35, 1.0 + (transform->perspective.x * normalizedPixels.x) + (transform->perspective.y * normalizedPixels.y));
-        stabilizedPixels = stabilizedPixels / perspectiveDenominator;
-        stabilizedPixels -= float2(
-            transform->shear.x * stabilizedPixels.y,
-            transform->shear.y * stabilizedPixels.x
-        );
-    }
+    float2 normalizedPixels = stabilizedPixels / transform->outputSize;
+    float perspectiveDenominator = max(0.35, 1.0 + (transform->perspective.x * normalizedPixels.x) + (transform->perspective.y * normalizedPixels.y));
+    stabilizedPixels = stabilizedPixels / perspectiveDenominator;
+    stabilizedPixels -= float2(
+        transform->shear.x * stabilizedPixels.y,
+        transform->shear.y * stabilizedPixels.x
+    );
     float2 sampleUV = (stabilizedPixels / transform->outputSize) + 0.5;
 
     bool outsideSource = sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0;
