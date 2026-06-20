@@ -1669,6 +1669,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
+    private static func analysisRevisionCacheKey(_ revision: UInt64, cacheIdentity: String?) -> UInt64 {
+        guard let identity = cacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !identity.isEmpty
+        else {
+            return revision
+        }
+        // Persistent cache identity includes schema, range, sample size, frame count, and fingerprints.
+        // Status-only store revision bumps must not invalidate render sampling caches for the same data.
+        return 0
+    }
+
     private static func cachedAutoTransform(
         preparedAnalysis: StabilizerPreparedAnalysis,
         renderTime: CMTime,
@@ -1688,7 +1699,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let key = StabilizerAutoTransformCacheKey(
             cacheIdentity: cacheIdentity,
-            analysisRevision: analysisRevision,
+            analysisRevision: analysisRevisionCacheKey(analysisRevision, cacheIdentity: cacheIdentity),
             renderTimeValue: renderTime.value,
             renderTimeScale: renderTime.timescale,
             renderTimeEpoch: renderTime.epoch,
@@ -1758,7 +1769,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     ) -> AutoCropFraming {
         let key = AutoCropFramingCacheKey(
             cacheIdentity: cacheIdentity,
-            analysisRevision: analysisRevision,
+            analysisRevision: analysisRevisionCacheKey(analysisRevision, cacheIdentity: cacheIdentity),
             renderTimeValue: renderTime.value,
             renderTimeScale: renderTime.timescale,
             renderTimeEpoch: renderTime.epoch,
@@ -1988,7 +1999,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let frames = preparedAnalysis.frames
         let key = AutoCropScaleDemandCacheKey(
             cacheIdentity: cacheIdentity,
-            analysisRevision: analysisRevision,
+            analysisRevision: analysisRevisionCacheKey(analysisRevision, cacheIdentity: cacheIdentity),
             centerSeconds: centerSeconds.bitPattern,
             outputWidth: Int32(outputSize.x.rounded()),
             outputHeight: Int32(outputSize.y.rounded()),
@@ -2097,7 +2108,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let frames = preparedAnalysis.frames
         let key = AutoCropZoomPlanCacheKey(
             cacheIdentity: cacheIdentity,
-            analysisRevision: analysisRevision,
+            analysisRevision: analysisRevisionCacheKey(analysisRevision, cacheIdentity: cacheIdentity),
             outputWidth: Int32(outputSize.x.rounded()),
             outputHeight: Int32(outputSize.y.rounded()),
             analysisFrameCount: frames.count,
