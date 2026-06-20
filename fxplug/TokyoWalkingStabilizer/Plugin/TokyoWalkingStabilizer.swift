@@ -3394,7 +3394,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let releaseSeconds = max(0.0, transitionDurationSeconds.isFinite ? transitionDurationSeconds : 0.0)
         let scaleWindowSeconds = holdSeconds + releaseSeconds
         let startSeconds = max(firstTime, currentSeconds - scaleWindowSeconds)
-        var peakScale = max(Float(1.0), currentScale.isFinite ? currentScale : Float(1.0))
+        let currentProtectedScale = autoCropZoomKeypointScale(forDemandScale: currentScale)
+        var floorScale = currentProtectedScale
+        var peakScale = currentProtectedScale
         guard currentSeconds - startSeconds > 1e-6 else {
             return autoCropPlaybackQuantizedScale(peakScale)
         }
@@ -3467,11 +3469,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 iterations: samplingProfile.scaleSearchIterations
             )
             if sampleScale.isFinite {
-                let protectedSampleScale = Float(1.0) + ((max(Float(1.0), sampleScale) - Float(1.0)) * influence)
-                peakScale = max(peakScale, protectedSampleScale)
+                let protectedSampleScale = autoCropZoomKeypointScale(forDemandScale: sampleScale)
+                floorScale = max(floorScale, protectedSampleScale)
+                let releasedSampleScale = Float(1.0) + ((protectedSampleScale - Float(1.0)) * influence)
+                peakScale = max(peakScale, releasedSampleScale)
             }
         }
-        return autoCropPlaybackQuantizedScale(peakScale)
+        return autoCropPlaybackQuantizedScale(max(floorScale, peakScale))
     }
 
     private static func autoCropPlaybackScaleInfluence(
