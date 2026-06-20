@@ -678,6 +678,7 @@ enum AutoStabilizationEstimator {
         let panStabilizationStrength: UInt64
         let farFieldWarp: UInt64
         let limitFootstepContinuity: Bool
+        let includeFarFieldWarp: Bool
     }
 
     private struct RenderEstimateCacheStoreKey: Hashable {
@@ -741,7 +742,8 @@ enum AutoStabilizationEstimator {
             outputSize: vector_float2,
             panSmoothSeconds: Double,
             strengths: StabilizerCorrectionStrengths,
-            limitFootstepContinuity: Bool
+            limitFootstepContinuity: Bool,
+            includeFarFieldWarp: Bool
         ) -> StabilizerAutoTransform {
             guard analysis.frames.indices.contains(index) else {
                 return .identity
@@ -759,7 +761,8 @@ enum AutoStabilizationEstimator {
                 strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
                 panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
                 farFieldWarp: strengths.farFieldWarp.bitPattern,
-                limitFootstepContinuity: limitFootstepContinuity
+                limitFootstepContinuity: limitFootstepContinuity,
+                includeFarFieldWarp: includeFarFieldWarp
             )
             lock.lock()
             if let cached = rawTransforms[key] {
@@ -775,7 +778,8 @@ enum AutoStabilizationEstimator {
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths,
                 cache: self,
-                limitFootstepContinuity: limitFootstepContinuity
+                limitFootstepContinuity: limitFootstepContinuity,
+                includeFarFieldWarp: includeFarFieldWarp
             )
 
             lock.lock()
@@ -1437,7 +1441,8 @@ enum AutoStabilizationEstimator {
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         cache: RenderEstimateCache,
-        limitFootstepContinuity: Bool = true
+        limitFootstepContinuity: Bool = true,
+        includeFarFieldWarp: Bool = true
     ) -> StabilizerAutoTransform {
         let frames = analysis.frames
         guard frames.count >= 3 else {
@@ -1461,12 +1466,6 @@ enum AutoStabilizationEstimator {
             radiusSeconds: effectiveStrideWobbleWindowSeconds * 0.5
         )
         let strideWobbleActiveIndices = strideWobbleWindowIndices.isEmpty ? [centerIndex] : strideWobbleWindowIndices
-        let farFieldWarpGateWindowIndices = indicesWithinTimeRadius(
-            frames,
-            centerTime: renderSeconds,
-            radiusSeconds: farFieldWarpOuterWindowSeconds * 0.5
-        )
-        let farFieldWarpGateActiveIndices = farFieldWarpGateWindowIndices.isEmpty ? [centerIndex] : farFieldWarpGateWindowIndices
         let sampledIndices = uniqueSortedIndices(
             activeIndices + strideWobbleActiveIndices + [centerIndex] + frameInterpolation.indices,
             validCount: frames.count
@@ -1493,54 +1492,6 @@ enum AutoStabilizationEstimator {
             indices: sampledIndices,
             innerWindowSeconds: footstepImpulseInnerWindowSeconds,
             outerWindowSeconds: footstepImpulseOuterWindowSeconds,
-            cache: cache
-        )
-        let farFieldBaselineYawPath = cachedOuterLinearPredictionPath(
-            .yaw,
-            analysis: analysis,
-            indices: sampledIndices,
-            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
-            cache: cache
-        )
-        let farFieldBaselinePitchPath = cachedOuterLinearPredictionPath(
-            .pitch,
-            analysis: analysis,
-            indices: sampledIndices,
-            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
-            cache: cache
-        )
-        let farFieldBaselineShearXPath = cachedOuterLinearPredictionPath(
-            .shearX,
-            analysis: analysis,
-            indices: sampledIndices,
-            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
-            cache: cache
-        )
-        let farFieldBaselineShearYPath = cachedOuterLinearPredictionPath(
-            .shearY,
-            analysis: analysis,
-            indices: sampledIndices,
-            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
-            cache: cache
-        )
-        let farFieldBaselinePerspectiveXPath = cachedOuterLinearPredictionPath(
-            .perspectiveX,
-            analysis: analysis,
-            indices: sampledIndices,
-            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
-            cache: cache
-        )
-        let farFieldBaselinePerspectiveYPath = cachedOuterLinearPredictionPath(
-            .perspectiveY,
-            analysis: analysis,
-            indices: sampledIndices,
-            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
-            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
             cache: cache
         )
 
@@ -1811,83 +1762,153 @@ enum AutoStabilizationEstimator {
         let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y
         let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: maximumFarFieldWarpStrength)
-        let farFieldWarpTrackingConfidence = stableFarFieldWarpTrackingConfidence(
-            analysis: analysis,
-            indices: farFieldWarpGateActiveIndices,
-            currentTrackingConfidence: trackingConfidence
-        )
-        let farFieldWarpEdgeQuality = stableFarFieldWarpEdgeQuality(
-            analysis: analysis,
-            indices: farFieldWarpGateActiveIndices,
-            currentSearchRadiusHitCount: searchRadiusHitCount,
-            currentSearchRadiusTotalCount: searchRadiusTotalCount
-        )
-        let farFieldWarpGate = farFieldWarpRenderGate(
-            warpConfidence: warpConfidence,
-            trackingConfidence: farFieldWarpTrackingConfidence,
-            edgeQuality: farFieldWarpEdgeQuality
-        )
-        let appliedWarpConfidence = clamp(warpConfidence * farFieldWarpGate, min: 0.0, max: 1.0)
-        let yawPitchProxy = vector_float2(
-            strengthScaledFarFieldWarpBandValue(
-                values: analysis.pathYaw,
-                baselineValues: farFieldBaselineYawPath,
-                interpolation: frameInterpolation,
-                deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
-                confidence: appliedWarpConfidence,
-                strength: farFieldWarpStrength,
-                limit: maxRenderedFarFieldYawPitchProxy
-            ),
-            strengthScaledFarFieldWarpBandValue(
-                values: analysis.pathPitch,
-                baselineValues: farFieldBaselinePitchPath,
-                interpolation: frameInterpolation,
-                deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
-                confidence: appliedWarpConfidence,
-                strength: farFieldWarpStrength,
-                limit: maxRenderedFarFieldYawPitchProxy
+        let shouldEstimateFarFieldWarp = includeFarFieldWarp && farFieldWarpStrength > 0.0
+        let appliedWarpConfidence: Float
+        let yawPitchProxy: vector_float2
+        let shear: vector_float2
+        let perspective: vector_float2
+        if shouldEstimateFarFieldWarp {
+            let farFieldWarpGateWindowIndices = indicesWithinTimeRadius(
+                frames,
+                centerTime: renderSeconds,
+                radiusSeconds: farFieldWarpOuterWindowSeconds * 0.5
             )
-        )
-        let shear = vector_float2(
-            strengthScaledFarFieldWarpBandValue(
-                values: analysis.pathShearX,
-                baselineValues: farFieldBaselineShearXPath,
-                interpolation: frameInterpolation,
-                deadband: maxRenderedFarFieldShear * 0.08,
-                confidence: appliedWarpConfidence,
-                strength: farFieldWarpStrength,
-                limit: maxRenderedFarFieldShear
-            ),
-            strengthScaledFarFieldWarpBandValue(
-                values: analysis.pathShearY,
-                baselineValues: farFieldBaselineShearYPath,
-                interpolation: frameInterpolation,
-                deadband: maxRenderedFarFieldShear * 0.08,
-                confidence: appliedWarpConfidence,
-                strength: farFieldWarpStrength,
-                limit: maxRenderedFarFieldShear
+            let farFieldWarpGateActiveIndices = farFieldWarpGateWindowIndices.isEmpty ? [centerIndex] : farFieldWarpGateWindowIndices
+            let farFieldWarpSampledIndices = uniqueSortedIndices(
+                farFieldWarpGateActiveIndices + [centerIndex] + frameInterpolation.indices,
+                validCount: frames.count
             )
-        )
-        let perspective = vector_float2(
-            strengthScaledFarFieldWarpBandValue(
-                values: analysis.pathPerspectiveX,
-                baselineValues: farFieldBaselinePerspectiveXPath,
-                interpolation: frameInterpolation,
-                deadband: maxRenderedFarFieldPerspective * 0.08,
-                confidence: appliedWarpConfidence,
-                strength: farFieldWarpStrength,
-                limit: maxRenderedFarFieldPerspective
-            ),
-            strengthScaledFarFieldWarpBandValue(
-                values: analysis.pathPerspectiveY,
-                baselineValues: farFieldBaselinePerspectiveYPath,
-                interpolation: frameInterpolation,
-                deadband: maxRenderedFarFieldPerspective * 0.08,
-                confidence: appliedWarpConfidence,
-                strength: farFieldWarpStrength,
-                limit: maxRenderedFarFieldPerspective
+            let farFieldBaselineYawPath = cachedOuterLinearPredictionPath(
+                .yaw,
+                analysis: analysis,
+                indices: farFieldWarpSampledIndices,
+                innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+                outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+                cache: cache
             )
-        )
+            let farFieldBaselinePitchPath = cachedOuterLinearPredictionPath(
+                .pitch,
+                analysis: analysis,
+                indices: farFieldWarpSampledIndices,
+                innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+                outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+                cache: cache
+            )
+            let farFieldBaselineShearXPath = cachedOuterLinearPredictionPath(
+                .shearX,
+                analysis: analysis,
+                indices: farFieldWarpSampledIndices,
+                innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+                outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+                cache: cache
+            )
+            let farFieldBaselineShearYPath = cachedOuterLinearPredictionPath(
+                .shearY,
+                analysis: analysis,
+                indices: farFieldWarpSampledIndices,
+                innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+                outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+                cache: cache
+            )
+            let farFieldBaselinePerspectiveXPath = cachedOuterLinearPredictionPath(
+                .perspectiveX,
+                analysis: analysis,
+                indices: farFieldWarpSampledIndices,
+                innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+                outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+                cache: cache
+            )
+            let farFieldBaselinePerspectiveYPath = cachedOuterLinearPredictionPath(
+                .perspectiveY,
+                analysis: analysis,
+                indices: farFieldWarpSampledIndices,
+                innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+                outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+                cache: cache
+            )
+            let farFieldWarpTrackingConfidence = stableFarFieldWarpTrackingConfidence(
+                analysis: analysis,
+                indices: farFieldWarpGateActiveIndices,
+                currentTrackingConfidence: trackingConfidence
+            )
+            let farFieldWarpEdgeQuality = stableFarFieldWarpEdgeQuality(
+                analysis: analysis,
+                indices: farFieldWarpGateActiveIndices,
+                currentSearchRadiusHitCount: searchRadiusHitCount,
+                currentSearchRadiusTotalCount: searchRadiusTotalCount
+            )
+            let farFieldWarpGate = farFieldWarpRenderGate(
+                warpConfidence: warpConfidence,
+                trackingConfidence: farFieldWarpTrackingConfidence,
+                edgeQuality: farFieldWarpEdgeQuality
+            )
+            appliedWarpConfidence = clamp(warpConfidence * farFieldWarpGate, min: 0.0, max: 1.0)
+            yawPitchProxy = vector_float2(
+                strengthScaledFarFieldWarpBandValue(
+                    values: analysis.pathYaw,
+                    baselineValues: farFieldBaselineYawPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
+                    confidence: appliedWarpConfidence,
+                    strength: farFieldWarpStrength,
+                    limit: maxRenderedFarFieldYawPitchProxy
+                ),
+                strengthScaledFarFieldWarpBandValue(
+                    values: analysis.pathPitch,
+                    baselineValues: farFieldBaselinePitchPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
+                    confidence: appliedWarpConfidence,
+                    strength: farFieldWarpStrength,
+                    limit: maxRenderedFarFieldYawPitchProxy
+                )
+            )
+            shear = vector_float2(
+                strengthScaledFarFieldWarpBandValue(
+                    values: analysis.pathShearX,
+                    baselineValues: farFieldBaselineShearXPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxRenderedFarFieldShear * 0.08,
+                    confidence: appliedWarpConfidence,
+                    strength: farFieldWarpStrength,
+                    limit: maxRenderedFarFieldShear
+                ),
+                strengthScaledFarFieldWarpBandValue(
+                    values: analysis.pathShearY,
+                    baselineValues: farFieldBaselineShearYPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxRenderedFarFieldShear * 0.08,
+                    confidence: appliedWarpConfidence,
+                    strength: farFieldWarpStrength,
+                    limit: maxRenderedFarFieldShear
+                )
+            )
+            perspective = vector_float2(
+                strengthScaledFarFieldWarpBandValue(
+                    values: analysis.pathPerspectiveX,
+                    baselineValues: farFieldBaselinePerspectiveXPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxRenderedFarFieldPerspective * 0.08,
+                    confidence: appliedWarpConfidence,
+                    strength: farFieldWarpStrength,
+                    limit: maxRenderedFarFieldPerspective
+                ),
+                strengthScaledFarFieldWarpBandValue(
+                    values: analysis.pathPerspectiveY,
+                    baselineValues: farFieldBaselinePerspectiveYPath,
+                    interpolation: frameInterpolation,
+                    deadband: maxRenderedFarFieldPerspective * 0.08,
+                    confidence: appliedWarpConfidence,
+                    strength: farFieldWarpStrength,
+                    limit: maxRenderedFarFieldPerspective
+                )
+            )
+        } else {
+            appliedWarpConfidence = 0.0
+            yawPitchProxy = vector_float2(0.0, 0.0)
+            shear = vector_float2(0.0, 0.0)
+            perspective = vector_float2(0.0, 0.0)
+        }
         return StabilizerAutoTransform(
             pixelOffset: vector_float2(compensationX, compensationY),
             macroPixelOffset: macroPixelOffset,
@@ -1964,6 +1985,7 @@ enum AutoStabilizationEstimator {
         let denominator = Double(max(1, sampleCount - 1))
         let sampleStep = renderTemporalSmoothingWindowSeconds / denominator
         let sigma = max(1e-6, halfWindow * 0.5)
+        let farFieldWarpHalfWindow = renderFarFieldWarpSmoothingWindowSeconds * 0.5
         var weightedSamples: [(transform: StabilizerAutoTransform, weight: Float, offsetSeconds: Double)] = []
         weightedSamples.reserveCapacity(sampleCount)
 
@@ -1983,13 +2005,15 @@ enum AutoStabilizationEstimator {
                 transform = rawCenterTransform
             } else {
                 let sampleFrameIndex = frameLookup(at: sampleSeconds, in: frames).centerIndex
+                let includeFarFieldWarp = abs(offset) <= farFieldWarpHalfWindow + 1e-9
                 transform = renderEstimateCache.rawTransform(
                     analysis: analysis,
                     index: sampleFrameIndex,
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
                     strengths: strengths,
-                    limitFootstepContinuity: false
+                    limitFootstepContinuity: false,
+                    includeFarFieldWarp: includeFarFieldWarp
                 )
             }
             weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
