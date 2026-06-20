@@ -44,11 +44,12 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.267"
+private let tokyoWalkingStabilizerVersion = "0.3.268"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 private let stabilizerDefaultTurnDetectionWindowSeconds = 6.0
+private let stabilizerMaximumFarFieldWarpStrength = 12.0
 private let stabilizerDefaultAutoCropTransitionDuration = 5.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
 private let stabilizerDefaultAutoCropLeadTime = 10.0
@@ -979,9 +980,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterID: ParameterID.farFieldWarpStrength.rawValue,
             defaultValue: 1.0,
             parameterMin: 0.0,
-            parameterMax: 4.0,
+            parameterMax: stabilizerMaximumFarFieldWarpStrength,
             sliderMin: 0.0,
-            sliderMax: 4.0,
+            sliderMax: stabilizerMaximumFarFieldWarpStrength,
             delta: 0.01,
             parameterFlags: flags
         )

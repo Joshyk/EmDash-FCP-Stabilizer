@@ -194,7 +194,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   yaw/pitch proxy, and perspective trim from the current frame's local deviation. Render
   gates warp with walking-footage tracking quality and search-radius headroom, starts the
   tracking gate early enough for moderate 25% Host Analysis evidence, reaches full response
-  more gradually, uses short local tracking support and a `0.36` second render smoothing
+  more gradually, keeps the previous `4.0` strength response unchanged while exposing a `0.0`
+  to `12.0` range, uses short local tracking support and a `0.36` second render smoothing
   window to reduce single-frame gate flicker, then
   applies a tiny deadband and small render-only clamps so weak frames do not create wave-like
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,

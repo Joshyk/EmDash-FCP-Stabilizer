@@ -481,6 +481,7 @@ private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
 private let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
+private let maximumFarFieldWarpStrength: Float = 12.0
 private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
@@ -1003,7 +1004,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     )
     let warpGate = warpGateComponents.gate
     let appliedWarpConfidence = clamp(rawWarpConfidence * warpGate, min: 0.0, max: 1.0)
-    let warpDetected = context.warpMagnitudes[index] * min(4.0, max(0.0, Float(options.strengths.warp)))
+    let warpDetected = context.warpMagnitudes[index] * min(maximumFarFieldWarpStrength, max(0.0, Float(options.strengths.warp)))
     let warpApplied = warpDetected * appliedWarpConfidence
 
     let bands = [

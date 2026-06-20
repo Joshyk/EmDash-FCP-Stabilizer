@@ -417,8 +417,8 @@ Inspector control, debug row, feedback band, or cache-derived diagnostic path.
 
 `Far-field Warp Strength` should expose one bundled small-clamp control for deskew/shear,
 yaw/pitch proxy, and perspective/distort trim. It is intended only for distant ridge-line
-shake in walking landscape footage. Keep the default at `1.0`, expose up to `4.0`, keep each
-unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
+shake in walking landscape footage. Keep the default at `1.0`, expose up to `12.0`, keep the
+previous `4.0` strength response unchanged, keep each unit's render clamps small, surface `warp q`, shear, yaw/pitch, and perspective in
 debug/status output, and render the correction from the current frame's local deviation from
 its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long-term drift
 does not become a fixed deskew. Low tracking confidence or poor search-radius headroom should

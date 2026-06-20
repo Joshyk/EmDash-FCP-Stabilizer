@@ -19,7 +19,7 @@ Repository context:
   - `Stride Wobble Rotation Strength`
   - `Far-field Warp Strength`
   - `Turn Smoothing Strength`
-  - `Far-field Warp Strength` defaults to `1.0` and exposes up to `4.0`.
+  - `Far-field Warp Strength` defaults to `1.0`, keeps the previous `4.0` response unchanged, and exposes up to `12.0`.
 - Do not add a Footstep Jitter window.
 - Do not recommend a separate post-stride Y-only bounce stage, Inspector control, or diagnostic band.
 - Do not rerun Host Analysis during render.

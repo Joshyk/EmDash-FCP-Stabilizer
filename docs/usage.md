@@ -124,8 +124,9 @@ fallbacks.
   uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
   trim after translation and roll are removed. Render uses only the current frame's local
   deviation from its own `0.10`/`1.0` second outer-frame linear warp baseline, so
-  accumulated drift does not turn into a fixed deskew. The default is `1.0`, the maximum is
-  `4.0`, and `0` fully disables warp. Render gates warp with walking-footage tracking
+  accumulated drift does not turn into a fixed deskew. The default is `1.0`, the previous
+  `4.0` strength response is unchanged, the maximum is `12.0`, and `0` fully disables warp.
+  Render gates warp with walking-footage tracking
   quality and search-radius headroom. The tracking gate starts early enough for moderate
   25% Host Analysis evidence but reaches full response more gradually, uses short local
   tracking support to reduce single-frame gate flicker, then applies a tiny deadband so
@@ -335,9 +336,10 @@ FxPlug.
   Footstep Jitter confidence is evaluated on the current render frame instead of inheriting
   the worst residual from the wider turn-detection window.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
-  proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps cap
-  shear at `0.016`, yaw/pitch proxy at `0.010`, and perspective at `0.006`. The applied
-  value is the local warp band against its `0.10`/`1.0` second outer-frame linear baseline,
+  proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps keep the
+  previous cap of shear `0.016`, yaw/pitch proxy `0.010`, and perspective `0.006`; values up
+  to `12` extend the same slope for extra headroom. The applied value is the local warp band
+  against its `0.10`/`1.0` second outer-frame linear baseline,
   not the absolute accumulated warp path. Render also requires walking-footage tracking
   quality and search-radius headroom before applying warp, starts its tracking gate earlier
   for moderate 25% Host Analysis evidence, stabilizes that gate with short local tracking

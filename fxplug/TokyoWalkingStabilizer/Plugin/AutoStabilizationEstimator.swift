@@ -604,6 +604,7 @@ enum AutoStabilizationEstimator {
     private static let maxRenderedFarFieldShear: Float = 0.004
     private static let maxRenderedFarFieldYawPitchProxy: Float = 0.0025
     private static let maxRenderedFarFieldPerspective: Float = 0.0015
+    private static let maximumFarFieldWarpStrength: Float = 12.0
     private static let farFieldWarpTrackingGateStart: Float = 0.26
     private static let farFieldWarpTrackingGateFull: Float = 0.56
     private static let farFieldWarpTrackingGateMedianBlend: Float = 0.45
@@ -1229,7 +1230,7 @@ enum AutoStabilizationEstimator {
         let totalBlockCount = analysis.totalBlockCounts.indices.contains(centerIndex) ? analysis.totalBlockCounts[centerIndex] : 0
         let searchRadiusHitCount = analysis.searchRadiusHitCounts.indices.contains(centerIndex) ? analysis.searchRadiusHitCounts[centerIndex] : 0
         let searchRadiusTotalCount = analysis.searchRadiusTotalCounts.indices.contains(centerIndex) ? analysis.searchRadiusTotalCounts[centerIndex] : 0
-        let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
+        let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: maximumFarFieldWarpStrength)
         let farFieldWarpGateWindowIndices = indicesWithinTimeRadius(
             frames,
             centerTime: renderSeconds,
@@ -1808,7 +1809,7 @@ enum AutoStabilizationEstimator {
         let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x
         let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y
         let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation + strideCompensationRotation
-        let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
+        let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: maximumFarFieldWarpStrength)
         let farFieldWarpTrackingConfidence = stableFarFieldWarpTrackingConfidence(
             analysis: analysis,
             indices: farFieldWarpGateActiveIndices,

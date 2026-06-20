@@ -132,8 +132,9 @@ low-evidence frames do not get a hidden minimum turn correction.
 `Far-field Warp Strength` bundles small-clamp shear, yaw/pitch proxy, and
 perspective trim for distant background motion. It is applied from the current
 frame's local deviation from its own `1.0` second outer-frame linear baseline,
-so long-term drift does not become a fixed deskew. The default is `1.0`, and the
-maximum is `4.0`. The render path gates warp with walking-footage tracking quality and
+so long-term drift does not become a fixed deskew. The default is `1.0`, the
+previous `4.0` strength response is unchanged, and the maximum is now `12.0`.
+The render path gates warp with walking-footage tracking quality and
 search-radius headroom. The tracking gate starts early enough for moderate
 25% Host Analysis evidence but reaches full response more gradually, uses short
 local tracking support to reduce single-frame gate flicker, then drops tiny warp
