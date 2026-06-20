@@ -264,9 +264,11 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   planned scale. A coverage repair pass checks the prepared analysis against that
   curve and adds only the keypoints needed to keep the curve above black-edge
   safety demand, so occasional outside-source boxes do not force frame-by-frame
-  zoom calculation. When no keypoint is active and the transform stays quiet for
-  a couple seconds, Auto Crop returns to identity so idle shots settle near zero
-  crop zoom.
+  zoom calculation. Low-demand keypoints that sit near identity halve their zoom
+  delta, so subtle or nearly idle sections do not remain as visibly cropped while
+  strong turn peaks keep their full planned zoom. When no keypoint is active and
+  the transform stays quiet for a couple seconds, Auto Crop returns to identity
+  so idle shots settle near zero crop zoom.
 - `Host Analysis Status`: read-only analysis/cache state. It appends the current FxPlug
   runtime version when Final Cut Pro accepts status parameter updates. `Persisted Analysis
   Loaded` and `Ready (... frames)` mean the effect is using a completed Event Analyzer cache.

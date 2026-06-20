@@ -44,7 +44,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.3.262"
+private let tokyoWalkingStabilizerVersion = "0.3.263"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -64,6 +64,8 @@ private let stabilizerAutoCropKeypointLogLimit = 6
 private let stabilizerAutoCropKeypointCoverageToleranceDelta: Float = 0.002
 private let stabilizerAutoCropKeypointDuplicateSeconds = 0.125
 private let stabilizerAutoCropKeypointCoveragePassLimit = 64
+private let stabilizerAutoCropSubtleZoomMaximumDelta: Float = 0.08
+private let stabilizerAutoCropSubtleZoomMultiplier: Float = 0.5
 private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
@@ -2330,7 +2332,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     continue
                 }
                 let plannedScale = autoCropZoomPlanSample(plan, at: sample.seconds).scale
-                let requiredScale = sample.scale + stabilizerAutoCropActiveScalePadding
+                let requiredScale = autoCropZoomKeypointScale(forDemandScale: sample.scale)
                 guard plannedScale + stabilizerAutoCropKeypointCoverageToleranceDelta < requiredScale else {
                     continue
                 }
@@ -2361,10 +2363,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     startSeconds: max(firstTime, sample.seconds - max(0.0, leadTimeSeconds)),
                     holdEndSeconds: min(lastTime, sample.seconds + max(0.0, holdTimeSeconds)),
                     endSeconds: min(lastTime, sample.seconds + max(0.0, holdTimeSeconds) + max(0.0, transitionDurationSeconds)),
-                    scale: sample.scale + stabilizerAutoCropActiveScalePadding,
+                    scale: autoCropZoomKeypointScale(forDemandScale: sample.scale),
                     positionPixels: sample.positionPixels
                 )
             }
+    }
+
+    private static func autoCropZoomKeypointScale(forDemandScale demandScale: Float) -> Float {
+        let safeDemandScale = max(Float(1.0), demandScale.isFinite ? demandScale : Float(1.0))
+        let paddedScale = safeDemandScale + stabilizerAutoCropActiveScalePadding
+        let paddedDelta = max(Float(0.0), paddedScale - Float(1.0))
+        guard paddedDelta <= stabilizerAutoCropSubtleZoomMaximumDelta else {
+            return paddedScale
+        }
+        let attenuatedScale = Float(1.0) + (paddedDelta * stabilizerAutoCropSubtleZoomMultiplier)
+        let safetyFloor = max(Float(1.0), safeDemandScale - stabilizerAutoCropKeypointCoverageToleranceDelta)
+        return max(attenuatedScale, safetyFloor)
     }
 
     private static func autoCropZoomDemandSamples(
