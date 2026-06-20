@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 19
+private let cacheSchemaVersion = 21
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -1036,8 +1036,8 @@ private final class MetalMotionWorkspace {
         let verticalMargin = min(6, max(2, height / 10))
         let usableWidth = max(0, width - (horizontalMargin * 2))
         let usableHeight = max(0, height - (verticalMargin * 2))
-        let columns = max(2, min(7, usableWidth / 18))
-        let rows = max(2, min(5, usableHeight / 12))
+        let columns = max(2, min(9, usableWidth / 18))
+        let rows = max(2, min(7, usableHeight / 12))
         guard columns > 0, rows > 0 else {
             return []
         }

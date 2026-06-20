@@ -2565,8 +2565,8 @@ enum AutoStabilizationEstimator {
         let verticalMargin = min(6, max(2, sampleHeight / 10))
         let usableWidth = max(0, sampleWidth - (horizontalMargin * 2))
         let usableHeight = max(0, sampleHeight - (verticalMargin * 2))
-        let columns = max(2, min(7, usableWidth / 18))
-        let rows = max(2, min(5, usableHeight / 12))
+        let columns = max(2, min(9, usableWidth / 18))
+        let rows = max(2, min(7, usableHeight / 12))
         guard columns > 0, rows > 0 else {
             return []
         }

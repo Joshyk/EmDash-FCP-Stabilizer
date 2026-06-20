@@ -197,10 +197,12 @@ Fine jitter analysis should use Metal block matching across multiple source-fram
 reject outlier blocks, and expose low block-confidence states in status/debug output instead
 of silently falling back to a coarse global shift. Walking landscape analysis should
 prioritize upper-frame far-field blocks so distant mountains/background motion is not
-dominated by close grass, water, or road parallax. Motion-path algorithm changes that alter
-prepared analysis output should bump the Host Analysis write schema, but keep previous
-still-valid schemas in the explicit supported-schema list unless the stored fields are no
-longer safe to interpret.
+dominated by close grass, water, or road parallax. Dense block-grid changes that alter
+prepared analysis output must bump the Host Analysis write schema and synchronize the Event
+Analyzer writer, FxPlug supported schemas, feedback CLI supported schemas, and docs together.
+Motion-path algorithm changes that alter prepared analysis output should bump the Host
+Analysis write schema, but keep previous still-valid schemas in the explicit supported-schema
+list unless the stored fields are no longer safe to interpret.
 
 ## Diagnostics
 
