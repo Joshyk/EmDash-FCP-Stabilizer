@@ -260,6 +260,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   a strong Auto Crop zoom keypoint peak. With `Remove Black Edges` on, final crop
   zoom is read from a cached keypoint plan built from prepared analysis instead
   of recalculating zoom every render frame. Each local peak safe-crop demand
+  becomes a keypoint, and render applies a current-frame safety scale floor when
+  that smooth plan would still expose outside-source pixels.
   becomes an internal zoom keypoint; subtle keypoints scale their timing down
   from their zoom delta so the visible crop-zoom bar does not stay zoomed across
   the full default window. The current render frame is used only to clamp the
