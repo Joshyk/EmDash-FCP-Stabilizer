@@ -1229,6 +1229,143 @@ enum AutoStabilizationEstimator {
         let totalBlockCount = analysis.totalBlockCounts.indices.contains(centerIndex) ? analysis.totalBlockCounts[centerIndex] : 0
         let searchRadiusHitCount = analysis.searchRadiusHitCounts.indices.contains(centerIndex) ? analysis.searchRadiusHitCounts[centerIndex] : 0
         let searchRadiusTotalCount = analysis.searchRadiusTotalCounts.indices.contains(centerIndex) ? analysis.searchRadiusTotalCounts[centerIndex] : 0
+        let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: 4.0)
+        let farFieldWarpGateWindowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: farFieldWarpOuterWindowSeconds * 0.5
+        )
+        let farFieldWarpGateActiveIndices = farFieldWarpGateWindowIndices.isEmpty ? [centerIndex] : farFieldWarpGateWindowIndices
+        let farFieldWarpSampledIndices = uniqueSortedIndices(
+            farFieldWarpGateActiveIndices + [centerIndex] + lookup.interpolation.indices,
+            validCount: frames.count
+        )
+        let renderEstimateCache = renderEstimateCache(for: analysis)
+        let farFieldBaselineYawPath = cachedOuterLinearPredictionPath(
+            .yaw,
+            analysis: analysis,
+            indices: farFieldWarpSampledIndices,
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: renderEstimateCache
+        )
+        let farFieldBaselinePitchPath = cachedOuterLinearPredictionPath(
+            .pitch,
+            analysis: analysis,
+            indices: farFieldWarpSampledIndices,
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: renderEstimateCache
+        )
+        let farFieldBaselineShearXPath = cachedOuterLinearPredictionPath(
+            .shearX,
+            analysis: analysis,
+            indices: farFieldWarpSampledIndices,
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: renderEstimateCache
+        )
+        let farFieldBaselineShearYPath = cachedOuterLinearPredictionPath(
+            .shearY,
+            analysis: analysis,
+            indices: farFieldWarpSampledIndices,
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: renderEstimateCache
+        )
+        let farFieldBaselinePerspectiveXPath = cachedOuterLinearPredictionPath(
+            .perspectiveX,
+            analysis: analysis,
+            indices: farFieldWarpSampledIndices,
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: renderEstimateCache
+        )
+        let farFieldBaselinePerspectiveYPath = cachedOuterLinearPredictionPath(
+            .perspectiveY,
+            analysis: analysis,
+            indices: farFieldWarpSampledIndices,
+            innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+            outerWindowSeconds: farFieldWarpOuterWindowSeconds,
+            cache: renderEstimateCache
+        )
+        let farFieldWarpTrackingConfidence = stableFarFieldWarpTrackingConfidence(
+            analysis: analysis,
+            indices: farFieldWarpGateActiveIndices,
+            currentTrackingConfidence: trackingConfidence
+        )
+        let farFieldWarpEdgeQuality = stableFarFieldWarpEdgeQuality(
+            analysis: analysis,
+            indices: farFieldWarpGateActiveIndices,
+            currentSearchRadiusHitCount: searchRadiusHitCount,
+            currentSearchRadiusTotalCount: searchRadiusTotalCount
+        )
+        let farFieldWarpGate = farFieldWarpRenderGate(
+            warpConfidence: warpConfidence,
+            trackingConfidence: farFieldWarpTrackingConfidence,
+            edgeQuality: farFieldWarpEdgeQuality
+        )
+        let appliedWarpConfidence = clamp(warpConfidence * farFieldWarpGate, min: 0.0, max: 1.0)
+        let yawPitchProxy = vector_float2(
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathYaw,
+                baselineValues: farFieldBaselineYawPath,
+                interpolation: lookup.interpolation,
+                deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldYawPitchProxy
+            ),
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathPitch,
+                baselineValues: farFieldBaselinePitchPath,
+                interpolation: lookup.interpolation,
+                deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldYawPitchProxy
+            )
+        )
+        let shear = vector_float2(
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathShearX,
+                baselineValues: farFieldBaselineShearXPath,
+                interpolation: lookup.interpolation,
+                deadband: maxRenderedFarFieldShear * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldShear
+            ),
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathShearY,
+                baselineValues: farFieldBaselineShearYPath,
+                interpolation: lookup.interpolation,
+                deadband: maxRenderedFarFieldShear * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldShear
+            )
+        )
+        let perspective = vector_float2(
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathPerspectiveX,
+                baselineValues: farFieldBaselinePerspectiveXPath,
+                interpolation: lookup.interpolation,
+                deadband: maxRenderedFarFieldPerspective * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldPerspective
+            ),
+            strengthScaledFarFieldWarpBandValue(
+                values: analysis.pathPerspectiveY,
+                baselineValues: farFieldBaselinePerspectiveYPath,
+                interpolation: lookup.interpolation,
+                deadband: maxRenderedFarFieldPerspective * 0.08,
+                confidence: appliedWarpConfidence,
+                strength: farFieldWarpStrength,
+                limit: maxRenderedFarFieldPerspective
+            )
+        )
 
         return StabilizerAutoTransform(
             pixelOffset: pixelOffset,
@@ -1246,15 +1383,15 @@ enum AutoStabilizationEstimator {
             temporalSmoothingWindowSeconds: Float(smoothingWindow),
             effectiveMicroJitterStrength: vector_float3(xStrength, yStrength, rotationStrength),
             effectiveStrideWobbleStrength: vector_float3(xStrength, yStrength, rotationStrength),
-            warpConfidence: warpConfidence,
+            warpConfidence: appliedWarpConfidence,
             microConfidence: xStrength,
             strideConfidence: xStrength,
             turnConfidence: turnConfidence,
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount,
-            yawPitchProxy: vector_float2(0.0, 0.0),
-            shear: vector_float2(0.0, 0.0),
-            perspective: vector_float2(0.0, 0.0),
+            yawPitchProxy: yawPitchProxy,
+            shear: shear,
+            perspective: perspective,
             blurAmount: blurAmount,
             trackingConfidence: trackingConfidence,
             walkingTrackingConfidence: trackingConfidence,
