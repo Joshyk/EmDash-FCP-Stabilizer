@@ -1935,6 +1935,42 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity
         )
+        if samplingProfile == .playback {
+            let localScale = requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: scaleDemand.currentPositionPixels,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            )
+            let finalScale = autoCropKeypointScale(protectedScale: max(Float(1.0), localScale))
+            let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
+                stablePositionPixels: scaleDemand.currentPositionPixels,
+                clampPositionPixels: scaleDemand.currentPositionPixels,
+                context: context,
+                scale: finalScale,
+                samplingProfile: samplingProfile
+            )
+            if !autoCropPosition(
+                finalPositionPixels,
+                fitsWithinScale: finalScale,
+                context: context,
+                samplingProfile: samplingProfile
+            ) {
+                os_log(
+                    "Auto Crop playback coverage miss | render %.3f scale %.4f localScale %.4f",
+                    log: stabilizerHostAnalysisLog,
+                    type: .error,
+                    renderSeconds,
+                    finalScale,
+                    localScale
+                )
+            }
+            return AutoCropFraming(
+                scale: finalScale,
+                positionPixels: finalPositionPixels,
+                telemetry: .empty
+            )
+        }
         let zoomPlan = cachedAutoCropZoomPlan(
             preparedAnalysis: preparedAnalysis,
             outputSize: outputSize,
@@ -3319,11 +3355,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return easeInOutRamp(Float(progress))
     }
 
-    private static func autoCropSamplingProfile(forQualityLevel qualityLevel: UInt32, renderSourceIsProxy: Bool) -> AutoCropSamplingProfile {
-        if renderSourceIsProxy || qualityLevel == 0 {
-            return .playback
-        }
-        return .full
+    private static func autoCropSamplingProfile(forQualityLevel _: UInt32, renderSourceIsProxy _: Bool) -> AutoCropSamplingProfile {
+        .playback
     }
 
     private static func autoCropSampleTime(_ seconds: Double, samplingProfile: AutoCropSamplingProfile) -> Double {
