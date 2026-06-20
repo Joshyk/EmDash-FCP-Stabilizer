@@ -83,6 +83,7 @@ private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
 private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
 private let stabilizerAutoCropPlaybackScaleSampleStepSeconds = 0.5
+private let stabilizerAutoCropPlaybackScaleSampleLimit = 6
 private let stabilizerAutoCropPlaybackScaleQuantization: Float = 0.002
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
@@ -1954,6 +1955,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 masterStrength: masterStrength,
                 samplingProfile: samplingProfile,
                 holdTimeSeconds: holdTimeSeconds,
+                transitionDurationSeconds: transitionDurationSeconds,
                 currentScale: localScale
             )
             let finalScale = autoCropKeypointScale(protectedScale: playbackScale)
@@ -3379,6 +3381,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         masterStrength: Float,
         samplingProfile: AutoCropSamplingProfile,
         holdTimeSeconds: Double,
+        transitionDurationSeconds: Double,
         currentScale: Float
     ) -> Float {
         guard currentSeconds.isFinite,
@@ -3387,11 +3390,56 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return autoCropPlaybackQuantizedScale(currentScale)
         }
 
-        let scaleWindowSeconds = max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0)
+        let holdSeconds = max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0)
+        let releaseSeconds = max(0.0, transitionDurationSeconds.isFinite ? transitionDurationSeconds : 0.0)
+        let scaleWindowSeconds = holdSeconds + releaseSeconds
         let startSeconds = max(firstTime, currentSeconds - scaleWindowSeconds)
         var peakScale = max(Float(1.0), currentScale.isFinite ? currentScale : Float(1.0))
-        var sampleSeconds = currentSeconds - stabilizerAutoCropPlaybackScaleSampleStepSeconds
-        while sampleSeconds >= startSeconds - 1e-9 {
+        guard currentSeconds - startSeconds > 1e-6 else {
+            return autoCropPlaybackQuantizedScale(peakScale)
+        }
+
+        var sampleAges: [Double] = []
+        sampleAges.reserveCapacity(stabilizerAutoCropPlaybackScaleSampleLimit)
+
+        if holdSeconds > 1e-6 {
+            let holdSampleCount = min(4, stabilizerAutoCropPlaybackScaleSampleLimit)
+            let holdStepSeconds = max(
+                stabilizerAutoCropPlaybackScaleSampleStepSeconds,
+                holdSeconds / Double(max(1, holdSampleCount))
+            )
+            var ageSeconds = holdStepSeconds
+            while ageSeconds <= holdSeconds + 1e-9,
+                  sampleAges.count < holdSampleCount {
+                sampleAges.append(ageSeconds)
+                ageSeconds += holdStepSeconds
+            }
+        }
+
+        if releaseSeconds > 1e-6,
+           sampleAges.count < stabilizerAutoCropPlaybackScaleSampleLimit {
+            let remainingCount = max(1, stabilizerAutoCropPlaybackScaleSampleLimit - sampleAges.count)
+            let releaseStepSeconds = releaseSeconds / Double(remainingCount)
+            for index in 1...remainingCount {
+                sampleAges.append(holdSeconds + (releaseStepSeconds * Double(index)))
+            }
+        }
+
+        for sampleAgeSeconds in sampleAges.prefix(stabilizerAutoCropPlaybackScaleSampleLimit) {
+            let sampleSeconds = currentSeconds - sampleAgeSeconds
+            guard sampleSeconds >= startSeconds - 1e-9,
+                  sampleSeconds >= firstTime - 1e-9
+            else {
+                continue
+            }
+            let influence = autoCropPlaybackScaleInfluence(
+                ageSeconds: sampleAgeSeconds,
+                holdTimeSeconds: holdTimeSeconds,
+                transitionDurationSeconds: transitionDurationSeconds
+            )
+            guard influence > 0.0001 else {
+                continue
+            }
             let sampleTransform = autoCropSampleTransform(
                 preparedAnalysis: preparedAnalysis,
                 currentSeconds: currentSeconds,
@@ -3419,11 +3467,36 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 iterations: samplingProfile.scaleSearchIterations
             )
             if sampleScale.isFinite {
-                peakScale = max(peakScale, sampleScale)
+                let protectedSampleScale = Float(1.0) + ((max(Float(1.0), sampleScale) - Float(1.0)) * influence)
+                peakScale = max(peakScale, protectedSampleScale)
             }
-            sampleSeconds -= stabilizerAutoCropPlaybackScaleSampleStepSeconds
         }
         return autoCropPlaybackQuantizedScale(peakScale)
+    }
+
+    private static func autoCropPlaybackScaleInfluence(
+        ageSeconds: Double,
+        holdTimeSeconds: Double,
+        transitionDurationSeconds: Double
+    ) -> Float {
+        guard ageSeconds.isFinite,
+              ageSeconds > 0.0
+        else {
+            return 1.0
+        }
+        let holdSeconds = max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0)
+        if ageSeconds <= holdSeconds {
+            return 1.0
+        }
+        let releaseSeconds = max(0.0, transitionDurationSeconds.isFinite ? transitionDurationSeconds : 0.0)
+        guard releaseSeconds > 1e-6 else {
+            return 0.0
+        }
+        let progress = (ageSeconds - holdSeconds) / releaseSeconds
+        guard progress < 1.0 else {
+            return 0.0
+        }
+        return Float(1.0) - easeInOutRamp(Float(progress))
     }
 
     private static func autoCropPlaybackQuantizedScale(_ scale: Float) -> Float {
