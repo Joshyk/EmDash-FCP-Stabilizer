@@ -98,6 +98,7 @@ install_motion_template() {
 
 	rm -rf "$MOTION_TEMPLATE_DEST"
 	ditto "$MOTION_TEMPLATE_SOURCE" "$MOTION_TEMPLATE_DEST"
+	touch "$MOTION_TEMPLATE_DEST" "$MOTION_TEMPLATE_DEST/Tokyo Walking Stabilizer.moef"
 
 	for legacy_group in \
 		"${HOME}/Movies/Motion Templates.localized/Effects.localized/Stabilizer" \
@@ -155,6 +156,7 @@ unregister_stale_plugins
 if [ "$source_app" != "$install_app" ]; then
 	ditto "$source_app" "$install_app"
 fi
+touch "$install_app" "$install_plugin"
 xattr -dr com.apple.quarantine "$install_app" >/dev/null 2>&1 || true
 
 codesign --verify --deep --strict "$install_app"
