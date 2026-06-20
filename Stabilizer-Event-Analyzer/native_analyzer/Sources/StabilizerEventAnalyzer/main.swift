@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 21
+private let cacheSchemaVersion = 22
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -23,6 +23,7 @@ private let localSearchRadius = 5
 private let minimumAcceptedMotionBlocks = 3
 private let minimumFarFieldMotionBlocks = 3
 private let staggeredMotionBlockFarFieldThreshold: Float = 0.70
+private let detailMotionBlockFarFieldThreshold: Float = 0.70
 private let staggeredMotionBlockMinimumWidth = 18
 private let staggeredMotionBlockMinimumHeight = 12
 private let maxFarFieldShear: Float = 0.008
@@ -1104,6 +1105,21 @@ private final class MetalMotionWorkspace {
                         y1: y1
                     )
                 }
+            }
+        }
+        for row in 0..<rows {
+            let y0 = rowEdges[row].y0
+            let y1 = rowEdges[row].y1
+            let centerY = Float(y0) + (Float(y1 - y0) * 0.5)
+            guard farFieldWeight(centerY: centerY, height: height) >= detailMotionBlockFarFieldThreshold else {
+                continue
+            }
+            for column in 0..<columns {
+                let x0 = columnEdges[column].x0
+                let x1 = columnEdges[column].x1
+                let midX = (x0 + x1) / 2
+                appendBlock(x0: x0, x1: midX, y0: y0, y1: y1)
+                appendBlock(x0: midX, x1: x1, y0: y0, y1: y1)
             }
         }
         return blocks

@@ -237,7 +237,7 @@ Render-time smoothing samples neighboring render times symmetrically across a
 edges it averages only in-range neighboring samples instead of duplicating the
 first or last analysis frame. It smooths Stride Wobble and Turn Smoothing bands
 without averaging away the current frame's Footstep Jitter
-impulse. Far-field Warp uses a separate short `0.36` second in-range smoothing
+impulse. Far-field Warp uses a separate short `0.20` second in-range smoothing
 window so distant ridge-line correction stays responsive without amplifying
 single-frame gate flicker. Render-time frame lookup uses the sorted Host Analysis
 times directly, so long analysis caches do not require repeated full-cache scans
@@ -327,8 +327,9 @@ cache.
 
 Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, and fingerprints instead of
-every frame's full luma sample. Schema 21 analysis uses dense `9 x 7` motion
-blocks and sub-pixel block shift refinement for higher precision prepared paths.
+every frame's full luma sample. Schema 22 analysis keeps the dense `9 x 7` motion
+grid and adds narrower upper-row far-field detail blocks before sub-pixel block
+shift refinement for higher precision prepared warp paths.
 Cache writing uses the prepared analysis frame set as the authoritative timeline,
 so a reduced retained source-frame map does not prevent a completed prepared path
 from being saved.

@@ -300,7 +300,7 @@ FxPlug.
   center-frame transform and the smoothing delta so visible stepping can be diagnosed from
   the Inspector. Footstep Jitter X/Y and roll keep the current render frame's impulse
   correction after the wider Stride/Turn smoothing pass, so fine distant ridge-line shake
-  is not averaged out by temporal smoothing. Far-field Warp uses a shorter `0.36` second
+  is not averaged out by temporal smoothing. Far-field Warp uses a shorter `0.20` second
   in-range smoothing window so ridge-line correction remains responsive without turning
   single-frame gate changes into swimming. Render-time window selection uses the sorted Host
   Analysis frame times directly, so long prepared caches do not require repeated full-cache
@@ -353,12 +353,12 @@ FxPlug.
   for moderate 25% Host Analysis evidence, stabilizes that gate with short local tracking
   support, applies only short render-time smoothing, and drops tiny warp deltas through a
   deadband to avoid wave-like image distortion while tuning micro jitter.
-- Host Analysis cache schema `19` stores the original-size-percentage sample path with the
+- Host Analysis cache schema `22` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, confidence, accepted-block counts,
-  blur values, and search-radius edge-hit counts. Schema 19 uses denser motion-block
-  evidence and sub-pixel block motion refinement for smoother prepared paths; supported
-  older schemas remain readable when their saved fields are still complete.
+  blur values, and search-radius edge-hit counts. Schema 22 adds upper-row far-field
+  detail blocks and sub-pixel block motion refinement for smoother prepared warp paths;
+  supported older schemas remain readable when their saved fields are still complete.
 - Persisted cache state changes update a hidden render revision parameter. Viewer-side
   instances also monitor saved cache changes so Final Cut Pro invalidates cached preview
   frames and redraws from the prepared motion path after the local analyzer writes a

@@ -26,8 +26,9 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Uses schema 19 chunked frame fingerprints and higher precision block motion evidence for
-  persisted-cache validation, while keeping compatible schema 17/18 caches readable.
+- Uses schema 22 chunked frame fingerprints and higher precision far-field block motion
+  evidence for persisted-cache validation, while keeping compatible schema 17-21 caches
+  readable.
 - Reuses persisted analysis only after the current source frame validates against saved
   frame fingerprints.
 - Maps trimmed-clip render time back to Host Analysis time by matching the current render
@@ -42,12 +43,12 @@ estimators, or Transform-keyframe writers back into this target.
   broader Turn Smoothing bands so walking-gimbal shake is separated by
   time scale without rerunning Host Analysis. Footstep Jitter keeps the current render
   frame's raw impulse after `1.20` second zero-phase smoothing; Far-field Warp uses a
-  shorter `0.36` second in-range smoothing window so ridge-line correction stays responsive.
+  shorter `0.20` second in-range smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
-- New schema 19 analysis writes higher precision prepared paths from denser far-field
-  motion blocks and sub-pixel block shift refinement while keeping older complete schema
-  17/18 caches readable.
+- New schema 22 analysis writes higher precision prepared warp paths from extra upper-row
+  far-field detail blocks and sub-pixel block shift refinement while keeping older complete
+  schema 17-21 caches readable.
 - `Remove Black Edges` is on by default and applies dynamic Auto Crop framing during
   render. Turning it off skips Auto Crop window sampling and framing entirely, so
   `Edge Display Mode` directly switches preview edges between stretched source edges and
@@ -195,7 +196,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   gates warp with walking-footage tracking quality and search-radius headroom, starts the
   tracking gate early enough for moderate 25% Host Analysis evidence, reaches full response
   more gradually, keeps the previous `4.0` strength response unchanged while exposing a `0.0`
-  to `12.0` range, uses short local tracking support and a `0.36` second render smoothing
+  to `12.0` range, uses short local tracking support and a `0.20` second render smoothing
   window to reduce single-frame gate flicker, then
   applies a tiny deadband and small render-only clamps so weak frames do not create wave-like
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,

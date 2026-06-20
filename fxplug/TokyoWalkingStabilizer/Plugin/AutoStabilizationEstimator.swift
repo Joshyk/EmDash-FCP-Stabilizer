@@ -619,6 +619,7 @@ enum AutoStabilizationEstimator {
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
     private static let staggeredMotionBlockFarFieldThreshold: Float = 0.70
+    private static let detailMotionBlockFarFieldThreshold: Float = 0.70
     private static let staggeredMotionBlockMinimumWidth = 18
     private static let staggeredMotionBlockMinimumHeight = 12
     private static let motionPathJerkLimitMultiplier: Float = 4.0
@@ -2636,6 +2637,21 @@ enum AutoStabilizationEstimator {
                         y1: y1
                     )
                 }
+            }
+        }
+        for row in 0..<rows {
+            let y0 = rowEdges[row].y0
+            let y1 = rowEdges[row].y1
+            let centerY = Float(y0) + (Float(y1 - y0) * 0.5)
+            guard farFieldWeight(centerY: centerY, sampleHeight: sampleHeight) >= detailMotionBlockFarFieldThreshold else {
+                continue
+            }
+            for column in 0..<columns {
+                let x0 = columnEdges[column].x0
+                let x1 = columnEdges[column].x1
+                let midX = (x0 + x1) / 2
+                appendBlock(x0: x0, x1: midX, y0: y0, y1: y1)
+                appendBlock(x0: midX, x1: x1, y0: y0, y1: y1)
             }
         }
         return blocks
