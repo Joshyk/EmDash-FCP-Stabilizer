@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 23
+private let cacheSchemaVersion = 22
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -24,7 +24,6 @@ private let minimumAcceptedMotionBlocks = 3
 private let minimumFarFieldMotionBlocks = 3
 private let staggeredMotionBlockFarFieldThreshold: Float = 0.70
 private let detailMotionBlockFarFieldThreshold: Float = 0.70
-private let denseSampleMotionBlockFarFieldThreshold: Float = 0.70
 private let staggeredMotionBlockMinimumWidth = 18
 private let staggeredMotionBlockMinimumHeight = 12
 private let maxFarFieldShear: Float = 0.008
@@ -987,11 +986,7 @@ private final class MetalMotionWorkspace {
             throw AnalyzerError("could not create Event Analyzer motion blocks")
         }
         let maxSampleCount = blockSpecs.map { spec in
-            let sampleStep = Self.motionBlockSampleStep(
-                width: spec.width,
-                height: spec.height,
-                farFieldWeight: spec.farFieldWeight
-            )
+            let sampleStep = max(1, min(spec.width, spec.height) / 72)
             let sampleColumns = max(1, (spec.width / sampleStep) + 1)
             let sampleRows = max(1, (spec.height / sampleStep) + 1)
             return sampleColumns * sampleRows
@@ -1001,11 +996,7 @@ private final class MetalMotionWorkspace {
         let scoreGridHeight = scoreGridWidth
         let scoreCount = scoreGridWidth * scoreGridHeight
         let uniforms = blockSpecs.map { spec in
-            let sampleStep = Self.motionBlockSampleStep(
-                width: spec.width,
-                height: spec.height,
-                farFieldWeight: spec.farFieldWeight
-            )
+            let sampleStep = max(1, min(spec.width, spec.height) / 72)
             return MetalBlockUniforms(
                 centerX: UInt32(Int(spec.centerX.rounded())),
                 centerY: UInt32(Int(spec.centerY.rounded())),
@@ -1039,14 +1030,6 @@ private final class MetalMotionWorkspace {
         self.chunkCount = chunkCount
         self.blocks = blocks
         self.uniformBuffer = uniformBuffer
-    }
-
-    private static func motionBlockSampleStep(width: Int, height: Int, farFieldWeight: Float) -> Int {
-        let baseSampleStep = max(1, min(width, height) / 72)
-        guard farFieldWeight >= denseSampleMotionBlockFarFieldThreshold else {
-            return baseSampleStep
-        }
-        return max(1, (baseSampleStep * 3) / 4)
     }
 
     private static func motionBlocks(width: Int, height: Int) -> [(centerX: Float, centerY: Float, width: Int, height: Int, farFieldWeight: Float)] {
