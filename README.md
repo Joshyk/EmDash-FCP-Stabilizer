@@ -163,7 +163,14 @@ not force frame-by-frame zoom calculation. Low-demand coverage misses are folded
 back into the smooth keypoint plan so subtle black-edge fixes do not become
 per-frame crop wobble. Low-demand keypoints that sit near identity halve their
 zoom delta and use shorter keypoint timing, so subtle or nearly idle sections do
-not remain as visibly cropped while strong turn peaks keep their full planned zoom. When no
+not remain as visibly cropped while strong turn peaks keep their full planned zoom.
+After coverage repair, micro zoom keypoints at demand scale `<= 1.03` are merged
+when their windows touch and their crop centers stay close, then coverage is
+checked again before the merged plan is accepted. The Host Analysis status shown
+while `Debug Overlay` is enabled includes short Auto Crop telemetry (`crop z`,
+`miss`, `worst`, `merge`), and the log summary prints raw/merged keypoint counts
+plus worst coverage deficit. This render-time merge does not change Host
+Analysis cache schemas or prepared stabilization paths. When no
 keypoint is active and the transform stays quiet for a couple seconds, Auto Crop
 returns to identity so idle shots settle near zero crop zoom.
 

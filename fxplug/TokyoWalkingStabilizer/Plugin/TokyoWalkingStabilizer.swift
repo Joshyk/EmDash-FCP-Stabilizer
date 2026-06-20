@@ -62,6 +62,10 @@ private let stabilizerMaximumAutoCropHoldTime = 30.0
 private let stabilizerAutoCropActiveScalePadding: Float = 0.018
 private let stabilizerAutoCropKeypointScaleThresholdDelta: Float = 0.006
 private let stabilizerAutoCropKeypointCoverageThresholdDelta: Float = 0.0005
+private let stabilizerAutoCropMicroMergeScaleThreshold: Float = 1.03
+private let stabilizerAutoCropMicroMergeTouchGapSeconds = 0.25
+private let stabilizerAutoCropMicroMergeMinimumPositionTolerance: Float = 8.0
+private let stabilizerAutoCropMicroMergePositionToleranceFraction: Float = 0.012
 private let stabilizerAutoCropKeypointRefineRadiusSeconds = 2.0
 private let stabilizerAutoCropKeypointRefineStepSeconds = 0.25
 private let stabilizerAutoCropKeypointMaximumCount = 64
@@ -136,10 +140,54 @@ enum StabilizerSampleScale: Int32 {
 private struct AutoCropFraming {
     var scale: Float
     var positionPixels: vector_float2
+    var telemetry: AutoCropCoverageTelemetry
 
     static let identity = AutoCropFraming(
         scale: 1.0,
-        positionPixels: vector_float2(0.0, 0.0)
+        positionPixels: vector_float2(0.0, 0.0),
+        telemetry: .empty
+    )
+}
+
+private struct AutoCropCoverageSummary {
+    let missCount: Int
+    let worstSeconds: Double?
+    let worstRequiredScale: Float
+    let worstPlannedScale: Float
+    let worstDeficit: Float
+
+    static let empty = AutoCropCoverageSummary(
+        missCount: 0,
+        worstSeconds: nil,
+        worstRequiredScale: 1.0,
+        worstPlannedScale: 1.0,
+        worstDeficit: 0.0
+    )
+}
+
+private struct AutoCropCoverageTelemetry {
+    let planCount: Int
+    let rawCount: Int
+    let mergedCount: Int
+    let mergeClusterCount: Int
+    let mergeBypassed: Bool
+    let missCount: Int
+    let worstSeconds: Double?
+    let worstRequiredScale: Float
+    let worstPlannedScale: Float
+    let worstDeficit: Float
+
+    static let empty = AutoCropCoverageTelemetry(
+        planCount: 0,
+        rawCount: 0,
+        mergedCount: 0,
+        mergeClusterCount: 0,
+        mergeBypassed: false,
+        missCount: 0,
+        worstSeconds: nil,
+        worstRequiredScale: 1.0,
+        worstPlannedScale: 1.0,
+        worstDeficit: 0.0
     )
 }
 
@@ -160,6 +208,7 @@ private struct AutoCropZoomKeypoint {
 
 private struct AutoCropZoomPlan {
     let keypoints: [AutoCropZoomKeypoint]
+    let telemetry: AutoCropCoverageTelemetry
 }
 
 private struct AutoCropZoomPlanSample {
@@ -1957,7 +2006,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         return AutoCropFraming(
             scale: finalScale,
-            positionPixels: finalPositionPixels
+            positionPixels: finalPositionPixels,
+            telemetry: zoomPlan.telemetry
         )
     }
 
@@ -2186,7 +2236,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
               let lastTime = preparedAnalysis.frames.last?.time,
               firstTime <= lastTime
         else {
-            return AutoCropZoomPlan(keypoints: [])
+            return AutoCropZoomPlan(keypoints: [], telemetry: .empty)
         }
 
         let coarseSamples = autoCropZoomDemandSamples(
@@ -2203,7 +2253,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cacheIdentity: cacheIdentity
         )
         guard !coarseSamples.isEmpty else {
-            return AutoCropZoomPlan(keypoints: [])
+            return AutoCropZoomPlan(keypoints: [], telemetry: .empty)
         }
         let coverageSamples = autoCropZoomDemandSamples(
             preparedAnalysis: preparedAnalysis,
@@ -2269,21 +2319,124 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             transitionDurationSeconds: transitionDurationSeconds
         )
 
-        let keypoints = autoCropZoomKeypoints(
-            from: selected,
+        let preMergeSamples = selected
+        let preMergePlan = AutoCropZoomPlan(
+            keypoints: autoCropZoomKeypoints(
+                from: preMergeSamples,
+                firstTime: firstTime,
+                lastTime: lastTime,
+                leadTimeSeconds: leadTimeSeconds,
+                holdTimeSeconds: holdTimeSeconds,
+                transitionDurationSeconds: transitionDurationSeconds
+            ),
+            telemetry: .empty
+        )
+        let preMergeCoverage = autoCropCoverageSummary(
+            plan: preMergePlan,
+            samples: safetySamples
+        )
+
+        let mergeResult = autoCropMicroMergedZoomSamples(
+            preMergeSamples,
+            outputSize: outputSize,
             firstTime: firstTime,
             lastTime: lastTime,
             leadTimeSeconds: leadTimeSeconds,
             holdTimeSeconds: holdTimeSeconds,
             transitionDurationSeconds: transitionDurationSeconds
         )
+        var finalSamples = mergeResult.samples
+        var finalCoverage = autoCropCoverageSummary(
+            plan: AutoCropZoomPlan(
+                keypoints: autoCropZoomKeypoints(
+                    from: finalSamples,
+                    firstTime: firstTime,
+                    lastTime: lastTime,
+                    leadTimeSeconds: leadTimeSeconds,
+                    holdTimeSeconds: holdTimeSeconds,
+                    transitionDurationSeconds: transitionDurationSeconds
+                ),
+                telemetry: .empty
+            ),
+            samples: safetySamples
+        )
+        if finalCoverage.missCount > 0 {
+            finalSamples = autoCropCoverageRepairedZoomSamples(
+                finalSamples,
+                coverageSamples: safetySamples,
+                firstTime: firstTime,
+                lastTime: lastTime,
+                leadTimeSeconds: leadTimeSeconds,
+                holdTimeSeconds: holdTimeSeconds,
+                transitionDurationSeconds: transitionDurationSeconds
+            )
+            finalCoverage = autoCropCoverageSummary(
+                plan: AutoCropZoomPlan(
+                    keypoints: autoCropZoomKeypoints(
+                        from: finalSamples,
+                        firstTime: firstTime,
+                        lastTime: lastTime,
+                        leadTimeSeconds: leadTimeSeconds,
+                        holdTimeSeconds: holdTimeSeconds,
+                        transitionDurationSeconds: transitionDurationSeconds
+                    ),
+                    telemetry: .empty
+                ),
+                samples: safetySamples
+            )
+        }
+
+        var mergeBypassed = false
+        if autoCropCoverageSummary(finalCoverage, isWorseThan: preMergeCoverage) {
+            os_log(
+                "Auto Crop micro merge bypassed due to coverage gap | rawCount %d mergedCount %d clusters %d missCount %d baselineMissCount %d worstDeficit %.4f baselineWorstDeficit %.4f",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                preMergeSamples.count,
+                mergeResult.mergedCount,
+                mergeResult.clusterCount,
+                finalCoverage.missCount,
+                preMergeCoverage.missCount,
+                finalCoverage.worstDeficit,
+                preMergeCoverage.worstDeficit
+            )
+            finalSamples = preMergeSamples
+            finalCoverage = preMergeCoverage
+            mergeBypassed = true
+        }
+
+        let keypoints = autoCropZoomKeypoints(
+            from: finalSamples,
+            firstTime: firstTime,
+            lastTime: lastTime,
+            leadTimeSeconds: leadTimeSeconds,
+            holdTimeSeconds: holdTimeSeconds,
+            transitionDurationSeconds: transitionDurationSeconds
+        )
+        let telemetry = AutoCropCoverageTelemetry(
+            planCount: keypoints.count,
+            rawCount: preMergeSamples.count,
+            mergedCount: mergeBypassed ? 0 : mergeResult.mergedCount,
+            mergeClusterCount: mergeBypassed ? 0 : mergeResult.clusterCount,
+            mergeBypassed: mergeBypassed,
+            missCount: finalCoverage.missCount,
+            worstSeconds: finalCoverage.worstSeconds,
+            worstRequiredScale: finalCoverage.worstRequiredScale,
+            worstPlannedScale: finalCoverage.worstPlannedScale,
+            worstDeficit: finalCoverage.worstDeficit
+        )
 
         if let strongest = keypoints.max(by: { $0.scale < $1.scale }) {
             os_log(
-                "Auto Crop zoom keypoint plan | count %d strongestPeak %.3f start %.3f holdEnd %.3f end %.3f scale %.4f lead %.3f",
+                "Auto Crop zoom keypoint plan | count %d rawCount %d mergedCount %d clusters %d missCount %d worstDeficit %.4f strongestPeak %.3f start %.3f holdEnd %.3f end %.3f scale %.4f lead %.3f",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 keypoints.count,
+                telemetry.rawCount,
+                telemetry.mergedCount,
+                telemetry.mergeClusterCount,
+                telemetry.missCount,
+                telemetry.worstDeficit,
                 strongest.peakSeconds,
                 strongest.startSeconds,
                 strongest.holdEndSeconds,
@@ -2311,14 +2464,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             }
         } else {
             os_log(
-                "Auto Crop zoom keypoint plan | count 0 lead %.3f",
+                "Auto Crop zoom keypoint plan | count 0 rawCount %d mergedCount %d clusters %d missCount %d worstDeficit %.4f lead %.3f",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
+                telemetry.rawCount,
+                telemetry.mergedCount,
+                telemetry.mergeClusterCount,
+                telemetry.missCount,
+                telemetry.worstDeficit,
                 leadTimeSeconds
             )
         }
 
-        return AutoCropZoomPlan(keypoints: keypoints)
+        return AutoCropZoomPlan(keypoints: keypoints, telemetry: telemetry)
     }
 
     private static func autoCropCoverageRepairedZoomSamples(
@@ -2353,7 +2511,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     leadTimeSeconds: leadTimeSeconds,
                     holdTimeSeconds: holdTimeSeconds,
                     transitionDurationSeconds: transitionDurationSeconds
-                )
+                ),
+                telemetry: .empty
             )
 
             var uncoveredSample: AutoCropZoomDemandSample?
@@ -2375,6 +2534,191 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             selected.append(sample)
         }
         return selected
+    }
+
+    private static func autoCropCoverageSummary(
+        plan: AutoCropZoomPlan,
+        samples coverageSamples: [AutoCropZoomDemandSample]
+    ) -> AutoCropCoverageSummary {
+        guard !coverageSamples.isEmpty else {
+            return .empty
+        }
+        var missCount = 0
+        var worstSeconds: Double?
+        var worstRequiredScale = Float(1.0)
+        var worstPlannedScale = Float(1.0)
+        var worstDeficit = Float(0.0)
+        for sample in coverageSamples where sample.scale > Float(1.0) + stabilizerAutoCropKeypointCoverageThresholdDelta {
+            let requiredScale = autoCropZoomKeypointScale(forDemandScale: sample.scale)
+            let plannedScale = autoCropZoomPlanSample(plan, at: sample.seconds).scale
+            let deficit = requiredScale - plannedScale
+            if plannedScale + stabilizerAutoCropKeypointCoverageToleranceDelta < requiredScale {
+                missCount += 1
+            }
+            if deficit > worstDeficit {
+                worstDeficit = deficit
+                worstSeconds = sample.seconds
+                worstRequiredScale = requiredScale
+                worstPlannedScale = plannedScale
+            }
+        }
+        guard missCount > 0 || worstSeconds != nil else {
+            return .empty
+        }
+        return AutoCropCoverageSummary(
+            missCount: missCount,
+            worstSeconds: worstSeconds,
+            worstRequiredScale: worstRequiredScale,
+            worstPlannedScale: worstPlannedScale,
+            worstDeficit: worstDeficit
+        )
+    }
+
+    private static func autoCropCoverageSummary(
+        _ candidate: AutoCropCoverageSummary,
+        isWorseThan baseline: AutoCropCoverageSummary
+    ) -> Bool {
+        if candidate.missCount != baseline.missCount {
+            return candidate.missCount > baseline.missCount
+        }
+        return candidate.worstDeficit > baseline.worstDeficit + 0.00001
+    }
+
+    private static func autoCropMicroMergedZoomSamples(
+        _ samples: [AutoCropZoomDemandSample],
+        outputSize: vector_float2,
+        firstTime: Double,
+        lastTime: Double,
+        leadTimeSeconds: Double,
+        holdTimeSeconds: Double,
+        transitionDurationSeconds: Double
+    ) -> (samples: [AutoCropZoomDemandSample], mergedCount: Int, clusterCount: Int) {
+        guard samples.count > 1 else {
+            return (samples, 0, 0)
+        }
+        let positionTolerance = max(
+            stabilizerAutoCropMicroMergeMinimumPositionTolerance,
+            min(outputSize.x, outputSize.y) * stabilizerAutoCropMicroMergePositionToleranceFraction
+        )
+        var mergedSamples: [AutoCropZoomDemandSample] = []
+        var currentCluster: [AutoCropZoomDemandSample] = []
+        var currentClusterEnd = -Double.infinity
+        var mergedCount = 0
+        var clusterCount = 0
+
+        func keypoint(for sample: AutoCropZoomDemandSample) -> AutoCropZoomKeypoint {
+            autoCropZoomKeypoints(
+                from: [sample],
+                firstTime: firstTime,
+                lastTime: lastTime,
+                leadTimeSeconds: leadTimeSeconds,
+                holdTimeSeconds: holdTimeSeconds,
+                transitionDurationSeconds: transitionDurationSeconds
+            ).first ?? AutoCropZoomKeypoint(
+                peakSeconds: sample.seconds,
+                startSeconds: sample.seconds,
+                holdEndSeconds: sample.seconds,
+                endSeconds: sample.seconds,
+                scale: autoCropZoomKeypointScale(forDemandScale: sample.scale),
+                positionPixels: sample.positionPixels
+            )
+        }
+
+        func appendCurrentCluster() {
+            guard !currentCluster.isEmpty else {
+                return
+            }
+            if currentCluster.count == 1 {
+                mergedSamples.append(currentCluster[0])
+            } else {
+                let representative = autoCropMicroMergeRepresentativeSample(
+                    currentCluster,
+                    firstTime: firstTime,
+                    lastTime: lastTime
+                )
+                mergedSamples.append(representative)
+                mergedCount += currentCluster.count - 1
+                clusterCount += 1
+            }
+            currentCluster.removeAll(keepingCapacity: true)
+            currentClusterEnd = -Double.infinity
+        }
+
+        for sample in samples.sorted(by: { $0.seconds < $1.seconds }) {
+            guard sample.scale <= stabilizerAutoCropMicroMergeScaleThreshold else {
+                appendCurrentCluster()
+                mergedSamples.append(sample)
+                continue
+            }
+            let sampleKeypoint = keypoint(for: sample)
+            if currentCluster.isEmpty {
+                currentCluster = [sample]
+                currentClusterEnd = sampleKeypoint.endSeconds
+                continue
+            }
+            let touchesCluster = sampleKeypoint.startSeconds <= currentClusterEnd + stabilizerAutoCropMicroMergeTouchGapSeconds
+            let positionMatchesCluster = autoCropMicroMergePositionMatches(
+                sample.positionPixels,
+                clusterSamples: currentCluster,
+                tolerance: positionTolerance
+            )
+            guard touchesCluster, positionMatchesCluster else {
+                appendCurrentCluster()
+                currentCluster = [sample]
+                currentClusterEnd = sampleKeypoint.endSeconds
+                continue
+            }
+            currentCluster.append(sample)
+            currentClusterEnd = max(currentClusterEnd, sampleKeypoint.endSeconds)
+        }
+        appendCurrentCluster()
+        return (mergedSamples, mergedCount, clusterCount)
+    }
+
+    private static func autoCropMicroMergePositionMatches(
+        _ position: vector_float2,
+        clusterSamples: [AutoCropZoomDemandSample],
+        tolerance: Float
+    ) -> Bool {
+        guard !clusterSamples.isEmpty else {
+            return true
+        }
+        for sample in clusterSamples {
+            let delta = position - sample.positionPixels
+            guard simd_length(delta) <= tolerance else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func autoCropMicroMergeRepresentativeSample(
+        _ samples: [AutoCropZoomDemandSample],
+        firstTime: Double,
+        lastTime: Double
+    ) -> AutoCropZoomDemandSample {
+        guard var strongest = samples.first else {
+            return AutoCropZoomDemandSample(
+                seconds: firstTime,
+                scale: 1.0,
+                positionPixels: vector_float2(0.0, 0.0)
+            )
+        }
+        var firstPeak = strongest.seconds
+        var lastPeak = strongest.seconds
+        for sample in samples {
+            firstPeak = min(firstPeak, sample.seconds)
+            lastPeak = max(lastPeak, sample.seconds)
+            if sample.scale > strongest.scale {
+                strongest = sample
+            }
+        }
+        let centerSeconds = min(max((firstPeak + lastPeak) * 0.5, firstTime), lastTime)
+        return AutoCropZoomDemandSample(
+            seconds: centerSeconds,
+            scale: strongest.scale,
+            positionPixels: strongest.positionPixels
+        )
     }
 
     private static func autoCropZoomKeypoints(
@@ -5475,11 +5819,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         frameCount: Int,
         panSmoothSeconds: Double,
         autoTransform: StabilizerAutoTransform,
+        autoCropFraming: AutoCropFraming,
         appliedPixelOffset: vector_float2,
         appliedRotationRadians: Float
     ) {
+        let cropTelemetry = autoCropFraming.telemetry
+        let cropMergeSuffix = cropTelemetry.mergeBypassed ? " bypass" : ""
         let status = String(
-            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f",
+            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f | crop z %.3f miss %d worst %.4f/%.4f@%.1f merge %d/%d%@",
             frameCount,
             tokyoWalkingStabilizerVersion,
             autoTransform.warpConfidence,
@@ -5525,7 +5872,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform.macroPixelOffset.x,
             autoTransform.strideWobblePixelOffset.x,
             autoTransform.microPixelOffset.y,
-            autoTransform.strideWobblePixelOffset.y
+            autoTransform.strideWobblePixelOffset.y,
+            autoCropFraming.scale,
+            cropTelemetry.missCount,
+            cropTelemetry.worstPlannedScale,
+            cropTelemetry.worstRequiredScale,
+            cropTelemetry.worstSeconds ?? -1.0,
+            cropTelemetry.mergedCount,
+            cropTelemetry.mergeClusterCount,
+            cropMergeSuffix
         )
         publishHostAnalysisStatus(statusOverride: status)
     }
@@ -5614,7 +5969,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform.effectiveStrideWobbleStrength.z
         )
         os_log(
-            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f FOOT STEP %.3f STRIDE %.3f FAR WARP %.3f TURN %.3f SMOOTH %.3f CROP ZOOM %.3f CROP X %.2f CROP Y %.2f",
+            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f FOOT STEP %.3f STRIDE %.3f FAR WARP %.3f TURN %.3f SMOOTH %.3f CROP ZOOM %.3f CROP X %.2f CROP Y %.2f CROP MISS %d WORST %.4f/%.4f MERGE %d/%d %{public}@",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -5628,7 +5983,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic3.x,
             diagnostic5.y,
             autoCropFraming.positionPixels.x,
-            autoCropFraming.positionPixels.y
+            autoCropFraming.positionPixels.y,
+            autoCropFraming.telemetry.missCount,
+            autoCropFraming.telemetry.worstPlannedScale,
+            autoCropFraming.telemetry.worstRequiredScale,
+            autoCropFraming.telemetry.mergedCount,
+            autoCropFraming.telemetry.mergeClusterCount,
+            autoCropFraming.telemetry.mergeBypassed ? "bypass" : "ok"
         )
         os_log(
             "Debug Overlay bars quality | FxPlug %{public}@ | FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f MATCH QUAL %.3f EDGE HIT %.3f WALK CONF %.3f",
@@ -6076,6 +6437,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 frameCount: Int(state.hostAnalysisFrameCount),
                 panSmoothSeconds: state.panSmoothSeconds,
                 autoTransform: autoTransform,
+                autoCropFraming: autoCropFraming,
                 appliedPixelOffset: transform.pixelOffset,
                 appliedRotationRadians: transform.rotationRadians
             )
