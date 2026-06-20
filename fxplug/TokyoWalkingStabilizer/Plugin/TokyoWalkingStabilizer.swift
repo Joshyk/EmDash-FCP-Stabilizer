@@ -82,6 +82,8 @@ private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
 private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
+private let stabilizerAutoCropPlaybackScaleSampleStepSeconds = 0.5
+private let stabilizerAutoCropPlaybackScaleQuantization: Float = 0.002
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
@@ -1942,7 +1944,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 sampleSteps: samplingProfile.scaleSearchSampleSteps,
                 iterations: samplingProfile.scaleSearchIterations
             )
-            let finalScale = autoCropKeypointScale(protectedScale: max(Float(1.0), localScale))
+            let playbackScale = autoCropPlaybackStableScale(
+                preparedAnalysis: preparedAnalysis,
+                currentSeconds: renderSeconds,
+                currentTransform: currentTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                masterStrength: masterStrength,
+                samplingProfile: samplingProfile,
+                holdTimeSeconds: holdTimeSeconds,
+                currentScale: localScale
+            )
+            let finalScale = autoCropKeypointScale(protectedScale: playbackScale)
             let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
                 stablePositionPixels: scaleDemand.currentPositionPixels,
                 clampPositionPixels: scaleDemand.currentPositionPixels,
@@ -1957,12 +1971,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 samplingProfile: samplingProfile
             ) {
                 os_log(
-                    "Auto Crop playback coverage miss | render %.3f scale %.4f localScale %.4f",
+                    "Auto Crop playback coverage miss | render %.3f scale %.4f stableScale %.4f",
                     log: stabilizerHostAnalysisLog,
                     type: .error,
                     renderSeconds,
                     finalScale,
-                    localScale
+                    playbackScale
                 )
             }
             return AutoCropFraming(
@@ -3353,6 +3367,73 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let progress = 1.0 - (abs(deltaSeconds) / radiusSeconds)
         return easeInOutRamp(Float(progress))
+    }
+
+    private static func autoCropPlaybackStableScale(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        currentSeconds: Double,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        samplingProfile: AutoCropSamplingProfile,
+        holdTimeSeconds: Double,
+        currentScale: Float
+    ) -> Float {
+        guard currentSeconds.isFinite,
+              let firstTime = preparedAnalysis.frames.first?.time
+        else {
+            return autoCropPlaybackQuantizedScale(currentScale)
+        }
+
+        let scaleWindowSeconds = max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0)
+        let startSeconds = max(firstTime, currentSeconds - scaleWindowSeconds)
+        var peakScale = max(Float(1.0), currentScale.isFinite ? currentScale : Float(1.0))
+        var sampleSeconds = currentSeconds - stabilizerAutoCropPlaybackScaleSampleStepSeconds
+        while sampleSeconds >= startSeconds - 1e-9 {
+            let sampleTransform = autoCropSampleTransform(
+                preparedAnalysis: preparedAnalysis,
+                currentSeconds: currentSeconds,
+                sampleSeconds: sampleSeconds,
+                currentTransform: currentTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                samplingProfile: samplingProfile
+            )
+            let sampleContext = AutoCropTransformContext(
+                transform: sampleTransform,
+                outputSize: outputSize,
+                masterStrength: masterStrength
+            )
+            let samplePositionPixels = blackSafeAutoCropPosition(
+                preferredPositionPixels: sampleTransform.macroPixelOffset * masterStrength,
+                context: sampleContext,
+                samplingProfile: samplingProfile
+            )
+            let sampleScale = requiredAutoCropScale(
+                context: sampleContext,
+                cropPositionPixels: samplePositionPixels,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            )
+            if sampleScale.isFinite {
+                peakScale = max(peakScale, sampleScale)
+            }
+            sampleSeconds -= stabilizerAutoCropPlaybackScaleSampleStepSeconds
+        }
+        return autoCropPlaybackQuantizedScale(peakScale)
+    }
+
+    private static func autoCropPlaybackQuantizedScale(_ scale: Float) -> Float {
+        let safeScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
+        let step = max(Float(0.0001), stabilizerAutoCropPlaybackScaleQuantization)
+        let delta = safeScale - Float(1.0)
+        guard delta > 0.0 else {
+            return Float(1.0)
+        }
+        return Float(1.0) + (Darwin.ceilf(delta / step) * step)
     }
 
     private static func autoCropSamplingProfile(forQualityLevel _: UInt32, renderSourceIsProxy _: Bool) -> AutoCropSamplingProfile {
