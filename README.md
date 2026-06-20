@@ -159,12 +159,11 @@ keypoint curve, while the current render frame is used only to clamp the crop
 center inside the planned scale. A coverage repair pass checks the
 prepared analysis against that curve and adds only the keypoints needed to keep
 the curve above black-edge safety demand, so occasional outside-source boxes do
-not force ordinary frame-by-frame zoom calculation. If the planned curve still
-misses the current transformed frame, render applies a one-frame safety floor to
-the crop scale instead of drawing outside-source pixels. Low-demand keypoints
-that sit near identity halve their zoom delta and use shorter keypoint timing,
-so subtle or nearly idle sections do not remain as visibly cropped while strong
-turn peaks keep their full planned zoom. When no
+not force frame-by-frame zoom calculation. Low-demand coverage misses are folded
+back into the smooth keypoint plan so subtle black-edge fixes do not become
+per-frame crop wobble. Low-demand keypoints that sit near identity halve their
+zoom delta and use shorter keypoint timing, so subtle or nearly idle sections do
+not remain as visibly cropped while strong turn peaks keep their full planned zoom. When no
 keypoint is active and the transform stays quiet for a couple seconds, Auto Crop
 returns to identity so idle shots settle near zero crop zoom.
 

@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "0.4.0"
+private let tokyoWalkingStabilizerVersion = "0.4.1"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -61,11 +61,12 @@ private let stabilizerDefaultAutoCropHoldTime = 2.0
 private let stabilizerMaximumAutoCropHoldTime = 30.0
 private let stabilizerAutoCropActiveScalePadding: Float = 0.018
 private let stabilizerAutoCropKeypointScaleThresholdDelta: Float = 0.006
+private let stabilizerAutoCropKeypointCoverageThresholdDelta: Float = 0.0005
 private let stabilizerAutoCropKeypointRefineRadiusSeconds = 2.0
 private let stabilizerAutoCropKeypointRefineStepSeconds = 0.25
 private let stabilizerAutoCropKeypointMaximumCount = 64
 private let stabilizerAutoCropKeypointLogLimit = 6
-private let stabilizerAutoCropKeypointCoverageToleranceDelta: Float = 0.002
+private let stabilizerAutoCropKeypointCoverageToleranceDelta: Float = 0.0005
 private let stabilizerAutoCropKeypointDuplicateSeconds = 0.125
 private let stabilizerAutoCropKeypointCoveragePassLimit = 64
 private let stabilizerAutoCropSubtleZoomMaximumDelta: Float = 0.08
@@ -298,7 +299,6 @@ private enum AutoCropSamplingProfile: Int32 {
 
 private struct AutoCropScaleDemand {
     let currentPositionPixels: vector_float2
-    let currentScale: Float
     let neutralPositionPixels: vector_float2
 }
 
@@ -1914,44 +1914,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let release = (!planIsActive && quietCurrentTransform) ? min(max(idleReleaseProgress, 0.0), 1.0) : 0.0
         let neutralProtectedScale = Float(1.0)
         let protectedScale = activeProtectedScale + ((neutralProtectedScale - activeProtectedScale) * release)
-        var finalScale = autoCropKeypointScale(protectedScale: protectedScale)
+        let finalScale = autoCropKeypointScale(protectedScale: protectedScale)
         let releasedPositionPixels = release > 0.0
             ? plannedFraming.positionPixels + ((scaleDemand.neutralPositionPixels - plannedFraming.positionPixels) * release)
             : plannedFraming.positionPixels
 
-        var finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
+        let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
             stablePositionPixels: releasedPositionPixels,
             clampPositionPixels: scaleDemand.currentPositionPixels,
             context: context,
             scale: finalScale,
             samplingProfile: samplingProfile
         )
-        if !autoCropPosition(
-            finalPositionPixels,
-            fitsWithinScale: finalScale,
-            context: context,
-            samplingProfile: samplingProfile
-        ) {
-            let repairScale = max(finalScale, scaleDemand.currentScale)
-            if repairScale > finalScale + 0.0001 {
-                finalScale = repairScale
-                finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
-                    stablePositionPixels: releasedPositionPixels,
-                    clampPositionPixels: scaleDemand.currentPositionPixels,
-                    context: context,
-                    scale: finalScale,
-                    samplingProfile: samplingProfile
-                )
-            }
-        }
-        if !autoCropPosition(
-            finalPositionPixels,
-            fitsWithinScale: finalScale,
-            context: context,
-            samplingProfile: samplingProfile
-        ) {
-            finalPositionPixels = scaleDemand.currentPositionPixels
-        }
         if !autoCropPosition(
             finalPositionPixels,
             fitsWithinScale: finalScale,
@@ -2096,12 +2070,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             context: context,
             samplingProfile: samplingProfile
         )
-        let currentScale = requiredAutoCropScale(
-            context: context,
-            cropPositionPixels: currentPositionPixels,
-            sampleSteps: samplingProfile.scaleSearchSampleSteps,
-            iterations: samplingProfile.scaleSearchIterations
-        )
         let neutralPositionPixels = blackSafeAutoCropPosition(
             preferredPositionPixels: vector_float2(0.0, 0.0),
             context: context,
@@ -2109,7 +2077,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         return AutoCropScaleDemand(
             currentPositionPixels: currentPositionPixels,
-            currentScale: currentScale,
             neutralPositionPixels: neutralPositionPixels
         )
     }
@@ -2355,7 +2322,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return initialSamples
         }
         let requiredSamples = coverageSamples
-            .filter { $0.scale > Float(1.0) + stabilizerAutoCropKeypointScaleThresholdDelta }
+            .filter { $0.scale > Float(1.0) + stabilizerAutoCropKeypointCoverageThresholdDelta }
             .sorted { $0.scale > $1.scale }
         guard !requiredSamples.isEmpty else {
             return initialSamples
