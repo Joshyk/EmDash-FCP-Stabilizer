@@ -82,8 +82,7 @@ private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
 private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
-private let stabilizerAutoCropPlaybackScaleSampleStepSeconds = 0.5
-private let stabilizerAutoCropPlaybackScaleSampleLimit = 6
+private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 1.0
 private let stabilizerAutoCropPlaybackScaleQuantization: Float = 0.002
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
@@ -212,6 +211,18 @@ private struct AutoCropZoomKeypoint {
 private struct AutoCropZoomPlan {
     let keypoints: [AutoCropZoomKeypoint]
     let telemetry: AutoCropCoverageTelemetry
+}
+
+private struct AutoCropPlaybackScalePlan {
+    let scale: Float
+    let sampleCount: Int
+    let peakSeconds: Double?
+
+    static let identity = AutoCropPlaybackScalePlan(
+        scale: 1.0,
+        sampleCount: 0,
+        peakSeconds: nil
+    )
 }
 
 private struct AutoCropZoomPlanSample {
@@ -502,6 +513,27 @@ private struct AutoCropZoomPlanCacheKey: Hashable {
     let transitionDuration: UInt64
     let leadTime: UInt64
     let holdTime: UInt64
+    let samplingProfile: Int32
+    let microJitterX: UInt64
+    let microJitterY: UInt64
+    let microJitterRotation: UInt64
+    let strideWobbleX: UInt64
+    let strideWobbleY: UInt64
+    let strideWobbleRotation: UInt64
+    let panStabilizationStrength: UInt64
+    let farFieldWarp: UInt64
+}
+
+private struct AutoCropPlaybackScalePlanCacheKey: Hashable {
+    let cacheIdentity: String?
+    let analysisRevision: UInt64
+    let outputWidth: Int32
+    let outputHeight: Int32
+    let analysisFrameCount: Int
+    let analysisFirstTime: UInt64
+    let analysisLastTime: UInt64
+    let panSmoothSeconds: UInt64
+    let masterStrength: UInt32
     let samplingProfile: Int32
     let microJitterX: UInt64
     let microJitterY: UInt64
@@ -902,6 +934,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static var autoCropZoomPlanCache: [AutoCropZoomPlanCacheKey: AutoCropZoomPlan] = [:]
     private static var autoCropZoomPlanCacheOrder: [AutoCropZoomPlanCacheKey] = []
     private static let autoCropZoomPlanCacheLimit = 16
+    private static let autoCropPlaybackScalePlanCacheLock = NSLock()
+    private static var autoCropPlaybackScalePlanCache: [AutoCropPlaybackScalePlanCacheKey: AutoCropPlaybackScalePlan] = [:]
+    private static var autoCropPlaybackScalePlanCacheOrder: [AutoCropPlaybackScalePlanCacheKey] = []
+    private static let autoCropPlaybackScalePlanCacheLimit = 16
     private static let autoTransformCacheLock = NSLock()
     private static var autoTransformCache: [StabilizerAutoTransformCacheKey: StabilizerAutoTransform] = [:]
     private static var autoTransformCacheOrder: [StabilizerAutoTransformCacheKey] = []
@@ -1939,26 +1975,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cacheIdentity: cacheIdentity
         )
         if samplingProfile == .playback {
-            let localScale = requiredAutoCropScale(
-                context: context,
-                cropPositionPixels: scaleDemand.currentPositionPixels,
-                sampleSteps: samplingProfile.scaleSearchSampleSteps,
-                iterations: samplingProfile.scaleSearchIterations
-            )
-            let playbackScale = autoCropPlaybackStableScale(
+            let playbackScalePlan = cachedAutoCropPlaybackScalePlan(
                 preparedAnalysis: preparedAnalysis,
-                currentSeconds: renderSeconds,
-                currentTransform: currentTransform,
                 outputSize: outputSize,
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths,
                 masterStrength: masterStrength,
                 samplingProfile: samplingProfile,
-                holdTimeSeconds: holdTimeSeconds,
-                transitionDurationSeconds: transitionDurationSeconds,
-                currentScale: localScale
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
             )
-            let finalScale = autoCropKeypointScale(protectedScale: playbackScale)
+            let finalScale = autoCropKeypointScale(protectedScale: playbackScalePlan.scale)
             let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
                 stablePositionPixels: scaleDemand.currentPositionPixels,
                 clampPositionPixels: scaleDemand.currentPositionPixels,
@@ -1973,12 +2000,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 samplingProfile: samplingProfile
             ) {
                 os_log(
-                    "Auto Crop playback coverage miss | render %.3f scale %.4f stableScale %.4f",
+                    "Auto Crop playback coverage miss | render %.3f scale %.4f planScale %.4f planSamples %d peak %.3f",
                     log: stabilizerHostAnalysisLog,
                     type: .error,
                     renderSeconds,
                     finalScale,
-                    playbackScale
+                    playbackScalePlan.scale,
+                    playbackScalePlan.sampleCount,
+                    playbackScalePlan.peakSeconds ?? -1.0
                 )
             }
             return AutoCropFraming(
@@ -2266,6 +2295,134 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropZoomPlanCache.removeValue(forKey: oldestKey)
         }
         return plan
+    }
+
+    private static func cachedAutoCropPlaybackScalePlan(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> AutoCropPlaybackScalePlan {
+        let frames = preparedAnalysis.frames
+        let key = AutoCropPlaybackScalePlanCacheKey(
+            cacheIdentity: cacheIdentity,
+            analysisRevision: analysisRevisionCacheKey(analysisRevision, cacheIdentity: cacheIdentity),
+            outputWidth: Int32(outputSize.x.rounded()),
+            outputHeight: Int32(outputSize.y.rounded()),
+            analysisFrameCount: frames.count,
+            analysisFirstTime: frames.first?.time.bitPattern ?? 0,
+            analysisLastTime: frames.last?.time.bitPattern ?? 0,
+            panSmoothSeconds: panSmoothSeconds.bitPattern,
+            masterStrength: masterStrength.bitPattern,
+            samplingProfile: samplingProfile.rawValue,
+            microJitterX: strengths.microJitterX.bitPattern,
+            microJitterY: strengths.microJitterY.bitPattern,
+            microJitterRotation: strengths.microJitterRotation.bitPattern,
+            strideWobbleX: strengths.strideWobbleX.bitPattern,
+            strideWobbleY: strengths.strideWobbleY.bitPattern,
+            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+            farFieldWarp: strengths.farFieldWarp.bitPattern
+        )
+
+        autoCropPlaybackScalePlanCacheLock.lock()
+        if let cachedPlan = autoCropPlaybackScalePlanCache[key] {
+            autoCropPlaybackScalePlanCacheLock.unlock()
+            return cachedPlan
+        }
+        autoCropPlaybackScalePlanCacheLock.unlock()
+
+        let plan = autoCropPlaybackScalePlan(
+            preparedAnalysis: preparedAnalysis,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
+
+        autoCropPlaybackScalePlanCacheLock.lock()
+        defer { autoCropPlaybackScalePlanCacheLock.unlock() }
+        if let cachedPlan = autoCropPlaybackScalePlanCache[key] {
+            return cachedPlan
+        }
+        autoCropPlaybackScalePlanCache[key] = plan
+        autoCropPlaybackScalePlanCacheOrder.append(key)
+        while autoCropPlaybackScalePlanCacheOrder.count > autoCropPlaybackScalePlanCacheLimit {
+            let oldestKey = autoCropPlaybackScalePlanCacheOrder.removeFirst()
+            autoCropPlaybackScalePlanCache.removeValue(forKey: oldestKey)
+        }
+        return plan
+    }
+
+    private static func autoCropPlaybackScalePlan(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> AutoCropPlaybackScalePlan {
+        guard masterStrength > 0.0001,
+              outputSize.x > 1.0,
+              outputSize.y > 1.0,
+              let firstTime = preparedAnalysis.frames.first?.time,
+              let lastTime = preparedAnalysis.frames.last?.time,
+              firstTime <= lastTime
+        else {
+            return .identity
+        }
+
+        let samples = autoCropZoomDemandSamples(
+            preparedAnalysis: preparedAnalysis,
+            startSeconds: firstTime,
+            endSeconds: lastTime,
+            stepSeconds: stabilizerAutoCropPlaybackScalePlanStepSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
+        guard !samples.isEmpty else {
+            return .identity
+        }
+
+        var peakScale = Float(1.0)
+        var peakSeconds: Double?
+        for sample in samples {
+            let protectedScale = autoCropZoomKeypointScale(forDemandScale: sample.scale)
+            if protectedScale > peakScale {
+                peakScale = protectedScale
+                peakSeconds = sample.seconds
+            }
+        }
+
+        let scale = autoCropPlaybackQuantizedScale(peakScale)
+        os_log(
+            "Auto Crop playback scale plan | samples %d step %.3f peak %.3f scale %.4f",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            samples.count,
+            stabilizerAutoCropPlaybackScalePlanStepSeconds,
+            peakSeconds ?? -1.0,
+            scale
+        )
+        return AutoCropPlaybackScalePlan(
+            scale: scale,
+            sampleCount: samples.count,
+            peakSeconds: peakSeconds
+        )
     }
 
     private static func autoCropZoomPlan(
@@ -3369,138 +3526,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let progress = 1.0 - (abs(deltaSeconds) / radiusSeconds)
         return easeInOutRamp(Float(progress))
-    }
-
-    private static func autoCropPlaybackStableScale(
-        preparedAnalysis: StabilizerPreparedAnalysis,
-        currentSeconds: Double,
-        currentTransform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths,
-        masterStrength: Float,
-        samplingProfile: AutoCropSamplingProfile,
-        holdTimeSeconds: Double,
-        transitionDurationSeconds: Double,
-        currentScale: Float
-    ) -> Float {
-        guard currentSeconds.isFinite,
-              let firstTime = preparedAnalysis.frames.first?.time
-        else {
-            return autoCropPlaybackQuantizedScale(currentScale)
-        }
-
-        let holdSeconds = max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0)
-        let releaseSeconds = max(0.0, transitionDurationSeconds.isFinite ? transitionDurationSeconds : 0.0)
-        let scaleWindowSeconds = holdSeconds + releaseSeconds
-        let startSeconds = max(firstTime, currentSeconds - scaleWindowSeconds)
-        let currentProtectedScale = autoCropZoomKeypointScale(forDemandScale: currentScale)
-        var floorScale = currentProtectedScale
-        var peakScale = currentProtectedScale
-        guard currentSeconds - startSeconds > 1e-6 else {
-            return autoCropPlaybackQuantizedScale(peakScale)
-        }
-
-        var sampleAges: [Double] = []
-        sampleAges.reserveCapacity(stabilizerAutoCropPlaybackScaleSampleLimit)
-
-        if holdSeconds > 1e-6 {
-            let holdSampleCount = min(4, stabilizerAutoCropPlaybackScaleSampleLimit)
-            let holdStepSeconds = max(
-                stabilizerAutoCropPlaybackScaleSampleStepSeconds,
-                holdSeconds / Double(max(1, holdSampleCount))
-            )
-            var ageSeconds = holdStepSeconds
-            while ageSeconds <= holdSeconds + 1e-9,
-                  sampleAges.count < holdSampleCount {
-                sampleAges.append(ageSeconds)
-                ageSeconds += holdStepSeconds
-            }
-        }
-
-        if releaseSeconds > 1e-6,
-           sampleAges.count < stabilizerAutoCropPlaybackScaleSampleLimit {
-            let remainingCount = max(1, stabilizerAutoCropPlaybackScaleSampleLimit - sampleAges.count)
-            let releaseStepSeconds = releaseSeconds / Double(remainingCount)
-            for index in 1...remainingCount {
-                sampleAges.append(holdSeconds + (releaseStepSeconds * Double(index)))
-            }
-        }
-
-        for sampleAgeSeconds in sampleAges.prefix(stabilizerAutoCropPlaybackScaleSampleLimit) {
-            let sampleSeconds = currentSeconds - sampleAgeSeconds
-            guard sampleSeconds >= startSeconds - 1e-9,
-                  sampleSeconds >= firstTime - 1e-9
-            else {
-                continue
-            }
-            let influence = autoCropPlaybackScaleInfluence(
-                ageSeconds: sampleAgeSeconds,
-                holdTimeSeconds: holdTimeSeconds,
-                transitionDurationSeconds: transitionDurationSeconds
-            )
-            guard influence > 0.0001 else {
-                continue
-            }
-            let sampleTransform = autoCropSampleTransform(
-                preparedAnalysis: preparedAnalysis,
-                currentSeconds: currentSeconds,
-                sampleSeconds: sampleSeconds,
-                currentTransform: currentTransform,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                samplingProfile: samplingProfile
-            )
-            let sampleContext = AutoCropTransformContext(
-                transform: sampleTransform,
-                outputSize: outputSize,
-                masterStrength: masterStrength
-            )
-            let samplePositionPixels = blackSafeAutoCropPosition(
-                preferredPositionPixels: sampleTransform.macroPixelOffset * masterStrength,
-                context: sampleContext,
-                samplingProfile: samplingProfile
-            )
-            let sampleScale = requiredAutoCropScale(
-                context: sampleContext,
-                cropPositionPixels: samplePositionPixels,
-                sampleSteps: samplingProfile.scaleSearchSampleSteps,
-                iterations: samplingProfile.scaleSearchIterations
-            )
-            if sampleScale.isFinite {
-                let protectedSampleScale = autoCropZoomKeypointScale(forDemandScale: sampleScale)
-                floorScale = max(floorScale, protectedSampleScale)
-                let releasedSampleScale = Float(1.0) + ((protectedSampleScale - Float(1.0)) * influence)
-                peakScale = max(peakScale, releasedSampleScale)
-            }
-        }
-        return autoCropPlaybackQuantizedScale(max(floorScale, peakScale))
-    }
-
-    private static func autoCropPlaybackScaleInfluence(
-        ageSeconds: Double,
-        holdTimeSeconds: Double,
-        transitionDurationSeconds: Double
-    ) -> Float {
-        guard ageSeconds.isFinite,
-              ageSeconds > 0.0
-        else {
-            return 1.0
-        }
-        let holdSeconds = max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0)
-        if ageSeconds <= holdSeconds {
-            return 1.0
-        }
-        let releaseSeconds = max(0.0, transitionDurationSeconds.isFinite ? transitionDurationSeconds : 0.0)
-        guard releaseSeconds > 1e-6 else {
-            return 0.0
-        }
-        let progress = (ageSeconds - holdSeconds) / releaseSeconds
-        guard progress < 1.0 else {
-            return 0.0
-        }
-        return Float(1.0) - easeInOutRamp(Float(progress))
     }
 
     private static func autoCropPlaybackQuantizedScale(_ scale: Float) -> Float {
