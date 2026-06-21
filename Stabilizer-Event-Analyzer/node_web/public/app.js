@@ -200,8 +200,19 @@ function updateLastAnalysisState() {
     : "Run analysis once to create a Last Analysis setting";
 }
 
+function lowerPath(sourcePath) {
+  return String(sourcePath || "").toLowerCase();
+}
+
+function isFcpbundlePath(sourcePath) {
+  return lowerPath(sourcePath).endsWith(".fcpbundle");
+}
+
 function exportKindForPath(sourcePath) {
-  return sourcePath.endsWith(".fcpxmld") ? "fcpxmld" : "fcpxml";
+  const lowered = lowerPath(sourcePath);
+  if (lowered.endsWith(".fcpbundle")) return "fcpbundle";
+  if (lowered.endsWith(".fcpxmld")) return "fcpxmld";
+  return "fcpxml";
 }
 
 function exportNameForPath(sourcePath) {
@@ -222,7 +233,7 @@ function defaultImportsDirForSource(sourcePath) {
   if (name === "Info.fcpxml" && exportNameForPath(parent).endsWith(".fcpxmld")) {
     return dirname(parent);
   }
-  if (name.endsWith(".fcpxmld")) {
+  if (name.endsWith(".fcpxmld") || name.endsWith(".fcpbundle")) {
     return parent;
   }
   return parent;
@@ -284,7 +295,7 @@ function renderExports(items) {
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "export-item";
-    empty.innerHTML = "<strong>No export files selected</strong><span></span>";
+    empty.innerHTML = "<strong>No source selected</strong><span></span>";
     el.exportsList.appendChild(empty);
     return;
   }
@@ -320,20 +331,22 @@ function renderAssets() {
       <td></td>
       <td></td>
       <td></td>
+      <td></td>
     `;
     const checkbox = row.querySelector("input");
     checkbox.checked = selected;
     checkbox.disabled = !asset.supported;
     const cells = row.querySelectorAll("td");
     cells[1].textContent = asset.name || asset.assetId;
-    cells[2].textContent = formatDuration(asset);
-    cells[3].textContent = `${asset.width || "?"}x${asset.height || "?"} | ${asset.frameDuration || "fps ?"}`;
+    cells[2].textContent = asset.eventName || "-";
+    cells[3].textContent = formatDuration(asset);
+    cells[4].textContent = `${asset.width || "?"}x${asset.height || "?"} | ${asset.frameDuration || "fps ?"}`;
     const mediaKind = asset.mediaKind === "original-media" || asset.mediaKind === "asset-src"
       ? "Original"
       : asset.mediaKind || "Unknown";
-    cells[4].textContent = asset.mediaPath ? `${mediaKind}: ${asset.mediaPath}` : "";
-    cells[5].textContent = asset.supported ? "Original ready" : asset.unsupported || "Unsupported";
-    cells[5].className = asset.supported ? "status-ready" : "status-error";
+    cells[5].textContent = asset.mediaPath ? `${mediaKind}: ${asset.mediaPath}` : "";
+    cells[6].textContent = asset.supported ? "Original ready" : asset.unsupported || "Unsupported";
+    cells[6].className = asset.supported ? "status-ready" : "status-error";
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) {
         state.selectedAssetIds.add(asset.assetId);
@@ -383,7 +396,7 @@ async function resumeLatestJob() {
 }
 
 async function selectExportFiles() {
-  setStatus("Selecting export files...");
+  setStatus("Selecting source files...");
   const payload = await api("/api/select-exports", {
     method: "POST",
   });
@@ -391,7 +404,7 @@ async function selectExportFiles() {
   const rejected = payload.rejected || [];
   const rejectionText = rejected.length ? ` (${rejected.length} rejected)` : "";
   if (!(payload.items || []).length) {
-    setStatus(rejected.length ? rejected.map((item) => item.reason).join("\n") : "No export files selected.", rejected.length ? "error" : "");
+    setStatus(rejected.length ? rejected.map((item) => item.reason).join("\n") : "No source selected.", rejected.length ? "error" : "");
     return;
   }
   const currentStillSelected = (payload.items || []).some((item) => item.path === state.sourcePath);
@@ -401,7 +414,7 @@ async function selectExportFiles() {
     setImportsDirForSource(state.sourcePath, payload.items[0]);
     await loadAssets();
   }
-  setStatus(`Selected ${(payload.items || []).length} export file(s)${rejectionText}.`, rejected.length ? "error" : "ok");
+  setStatus(`Selected ${(payload.items || []).length} source(s)${rejectionText}.`, rejected.length ? "error" : "ok");
 }
 
 async function loadAssets() {
@@ -416,7 +429,7 @@ async function loadAssets() {
   renderBatchSummary(null);
   renderAssets();
   if (!state.sourcePath) {
-    setStatus("Set an FCPXMLD or Info.fcpxml path.", "error");
+    setStatus("Set an FCP library, FCPXMLD, or Info.fcpxml path.", "error");
     return;
   }
   setStatus("Loading Event media...");
@@ -426,7 +439,10 @@ async function loadAssets() {
       body: { sourcePath: state.sourcePath },
     });
     state.assets = payload.assets || [];
-    el.sourceText.textContent = payload.packagePath || payload.infoPath || state.sourcePath;
+    const eventNames = payload.eventNames || [];
+    el.sourceText.textContent = eventNames.length
+      ? `${eventNames.join(", ")} | ${payload.packagePath || payload.infoPath || state.sourcePath}`
+      : payload.packagePath || payload.infoPath || state.sourcePath;
     if (state.pendingPresetAssetIds) {
       for (const asset of state.assets) {
         if (asset.supported && state.pendingPresetAssetIds.has(asset.assetId)) {
@@ -434,13 +450,15 @@ async function loadAssets() {
         }
       }
       state.pendingPresetAssetIds = null;
-    } else {
+    } else if (!isFcpbundlePath(state.sourcePath)) {
       for (const asset of state.assets) {
         if (asset.supported) state.selectedAssetIds.add(asset.assetId);
       }
     }
     renderAssets();
-    setStatus(`Loaded ${state.assets.length} Event media asset(s).`, "ok");
+    const supportedCount = state.assets.filter((asset) => asset.supported).length;
+    const selectHint = isFcpbundlePath(state.sourcePath) ? " Select the clip(s) to analyze." : "";
+    setStatus(`Loaded ${supportedCount}/${state.assets.length} supported Event media asset(s).${selectHint}`, "ok");
   } catch (error) {
     renderAssets();
     setStatus(error.message, "error");

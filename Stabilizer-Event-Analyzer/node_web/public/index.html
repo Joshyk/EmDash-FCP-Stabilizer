@@ -19,10 +19,10 @@
       <main class="layout">
         <section class="panel side-panel">
           <div class="panel-header">
-            <h2>Exports</h2>
+            <h2>Sources</h2>
           </div>
           <div class="button-row">
-            <button id="selectExportFilesButton" type="button">Select Export Files</button>
+            <button id="selectExportFilesButton" type="button">Select FCP Source</button>
             <button id="lastAnalysisButton" type="button" disabled>Last Analysis</button>
           </div>
           <div id="exportsList" class="exports-list"></div>
@@ -34,7 +34,7 @@
             <span id="sourceText" class="muted"></span>
           </div>
           <label class="field">
-            <span>FCPXMLD or Info.fcpxml path</span>
+            <span>FCP Library (.fcpbundle), FCPXMLD, or Info.fcpxml path</span>
             <input id="sourcePathInput" type="text" autocomplete="off">
           </label>
           <div class="button-row">
@@ -48,6 +48,7 @@
                 <tr>
                   <th></th>
                   <th>Name</th>
+                  <th>Event</th>
                   <th>Duration</th>
                   <th>Format</th>
                   <th>Media</th>

@@ -11,6 +11,10 @@ const { pathToFileURL } = require("node:url");
 const repoRoot = path.resolve(__dirname, "../..");
 const fixture = path.join(repoRoot, "fixtures", "minimal-event.fcpxmld");
 
+function hasCommand(command) {
+  return spawnSync("bash", ["-lc", `command -v ${command}`], { encoding: "utf8" }).status === 0;
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
@@ -104,6 +108,54 @@ test("list_event_assets reads Event media assets", () => {
   assert.equal(payload.assets[0].name, "P1000307");
   assert.equal(payload.assets[0].mediaKind, "original-media");
   assert.equal(payload.assets[0].durationTimecode, "00:00:10:00");
+});
+
+test("list_event_assets reads original media clips from an FCP library bundle", { skip: !(hasCommand("ffmpeg") && hasCommand("ffprobe")) }, () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-fcpbundle-source-"));
+  const bundle = path.join(tmp, "Library.fcpbundle");
+  const originalMedia = path.join(bundle, "Event A", "Original Media");
+  const proxyMedia = path.join(bundle, "Event A", "Transcoded Media", "Proxy Media");
+  fs.mkdirSync(originalMedia, { recursive: true });
+  fs.mkdirSync(proxyMedia, { recursive: true });
+  const clipPath = path.join(originalMedia, "LibraryClip.mov");
+  const proxyPath = path.join(proxyMedia, "ProxyClip.mov");
+  fs.writeFileSync(proxyPath, "");
+  const ffmpeg = spawnSync("ffmpeg", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc=size=160x90:rate=30",
+    "-frames:v",
+    "30",
+    "-an",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:v",
+    "mpeg4",
+    clipPath,
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(ffmpeg.status, 0, ffmpeg.stderr || ffmpeg.stdout);
+
+  const payload = run("python3", ["scripts/list_event_assets.py", "--fcpxml", bundle]);
+  assert.equal(payload.status, "ok");
+  assert.equal(payload.packagePath, fs.realpathSync(bundle));
+  assert.match(payload.infoPath, /fcpbundle_sources/);
+  assert.deepEqual(payload.eventNames, ["Event A"]);
+  assert.equal(payload.assetCount, 1);
+  assert.equal(payload.assets[0].name, "LibraryClip");
+  assert.equal(payload.assets[0].eventName, "Event A");
+  assert.equal(payload.assets[0].mediaKind, "original-media");
+  assert.equal(payload.assets[0].mediaPath, fs.realpathSync(clipPath));
+  assert.equal(payload.assets[0].supported, true);
+  assert.equal(payload.assets[0].width, 160);
+  assert.equal(payload.assets[0].height, 90);
+  assert.equal(payload.assets[0].frameDuration, "1/30s");
 });
 
 test("list_event_assets refuses proxy-only media reps", () => {

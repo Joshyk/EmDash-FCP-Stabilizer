@@ -437,15 +437,18 @@ async function exportItemForPath(selectedPath) {
   if (stat.isDirectory() && name.endsWith(".fcpxmld")) {
     return { name, path: resolved, importsDir: defaultImportsDirForSource(resolved), mtimeMs: stat.mtimeMs, kind: "fcpxmld" };
   }
+  if (stat.isDirectory() && name.endsWith(".fcpbundle")) {
+    return { name, path: resolved, importsDir: defaultImportsDirForSource(resolved), mtimeMs: stat.mtimeMs, kind: "fcpbundle" };
+  }
   if (stat.isFile() && name.endsWith(".fcpxml")) {
     return { name, path: resolved, importsDir: defaultImportsDirForSource(resolved), mtimeMs: stat.mtimeMs, kind: "fcpxml" };
   }
-  throw new Error(`${selectedPath} is not an FCPXMLD package or .fcpxml file`);
+  throw new Error(`${selectedPath} is not an FCP library, FCPXMLD package, or .fcpxml file`);
 }
 
 async function selectExportFiles() {
   const script = [
-    'set selectedFiles to choose file with prompt "Select FCPXMLD packages or Info.fcpxml files" with multiple selections allowed',
+    'set selectedFiles to choose file with prompt "Select FCP libraries, FCPXMLD packages, or Info.fcpxml files" with multiple selections allowed',
     "set outputPaths to {}",
     "repeat with selectedFile in selectedFiles",
     "  set end of outputPaths to POSIX path of selectedFile",

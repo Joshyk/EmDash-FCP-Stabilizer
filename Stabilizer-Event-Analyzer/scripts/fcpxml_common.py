@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import shutil
+import subprocess
 import urllib.parse
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -12,6 +16,19 @@ from pathlib import Path
 
 
 SCHEMA_VERSION = 1
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
+VIDEO_MEDIA_EXTENSIONS = {
+    ".3gp",
+    ".avi",
+    ".m2t",
+    ".m2ts",
+    ".m4v",
+    ".mov",
+    ".mp4",
+    ".mts",
+    ".mxf",
+}
 
 
 @dataclass(frozen=True)
@@ -20,6 +37,7 @@ class EventAsset:
     name: str
     media_path: Path | None
     media_kind: str | None
+    event_name: str | None
     frame_duration: Fraction | None
     duration: Fraction | None
     source_start: Fraction
@@ -39,6 +57,10 @@ def local_name(tag: str) -> str:
 
 
 def resolve_info_path(path: Path) -> tuple[Path, Path | None]:
+    path = path.expanduser()
+    if path.is_dir() and path.suffix == ".fcpbundle":
+        resolved = path.resolve()
+        return materialize_fcpbundle_info(resolved), resolved
     if path.is_dir():
         info = path / "Info.fcpxml"
         if not info.is_file():
@@ -93,6 +115,12 @@ def file_url_to_path(url: str) -> Path:
 
 def path_to_file_url(path: Path) -> str:
     return urllib.parse.urljoin("file:", urllib.parse.quote(str(path.resolve())))
+
+
+def time_string(value: Fraction) -> str:
+    if value.denominator == 1:
+        return f"{value.numerator}s"
+    return f"{value.numerator}/{value.denominator}s"
 
 
 def transcoded_media_reason(path: Path) -> str | None:
@@ -162,11 +190,214 @@ def parse_dimension(value: str | None) -> int | None:
     return int(match.group(0)) if match else None
 
 
+def event_name_by_asset_id(root: ET.Element) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for event in root.iter():
+        if local_name(event.tag) != "event":
+            continue
+        event_name = event.attrib.get("name")
+        if not event_name:
+            continue
+        for child in event.iter():
+            if local_name(child.tag) == "asset-clip" and child.attrib.get("ref"):
+                mapping.setdefault(child.attrib["ref"], event_name)
+    return mapping
+
+
+def fcpbundle_event_dirs(bundle_path: Path) -> list[Path]:
+    return [
+        child
+        for child in sorted(bundle_path.iterdir(), key=lambda item: item.name.casefold())
+        if child.is_dir() and not child.name.startswith(".") and (child / "Original Media").is_dir()
+    ]
+
+
+def fcpbundle_media_files(bundle_path: Path) -> list[tuple[Path, Path]]:
+    media_files: list[tuple[Path, Path]] = []
+    for event_dir in fcpbundle_event_dirs(bundle_path):
+        original_media = event_dir / "Original Media"
+        for media_path in sorted(original_media.rglob("*"), key=lambda item: str(item).casefold()):
+            if not media_path.is_file():
+                continue
+            if media_path.name.startswith(".") or media_path.suffix.lower() not in VIDEO_MEDIA_EXTENSIONS:
+                continue
+            media_files.append((event_dir, media_path))
+    return media_files
+
+
+def fcpbundle_signature(bundle_path: Path, media_files: list[tuple[Path, Path]]) -> dict:
+    items = []
+    for event_dir, media_path in media_files:
+        stat = media_path.stat()
+        items.append(
+            {
+                "event": event_dir.name,
+                "path": str(media_path),
+                "size": stat.st_size,
+                "mtimeNs": stat.st_mtime_ns,
+            }
+        )
+    return {
+        "bundlePath": str(bundle_path),
+        "bundleMtimeNs": bundle_path.stat().st_mtime_ns,
+        "items": items,
+    }
+
+
+def ffprobe_executable() -> str:
+    candidates = [
+        shutil.which("ffprobe"),
+        "/opt/homebrew/bin/ffprobe",
+        "/usr/local/bin/ffprobe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return str(candidate)
+    raise RuntimeError(
+        "ffprobe is required to read media metadata directly from .fcpbundle; "
+        "install ffmpeg/ffprobe or use an exported FCPXMLD package"
+    )
+
+
+def positive_fraction(value: str | None) -> Fraction | None:
+    if not value or value == "N/A":
+        return None
+    try:
+        fraction = Fraction(value)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return fraction if fraction > 0 else None
+
+
+def probe_video_metadata(media_path: Path, ffprobe: str) -> tuple[int, int, Fraction, Fraction]:
+    result = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,avg_frame_rate,r_frame_rate,duration:format=duration",
+            "-of",
+            "json",
+            str(media_path),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "ffprobe failed").strip())
+    payload = json.loads(result.stdout or "{}")
+    streams = payload.get("streams") or []
+    if not streams:
+        raise RuntimeError("ffprobe found no video stream")
+    stream = streams[0]
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    if width <= 0 or height <= 0:
+        raise RuntimeError("ffprobe did not return video dimensions")
+    fps = positive_fraction(stream.get("avg_frame_rate")) or positive_fraction(stream.get("r_frame_rate"))
+    if fps is None:
+        raise RuntimeError("ffprobe did not return a usable video frame rate")
+    duration = (
+        positive_fraction(stream.get("duration"))
+        or positive_fraction((payload.get("format") or {}).get("duration"))
+    )
+    if duration is None:
+        raise RuntimeError("ffprobe did not return a usable video duration")
+    frame_duration = Fraction(fps.denominator, fps.numerator)
+    frame_count = max(1, int((duration / frame_duration) + Fraction(1, 2)))
+    return width, height, frame_duration, frame_duration * frame_count
+
+
+def fcpbundle_cache_dir(bundle_path: Path) -> Path:
+    digest = hashlib.sha256(str(bundle_path).encode("utf-8")).hexdigest()[:16]
+    return FCPBUNDLE_SOURCE_CACHE / f"{safe_file_component(bundle_path.stem)}-{digest}.fcpxmld"
+
+
+def materialize_fcpbundle_info(bundle_path: Path) -> Path:
+    if not bundle_path.exists() or not bundle_path.is_dir():
+        raise FileNotFoundError(f"FCP library bundle was not found: {bundle_path}")
+    media_files = fcpbundle_media_files(bundle_path)
+    if not media_files:
+        raise ValueError(f"no original video media was found in Event Original Media folders: {bundle_path}")
+    cache_dir = fcpbundle_cache_dir(bundle_path)
+    info_path = cache_dir / "Info.fcpxml"
+    manifest_path = cache_dir / "source-manifest.json"
+    signature = fcpbundle_signature(bundle_path, media_files)
+    if info_path.exists() and manifest_path.exists():
+        try:
+            if json.loads(manifest_path.read_text(encoding="utf-8")) == signature:
+                return info_path
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    ffprobe = ffprobe_executable()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    root = ET.Element("fcpxml", {"version": "1.11"})
+    resource_node = ET.SubElement(root, "resources")
+    library_node = ET.SubElement(root, "library")
+    asset_index = 1
+    for event_dir in fcpbundle_event_dirs(bundle_path):
+        event_node = ET.SubElement(library_node, "event", {"name": event_dir.name})
+        event_media = [media_path for media_event, media_path in media_files if media_event == event_dir]
+        for media_path in event_media:
+            asset_id = f"r{asset_index}"
+            asset_index += 1
+            attrs = {
+                "id": asset_id,
+                "name": media_path.stem,
+                "start": "0s",
+                "hasVideo": "1",
+            }
+            clip_attrs = {
+                "name": media_path.stem,
+                "ref": asset_id,
+                "start": "0s",
+                "offset": "0s",
+            }
+            try:
+                width, height, frame_duration, duration = probe_video_metadata(media_path, ffprobe)
+                format_id = f"r{asset_index}"
+                asset_index += 1
+                ET.SubElement(
+                    resource_node,
+                    "format",
+                    {
+                        "id": format_id,
+                        "name": f"FFVideoFormat{width}x{height}",
+                        "frameDuration": time_string(frame_duration),
+                        "width": str(width),
+                        "height": str(height),
+                    },
+                )
+                attrs["format"] = format_id
+                attrs["duration"] = time_string(duration)
+                clip_attrs["format"] = format_id
+                clip_attrs["duration"] = time_string(duration)
+            except Exception as exc:  # noqa: BLE001
+                attrs["stabilizerUnsupported"] = f"ffprobe metadata failed for original media: {exc}"
+            asset = ET.SubElement(resource_node, "asset", attrs)
+            ET.SubElement(asset, "media-rep", {"kind": "original-media", "src": path_to_file_url(media_path)})
+            ET.SubElement(event_node, "asset-clip", clip_attrs)
+    try:
+        ET.indent(root, space="  ")
+    except AttributeError:
+        pass
+    ET.ElementTree(root).write(info_path, encoding="utf-8", xml_declaration=True)
+    manifest_path.write_text(json.dumps(signature, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return info_path
+
+
 def load_event_assets(fcpxml_path: Path) -> list[EventAsset]:
     info_path, _ = resolve_info_path(fcpxml_path)
     root = ET.parse(info_path).getroot()
     formats = resource_map(root, "format")
     assets = resource_map(root, "asset")
+    asset_events = event_name_by_asset_id(root)
     results: list[EventAsset] = []
     seen: set[str] = set()
     for asset_id, asset in assets.items():
@@ -177,7 +408,7 @@ def load_event_assets(fcpxml_path: Path) -> list[EventAsset]:
         seen.add(asset_id)
         src, media_kind, source_unsupported = choose_original_asset_src(asset)
         media_path: Path | None = None
-        unsupported: str | None = source_unsupported
+        unsupported: str | None = source_unsupported or asset.attrib.get("stabilizerUnsupported")
         if src:
             try:
                 media_path = file_url_to_path(src)
@@ -216,6 +447,7 @@ def load_event_assets(fcpxml_path: Path) -> list[EventAsset]:
                 name=asset.attrib.get("name") or asset_id,
                 media_path=media_path,
                 media_kind=media_kind,
+                event_name=asset_events.get(asset_id),
                 frame_duration=frame_duration,
                 duration=duration,
                 source_start=parse_time(asset.attrib.get("start"), Fraction(0)),

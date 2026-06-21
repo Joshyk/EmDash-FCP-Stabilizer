@@ -34,6 +34,7 @@ def asset_payload(asset, index: int) -> dict:
         "id": asset.id,
         "index": index,
         "name": asset.name,
+        "eventName": asset.event_name,
         "assetId": asset.id,
         "mediaPath": str(asset.media_path) if asset.media_path else None,
         "mediaKind": asset.media_kind,
