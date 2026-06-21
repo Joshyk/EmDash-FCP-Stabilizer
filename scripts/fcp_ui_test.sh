@@ -6,7 +6,7 @@ PARENT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
 FCP_BATCH_HELPER="${ROOT_DIR}/scripts/fcp_batch_stabilizer.applescript"
 TEST_LIBRARY="/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stab-test.fcpbundle"
-CACHE_ROOT="${TEST_LIBRARY}/test/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
+CACHE_ROOT="${TEST_LIBRARY}/6-17-26/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
 FEEDBACK_TOOL="${ROOT_DIR}/fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh"
 
 usage() {
