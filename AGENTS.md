@@ -45,15 +45,22 @@ effect applies its own internal crop/scale. The native effect renders a transfor
 texture with Metal and applies automatic walking-gimbal stabilization inside the FxPlug
 render path.
 
-## Host Analysis And Cache
+## Analysis Cache And Legacy Host Analysis
 
-The FxPlug uses Final Cut Pro's FxPlug `Host Analysis` infrastructure to request GPU
-analysis frames from the host. The native analysis path must use Metal compute inside the
-plug-in runtime for luma downsampling and frame-to-frame motion search. Do not add a CPU
-analysis fallback; if Metal analysis resources are unavailable, fail the Host Analysis path
+Current analysis generation is owned by the local Stabilizer Event Analyzer. New FxPlug
+effect instances are cache consumers: they validate Event-scoped persisted analysis, render
+from the prepared motion path, and do not expose `Sample Size`, `Start Host Analysis`,
+`Clear Host Analysis Cache`, or `Queue` in the visible Inspector. If an older saved timeline
+instance still shows hidden Host Analysis controls, those controls are legacy
+compatibility/debug paths and must not become the primary workflow again.
+
+The legacy FxPlug Host Analysis path uses Final Cut Pro's FxPlug `Host Analysis`
+infrastructure to request GPU analysis frames from the host. Any native analysis path must
+use Metal compute for luma downsampling and frame-to-frame motion search. Do not add a CPU
+analysis fallback; if Metal analysis resources are unavailable, fail the analysis path
 visibly in logs/status.
 
-Completed Host Analysis frame sets should be persisted inside the active Final Cut Pro
+Completed analysis frame sets should be persisted inside the active Final Cut Pro
 library bundle, scoped to the current Event resolved from `FxProjectAPI.mediaFolderURL()`
 when the host-provided folder is inside an Event. If the host-provided folder is a library
 temp folder instead of an Event folder, the runtime may use an unambiguous top-level Event
@@ -111,25 +118,21 @@ multiple regular/stale active-library bookmarks, such as `test-gh6.fcpbundle`,
 an Event UUID that does not resolve through `CurrentVersion.flexolibrary`. That is an
 environment/active-library ambiguity, not a missing entitlement or a reason to add a shared
 cache fallback. Close the extra libraries or make FCP expose a single unambiguous active
-library/Event, then rerun Host Analysis and verify the Event-scoped
+library/Event, then rerun the Event Analyzer and verify the Event-scoped
 `Analysis Files/TokyoWalkingStabilizerHostAnalysis/` cache appears.
-`Start Host Analysis` should first reload and use a saved persistent cache when one exists;
-only start a new host analysis when no saved cache can be loaded. If the button callback
-cannot see `FxProjectAPI`, it should still request Host Analysis and let analyzer
-`setupAnalysis` resolve the Event cache root; if setup cannot resolve that root, complete the
-active analysis in memory only and show `Ready Memory Only - Project Bundle Cache
-Unavailable` after completion until an Event cache root is resolved and the result can be
-saved. That in-memory result may drive the current viewer/render session only; it must not
-delete saved cache files. If the loaded
-cache is rejected for the current clip, the next start should skip that rejected cache and
-request a new analysis. `Clear Host Analysis Cache` is the explicit cache-clear path and
-should show `Cache Cleared`.
+The current compatibility `Start Host Analysis` button, when present on older timeline
+instances, should only reload and use a saved persistent Event Analyzer cache. It must not
+ask Final Cut Pro to start a new Host Analysis pass. If the loaded cache is rejected for the
+current clip, the next start should skip that rejected cache and keep `External Analysis
+Required - Run Event Analyzer` visible. `Clear Host Analysis Cache`, when present on older
+instances, must not delete Event Analyzer cache files and should show that the external cache
+is managed by the Event Analyzer.
 Keep the plug-in target signed with sandbox and security-scoped file entitlements so the
 Host Analysis runtime can open the `FxProjectAPI.mediaFolderURL()` security-scoped URL. The
 target may also carry a read-only home-relative exception for Final Cut Pro's preference
 plist so the no-media-folder resolver can read `FFActiveLibraries`; this exception must not
 be used to add a shared or out-of-bundle cache path. The debug-signed local build may carry
-read-write exceptions for shared `test_fcp_project/test.fcpbundle` and
+read-write exceptions for shared `test_fcp_project/stab-test.fcpbundle` and
 `test_fcp_project/test-gh6.fcpbundle` fixtures so Codex-driven FCP tests can persist
 Event-scoped caches when Final Cut Pro's active-library bookmark is not security-scoped. It
 may also carry a local read-write exception for the user's external Final
@@ -160,16 +163,16 @@ active `.fcpbundle`. When a motion-path algorithm change needs a new write schem
 backward read compatibility for still-valid recent schemas by listing them in
 `supportedCacheSchemaVersions` and the feedback CLI's supported schema list; do not reject old
 caches solely because a newer schema is now written. Unsupported schema candidates should
-surface `Cache Unsupported - Run Host Analysis` in the Inspector, remain on disk, and require
-an explicit new Host Analysis run instead of being silently ignored or deleted. Supported-schema
+surface `Cache Unsupported - Run Event Analyzer` in the Inspector, remain on disk, and require
+an explicit new Event Analyzer run instead of being silently ignored or deleted. Supported-schema
 caches with incomplete prepared path arrays or incomplete frame coverage for the saved
-analysis range should surface `Cache Incomplete - Run Host Analysis`, remain on disk, and
-require a new Host Analysis run.
+analysis range should surface `Cache Incomplete - Run Event Analyzer`, remain on disk, and
+require a new Event Analyzer run.
 
-Host Analysis should read user-controlled `Sample Size` once when analysis starts. The
-Inspector default should be `100%` so Host Analysis uses full source detail unless the user
-explicitly selects a smaller debug sample, while still offering `75%`, `50%`, `25%`, and
-`10%` options. The
+The local Event Analyzer should read user-controlled sample size once when analysis starts.
+New FxPlug effect instances must not publish a visible `Sample Size` control. The default
+should be `100%` so analysis uses full source detail unless the user explicitly selects a
+smaller debug sample, while still offering `75%`, `50%`, `25%`, and `10%` options. The
 sample image must always be derived from the original clip dimensions using the selected
 percentage option. Long clips should keep that requested percentage. In-progress analysis
 should stream frame-to-frame motion in memory and keep only the previous luma buffer needed
@@ -185,7 +188,7 @@ completed prepared path from being saved.
 The feedback CLI under `fxplug/TokyoWalkingStabilizer/scripts/` reads saved Host Analysis cache
 files for diagnostics only. It must not become a second stabilization runtime or silently
 repair malformed cache data; mismatched frame/path arrays should fail visibly and require a
-new Host Analysis run. Its cache inventory mode should list saved cache readiness without
+new Event Analyzer run. Its cache inventory mode should list saved cache readiness without
 repairing, deleting, or promoting cache files. Feedback band estimates should mirror the
 render path's order:
 measure Footstep Jitter against the outer-frame baseline first, then compute Stride Wobble
@@ -224,9 +227,11 @@ preview.
 
 ## Playback And Render
 
-Host Analysis playback must render from prepared motion paths for the active FxPlug runtime.
-`Start Host Analysis` is the only path that should call `startForwardAnalysis`; render and
-preview callbacks must not auto-start Host Analysis. If Final Cut Pro reports that another
+Analysis playback must render from prepared motion paths for the active FxPlug runtime.
+For current new effect instances, those paths come from the local Event Analyzer cache and
+render/preview callbacks must not auto-start analysis. The legacy hidden `Start Host
+Analysis` path is the only path that may call `startForwardAnalysis` when that legacy path is
+intentionally exercised. If Final Cut Pro reports that another
 Host Analysis is already requested or running, queue the requested effect instance for
 serial analysis and surface `Queued Host Analysis` in the Inspector instead of failing
 silently. Also queue the request when this plug-in process already has an active or
@@ -459,11 +464,11 @@ The Xcode project lives at
 Use this local Final Cut Pro library for manual end-to-end testing:
 
 ```text
-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/test.fcpbundle
+/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stab-test.fcpbundle
 ```
 
-It is a shared workspace test fixture, outside this plugin repo. Use it when checking the
-native effect against real timeline clips in Final Cut Pro.
+`stab-test.fcpbundle` is the current shared workspace test fixture outside this plugin repo.
+Use it when checking the native effect against real timeline clips in Final Cut Pro.
 
 ## Shared Final Cut Pro UI Shortcut Script
 
@@ -481,9 +486,8 @@ scripts/fcp_ui_test.sh env-check
 scripts/fcp_ui_test.sh open-test-library
 scripts/fcp_ui_test.sh open-project "stab test - gh6"
 scripts/fcp_ui_test.sh select-playhead-clip
-scripts/fcp_ui_test.sh apply-and-analyze-selected
-scripts/fcp_ui_test.sh analyze-selected
-scripts/fcp_ui_test.sh start-analysis
+scripts/fcp_ui_test.sh apply-selected
+scripts/fcp_ui_test.sh enable-debug
 scripts/fcp_ui_test.sh dump-front-window
 scripts/fcp_ui_test.sh list-caches
 ```
@@ -499,7 +503,6 @@ From this repo, run it through the parent-relative path:
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript export-xml
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript import-xml
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript apply
-osascript ../scripts/fcp_stabilizer_shortcuts.applescript start-analysis
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript toggle-debug-overlay
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript set-debug-overlay on
 osascript ../scripts/fcp_stabilizer_shortcuts.applescript set-debug-overlay off
@@ -512,15 +515,16 @@ osascript ../scripts/fcp_stabilizer_shortcuts.applescript dump-front-window
 
 Use it from Keyboard Maestro, Automator Quick Actions, or Terminal when manual FCP
 validation needs faster access to XML export/import dialogs, `Tokyo Walking Stabilizer`,
-`Start Host Analysis`, `Debug Overlay`, selected Browser projects, or the Inspector. Grant
-Accessibility permission to the app that runs the script.
+`Debug Overlay`, selected Browser projects, or the Inspector. `Start Host Analysis` helpers
+are legacy-only for older timeline instances that still expose hidden Host Analysis
+controls. Grant Accessibility permission to the app that runs the script.
 For project opening, prefer `open-project PROJECT_NAME` when the target Browser project
 name is known, or `open-selected-project` after selecting the project thumbnail or list row
 in the Browser. These commands use `Clip > Open Clip` because ordinary AppleScript click
 repeats and CoreGraphics double-clicks can fail to register as a Final Cut Pro project
 open in some layouts. Use
-`select-playhead-clip` to reselect the timeline clip under the playhead before running
-`analyze-selected` when Final Cut Pro focus has drifted back to the Browser or search field.
+`select-playhead-clip` to reselect the timeline clip under the playhead before cache/debug
+checks when Final Cut Pro focus has drifted back to the Browser or search field.
 If FCP UI labels change, use `dump-front-window` to inspect the accessible roles/names and
 update the shared script in the parent workspace. Do not copy a separate version into this
 repo unless the user explicitly asks for repo-local divergence.

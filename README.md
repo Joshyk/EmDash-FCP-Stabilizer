@@ -176,10 +176,11 @@ returns to identity so idle shots settle near zero crop zoom.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R360` means FxPlug `0.3.60`
-is rendering original/optimized frames, and `P360` means proxy playback is using
-the saved Host Analysis path. It does not control black outside-source pixels;
-`Edge Display Mode` controls that separately.
+active render runtime and current source mode: `R###` means the current FxPlug
+runtime is rendering original/optimized frames, and `P###` means proxy playback
+is using the saved analysis path. The digits are derived from the active FxPlug
+version. It does not control black outside-source pixels; `Edge Display Mode`
+controls that separately.
 The overlay scales from the current render output so the top-left panel occupies
 roughly half of the viewer height in original, optimized, and proxy playback.
 

@@ -80,7 +80,8 @@ estimators, or Transform-keyframe writers back into this target.
   `Project Bundle Cache Unavailable - Ambiguous Event`.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
-  roll, and optional small-clamp Far-field Warp while keeping render scale fixed at 1.0.
+  roll, optional small-clamp Far-field Warp, and dynamic Auto Crop scale when
+  `Remove Black Edges` is enabled.
 - Includes a minimal wrapper app source/resource set under `WrapperApp/`.
 
 The current effect implementation reads current render frames as Metal textures, validates
@@ -291,9 +292,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
   `ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `W Q`,
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R361` means
-  FxPlug `0.3.61` is rendering original/optimized frames, and `P361` means proxy playback is
-  using the saved Host Analysis path. The overlay scales from the current render output so
+  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R###` means
+  the current FxPlug runtime is rendering original/optimized frames, and `P###` means proxy
+  playback is using the saved analysis path. The digits are derived from the active FxPlug
+  version. The overlay scales from the current render output so
   the top-left panel occupies roughly half of the viewer height in original, optimized, and
   proxy playback. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render

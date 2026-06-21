@@ -4,10 +4,18 @@ You are reviewing a native Final Cut Pro FxPlug stabilizer implementation for wa
 
 Repository context:
 
-- This project is FxPlug-only. Do not suggest CommandPost, Lua, Python, standalone estimators, timeline automation, or CPU analysis fallbacks.
-- Host Analysis uses Final Cut Pro FxPlug analysis frames and Metal compute inside the plug-in runtime.
-- If Metal analysis resources are unavailable, the Host Analysis path should fail visibly in logs/status.
-- The effect intentionally avoids Final Cut Pro's built-in Stabilization and avoids zoom/scale correction.
+- The Final Cut Pro effect must stay native FxPlug/Metal code. Do not suggest
+  CommandPost, Lua timeline automation, Transform-keyframe writers, or CPU
+  analysis fallbacks.
+- Analysis generation currently comes from the local Stabilizer Event Analyzer,
+  which writes Event-scoped persisted caches. New FxPlug effect instances are
+  cache consumers: they validate and render from those caches instead of asking
+  Final Cut Pro to start Host Analysis from the Inspector.
+- If Metal analysis resources are unavailable, the analysis path should fail
+  visibly in logs/status instead of falling back to CPU analysis.
+- The effect intentionally avoids Final Cut Pro's built-in Stabilization and
+  does not write Final Cut Pro Transform keyframes. `Remove Black Edges` may
+  apply dynamic Auto Crop render scale during playback.
 - The render path should correct X/Y translation and roll, plus a bundled small-clamp
   `Far-field Warp Strength` for deskew/shear, yaw/pitch proxy, and perspective trim.
 - The active walking controls already exist:
@@ -19,7 +27,10 @@ Repository context:
   - `Stride Wobble Rotation Strength`
   - `Far-field Warp Strength`
   - `Turn Smoothing Strength`
-  - `Far-field Warp Strength` defaults to `1.0`, keeps the previous `4.0` response unchanged, and exposes up to `12.0`.
+  - `Footstep Jitter Rotation Strength` and `Stride Wobble Rotation Strength`
+    both default to `0.5`.
+  - `Far-field Warp Strength` defaults to `0.5`, keeps the previous `4.0`
+    response unchanged, and exposes up to `12.0`.
 - Do not add a Footstep Jitter window.
 - Do not recommend a separate post-stride Y-only bounce stage, Inspector control, or diagnostic band.
 - Do not rerun Host Analysis during render.
@@ -63,6 +74,6 @@ Please review this implementation for walking-gimbal smoothing quality. Focus on
 3. Whether Turn Smoothing stays X-only while Footstep Jitter and Stride Wobble remain correctly ordered for Y correction.
 4. Whether the debug output exposes enough information to diagnose overcorrection, undercorrection, and confidence gating.
 5. Whether the normalization of the debug bars is useful for 1080p and 4K footage.
-6. Any specific code-level changes that would make the walking footage smoother without adding fallbacks, zoom, or render-time block matching.
+6. Any specific code-level changes that would make the walking footage smoother without adding fallbacks, render-time block matching, or extra user-visible zoom controls.
 
 Return concrete recommendations with file/function targets. If you suggest code changes, keep them within the FxPlug render-time path and explain whether they require a Host Analysis cache schema bump.

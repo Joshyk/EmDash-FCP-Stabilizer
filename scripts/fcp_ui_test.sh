@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PARENT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
-FCP_HELPER="${PARENT_DIR}/scripts/fcp_stabilizer_shortcuts.applescript"
+FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
 FCP_BATCH_HELPER="${ROOT_DIR}/scripts/fcp_batch_stabilizer.applescript"
-TEST_LIBRARY="${PARENT_DIR}/test_fcp_project/test.fcpbundle"
+TEST_LIBRARY="/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stab-test.fcpbundle"
 CACHE_ROOT="${TEST_LIBRARY}/test/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
 FEEDBACK_TOOL="${ROOT_DIR}/fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh"
 
@@ -25,20 +25,21 @@ Commands:
   apply-selected            Apply Tokyo Walking Stabilizer to the selected clip.
   enable-debug              Turn Debug Overlay on for the selected effect.
   disable-debug             Turn Debug Overlay off for the selected effect.
-  start-analysis            Press Start Host Analysis for the selected effect.
-  set-sample-size PERCENT   Set selected clip's Stabilizer Sample Size.
+  start-analysis            Legacy: reload Event Analyzer cache from an older
+                            Start Host Analysis control, if one is still visible.
+  set-sample-size PERCENT   Legacy: set selected clip's hidden Stabilizer Sample Size.
   start-analysis-at-sample PERCENT
-                            Set Sample Size, then press Start Host Analysis.
-  analyze-selected          Enable Debug Overlay, then press Start Host Analysis.
+                            Legacy: set Sample Size, then press Start Host Analysis.
+  analyze-selected          Legacy: enable Debug Overlay, then press Start Host Analysis.
   apply-and-analyze-selected
-                            Apply the effect, enable Debug Overlay, then start analysis.
+                            Legacy: apply the effect, enable Debug Overlay, then start analysis.
                             Use only on a fresh selected clip to avoid duplicate effects.
   queue-open-timeline-clips PERCENT [MAX_CLIPS]
-                            Walk the open timeline from the beginning and start/queue
-                            Stabilizer Host Analysis on clips with accessible controls.
+                            Legacy: walk the open timeline and start/queue old
+                            Stabilizer Host Analysis controls when accessible.
   queue-current-event-compounds PERCENT [MAX_ITEMS] [MAX_CLIPS_PER_ITEM]
-                            Open visible Browser items in the current Event and queue
-                            their timeline clips. Select the first visible compound first.
+                            Legacy: open visible Browser items in the current Event and
+                            queue their old timeline Host Analysis controls.
   clear-browser-search      Clear the visible FCP Browser search field.
   open-selected-project     Open the selected FCP Browser project row/thumbnail.
   open-project NAME         Open the named FCP Browser project in the selected Event.

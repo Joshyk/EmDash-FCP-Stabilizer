@@ -1,9 +1,8 @@
 # Codex Final Cut Pro UI Testing
 
 Use `scripts/fcp_ui_test.sh` before reaching for free-form pointer control. It
-wraps the shared parent AppleScript helper at
-`../scripts/fcp_stabilizer_shortcuts.applescript` and gives Codex stable,
-terminal-first entry points for the repetitive Final Cut Pro UI actions.
+wraps the shared parent AppleScript helper and gives Codex stable,
+terminal-first entry points for repetitive Final Cut Pro UI actions.
 
 ## First Check
 
@@ -31,50 +30,37 @@ Pro is currently running.
    scripts/fcp_ui_test.sh select-playhead-clip
    ```
 
-3. Apply the effect, enable `Debug Overlay`, and press `Start Host Analysis`:
+3. Apply the effect and enable `Debug Overlay`:
 
    ```sh
-   scripts/fcp_ui_test.sh apply-and-analyze-selected
+   scripts/fcp_ui_test.sh apply-selected
+   scripts/fcp_ui_test.sh enable-debug
    ```
 
-Use `apply-and-analyze-selected` only for a fresh selected clip. If the clip
-already has `Tokyo Walking Stabilizer`, run:
+New effect instances are cache consumers. They do not expose `Sample Size`,
+`Start Host Analysis`, `Clear Host Analysis Cache`, or `Queue`, and preview
+callbacks must not auto-start analysis. Generate or refresh analysis with the
+local Stabilizer Event Analyzer, import its generated FCPXMLD, then check that
+`Host Analysis Status` reports `Persisted Analysis Loaded` or `Ready (... frames)`.
+
+If an older saved timeline instance still exposes `Start Host Analysis`, pressing
+it is a legacy compatibility check that only reloads a compatible Event Analyzer
+cache. It must not be used as the primary way to generate analysis.
+
+## Legacy Host Analysis UI
+
+The following script commands exist only for older timeline instances that still
+show hidden Host Analysis controls:
 
 ```sh
 scripts/fcp_ui_test.sh analyze-selected
-```
-
-To force the selected clip's Host Analysis sample before starting:
-
-```sh
 scripts/fcp_ui_test.sh start-analysis-at-sample 50
-```
-
-## Batch Queueing
-
-For compound-clip batches, select the target Event in Final Cut Pro's Browser,
-make the first visible compound clip the selected Browser item, and keep the
-Browser list scoped to the compounds you want to process. Then run:
-
-```sh
+scripts/fcp_ui_test.sh queue-open-timeline-clips 50
 scripts/fcp_ui_test.sh queue-current-event-compounds 50
 ```
 
-The batch helper opens each visible Browser item, walks its open timeline from
-the beginning, sets `Sample Size` to the requested value, and presses `Start
-Host Analysis` for clips where the `Tokyo Walking Stabilizer` controls are
-accessible. Clips without accessible Stabilizer controls are logged as skipped.
-Pass explicit limits when the Browser status count is not the intended batch:
-
-```sh
-scripts/fcp_ui_test.sh queue-current-event-compounds 50 14 200
-```
-
-For only the currently open compound timeline:
-
-```sh
-scripts/fcp_ui_test.sh queue-open-timeline-clips 50
-```
+Do not use those commands for the current Event Analyzer workflow. If they fail
+because the controls are not present, that is expected for new effect instances.
 
 ## Diagnostics
 
@@ -85,13 +71,13 @@ dump the accessible tree instead of trying random clicks:
 scripts/fcp_ui_test.sh dump-front-window
 ```
 
-After Host Analysis writes a cache in the shared test library, inspect readiness
-and clip-relative review notes without reopening the UI:
+After the local Event Analyzer writes a cache in the shared test library, inspect
+readiness and clip-relative review notes without reopening the UI:
 
 ```sh
 scripts/fcp_ui_test.sh list-caches
 scripts/fcp_ui_test.sh feedback-at 5.0 "notable unremoved shake"
 ```
 
-These cache diagnostics read saved Host Analysis files only. They do not repair,
+These cache diagnostics read saved analysis files only. They do not repair,
 promote, delete, or generate cache data.

@@ -64,16 +64,16 @@ fallbacks.
 ## Controls
 
 - `Footstep Jitter X Strength`: direct amount for horizontal footstep-jitter correction. The
-  default is `1.0` and the maximum is `4.0`. Values above `1.0` can push through weak
+  default is `1.0` and the maximum is `10.0`. Values above `1.0` can push through weak
   frame evidence when the detected impulse is visibly under-corrected, but render output
   still clamps at full detected-impulse removal to avoid inverse shake.
 - `Footstep Jitter Y Strength`: direct amount for vertical footstep-jitter correction. The
-  default is `1.0` and the maximum is `4.0`. Footstep Jitter uses an outer-frame linear
+  default is `1.0` and the maximum is `10.0`. Footstep Jitter uses an outer-frame linear
   prediction with seconds-based windows: it skips the center `0.10` second shock region
   and predicts from outer samples up to `1.0` second away for X/Y/rotation, so footstep
   landing shock is treated as a frame-level impulse instead of being averaged back into the
   smooth path.
-  Host Analysis builds that path from multiple Metal block-matched regions with outlier
+- Prepared analysis builds that path from multiple Metal block-matched regions with outlier
   blocks rejected before render. Footstep Jitter is gated per frame from current tracking
   quality, block coverage, blur, and whether the center frame actually departs from its
   outer-frame baseline. The gate also requires local baseline support and compares the
@@ -96,9 +96,9 @@ fallbacks.
   output still clamps at full detected-impulse removal to avoid inverse shake.
 - `Stride Wobble X Strength`: direct amount for medium-period horizontal walking wobble that
   is longer than Footstep Jitter but shorter than broad Turn Smoothing. The default is
-  `0.65` and the maximum is `4.0`.
+  `1.0` and the maximum is `10.0`.
 - `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
-  default is `0.70`, so medium vertical follow-through is handled by the stride stage.
+  default is `1.0`, so medium vertical follow-through is handled by the stride stage.
   Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
   user-facing Stride Wobble window. Its residual gate uses robust window percentiles instead
   of the single worst residual in the window, and its confidence reaches full response
@@ -144,7 +144,7 @@ fallbacks.
   evidence and a real X turn band, so low-evidence frames no longer receive a hidden minimum
   turn correction.
 - `Turn Detection Window`: centered smoothing window for walking turns. The default is
-  `6.0` seconds. In Host Analysis mode this is evaluated against prepared motion paths during render, so changing the slider
+  `6.0` seconds. This is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
@@ -204,8 +204,9 @@ fallbacks.
 - `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
   `WARP`, `TURN`, live `F Q`/`S Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R360` means FxPlug `0.3.60` is rendering original/optimized
-  frames, while `P360` means proxy playback is using the saved Host Analysis path.
+  checking runtime behavior. `R###` means the current FxPlug runtime is rendering
+  original/optimized frames, while `P###` means proxy playback is using the saved analysis
+  path; the digits are derived from the active FxPlug version.
   The overlay scales from the current render output so the top-left panel occupies roughly
   half of the viewer height in original, optimized, and proxy playback.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -264,7 +265,7 @@ the requested `--window` and prints both the requested note time and selected
 clip time. The report also prints residual quality, blur quality, block coverage,
 edge quality, stable WARP tracking support, and WARP tracking/edge gate values so conservative gating can be separated
 from weak detected motion. If the cache was written by an older build with mismatched frame/path
-arrays, it fails visibly and asks for a new Host Analysis run with the current
+arrays, it fails visibly and asks for a new Event Analyzer run with the current
 FxPlug.
 
 ## Behavior
@@ -276,7 +277,9 @@ FxPlug.
   and roll, with optional small-clamp `Far-field Warp Strength` for deskew/shear, yaw/pitch
   proxy, and perspective/distort trim. This warp path is intentionally low because close
   foreground detail can otherwise swim or distort.
-- It does not apply Z correction or zoom; render scale stays fixed at 1.0.
+- It does not apply user Transform keyframes or Z correction. When `Remove Black Edges` is
+  on, render uses dynamic Auto Crop scale from the prepared keypoint plan; turning it off
+  skips Auto Crop framing.
 - The effect renders from prepared analysis written by the local Stabilizer Event
   Analyzer. New effect instances do not ask Final Cut Pro to start Host Analysis from the
   Inspector, and preview/render callbacks do not auto-start analysis.
@@ -286,7 +289,7 @@ FxPlug.
 - Proxy/scaled media is rejected only for unvalidated persisted-cache validation. After an
   original-media cache has been validated, playback can use proxy media while rendering from
   the prepared original-media motion path.
-- Playback uses prepared motion paths from completed Host Analysis. It must not run full
+- Playback uses prepared motion paths from completed analysis. It must not run full
   frame-to-frame block matching on every rendered playback frame. Host Analysis stores
   separate raw X/Y/roll impulse paths for Footstep Jitter before applying the zero-phase
   jerk limiter used by broader pan and turn stages. Those raw footstep paths and their
