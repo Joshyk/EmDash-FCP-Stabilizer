@@ -117,6 +117,19 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   const proxyMedia = path.join(bundle, "Event A", "Transcoded Media", "Proxy Media");
   fs.mkdirSync(originalMedia, { recursive: true });
   fs.mkdirSync(proxyMedia, { recursive: true });
+  fs.writeFileSync(
+    path.join(bundle, "Settings.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>colorProcessingMode</key>
+  <integer>2</integer>
+</dict>
+</plist>
+`,
+    "utf8"
+  );
   const clipPath = path.join(originalMedia, "LibraryClip.mov");
   const proxyPath = path.join(proxyMedia, "ProxyClip.mov");
   fs.writeFileSync(proxyPath, "");
@@ -150,7 +163,9 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
   const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(manifest.syntheticSchemaVersion, 2);
+  assert.equal(manifest.syntheticSchemaVersion, 3);
+  assert.equal(manifest.colorProcessing, "wide-hdr");
+  assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
   assert.equal(payload.assets[0].name, "LibraryClip");
   assert.equal(payload.assets[0].eventName, "Event A");
@@ -160,6 +175,22 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assets[0].width, 160);
   assert.equal(payload.assets[0].height, 90);
   assert.equal(payload.assets[0].frameDuration, "1/30s");
+});
+
+test("fcpxml_common maps ffprobe color metadata to FCPXML colorSpace labels", () => {
+  const script = `
+import sys
+sys.path.insert(0, "scripts")
+from fcpxml_common import fcp_color_space
+assert fcp_color_space("bt2020", "arib-std-b67", "bt2020nc") == "9-18-9 (Rec. 2020 HLG)"
+assert fcp_color_space("bt709", "bt709", "bt709") == "1-1-1 (Rec. 709)"
+assert fcp_color_space("smpte170m", "bt709", "bt709") is None
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("list_event_assets refuses proxy-only media reps", () => {
@@ -531,7 +562,7 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
     <asset id="r4" name="Other" start="0s" duration="300300/30000s" hasVideo="1" format="r1" src="file:///tmp/Other.mov"/>
     <effect id="r5" name="Existing Effect" uid="FxPlug:EXISTING"/>
   </resources>
-  <library>
+  <library colorProcessing="wide-hdr">
     <event name="AnalyzedOnly">
       <asset-clip name="P1000307" ref="r2" start="3600s" duration="300300/30000s" format="r1">
         <adjust-colorConform enabled="1"/>
@@ -587,6 +618,7 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   assert.equal(payload.onlyAnalyzedAssets, true);
   assert.equal(payload.insertedFilters, 2);
   const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
+  assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.match(info, /Tokyo Walking Stabilizer - Analyzed Footage/);
   assert.match(info, /<asset[^>]+id="r2"[^>]+start="3600s"/);
   assert.equal((info.match(/<asset-clip[^>]+ref="r2"[^>]+start="3600s"/g) || []).length, 2);

@@ -260,6 +260,17 @@ def append_filtered_asset_clip(
     return clip
 
 
+def source_library_attrs(source_root: ET.Element) -> dict[str, str]:
+    for element in source_root:
+        if local_name(element.tag) != "library":
+            continue
+        color_processing = element.attrib.get("colorProcessing")
+        if color_processing:
+            return {"colorProcessing": color_processing}
+        return {}
+    return {}
+
+
 def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) -> ET.Element:
     root = ET.Element("fcpxml", dict(source_root.attrib))
     source_resources = resources(source_root)
@@ -282,7 +293,7 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
                 copied_resource_ids.add(resource_id)
 
     ref = ensure_effect_resource(root)
-    library = ET.SubElement(root, "library")
+    library = ET.SubElement(root, "library", source_library_attrs(source_root))
     event_name = (event_names(source_root) or ["Stabilized Analysis"])[0]
     event = ET.SubElement(library, "event", {"name": event_name})
     project_duration = sum((parse_time(resource_by_id(source_root, asset_id).attrib["duration"]) for asset_id in results), start=parse_time("0s"))

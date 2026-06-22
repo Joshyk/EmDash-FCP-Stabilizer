@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import plistlib
 import re
 import shutil
 import subprocess
@@ -18,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 2
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 3
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -51,6 +52,15 @@ class EventAsset:
 class MediaRep:
     kind: str | None
     src: str
+
+
+@dataclass(frozen=True)
+class VideoMetadata:
+    width: int
+    height: int
+    frame_duration: Fraction
+    duration: Fraction
+    color_space: str | None
 
 
 def local_name(tag: str) -> str:
@@ -242,8 +252,29 @@ def fcpbundle_signature(bundle_path: Path, media_files: list[tuple[Path, Path]])
         "syntheticSchemaVersion": FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION,
         "bundlePath": str(bundle_path),
         "bundleMtimeNs": bundle_path.stat().st_mtime_ns,
+        "colorProcessing": fcpbundle_color_processing(bundle_path),
+        "settingsMtimeNs": fcpbundle_settings_mtime_ns(bundle_path),
         "items": items,
     }
+
+
+def fcpbundle_settings_mtime_ns(bundle_path: Path) -> int | None:
+    settings_path = bundle_path / "Settings.plist"
+    if not settings_path.is_file():
+        return None
+    return settings_path.stat().st_mtime_ns
+
+
+def fcpbundle_color_processing(bundle_path: Path) -> str | None:
+    settings_path = bundle_path / "Settings.plist"
+    if not settings_path.is_file():
+        return None
+    with settings_path.open("rb") as handle:
+        settings = plistlib.load(handle)
+    mode = settings.get("colorProcessingMode")
+    if mode == 2:
+        return "wide-hdr"
+    return None
 
 
 def ffprobe_executable() -> str:
@@ -271,7 +302,18 @@ def positive_fraction(value: str | None) -> Fraction | None:
     return fraction if fraction > 0 else None
 
 
-def probe_video_metadata(media_path: Path, ffprobe: str) -> tuple[int, int, Fraction, Fraction]:
+def fcp_color_space(color_primaries: str | None, color_transfer: str | None, color_matrix: str | None) -> str | None:
+    primaries = (color_primaries or "").lower()
+    transfer = (color_transfer or "").lower()
+    matrix = (color_matrix or "").lower()
+    if primaries == "bt2020" and transfer in {"arib-std-b67", "arib_std_b67"} and matrix in {"bt2020nc", "bt2020_ncl"}:
+        return "9-18-9 (Rec. 2020 HLG)"
+    if primaries == "bt709" and transfer == "bt709" and matrix == "bt709":
+        return "1-1-1 (Rec. 709)"
+    return None
+
+
+def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
     result = subprocess.run(
         [
             ffprobe,
@@ -280,7 +322,7 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> tuple[int, int, Frac
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height,avg_frame_rate,r_frame_rate,duration:format=duration",
+            "stream=width,height,avg_frame_rate,r_frame_rate,duration,color_space,color_transfer,color_primaries:format=duration",
             "-of",
             "json",
             str(media_path),
@@ -312,7 +354,17 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> tuple[int, int, Frac
         raise RuntimeError("ffprobe did not return a usable video duration")
     frame_duration = Fraction(fps.denominator, fps.numerator)
     frame_count = max(1, int((duration / frame_duration) + Fraction(1, 2)))
-    return width, height, frame_duration, frame_duration * frame_count
+    return VideoMetadata(
+        width=width,
+        height=height,
+        frame_duration=frame_duration,
+        duration=frame_duration * frame_count,
+        color_space=fcp_color_space(
+            stream.get("color_primaries"),
+            stream.get("color_transfer"),
+            stream.get("color_space"),
+        ),
+    )
 
 
 def fcpbundle_cache_dir(bundle_path: Path) -> Path:
@@ -341,7 +393,11 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     root = ET.Element("fcpxml", {"version": "1.11"})
     resource_node = ET.SubElement(root, "resources")
-    library_node = ET.SubElement(root, "library")
+    library_attrs = {}
+    color_processing = fcpbundle_color_processing(bundle_path)
+    if color_processing:
+        library_attrs["colorProcessing"] = color_processing
+    library_node = ET.SubElement(root, "library", library_attrs)
     asset_index = 1
     for event_dir in fcpbundle_event_dirs(bundle_path):
         event_node = ET.SubElement(library_node, "event", {"name": event_dir.name})
@@ -362,23 +418,26 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
                 "offset": "0s",
             }
             try:
-                width, height, frame_duration, duration = probe_video_metadata(media_path, ffprobe)
+                metadata = probe_video_metadata(media_path, ffprobe)
                 format_id = f"r{asset_index}"
                 asset_index += 1
+                format_attrs = {
+                    "id": format_id,
+                    "frameDuration": time_string(metadata.frame_duration),
+                    "width": str(metadata.width),
+                    "height": str(metadata.height),
+                }
+                if metadata.color_space:
+                    format_attrs["colorSpace"] = metadata.color_space
                 ET.SubElement(
                     resource_node,
                     "format",
-                    {
-                        "id": format_id,
-                        "frameDuration": time_string(frame_duration),
-                        "width": str(width),
-                        "height": str(height),
-                    },
+                    format_attrs,
                 )
                 attrs["format"] = format_id
-                attrs["duration"] = time_string(duration)
+                attrs["duration"] = time_string(metadata.duration)
                 clip_attrs["format"] = format_id
-                clip_attrs["duration"] = time_string(duration)
+                clip_attrs["duration"] = time_string(metadata.duration)
             except Exception as exc:  # noqa: BLE001
                 attrs["stabilizerUnsupported"] = f"ffprobe metadata failed for original media: {exc}"
             asset = ET.SubElement(resource_node, "asset", attrs)
