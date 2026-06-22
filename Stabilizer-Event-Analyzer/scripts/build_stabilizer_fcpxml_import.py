@@ -157,7 +157,7 @@ def stabilizer_filter(ref: str, result: dict) -> ET.Element:
     frame_count = result.get("frameCount")
     schema = result.get("cacheSchemaVersion", 16)
     revision = str(zlib.adler32(identity.encode("utf-8")) % 999_983)
-    node = ET.Element("filter-video", {"ref": ref, "name": EFFECT_NAME, "nameOverride": EFFECT_NAME})
+    node = ET.Element("filter-video", {"ref": ref, "name": EFFECT_NAME})
     add_param(node, "Host Analysis Status", 15, f"Persisted Analysis Loaded | Schema: {schema}")
     add_param(
         node,

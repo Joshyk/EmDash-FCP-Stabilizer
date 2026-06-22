@@ -300,6 +300,8 @@ test("build_stabilizer_fcpxml_import inserts Stabilizer filter", () => {
   const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
   assert.match(info, /Tokyo Walking Stabilizer/);
   assert.match(info, /Host Analysis Cache Identity/);
+  assert.doesNotMatch(info, /nameOverride=/);
+  assert.doesNotMatch(info, /videoOverride=/);
 });
 
 test("build_stabilizer_fcpxml_import attaches video refs to parent clips", () => {
@@ -746,4 +748,53 @@ test("validate_stabilizer_fcpxml_import fails cache identity mismatch before FCP
   assert.equal(validation.status, "fail");
   assert.equal(validation.importReady, false);
   assert.match(validation.failures.join("\n"), /Cache Identity does not match manifest/i);
+});
+
+test("validate_stabilizer_fcpxml_import rejects DTD-invalid filter-video attributes", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-dtd-attrs-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const infoPath = path.join(pkg.outputPackage, "Info.fcpxml");
+  const info = fs.readFileSync(infoPath, "utf8").replace(
+    /<filter-video ref="/,
+    '<filter-video nameOverride="Tokyo Walking Stabilizer" videoOverride="1" ref="'
+  );
+  fs.writeFileSync(infoPath, info, "utf8");
+  const result = spawnSync("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    pkg.outputPackage,
+    "--manifest",
+    pkg.manifestPath,
+    "--output",
+    pkg.validationPath,
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  const validation = JSON.parse(result.stdout);
+  assert.equal(validation.status, "fail");
+  assert.equal(validation.importReady, false);
+  assert.match(validation.failures.join("\n"), /DTD-invalid attribute/);
+  assert.match(validation.failures.join("\n"), /nameOverride/);
+  assert.match(validation.failures.join("\n"), /videoOverride/);
 });

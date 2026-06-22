@@ -15,6 +15,9 @@ from fcpxml_common import SCHEMA_VERSION, local_name, parse_time, resolve_info_p
 from build_stabilizer_fcpxml_import import EFFECT_NAME, EFFECT_UID, LEGACY_FILTER_NAMES
 
 
+FCPXML_DTD_INVALID_FILTER_VIDEO_ATTRS = {"nameOverride", "videoOverride"}
+
+
 def emit(payload: dict, status: int = 0) -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return status
@@ -148,6 +151,9 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
     for element in root.iter():
         tag = local_name(element.tag)
         if tag == "filter-video":
+            invalid_attrs = sorted(FCPXML_DTD_INVALID_FILTER_VIDEO_ATTRS.intersection(element.attrib))
+            if invalid_attrs:
+                failures.append(f"filter-video contains FCPXML DTD-invalid attribute(s): {', '.join(invalid_attrs)}")
             name = filter_name(element)
             if name in LEGACY_FILTER_NAMES:
                 failures.append(f"legacy filter remains: {name}")
