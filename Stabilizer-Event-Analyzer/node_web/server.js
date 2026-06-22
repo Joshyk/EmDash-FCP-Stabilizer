@@ -24,6 +24,7 @@ const NATIVE_ANALYZER_SOURCE = path.join(REPO_ROOT, "native_analyzer", "Sources"
 const CACHE_SCHEMA_VERSION = readNativeAnalyzerCacheSchemaVersion();
 const SAMPLE_SCALE_PERCENT_CHOICES = [100, 75, 50, 25, 10];
 const DEFAULT_SAMPLE_SCALE_PERCENT = 100;
+const DEFAULT_ANALYSIS_DIR_NAME = "stablizer_analysis";
 const jobs = new Map();
 let serverRef = null;
 
@@ -398,12 +399,9 @@ function defaultImportsDirForSource(sourcePath) {
   const resolved = expandPath(sourcePath);
   if (!resolved) return "";
   if (path.basename(resolved) === "Info.fcpxml" && path.basename(path.dirname(resolved)).endsWith(".fcpxmld")) {
-    return path.dirname(path.dirname(resolved));
+    return path.join(path.dirname(path.dirname(resolved)), DEFAULT_ANALYSIS_DIR_NAME);
   }
-  if (path.basename(resolved).endsWith(".fcpxmld")) {
-    return path.dirname(resolved);
-  }
-  return path.dirname(resolved);
+  return path.join(path.dirname(resolved), DEFAULT_ANALYSIS_DIR_NAME);
 }
 
 function runTextProcess(command, args) {
@@ -818,6 +816,7 @@ async function handleApi(req, res, pathname) {
         repoRoot: REPO_ROOT,
         outputDir: OUTPUT_DIR,
         defaultImportsDir: "",
+        defaultAnalysisDirName: DEFAULT_ANALYSIS_DIR_NAME,
         cacheRoot: CACHE_ROOT,
         cacheSchemaVersion: CACHE_SCHEMA_VERSION,
         sampleScalePercentChoices: SAMPLE_SCALE_PERCENT_CHOICES,
@@ -933,6 +932,7 @@ if (require.main === module) {
 
 module.exports = {
   buildCacheRootFromAnalysis,
+  defaultImportsDirForSource,
   failedRunResult,
   parseAnalyzerProgressLine,
   processFailureDetails,

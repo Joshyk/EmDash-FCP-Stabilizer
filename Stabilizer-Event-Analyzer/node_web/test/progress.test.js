@@ -1,10 +1,12 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const test = require("node:test");
 
 const {
   buildCacheRootFromAnalysis,
+  defaultImportsDirForSource,
   failedRunResult,
   parseAnalyzerProgressLine,
   processFailureDetails,
@@ -20,6 +22,25 @@ test("buildCacheRootFromAnalysis requires analyzer-normalized cache root", () =>
   assert.throws(
     () => buildCacheRootFromAnalysis({}),
     /analyzer did not return a normalized cache root/
+  );
+});
+
+test("defaultImportsDirForSource writes beside selected export in stablizer_analysis", () => {
+  assert.equal(
+    defaultImportsDirForSource("/Volumes/Edit/Project/Library.fcpbundle"),
+    path.resolve("/Volumes/Edit/Project/stablizer_analysis")
+  );
+  assert.equal(
+    defaultImportsDirForSource("/Volumes/Edit/Project/Event.fcpxmld"),
+    path.resolve("/Volumes/Edit/Project/stablizer_analysis")
+  );
+  assert.equal(
+    defaultImportsDirForSource("/Volumes/Edit/Project/Event.fcpxmld/Info.fcpxml"),
+    path.resolve("/Volumes/Edit/Project/stablizer_analysis")
+  );
+  assert.equal(
+    defaultImportsDirForSource("/Volumes/Edit/Project/Event.fcpxml"),
+    path.resolve("/Volumes/Edit/Project/stablizer_analysis")
   );
 });
 

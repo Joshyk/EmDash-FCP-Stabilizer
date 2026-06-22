@@ -18,6 +18,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 2
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -238,6 +239,7 @@ def fcpbundle_signature(bundle_path: Path, media_files: list[tuple[Path, Path]])
             }
         )
     return {
+        "syntheticSchemaVersion": FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION,
         "bundlePath": str(bundle_path),
         "bundleMtimeNs": bundle_path.stat().st_mtime_ns,
         "items": items,
@@ -368,7 +370,6 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
                     "format",
                     {
                         "id": format_id,
-                        "name": f"FFVideoFormat{width}x{height}",
                         "frameDuration": time_string(frame_duration),
                         "width": str(width),
                         "height": str(height),

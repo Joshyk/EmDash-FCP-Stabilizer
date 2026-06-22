@@ -10,7 +10,8 @@ The workflow is:
 3. Choose an export from the selected file list, then select one or more Event
    media assets.
 4. Use `Imports` for the generated import package and analysis staging cache.
-   It defaults to the same folder as the selected export. Use `Select Imports`
+   It defaults to a `stablizer_analysis` folder next to the selected Final Cut
+   Pro bundle, FCPXMLD package, or `Info.fcpxml` export. Use `Select Imports`
    only when you want a different folder.
 5. Run serial analysis for the full media duration of each selected asset. When
    multiple assets are selected, the native analyzer finishes one asset before
@@ -93,15 +94,16 @@ shared fallback cache.
 
 ## Imports
 
-`Imports` defaults to the same folder as the selected `.fcpxmld` package or
-`Info.fcpxml` export. The generated `*-stabilizer.fcpxmld` import package is a
-compact analyzed-footage-only package written there, and analysis cache files
-are staged below that folder:
+`Imports` defaults to a sibling `stablizer_analysis` folder next to the selected
+`.fcpbundle`, `.fcpxmld` package, or `Info.fcpxml` export. The generated import
+packages are compact analyzed-footage-only packages written there, and analysis
+cache files are staged below that folder:
 
 ```text
 Exports/
-Exports/SomeEvent-stabilizer.fcpxmld/
-Exports/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
+Exports/SomeLibrary.fcpbundle
+Exports/stablizer_analysis/P1000304__sample100__schema23__63720f__2026-06-22/P1000304.fcpxmld/
+Exports/stablizer_analysis/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
 ```
 
 The tool never falls back to Application Support or any shared cache location.

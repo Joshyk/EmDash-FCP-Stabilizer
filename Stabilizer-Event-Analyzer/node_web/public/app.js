@@ -1,6 +1,7 @@
 "use strict";
 
 const LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v1";
+const DEFAULT_ANALYSIS_DIR_NAME = "stablizer_analysis";
 
 const state = {
   config: null,
@@ -226,17 +227,19 @@ function dirname(sourcePath) {
   return parts.join("/") || "/";
 }
 
+function joinPath(parent, child) {
+  if (!parent || parent === "/") return `/${child}`;
+  return `${parent.replace(/\/+$/, "")}/${child}`;
+}
+
 function defaultImportsDirForSource(sourcePath) {
   if (!sourcePath) return "";
   const name = exportNameForPath(sourcePath);
   const parent = dirname(sourcePath);
   if (name === "Info.fcpxml" && exportNameForPath(parent).endsWith(".fcpxmld")) {
-    return dirname(parent);
+    return joinPath(dirname(parent), DEFAULT_ANALYSIS_DIR_NAME);
   }
-  if (name.endsWith(".fcpxmld") || name.endsWith(".fcpbundle")) {
-    return parent;
-  }
-  return parent;
+  return joinPath(parent, DEFAULT_ANALYSIS_DIR_NAME);
 }
 
 function currentExportItem(sourcePath) {
@@ -382,7 +385,8 @@ async function loadConfig() {
   el.cacheRootInput.value = state.config.cacheRoot || "";
   el.sampleScaleInput.value = String(state.config.defaultSampleScalePercent || 100);
   const schemaText = state.config.cacheSchemaVersion ? ` | Writer schema: ${state.config.cacheSchemaVersion}` : "";
-  el.configText.textContent = `Imports: same folder as selected export${schemaText} | ${state.config.repoRoot || ""}`;
+  const analysisDirName = state.config.defaultAnalysisDirName || DEFAULT_ANALYSIS_DIR_NAME;
+  el.configText.textContent = `Imports: ${analysisDirName} next to selected export${schemaText} | ${state.config.repoRoot || ""}`;
   renderExports([]);
   updateLastAnalysisState();
   updateRunState();

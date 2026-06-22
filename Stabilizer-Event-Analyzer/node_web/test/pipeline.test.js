@@ -148,6 +148,10 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.match(payload.infoPath, /fcpbundle_sources/);
   assert.deepEqual(payload.eventNames, ["Event A"]);
   assert.equal(payload.assetCount, 1);
+  const info = fs.readFileSync(payload.infoPath, "utf8");
+  const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
+  assert.equal(manifest.syntheticSchemaVersion, 2);
+  assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
   assert.equal(payload.assets[0].name, "LibraryClip");
   assert.equal(payload.assets[0].eventName, "Event A");
   assert.equal(payload.assets[0].mediaKind, "original-media");
