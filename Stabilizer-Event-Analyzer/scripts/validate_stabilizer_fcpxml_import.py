@@ -55,6 +55,19 @@ def resource_by_id(root: ET.Element) -> dict[str, ET.Element]:
     }
 
 
+def parent_map(root: ET.Element) -> dict[ET.Element, ET.Element]:
+    return {child: parent for parent in root.iter() for child in list(parent)}
+
+
+def has_ancestor(element: ET.Element, parents: dict[ET.Element, ET.Element], tag_name: str) -> bool:
+    current = parents.get(element)
+    while current is not None:
+        if local_name(current.tag) == tag_name:
+            return True
+        current = parents.get(current)
+    return False
+
+
 def has_media_rep(asset: ET.Element) -> bool:
     return any(local_name(child.tag) == "media-rep" and child.attrib.get("src") for child in asset)
 
@@ -112,6 +125,7 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
     cache_identity = (manifest.get("cacheIdentity") or "").strip()
     resource_map = resource_by_id(root)
     asset = resource_map.get(asset_id or "")
+    parents = parent_map(root)
 
     if not asset_id:
         failures.append("manifest is missing assetId")
@@ -138,6 +152,11 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
     }
     if not effect_ids:
         failures.append("Tokyo Walking Stabilizer effect resource is missing")
+    media_ids = {
+        child.attrib["id"]
+        for child in resources(root)
+        if local_name(child.tag) == "media" and child.attrib.get("id")
+    }
 
     identities = stabilizer_filter_identities(root)
     if not identities:
@@ -164,10 +183,20 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
             if ref != asset_id:
                 failures.append(f"import package contains non-analyzed footage ref: {ref}")
             if tag == "asset-clip":
+                if has_ancestor(element, parents, "project"):
+                    failures.append("project edit uses asset-clip directly instead of ref-clip media")
                 if not valid_time(element.attrib.get("start"), positive=False):
                     failures.append(f"asset-clip start is invalid for ref {ref}")
                 if not valid_time(element.attrib.get("duration"), positive=True):
                     failures.append(f"asset-clip duration is invalid for ref {ref}")
+        if tag == "ref-clip" and element.attrib.get("ref"):
+            ref = element.attrib["ref"]
+            if ref not in media_ids:
+                failures.append(f"ref-clip does not reference a media resource: {ref}")
+            if not valid_time(element.attrib.get("start"), positive=False):
+                failures.append(f"ref-clip start is invalid for ref {ref}")
+            if not valid_time(element.attrib.get("duration"), positive=True):
+                failures.append(f"ref-clip duration is invalid for ref {ref}")
 
     prepared = manifest.get("preparedMotionPath")
     if prepared is not True:
