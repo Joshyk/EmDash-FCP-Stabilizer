@@ -150,9 +150,14 @@ function renderBatchSummary(result) {
       const sample = pkg.sampleScalePercent ? `${pkg.sampleScalePercent}%` : "?";
       const pixels = pkg.sampleWidth && pkg.sampleHeight ? `${pkg.sampleWidth}x${pkg.sampleHeight}` : "?";
       const cacheInstall = pkg.eventCacheInstalled ? "event cache installed" : "event cache pending";
+      const effectStack = pkg.sourceEffectStack || {};
+      const inheritedEffects = Number(effectStack.inheritedFilterCount || 0);
+      const effectStatus = inheritedEffects > 0
+        ? `${inheritedEffects} inherited effect${inheritedEffects === 1 ? "" : "s"}`
+        : (effectStack.unavailableReason || "no inherited effects");
       row.innerHTML = "<strong></strong><span></span><code></code>";
       row.querySelector("strong").textContent = pkg.importReady ? "Ready" : "Blocked";
-      row.querySelector("span").textContent = `sample ${sample} (${pixels}) | schema ${pkg.cacheSchemaVersion || "?"} | ${pkg.cacheIdentityShort || "no identity"} | ${cacheInstall}`;
+      row.querySelector("span").textContent = `sample ${sample} (${pixels}) | schema ${pkg.cacheSchemaVersion || "?"} | ${pkg.cacheIdentityShort || "no identity"} | ${cacheInstall} | ${effectStatus}`;
       row.querySelector("code").textContent = pkg.packagePath || pkg.fcpxmldPath || "";
       list.appendChild(row);
     }

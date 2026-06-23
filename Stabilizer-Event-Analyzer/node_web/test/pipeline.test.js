@@ -652,7 +652,11 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   assert.equal((info.match(/<asset-clip[^>]+ref="r2"[^>]+start="3600s"/g) || []).length, 1);
   assert.doesNotMatch(info, /Large Existing Project/);
   assert.doesNotMatch(info, /Other/);
-  assert.doesNotMatch(info, /Existing Effect/);
+  assert.match(info, /<effect id="r5" name="Existing Effect"/);
+  assert.match(
+    info,
+    /<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video>\s*<filter-video ref="r5" name="Existing Effect"\s*\/>/
+  );
   assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 1);
 });
 
@@ -694,8 +698,88 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(manifest.sourceMediaFingerprint, "aaa:bbb:ccc");
   assert.equal(manifest.cacheIdentity, analysisResult().cacheIdentity);
   assert.equal(manifest.preparedMotionPath, true);
+  assert.equal(manifest.sourceEffectStack.inheritedFilterCount, 0);
   assert.equal(fs.existsSync(path.join(pkg.packageDirectory, manifest.cachePayloadCacheFile)), true);
   assert.equal(fs.existsSync(path.join(pkg.outputPackage, "Info.fcpxml")), true);
+});
+
+test("build_stabilizer_fcpxml_import inherits source effects in per-footage packages", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-per-footage-effects-test-"));
+  const pkg = path.join(tmp, "TimelineEffects.fcpxmld");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(
+    path.join(pkg, "Info.fcpxml"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<fcpxml version="1.11">
+  <resources>
+    <format id="r1" name="FFVideoFormat1080p30" frameDuration="1001/30000s" width="1920" height="1080"/>
+    <asset id="r2" name="P1000307" start="0s" duration="300300/30000s" hasVideo="1" format="r1">
+      <media-rep kind="original-media" src="file:///tmp/P1000307.mov"/>
+    </asset>
+    <effect id="r5" name="Existing Effect" uid="FxPlug:EXISTING"/>
+  </resources>
+  <library>
+    <event name="TimelineEffects">
+      <project name="Timeline Effects Project">
+        <sequence format="r1" duration="300300/30000s" tcStart="0s" tcFormat="NDF">
+          <spine>
+            <asset-clip name="P1000307" ref="r2" offset="0s" start="0s" duration="300300/30000s">
+              <marker start="0s" duration="1001/30000s" value="keep"/>
+              <filter-video ref="r5" name="Existing Effect"/>
+            </asset-clip>
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>
+`,
+    "utf8"
+  );
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    pkg,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  assert.equal(build.status, "ok");
+  assert.equal(build.packages[0].sourceEffectStack.inheritedFilterCount, 1);
+  assert.deepEqual(build.packages[0].sourceEffectStack.inheritedFilterNames, ["Existing Effect"]);
+  const builtPackage = build.packages[0];
+  const info = fs.readFileSync(path.join(builtPackage.outputPackage, "Info.fcpxml"), "utf8");
+  assert.match(info, /<effect id="r5" name="Existing Effect"/);
+  assert.match(
+    info,
+    /<marker[^>]*value="keep"[^>]*\s*\/>\s*<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video>\s*<filter-video ref="r5" name="Existing Effect"\s*\/>/
+  );
+  const manifest = JSON.parse(fs.readFileSync(builtPackage.manifestPath, "utf8"));
+  assert.equal(manifest.sourceEffectStack.inheritedFilterCount, 1);
+  assert.deepEqual(manifest.sourceEffectStack.inheritedFilterNames, ["Existing Effect"]);
+  assert.equal(manifest.sourceEffectStack.unavailableReason, null);
+  const validation = run("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    builtPackage.outputPackage,
+    "--manifest",
+    builtPackage.manifestPath,
+    "--output",
+    builtPackage.validationPath,
+  ]);
+  assert.equal(validation.status, "pass");
+  assert.equal(validation.importReady, true);
 });
 
 test("validate_stabilizer_fcpxml_import passes generated per-footage package", () => {

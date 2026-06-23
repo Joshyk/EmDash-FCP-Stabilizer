@@ -22,6 +22,13 @@ The workflow is:
    a single review project. The generated clips carry Tokyo Walking Stabilizer
    filters with the generated cache identity.
 
+Generated clips place `Tokyo Walking Stabilizer` first, then re-attach
+non-Stabilizer video filters from the matching source timeline clip so existing
+effects remain on top of the stabilization pass. Direct `.fcpbundle` sources are
+materialized from Event `Original Media` only; if no exported FCPXML timeline
+effect stack is available, the generated manifest and Web UI package row make
+that explicit instead of silently pretending effects were inherited.
+
 Trimmed timeline clips are not treated as the analysis authority. The analyzer
 uses Event media as the unit of work. A trimmed timeline item naturally uses the
 matching portion of the full-media cache at render time.

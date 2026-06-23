@@ -737,6 +737,7 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
         cacheIdentityShort: pkg.cacheIdentityShort,
         eventCacheInstalled,
         eventCacheRoot: installation && installation.cacheRoot,
+        sourceEffectStack: pkg.sourceEffectStack || null,
         importReady: validationReady && eventCacheInstalled,
       };
     }),

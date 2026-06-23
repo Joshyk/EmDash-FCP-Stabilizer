@@ -202,6 +202,26 @@ def first_event_asset_clip(root: ET.Element, asset_id: str) -> ET.Element | None
     return None
 
 
+def first_asset_clip(root: ET.Element, asset_id: str) -> ET.Element | None:
+    for element in root.iter():
+        if local_name(element.tag) == "asset-clip" and element.attrib.get("ref") == asset_id:
+            return element
+    return None
+
+
+def has_ancestor(element: ET.Element, parents: dict[ET.Element, ET.Element], tag_name: str) -> bool:
+    current = parents.get(element)
+    while current is not None:
+        if local_name(current.tag) == tag_name:
+            return True
+        current = parents.get(current)
+    return False
+
+
+def is_replaced_stabilizer_filter(element: ET.Element) -> bool:
+    return local_name(element.tag) == "filter-video" and filter_name(element) in LEGACY_FILTER_NAMES | FILTER_NAMES
+
+
 def filtered_pre_effect_children(source: ET.Element | None) -> list[ET.Element]:
     if source is None:
         return []
@@ -210,10 +230,52 @@ def filtered_pre_effect_children(source: ET.Element | None) -> list[ET.Element]:
         tag = local_name(child.tag)
         if tag not in PRE_EFFECT_CHILD_TAGS:
             continue
-        if tag == "filter-video" or filter_name(child) in LEGACY_FILTER_NAMES | FILTER_NAMES:
+        children.append(copy.deepcopy(child))
+    return children
+
+
+def inherited_filter_children(source: ET.Element | None) -> list[ET.Element]:
+    if source is None:
+        return []
+    children = []
+    for child in list(source):
+        if local_name(child.tag) != "filter-video" or is_replaced_stabilizer_filter(child):
             continue
         children.append(copy.deepcopy(child))
     return children
+
+
+def inherited_filter_source_clip(root: ET.Element, asset_id: str) -> ET.Element | None:
+    parents = parent_map(root)
+    candidates: list[tuple[int, int, int, ET.Element]] = []
+    for order, element in enumerate(root.iter()):
+        if local_name(element.tag) != "asset-clip" or element.attrib.get("ref") != asset_id:
+            continue
+        filter_count = len(inherited_filter_children(element))
+        if filter_count == 0:
+            continue
+        timeline_score = 1 if has_ancestor(element, parents, "project") else 0
+        candidates.append((filter_count, timeline_score, -order, element))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[:3])[3]
+
+
+def inherited_filter_summary(source: ET.Element | None) -> dict:
+    filters = inherited_filter_children(source)
+    return {
+        "inheritedFilterCount": len(filters),
+        "inheritedFilterNames": [filter_name(item) for item in filters],
+    }
+
+
+def referenced_resource_ids(element: ET.Element) -> set[str]:
+    resource_ids: set[str] = set()
+    for node in element.iter():
+        ref = node.attrib.get("ref")
+        if ref:
+            resource_ids.add(ref)
+    return resource_ids
 
 
 def clip_attributes(
@@ -243,6 +305,7 @@ def append_filtered_asset_clip(
     parent: ET.Element,
     asset: ET.Element,
     source_clip: ET.Element | None,
+    effect_source_clip: ET.Element | None,
     ref: str,
     result: dict,
     *,
@@ -252,6 +315,8 @@ def append_filtered_asset_clip(
     for child in filtered_pre_effect_children(source_clip):
         clip.append(child)
     clip.append(stabilizer_filter(ref, result))
+    for child in inherited_filter_children(effect_source_clip):
+        clip.append(child)
     return clip
 
 
@@ -268,9 +333,18 @@ def source_library_attrs(source_root: ET.Element) -> dict[str, str]:
 
 def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) -> ET.Element:
     root = ET.Element("fcpxml", dict(source_root.attrib))
-    source_resources = resources(source_root)
     target_resources = ET.SubElement(root, "resources")
     copied_resource_ids: set[str] = set()
+    extra_resource_ids: set[str] = set()
+    effect_source_clips = {
+        asset_id: inherited_filter_source_clip(source_root, asset_id)
+        for asset_id in results
+    }
+    for source_clip in effect_source_clips.values():
+        if source_clip is None:
+            continue
+        for child in inherited_filter_children(source_clip):
+            extra_resource_ids.update(referenced_resource_ids(child))
     for asset_id in results:
         asset = resource_by_id(source_root, asset_id)
         if asset is None or local_name(asset.tag) != "asset":
@@ -286,6 +360,13 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
             if resource_id and resource_id not in copied_resource_ids:
                 target_resources.append(copy.deepcopy(resource))
                 copied_resource_ids.add(resource_id)
+    for resource_id in sorted(extra_resource_ids):
+        if resource_id in copied_resource_ids:
+            continue
+        resource = resource_by_id(source_root, resource_id)
+        if resource is not None:
+            target_resources.append(copy.deepcopy(resource))
+            copied_resource_ids.add(resource_id)
 
     ref = ensure_effect_resource(root)
     library = ET.SubElement(root, "library", source_library_attrs(source_root))
@@ -294,13 +375,14 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     event_nodes: dict[str, ET.Element] = {}
     for asset_id, result in results.items():
         asset = resource_by_id(source_root, asset_id)
-        source_clip = first_event_asset_clip(source_root, asset_id)
+        source_clip = first_event_asset_clip(source_root, asset_id) or first_asset_clip(source_root, asset_id)
+        effect_source_clip = effect_source_clips.get(asset_id)
         event_name = source_event_names.get(asset_id) or fallback_event_name
         event = event_nodes.get(event_name)
         if event is None:
             event = ET.SubElement(library, "event", {"name": event_name})
             event_nodes[event_name] = event
-        append_filtered_asset_clip(event, asset, source_clip, ref, result)
+        append_filtered_asset_clip(event, asset, source_clip, effect_source_clip, ref, result)
     return root
 
 
@@ -372,6 +454,15 @@ def event_root_for_source(source_path: Path, event_name: str | None) -> str | No
     return None
 
 
+def source_effect_stack_unavailable_reason(source_path: Path, inherited_filter_count: int) -> str | None:
+    if inherited_filter_count > 0:
+        return None
+    source = source_path.expanduser()
+    if source.suffix == ".fcpbundle":
+        return "direct .fcpbundle sources expose Original Media only; export FCPXMLD from Final Cut Pro to inherit timeline effects"
+    return None
+
+
 def analysis_manifest(
     source_root: ET.Element,
     source_path: Path,
@@ -381,7 +472,10 @@ def analysis_manifest(
     cache_payload: dict | None = None,
 ) -> dict:
     asset = resource_by_id(source_root, asset_id)
-    source_clip = first_event_asset_clip(source_root, asset_id)
+    source_clip = first_event_asset_clip(source_root, asset_id) or first_asset_clip(source_root, asset_id)
+    effect_source_clip = inherited_filter_source_clip(source_root, asset_id)
+    effect_stack = inherited_filter_summary(effect_source_clip)
+    unavailable_reason = source_effect_stack_unavailable_reason(source_path, effect_stack["inheritedFilterCount"])
     source_event_name = event_name_by_asset_id(source_root).get(asset_id)
     media_reps = []
     if asset is not None:
@@ -440,6 +534,10 @@ def analysis_manifest(
             "start": source_clip.attrib.get("start") if source_clip is not None else None,
             "duration": source_clip.attrib.get("duration") if source_clip is not None else None,
         },
+        "sourceEffectStack": {
+            **effect_stack,
+            "unavailableReason": unavailable_reason,
+        },
     }
 
 
@@ -487,6 +585,7 @@ def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict]
             "sampleHeight": result.get("sampleHeight"),
             "frameCount": result.get("frameCount"),
             "preparedMotionPath": manifest["preparedMotionPath"],
+            "sourceEffectStack": manifest["sourceEffectStack"],
         })
     return packages
 
