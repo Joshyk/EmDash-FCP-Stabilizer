@@ -296,6 +296,12 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     library = ET.SubElement(root, "library", source_library_attrs(source_root))
     event_name = (event_names(source_root) or ["Stabilized Analysis"])[0]
     event = ET.SubElement(library, "event", {"name": event_name})
+    timeline_entries = []
+    for asset_id, result in results.items():
+        asset = resource_by_id(source_root, asset_id)
+        source_clip = first_event_asset_clip(source_root, asset_id)
+        append_filtered_asset_clip(event, asset, source_clip, ref, result)
+        timeline_entries.append((asset_id, result, asset, source_clip))
     project_duration = sum((parse_time(resource_by_id(source_root, asset_id).attrib["duration"]) for asset_id in results), start=parse_time("0s"))
     first_asset = resource_by_id(source_root, next(iter(results)))
     first_format = first_asset.attrib["format"]
@@ -309,10 +315,7 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     sequence = ET.SubElement(project, "sequence", sequence_attrs)
     spine = ET.SubElement(sequence, "spine")
     offset = parse_time("0s")
-    for asset_id, result in results.items():
-        asset = resource_by_id(source_root, asset_id)
-        source_clip = first_event_asset_clip(source_root, asset_id)
-        append_filtered_asset_clip(event, asset, source_clip, ref, result)
+    for asset_id, result, asset, source_clip in timeline_entries:
         append_filtered_asset_clip(spine, asset, source_clip, ref, result, offset=time_string(offset))
         offset += parse_time(asset.attrib["duration"])
     return root
