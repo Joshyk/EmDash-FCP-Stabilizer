@@ -616,22 +616,23 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   ]);
   assert.equal(payload.status, "ok");
   assert.equal(payload.onlyAnalyzedAssets, true);
-  assert.equal(payload.insertedFilters, 2);
+  assert.equal(payload.insertedFilters, 1);
   const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
-  assert.match(info, /Tokyo Walking Stabilizer - Analyzed Footage/);
+  assert.match(info, /<event name="AnalyzedOnly">/);
+  assert.doesNotMatch(info, /Tokyo Walking Stabilizer - Analyzed Footage/);
+  assert.doesNotMatch(info, /<project/);
   assert.doesNotMatch(info, /<media id="r\d+"/);
   assert.doesNotMatch(info, /<ref-clip/);
-  assert.match(info, /<video ref="r2"[^>]+name="P1000307"/);
+  assert.doesNotMatch(info, /<video/);
   const eventAssetIndex = info.indexOf('<asset-clip ref="r2"');
-  const projectIndex = info.indexOf('<project name="Tokyo Walking Stabilizer - Analyzed Footage"');
-  assert.ok(eventAssetIndex !== -1 && projectIndex !== -1 && eventAssetIndex < projectIndex);
+  assert.ok(eventAssetIndex !== -1);
   assert.match(info, /<asset[^>]+id="r2"[^>]+start="3600s"/);
   assert.equal((info.match(/<asset-clip[^>]+ref="r2"[^>]+start="3600s"/g) || []).length, 1);
   assert.doesNotMatch(info, /Large Existing Project/);
   assert.doesNotMatch(info, /Other/);
   assert.doesNotMatch(info, /Existing Effect/);
-  assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 2);
+  assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 1);
 });
 
 test("build_stabilizer_fcpxml_import emits one package directory per footage", () => {
@@ -668,6 +669,7 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(path.basename(pkg.manifestPath), "P1000307.analysis-manifest.json");
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
   assert.equal(manifest.footageFileName, "P1000307.mov");
+  assert.equal(manifest.eventName, "gh6");
   assert.equal(manifest.sourceMediaFingerprint, "aaa:bbb:ccc");
   assert.equal(manifest.cacheIdentity, analysisResult().cacheIdentity);
   assert.equal(manifest.preparedMotionPath, true);

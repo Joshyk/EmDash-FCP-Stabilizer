@@ -16,6 +16,7 @@ from typing import Iterable
 
 from fcpxml_common import (
     SCHEMA_VERSION,
+    event_name_by_asset_id,
     event_names,
     local_name,
     parse_time,
@@ -52,7 +53,6 @@ PRE_EFFECT_CHILD_TAGS = {
     "adjust-panner",
     "marker",
 }
-VIDEO_PRE_EFFECT_CHILD_TAGS = PRE_EFFECT_CHILD_TAGS - {"adjust-volume", "adjust-panner"}
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -185,12 +185,6 @@ def insert_after_child(parent: ET.Element, child: ET.Element, node: ET.Element) 
     parent.insert(index, node)
 
 
-def time_string(value) -> str:
-    if value.denominator == 1:
-        return f"{value.numerator}s"
-    return f"{value.numerator}/{value.denominator}s"
-
-
 def resource_by_id(root: ET.Element, resource_id: str) -> ET.Element | None:
     for child in resources(root):
         if child.attrib.get("id") == resource_id:
@@ -222,20 +216,6 @@ def filtered_pre_effect_children(source: ET.Element | None) -> list[ET.Element]:
     return children
 
 
-def filtered_video_pre_effect_children(source: ET.Element | None) -> list[ET.Element]:
-    if source is None:
-        return []
-    children = []
-    for child in list(source):
-        tag = local_name(child.tag)
-        if tag not in VIDEO_PRE_EFFECT_CHILD_TAGS:
-            continue
-        if tag == "filter-video" or filter_name(child) in LEGACY_FILTER_NAMES | FILTER_NAMES:
-            continue
-        children.append(copy.deepcopy(child))
-    return children
-
-
 def clip_attributes(
     asset: ET.Element,
     source_clip: ET.Element | None,
@@ -259,28 +239,6 @@ def clip_attributes(
     return attrs
 
 
-def video_attributes(
-    asset: ET.Element,
-    source_clip: ET.Element | None,
-    *,
-    offset: str | None = None,
-) -> dict[str, str]:
-    attrs: dict[str, str] = {
-        "ref": asset.attrib["id"],
-        "name": asset.attrib.get("name") or asset.attrib["id"],
-    }
-    for key in ("start", "duration"):
-        if source_clip is not None and source_clip.attrib.get(key):
-            attrs[key] = source_clip.attrib[key]
-        elif asset.attrib.get(key):
-            attrs[key] = asset.attrib[key]
-    if "duration" not in attrs:
-        raise ValueError(f"asset has no duration for video edit: {asset.attrib.get('id')}")
-    if offset is not None:
-        attrs["offset"] = offset
-    return attrs
-
-
 def append_filtered_asset_clip(
     parent: ET.Element,
     asset: ET.Element,
@@ -292,22 +250,6 @@ def append_filtered_asset_clip(
 ) -> ET.Element:
     clip = ET.SubElement(parent, "asset-clip", clip_attributes(asset, source_clip, offset=offset))
     for child in filtered_pre_effect_children(source_clip):
-        clip.append(child)
-    clip.append(stabilizer_filter(ref, result))
-    return clip
-
-
-def append_filtered_video(
-    parent: ET.Element,
-    asset: ET.Element,
-    source_clip: ET.Element | None,
-    ref: str,
-    result: dict,
-    *,
-    offset: str | None = None,
-) -> ET.Element:
-    clip = ET.SubElement(parent, "video", video_attributes(asset, source_clip, offset=offset))
-    for child in filtered_video_pre_effect_children(source_clip):
         clip.append(child)
     clip.append(stabilizer_filter(ref, result))
     return clip
@@ -347,30 +289,18 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
 
     ref = ensure_effect_resource(root)
     library = ET.SubElement(root, "library", source_library_attrs(source_root))
-    event_name = (event_names(source_root) or ["Stabilized Analysis"])[0]
-    event = ET.SubElement(library, "event", {"name": event_name})
-    timeline_entries = []
+    source_event_names = event_name_by_asset_id(source_root)
+    fallback_event_name = (event_names(source_root) or ["Stabilized Analysis"])[0]
+    event_nodes: dict[str, ET.Element] = {}
     for asset_id, result in results.items():
         asset = resource_by_id(source_root, asset_id)
         source_clip = first_event_asset_clip(source_root, asset_id)
+        event_name = source_event_names.get(asset_id) or fallback_event_name
+        event = event_nodes.get(event_name)
+        if event is None:
+            event = ET.SubElement(library, "event", {"name": event_name})
+            event_nodes[event_name] = event
         append_filtered_asset_clip(event, asset, source_clip, ref, result)
-        timeline_entries.append((asset_id, result, asset, source_clip))
-    project_duration = sum((parse_time(resource_by_id(source_root, asset_id).attrib["duration"]) for asset_id in results), start=parse_time("0s"))
-    first_asset = resource_by_id(source_root, next(iter(results)))
-    first_format = first_asset.attrib["format"]
-    sequence_attrs = {
-        "format": first_format,
-        "duration": time_string(project_duration),
-        "tcStart": "0s",
-        "tcFormat": "NDF",
-    }
-    project = ET.SubElement(event, "project", {"name": "Tokyo Walking Stabilizer - Analyzed Footage"})
-    sequence = ET.SubElement(project, "sequence", sequence_attrs)
-    spine = ET.SubElement(sequence, "spine")
-    offset = parse_time("0s")
-    for asset_id, result, asset, source_clip in timeline_entries:
-        append_filtered_video(spine, asset, source_clip, ref, result, offset=time_string(offset))
-        offset += parse_time(asset.attrib["duration"])
     return root
 
 
@@ -433,6 +363,7 @@ def copy_cache_payload(package_dir: Path, footage: str, result: dict, cache_root
 def analysis_manifest(source_root: ET.Element, asset_id: str, result: dict, cache_root: str | None = None, cache_payload: dict | None = None) -> dict:
     asset = resource_by_id(source_root, asset_id)
     source_clip = first_event_asset_clip(source_root, asset_id)
+    source_event_name = event_name_by_asset_id(source_root).get(asset_id)
     media_reps = []
     if asset is not None:
         for child in asset:
@@ -458,6 +389,7 @@ def analysis_manifest(source_root: ET.Element, asset_id: str, result: dict, cach
         "assetId": asset_id,
         "footageName": result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
         "footageFileName": result.get("footageFileName") or result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
+        "eventName": source_event_name,
         "mediaPath": result.get("mediaPath"),
         "mediaKind": result.get("mediaKind"),
         "mediaReps": media_reps,
@@ -560,7 +492,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument(
         "--only-analyzed-assets",
         action="store_true",
-        help="Build a compact FCPXMLD containing only analyzed video assets and one review project.",
+        help="Build a compact FCPXMLD containing only analyzed Event clips.",
     )
     parser.add_argument(
         "--per-footage-packages",
@@ -597,7 +529,7 @@ def main(argv: Iterable[str]) -> int:
                         "packages": packages,
                         "outputPackage": packages[0]["outputPackage"] if packages else None,
                         "infoPath": packages[0]["infoPath"] if packages else None,
-                        "insertedFilters": len(packages) * 2,
+                        "insertedFilters": len(packages),
                         "removedExistingFilters": 0,
                         "assetIds": sorted(results),
                         "onlyAnalyzedAssets": True,
@@ -624,7 +556,7 @@ def main(argv: Iterable[str]) -> int:
                     "status": "ok",
                     "outputPackage": str(package_path),
                     "infoPath": str(target_info),
-                    "insertedFilters": len(results) * 2,
+                    "insertedFilters": len(results),
                     "removedExistingFilters": 0,
                     "assetIds": sorted(results),
                     "safeName": safe_file_component(package_path.stem),

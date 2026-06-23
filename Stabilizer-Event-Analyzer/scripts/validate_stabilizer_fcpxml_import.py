@@ -163,6 +163,8 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
 
     for element in root.iter():
         tag = local_name(element.tag)
+        if tag == "project":
+            failures.append("import package contains a project timeline instead of Event clips only")
         if tag == "filter-video":
             invalid_attrs = sorted(FCPXML_DTD_INVALID_FILTER_VIDEO_ATTRS.intersection(element.attrib))
             if invalid_attrs:
@@ -176,6 +178,8 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
             ref = element.attrib["ref"]
             if ref != asset_id:
                 failures.append(f"import package contains non-analyzed footage ref: {ref}")
+            if tag == "video":
+                failures.append(f"import package contains a video edit instead of an Event asset-clip: {ref}")
             if tag == "asset-clip":
                 if has_ancestor(element, parents, "project"):
                     failures.append("project edit uses asset-clip directly instead of video")
