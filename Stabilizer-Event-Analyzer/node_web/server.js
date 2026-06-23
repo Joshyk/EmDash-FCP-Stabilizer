@@ -404,6 +404,11 @@ function defaultImportsDirForSource(sourcePath) {
   return path.join(path.dirname(resolved), DEFAULT_ANALYSIS_DIR_NAME);
 }
 
+function isFcpBundleSource(sourcePath) {
+  const resolved = expandPath(sourcePath);
+  return Boolean(resolved && path.basename(resolved).endsWith(".fcpbundle"));
+}
+
 function runTextProcess(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -526,8 +531,8 @@ function selectedAssetArgs(assetIds, analyzeAll) {
   return ids.flatMap((id) => ["--asset-id", String(id)]);
 }
 
-function cacheRootValue(value) {
-  const resolved = expandPath(value || CACHE_ROOT);
+function cacheRootValue(value, sourcePath, importsDir) {
+  const resolved = expandPath(isFcpBundleSource(sourcePath) ? importsDir : (value || CACHE_ROOT));
   if (!resolved) throw new Error("cache root is required");
   return resolved;
 }
@@ -540,7 +545,8 @@ function buildCacheRootFromAnalysis(analysis) {
 }
 
 function outputDirValue(value, sourcePath) {
-  const resolved = expandPath(value || defaultImportsDirForSource(sourcePath) || OUTPUT_DIR);
+  const defaultImportsDir = defaultImportsDirForSource(sourcePath);
+  const resolved = expandPath(isFcpBundleSource(sourcePath) ? defaultImportsDir : (value || defaultImportsDir || OUTPUT_DIR));
   if (!resolved) throw new Error("imports directory is required");
   return resolved;
 }
@@ -551,7 +557,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
   await fsp.mkdir(dir, { recursive: true });
   const sourcePath = expandPath(body.sourcePath);
   const importsDir = outputDirValue(body.importsDir || body.outputDir, sourcePath);
-  const cacheRoot = cacheRootValue(body.cacheRoot || importsDir);
+  const cacheRoot = cacheRootValue(body.cacheRoot || importsDir, sourcePath, importsDir);
   const sampleScalePercent = Number(body.sampleScalePercent || DEFAULT_SAMPLE_SCALE_PERCENT);
   if (!SAMPLE_SCALE_PERCENT_CHOICES.includes(sampleScalePercent)) {
     throw new Error(`sampleScalePercent must be one of ${SAMPLE_SCALE_PERCENT_CHOICES.join(", ")}`);
@@ -932,8 +938,11 @@ if (require.main === module) {
 
 module.exports = {
   buildCacheRootFromAnalysis,
+  cacheRootValue,
   defaultImportsDirForSource,
   failedRunResult,
+  isFcpBundleSource,
+  outputDirValue,
   parseAnalyzerProgressLine,
   processFailureDetails,
   processFailureMessage,

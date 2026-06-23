@@ -6,8 +6,11 @@ const test = require("node:test");
 
 const {
   buildCacheRootFromAnalysis,
+  cacheRootValue,
   defaultImportsDirForSource,
   failedRunResult,
+  isFcpBundleSource,
+  outputDirValue,
   parseAnalyzerProgressLine,
   processFailureDetails,
   processFailureMessage,
@@ -41,6 +44,31 @@ test("defaultImportsDirForSource writes beside selected export in stablizer_anal
   assert.equal(
     defaultImportsDirForSource("/Volumes/Edit/Project/Event.fcpxml"),
     path.resolve("/Volumes/Edit/Project/stablizer_analysis")
+  );
+});
+
+test("fcpbundle sources force output and cache beside the bundle", () => {
+  const sourcePath = "/Volumes/Edit/Project/Library.fcpbundle";
+  const importsDir = path.resolve("/Volumes/Edit/Project/stablizer_analysis");
+  assert.equal(isFcpBundleSource(sourcePath), true);
+  assert.equal(
+    outputDirValue("/Volumes/Edit/Project", sourcePath),
+    importsDir
+  );
+  assert.equal(
+    cacheRootValue("/tmp/other-cache", sourcePath, importsDir),
+    importsDir
+  );
+});
+
+test("xml sources still honor explicit output and cache roots", () => {
+  const sourcePath = "/Volumes/Edit/Project/Event.fcpxmld";
+  const importsDir = path.resolve("/tmp/custom-imports");
+  assert.equal(isFcpBundleSource(sourcePath), false);
+  assert.equal(outputDirValue(importsDir, sourcePath), importsDir);
+  assert.equal(
+    cacheRootValue("/tmp/custom-cache", sourcePath, importsDir),
+    path.resolve("/tmp/custom-cache")
   );
 });
 
