@@ -162,9 +162,9 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.deepEqual(payload.eventNames, ["Event A"]);
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
-  const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(manifest.syntheticSchemaVersion, 3);
-  assert.equal(manifest.colorProcessing, "wide-hdr");
+  const sourceManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
+  assert.equal(sourceManifest.syntheticSchemaVersion, 3);
+  assert.equal(sourceManifest.colorProcessing, "wide-hdr");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
   assert.equal(payload.assets[0].name, "LibraryClip");
@@ -175,6 +175,27 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assets[0].width, 160);
   assert.equal(payload.assets[0].height, 90);
   assert.equal(payload.assets[0].frameDuration, "1/30s");
+
+  const analysis = analysisResult(payload.assets[0].assetId, "LibraryClip");
+  analysis.mediaPath = "/Volumes/External Media/LibraryClip.mov";
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(analysisPath, JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }), "utf8");
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    bundle,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  assert.equal(manifest.eventName, "Event A");
+  assert.equal(manifest.eventRoot, fs.realpathSync(path.join(bundle, "Event A")));
 });
 
 test("fcpxml_common maps ffprobe color metadata to FCPXML colorSpace labels", () => {
@@ -748,6 +769,62 @@ test("install_stabilizer_package_cache infers Event root from manifest mediaPath
   assert.equal(install.eventRoot, resolvedEventRoot);
   assert.equal(install.cacheRoot, path.join(resolvedEventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"));
   assert.equal(fs.existsSync(path.join(install.cacheRoot, "caches", analysis.cacheFileName)), true);
+});
+
+test("install_stabilizer_package_cache uses manifest eventRoot when mediaPath is external", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-event-root-test-"));
+  const eventRoot = path.join(tmp, "Library.fcpbundle", "Event A");
+  fs.mkdirSync(path.join(eventRoot, "Original Media"), { recursive: true });
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  analysis.mediaPath = "/Volumes/External Media/P1000307.mov";
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  manifest.eventRoot = eventRoot;
+  fs.writeFileSync(pkg.manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const targetCacheRoot = path.join(eventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis");
+  fs.mkdirSync(targetCacheRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(targetCacheRoot, "host-analysis-index-v2.json"),
+    JSON.stringify({
+      schemaVersion: analysis.cacheSchemaVersion,
+      entries: [{
+        cacheIdentity: "old-cache-identity",
+        cacheFileName: "old-cache.json",
+      }],
+    }),
+    "utf8"
+  );
+  const install = run("python3", [
+    "scripts/install_stabilizer_package_cache.py",
+    "--manifest",
+    pkg.manifestPath,
+  ]);
+  assert.equal(install.status, "ok");
+  const resolvedEventRoot = fs.realpathSync(eventRoot);
+  assert.equal(install.eventRoot, resolvedEventRoot);
+  assert.equal(install.cacheRoot, path.join(resolvedEventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"));
+  assert.equal(fs.existsSync(path.join(install.cacheRoot, "caches", analysis.cacheFileName)), true);
+  const installedIndex = JSON.parse(fs.readFileSync(path.join(install.cacheRoot, "host-analysis-index-v2.json"), "utf8"));
+  assert.equal(installedIndex.entries.some((entry) => entry.cacheIdentity === "old-cache-identity"), true);
+  assert.equal(installedIndex.entries.some((entry) => entry.cacheIdentity === analysis.cacheIdentity), true);
 });
 
 test("validate_stabilizer_fcpxml_import fails cache identity mismatch before FCP import", () => {

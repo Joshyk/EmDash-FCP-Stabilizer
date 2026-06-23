@@ -30,6 +30,13 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def event_root_from_manifest(manifest: dict) -> Path | None:
+    event_root_value = manifest.get("eventRoot")
+    if not event_root_value:
+        return None
+    return Path(event_root_value).expanduser().resolve()
+
+
 def infer_event_root(manifest: dict) -> Path:
     media_path_value = manifest.get("mediaPath")
     if not media_path_value:
@@ -46,6 +53,34 @@ def infer_event_root(manifest: dict) -> Path:
     if len(relative_parts) < 2:
         raise ValueError("mediaPath does not include an Event directory inside the .fcpbundle")
     return bundle_root / relative_parts[0]
+
+
+def merge_cache_index(source_path: Path, target_path: Path) -> None:
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    source_entries = source.get("entries") or []
+    existing_entries = []
+    if target_path.exists():
+        try:
+            existing = json.loads(target_path.read_text(encoding="utf-8"))
+            if existing.get("schemaVersion") == source.get("schemaVersion"):
+                existing_entries = existing.get("entries") or []
+        except Exception:  # noqa: BLE001
+            existing_entries = []
+
+    merged_entries = []
+    seen: set[tuple[str, str]] = set()
+    for entry in [*source_entries, *existing_entries]:
+        identity = (entry.get("cacheIdentity") or "").strip()
+        file_name = (entry.get("cacheFileName") or "").strip()
+        key = (identity, file_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_entries.append(entry)
+
+    target = dict(source)
+    target["entries"] = merged_entries[:64]
+    target_path.write_text(json.dumps(target, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def main(argv: Iterable[str]) -> int:
@@ -81,7 +116,11 @@ def main(argv: Iterable[str]) -> int:
         if index_entry.get("cacheFileName") != source_cache_file.name:
             raise ValueError("cache payload index file name does not match manifest")
 
-        event_root = args.event_root.expanduser().resolve() if args.event_root else infer_event_root(manifest)
+        event_root = (
+            args.event_root.expanduser().resolve()
+            if args.event_root
+            else event_root_from_manifest(manifest) or infer_event_root(manifest)
+        )
         if not event_root.exists() or not event_root.is_dir():
             raise FileNotFoundError(f"FCP Event root is missing: {event_root}")
         cache_root = event_root / "Analysis Files" / "TokyoWalkingStabilizerHostAnalysis"
@@ -96,7 +135,10 @@ def main(argv: Iterable[str]) -> int:
             source_sidecar = payload_dir / sidecar
             if source_sidecar.exists():
                 target_sidecar = cache_root / sidecar
-                shutil.copy2(source_sidecar, target_sidecar)
+                if sidecar == "host-analysis-index-v2.json":
+                    merge_cache_index(source_sidecar, target_sidecar)
+                else:
+                    shutil.copy2(source_sidecar, target_sidecar)
                 installed_files.append(str(target_sidecar))
 
         return emit(

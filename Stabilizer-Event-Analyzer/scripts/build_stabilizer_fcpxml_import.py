@@ -360,7 +360,26 @@ def copy_cache_payload(package_dir: Path, footage: str, result: dict, cache_root
     }
 
 
-def analysis_manifest(source_root: ET.Element, asset_id: str, result: dict, cache_root: str | None = None, cache_payload: dict | None = None) -> dict:
+def event_root_for_source(source_path: Path, event_name: str | None) -> str | None:
+    if not event_name:
+        return None
+    source = source_path.expanduser().resolve()
+    if source.suffix != ".fcpbundle" or not source.is_dir():
+        return None
+    event_root = source / event_name
+    if event_root.is_dir():
+        return str(event_root)
+    return None
+
+
+def analysis_manifest(
+    source_root: ET.Element,
+    source_path: Path,
+    asset_id: str,
+    result: dict,
+    cache_root: str | None = None,
+    cache_payload: dict | None = None,
+) -> dict:
     asset = resource_by_id(source_root, asset_id)
     source_clip = first_event_asset_clip(source_root, asset_id)
     source_event_name = event_name_by_asset_id(source_root).get(asset_id)
@@ -390,6 +409,7 @@ def analysis_manifest(source_root: ET.Element, asset_id: str, result: dict, cach
         "footageName": result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
         "footageFileName": result.get("footageFileName") or result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
         "eventName": source_event_name,
+        "eventRoot": event_root_for_source(source_path, source_event_name),
         "mediaPath": result.get("mediaPath"),
         "mediaKind": result.get("mediaKind"),
         "mediaReps": media_reps,
@@ -449,7 +469,7 @@ def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict]
         tree.write(info_path, encoding="utf-8", xml_declaration=True)
         manifest_path = package_dir / f"{footage}.analysis-manifest.json"
         cache_payload = copy_cache_payload(package_dir, footage, result, cache_root)
-        manifest = analysis_manifest(source_root, asset_id, result, cache_root=cache_root, cache_payload=cache_payload)
+        manifest = analysis_manifest(source_root, source_path, asset_id, result, cache_root=cache_root, cache_payload=cache_payload)
         write_json(manifest_path, manifest)
         packages.append({
             "assetId": asset_id,
