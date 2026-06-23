@@ -52,6 +52,7 @@ PRE_EFFECT_CHILD_TAGS = {
     "adjust-panner",
     "marker",
 }
+VIDEO_PRE_EFFECT_CHILD_TAGS = PRE_EFFECT_CHILD_TAGS - {"adjust-volume", "adjust-panner"}
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -221,6 +222,20 @@ def filtered_pre_effect_children(source: ET.Element | None) -> list[ET.Element]:
     return children
 
 
+def filtered_video_pre_effect_children(source: ET.Element | None) -> list[ET.Element]:
+    if source is None:
+        return []
+    children = []
+    for child in list(source):
+        tag = local_name(child.tag)
+        if tag not in VIDEO_PRE_EFFECT_CHILD_TAGS:
+            continue
+        if tag == "filter-video" or filter_name(child) in LEGACY_FILTER_NAMES | FILTER_NAMES:
+            continue
+        children.append(copy.deepcopy(child))
+    return children
+
+
 def clip_attributes(
     asset: ET.Element,
     source_clip: ET.Element | None,
@@ -244,48 +259,26 @@ def clip_attributes(
     return attrs
 
 
-def media_clip_duration(asset: ET.Element, source_clip: ET.Element | None) -> str:
-    if source_clip is not None and source_clip.attrib.get("duration"):
-        return source_clip.attrib["duration"]
-    if asset.attrib.get("duration"):
-        return asset.attrib["duration"]
-    raise ValueError(f"asset has no duration for media clip: {asset.attrib.get('id')}")
-
-
-def ref_clip_attributes(
-    media_id: str,
+def video_attributes(
     asset: ET.Element,
     source_clip: ET.Element | None,
     *,
     offset: str | None = None,
 ) -> dict[str, str]:
     attrs: dict[str, str] = {
-        "ref": media_id,
+        "ref": asset.attrib["id"],
         "name": asset.attrib.get("name") or asset.attrib["id"],
-        "start": "0s",
-        "duration": media_clip_duration(asset, source_clip),
     }
+    for key in ("start", "duration"):
+        if source_clip is not None and source_clip.attrib.get(key):
+            attrs[key] = source_clip.attrib[key]
+        elif asset.attrib.get(key):
+            attrs[key] = asset.attrib[key]
+    if "duration" not in attrs:
+        raise ValueError(f"asset has no duration for video edit: {asset.attrib.get('id')}")
     if offset is not None:
         attrs["offset"] = offset
     return attrs
-
-
-def create_media_resource(root: ET.Element, asset: ET.Element, source_clip: ET.Element | None) -> str:
-    media_id = next_resource_id(root)
-    duration = media_clip_duration(asset, source_clip)
-    media = ET.SubElement(resources(root), "media", {"id": media_id, "name": asset.attrib.get("name") or asset.attrib["id"]})
-    sequence_attrs = {
-        "duration": duration,
-        "tcStart": "0s",
-        "tcFormat": "NDF",
-    }
-    format_id = (source_clip.attrib.get("format") if source_clip is not None else None) or asset.attrib.get("format")
-    if format_id:
-        sequence_attrs["format"] = format_id
-    sequence = ET.SubElement(media, "sequence", sequence_attrs)
-    spine = ET.SubElement(sequence, "spine")
-    ET.SubElement(spine, "asset-clip", clip_attributes(asset, source_clip, offset="0s"))
-    return media_id
 
 
 def append_filtered_asset_clip(
@@ -304,9 +297,8 @@ def append_filtered_asset_clip(
     return clip
 
 
-def append_filtered_ref_clip(
+def append_filtered_video(
     parent: ET.Element,
-    media_id: str,
     asset: ET.Element,
     source_clip: ET.Element | None,
     ref: str,
@@ -314,8 +306,8 @@ def append_filtered_ref_clip(
     *,
     offset: str | None = None,
 ) -> ET.Element:
-    clip = ET.SubElement(parent, "ref-clip", ref_clip_attributes(media_id, asset, source_clip, offset=offset))
-    for child in filtered_pre_effect_children(source_clip):
+    clip = ET.SubElement(parent, "video", video_attributes(asset, source_clip, offset=offset))
+    for child in filtered_video_pre_effect_children(source_clip):
         clip.append(child)
     clip.append(stabilizer_filter(ref, result))
     return clip
@@ -361,9 +353,8 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     for asset_id, result in results.items():
         asset = resource_by_id(source_root, asset_id)
         source_clip = first_event_asset_clip(source_root, asset_id)
-        media_id = create_media_resource(root, asset, source_clip)
-        append_filtered_ref_clip(event, media_id, asset, source_clip, ref, result)
-        timeline_entries.append((asset_id, result, asset, source_clip, media_id))
+        append_filtered_asset_clip(event, asset, source_clip, ref, result)
+        timeline_entries.append((asset_id, result, asset, source_clip))
     project_duration = sum((parse_time(resource_by_id(source_root, asset_id).attrib["duration"]) for asset_id in results), start=parse_time("0s"))
     first_asset = resource_by_id(source_root, next(iter(results)))
     first_format = first_asset.attrib["format"]
@@ -377,8 +368,8 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     sequence = ET.SubElement(project, "sequence", sequence_attrs)
     spine = ET.SubElement(sequence, "spine")
     offset = parse_time("0s")
-    for asset_id, result, asset, source_clip, media_id in timeline_entries:
-        append_filtered_ref_clip(spine, media_id, asset, source_clip, ref, result, offset=time_string(offset))
+    for asset_id, result, asset, source_clip in timeline_entries:
+        append_filtered_video(spine, asset, source_clip, ref, result, offset=time_string(offset))
         offset += parse_time(asset.attrib["duration"])
     return root
 

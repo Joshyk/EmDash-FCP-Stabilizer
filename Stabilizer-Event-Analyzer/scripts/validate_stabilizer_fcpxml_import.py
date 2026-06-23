@@ -152,12 +152,6 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
     }
     if not effect_ids:
         failures.append("Tokyo Walking Stabilizer effect resource is missing")
-    media_ids = {
-        child.attrib["id"]
-        for child in resources(root)
-        if local_name(child.tag) == "media" and child.attrib.get("id")
-    }
-
     identities = stabilizer_filter_identities(root)
     if not identities:
         failures.append("Tokyo Walking Stabilizer filter is missing")
@@ -184,15 +178,14 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
                 failures.append(f"import package contains non-analyzed footage ref: {ref}")
             if tag == "asset-clip":
                 if has_ancestor(element, parents, "project"):
-                    failures.append("project edit uses asset-clip directly instead of ref-clip media")
-                if not valid_time(element.attrib.get("start"), positive=False):
-                    failures.append(f"asset-clip start is invalid for ref {ref}")
-                if not valid_time(element.attrib.get("duration"), positive=True):
-                    failures.append(f"asset-clip duration is invalid for ref {ref}")
+                    failures.append("project edit uses asset-clip directly instead of video")
+            if not valid_time(element.attrib.get("start"), positive=False):
+                failures.append(f"{tag} start is invalid for ref {ref}")
+            if not valid_time(element.attrib.get("duration"), positive=True):
+                failures.append(f"{tag} duration is invalid for ref {ref}")
         if tag == "ref-clip" and element.attrib.get("ref"):
             ref = element.attrib["ref"]
-            if ref not in media_ids:
-                failures.append(f"ref-clip does not reference a media resource: {ref}")
+            failures.append(f"import package contains ref-clip instead of direct video edit: {ref}")
             if not valid_time(element.attrib.get("start"), positive=False):
                 failures.append(f"ref-clip start is invalid for ref {ref}")
             if not valid_time(element.attrib.get("duration"), positive=True):

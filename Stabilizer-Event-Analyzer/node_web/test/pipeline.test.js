@@ -620,9 +620,10 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.match(info, /Tokyo Walking Stabilizer - Analyzed Footage/);
-  assert.match(info, /<media id="r\d+" name="P1000307">/);
-  assert.equal((info.match(/<ref-clip[^>]+name="P1000307"/g) || []).length, 2);
-  const eventAssetIndex = info.indexOf('<ref-clip ref="');
+  assert.doesNotMatch(info, /<media id="r\d+"/);
+  assert.doesNotMatch(info, /<ref-clip/);
+  assert.match(info, /<video ref="r2"[^>]+name="P1000307"/);
+  const eventAssetIndex = info.indexOf('<asset-clip ref="r2"');
   const projectIndex = info.indexOf('<project name="Tokyo Walking Stabilizer - Analyzed Footage"');
   assert.ok(eventAssetIndex !== -1 && projectIndex !== -1 && eventAssetIndex < projectIndex);
   assert.match(info, /<asset[^>]+id="r2"[^>]+start="3600s"/);
