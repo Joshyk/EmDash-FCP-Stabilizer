@@ -782,6 +782,81 @@ test("build_stabilizer_fcpxml_import inherits source effects in per-footage pack
   assert.equal(validation.importReady, true);
 });
 
+test("build_stabilizer_fcpxml_import preserves existing AutoWB effects in per-footage packages", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-per-footage-autowb-test-"));
+  const pkg = path.join(tmp, "AutoWBExisting.fcpxmld");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(
+    path.join(pkg, "Info.fcpxml"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<fcpxml version="1.14">
+  <resources>
+    <format id="r1" name="FFVideoFormat1080p30" frameDuration="1001/30000s" width="1920" height="1080"/>
+    <asset id="r2" name="P1000307" start="0s" duration="300300/30000s" hasVideo="1" format="r1">
+      <media-rep kind="original-media" src="file:///tmp/P1000307.mov"/>
+    </asset>
+    <effect id="r5" name="AutoWB Color - Automation" uid="~/Effects.localized/Emdash Studios/AutoWB Color - Automation/AutoWB Color - Automation.moef"/>
+    <effect id="r6" name="Color Wheels" uid="FxPlug:52A68C6D-B49C-41AA-B3EA-03945D0C8EB4"/>
+  </resources>
+  <library>
+    <event name="AutoWBExisting">
+      <asset-clip name="P1000307" ref="r2" start="0s" duration="300300/30000s" format="r1">
+        <filter-video ref="r5" name="AutoWB Color - Automation" nameOverride="AutoWB Color - Automation"/>
+        <filter-video ref="r6" name="Color Wheels" nameOverride="AutoWB Color - Final Tweak"/>
+      </asset-clip>
+    </event>
+  </library>
+</fcpxml>
+`,
+    "utf8"
+  );
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    pkg,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  assert.equal(build.status, "ok");
+  assert.equal(build.packages[0].sourceEffectStack.inheritedFilterCount, 2);
+  assert.deepEqual(build.packages[0].sourceEffectStack.inheritedFilterNames, [
+    "AutoWB Color - Automation",
+    "AutoWB Color - Final Tweak",
+  ]);
+  const builtPackage = build.packages[0];
+  const info = fs.readFileSync(path.join(builtPackage.outputPackage, "Info.fcpxml"), "utf8");
+  assert.match(info, /<fcpxml version="1\.14">/);
+  assert.match(info, /<effect id="r5" name="AutoWB Color - Automation"/);
+  assert.match(info, /<effect id="r6" name="Color Wheels"/);
+  assert.match(
+    info,
+    /<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video>\s*<filter-video ref="r5" name="AutoWB Color - Automation" nameOverride="AutoWB Color - Automation"\s*\/>\s*<filter-video ref="r6" name="Color Wheels" nameOverride="AutoWB Color - Final Tweak"\s*\/>/
+  );
+  const validation = run("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    builtPackage.outputPackage,
+    "--manifest",
+    builtPackage.manifestPath,
+    "--output",
+    builtPackage.validationPath,
+  ]);
+  assert.equal(validation.status, "pass");
+  assert.equal(validation.importReady, true);
+});
+
 test("validate_stabilizer_fcpxml_import passes generated per-footage package", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-pass-test-"));
   const analysisPath = path.join(tmp, "analysis.json");

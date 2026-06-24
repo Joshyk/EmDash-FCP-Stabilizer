@@ -15,7 +15,8 @@ from fcpxml_common import SCHEMA_VERSION, local_name, parse_time, resolve_info_p
 from build_stabilizer_fcpxml_import import EFFECT_NAME, EFFECT_UID, LEGACY_FILTER_NAMES
 
 
-FCPXML_DTD_INVALID_FILTER_VIDEO_ATTRS = {"nameOverride", "videoOverride"}
+ALWAYS_INVALID_FILTER_VIDEO_ATTRS = {"videoOverride"}
+NAME_OVERRIDE_MIN_VERSION = (1, 12)
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -45,6 +46,22 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
 
 def filter_name(element: ET.Element) -> str:
     return element.attrib.get("nameOverride") or element.attrib.get("name") or ""
+
+
+def fcpxml_version_tuple(root: ET.Element) -> tuple[int, int]:
+    value = root.attrib.get("version") or "0.0"
+    try:
+        major, minor = value.split(".", 1)
+        return int(major), int(minor)
+    except ValueError:
+        return 0, 0
+
+
+def invalid_filter_video_attrs(root: ET.Element, element: ET.Element) -> list[str]:
+    invalid = set(ALWAYS_INVALID_FILTER_VIDEO_ATTRS).intersection(element.attrib)
+    if fcpxml_version_tuple(root) < NAME_OVERRIDE_MIN_VERSION and "nameOverride" in element.attrib:
+        invalid.add("nameOverride")
+    return sorted(invalid)
 
 
 def resource_by_id(root: ET.Element) -> dict[str, ET.Element]:
@@ -166,7 +183,7 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
         if tag == "project":
             failures.append("import package contains a project timeline instead of Event clips only")
         if tag == "filter-video":
-            invalid_attrs = sorted(FCPXML_DTD_INVALID_FILTER_VIDEO_ATTRS.intersection(element.attrib))
+            invalid_attrs = invalid_filter_video_attrs(root, element)
             if invalid_attrs:
                 failures.append(f"filter-video contains FCPXML DTD-invalid attribute(s): {', '.join(invalid_attrs)}")
             name = filter_name(element)
