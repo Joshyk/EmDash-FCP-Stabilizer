@@ -1681,7 +1681,7 @@ enum AutoStabilizationEstimator {
             multiplier: 0.9,
             qualityModel: analysis.qualityModel
         )
-        let confidence = turnSmoothingConfidence(
+        let turnBandConfidence = turnSmoothingConfidence(
             bandValue: panBandX,
             trackingConfidence: turnTrackingConfidence
         )
@@ -1694,6 +1694,7 @@ enum AutoStabilizationEstimator {
         )
         let footstepXTurnGate = clamp(1.0 - (turnOwnershipX * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
         let strideXTurnGate = clamp(1.0 - (turnOwnershipX * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
+        let confidence = turnBandConfidence * turnOwnershipX
         let footstepXConfidence = rawFootstepXConfidence * footstepXTurnGate
         let strideXConfidence = rawStrideXConfidence * strideXTurnGate
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
@@ -4174,7 +4175,7 @@ enum AutoStabilizationEstimator {
 
     private static func correctionConfidenceResponse(_ confidence: Float) -> Float {
         let boundedConfidence = clamp(confidence, min: 0.0, max: 1.0)
-        return boundedConfidence * (1.0 + ((1.0 - boundedConfidence) * 0.45))
+        return boundedConfidence * boundedConfidence * (3.0 - (2.0 * boundedConfidence))
     }
 
     private static func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {

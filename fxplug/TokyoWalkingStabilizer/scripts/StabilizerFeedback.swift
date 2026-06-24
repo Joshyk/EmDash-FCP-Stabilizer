@@ -981,7 +981,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideDetected = hypotf(strideX * xScale, strideY * yScale) + (abs(strideR) * 12.0)
     let strideApplied = hypotf(strideAppliedX, strideAppliedY) + (strideAppliedR * 12.0)
 
-    let turnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking)
+    let turnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
     let turnDetected = abs(turnBandX * xScale)
     let turnApplied = turnDetected * correctionFactor(options.strengths.turn, confidence: turnQ)
 
@@ -1038,7 +1038,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             applied: turnApplied,
             remaining: max(0.0, turnDetected - turnApplied),
             confidence: turnQ,
-            note: String(format: "X band %.3f", turnBandX)
+            note: String(format: "X band %.3f ownership %.2f", turnBandX, turnOwnershipX)
         )
     ]
 
@@ -1869,7 +1869,7 @@ private func walkingCorrectionFactor(_ strength: Double, confidence: Float, maxS
 
 private func correctionConfidenceResponse(_ confidence: Float) -> Float {
     let bounded = clamp(confidence, min: 0.0, max: 1.0)
-    return bounded * (1.0 + ((1.0 - bounded) * 0.45))
+    return bounded * bounded * (3.0 - (2.0 * bounded))
 }
 
 private func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {
