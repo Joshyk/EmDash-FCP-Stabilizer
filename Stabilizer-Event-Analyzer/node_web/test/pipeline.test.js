@@ -198,6 +198,46 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(manifest.eventRoot, fs.realpathSync(path.join(bundle, "Event A")));
 });
 
+test("list_event_assets skips broken original media links from FCP library bundles", { skip: !(hasCommand("ffmpeg") && hasCommand("ffprobe")) }, () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-fcpbundle-broken-link-"));
+  const bundle = path.join(tmp, "Library.fcpbundle");
+  const goodOriginalMedia = path.join(bundle, "Event A", "Original Media");
+  const brokenOriginalMedia = path.join(bundle, "Event B", "Original Media");
+  fs.mkdirSync(goodOriginalMedia, { recursive: true });
+  fs.mkdirSync(brokenOriginalMedia, { recursive: true });
+  const clipPath = path.join(goodOriginalMedia, "LibraryClip.mov");
+  const brokenSymlinkPath = path.join(brokenOriginalMedia, "MissingOriginal.mov");
+  fs.symlinkSync(path.join(tmp, "MissingOriginal.mov"), brokenSymlinkPath);
+  const ffmpeg = spawnSync("ffmpeg", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc=size=160x90:rate=30",
+    "-frames:v",
+    "30",
+    "-an",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:v",
+    "mpeg4",
+    clipPath,
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(ffmpeg.status, 0, ffmpeg.stderr || ffmpeg.stdout);
+
+  const payload = run("python3", ["scripts/list_event_assets.py", "--fcpxml", bundle]);
+  assert.equal(payload.status, "ok");
+  assert.deepEqual(payload.eventNames, ["Event A", "Event B"]);
+  assert.equal(payload.assetCount, 1);
+  assert.equal(payload.assets[0].name, "LibraryClip");
+  assert.equal(payload.assets[0].eventName, "Event A");
+});
+
 test("fcpxml_common maps ffprobe color metadata to FCPXML colorSpace labels", () => {
   const script = `
 import sys
