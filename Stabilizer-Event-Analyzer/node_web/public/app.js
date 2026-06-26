@@ -297,6 +297,12 @@ function formatDuration(asset) {
   return "-";
 }
 
+function formatAssetStatus(asset) {
+  if (asset.supported) return "Original ready";
+  if ((asset.unsupported || "").startsWith("Broken original link")) return "Broken original link";
+  return asset.unsupported || "Unsupported";
+}
+
 function renderExports(items) {
   state.exportItems = items;
   el.exportsList.textContent = "";
@@ -353,7 +359,8 @@ function renderAssets() {
       ? "Original"
       : asset.mediaKind || "Unknown";
     cells[5].textContent = asset.mediaPath ? `${mediaKind}: ${asset.mediaPath}` : "";
-    cells[6].textContent = asset.supported ? "Original ready" : asset.unsupported || "Unsupported";
+    cells[6].textContent = formatAssetStatus(asset);
+    cells[6].title = asset.unsupported || "";
     cells[6].className = asset.supported ? "status-ready" : "status-error";
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) {

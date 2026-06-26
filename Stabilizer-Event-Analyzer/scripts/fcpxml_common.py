@@ -19,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 3
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 4
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -228,7 +228,7 @@ def fcpbundle_media_files(bundle_path: Path) -> list[tuple[Path, Path]]:
     for event_dir in fcpbundle_event_dirs(bundle_path):
         original_media = event_dir / "Original Media"
         for media_path in sorted(original_media.rglob("*"), key=lambda item: str(item).casefold()):
-            if not media_path.is_file():
+            if not media_path.is_file() and not media_path.is_symlink():
                 continue
             if media_path.name.startswith(".") or media_path.suffix.lower() not in VIDEO_MEDIA_EXTENSIONS:
                 continue
@@ -236,18 +236,56 @@ def fcpbundle_media_files(bundle_path: Path) -> list[tuple[Path, Path]]:
     return media_files
 
 
-def fcpbundle_signature(bundle_path: Path, media_files: list[tuple[Path, Path]]) -> dict:
-    items = []
-    for event_dir, media_path in media_files:
-        stat = media_path.stat()
-        items.append(
+def fcpbundle_original_media_link_reason(media_path: Path) -> str | None:
+    if not media_path.is_symlink():
+        return None
+    target_path = media_path.resolve(strict=False)
+    if not media_path.exists():
+        return f"Broken original link - target not found: {target_path}"
+    if not target_path.is_file():
+        return f"Broken original link - target is not a file: {target_path}"
+    return None
+
+
+def fcpbundle_media_signature_item(event_dir: Path, media_path: Path) -> dict:
+    entry_stat = media_path.lstat()
+    item = {
+        "event": event_dir.name,
+        "path": str(media_path),
+        "entrySize": entry_stat.st_size,
+        "entryMtimeNs": entry_stat.st_mtime_ns,
+        "isSymlink": media_path.is_symlink(),
+    }
+    if media_path.is_symlink():
+        try:
+            item["linkTarget"] = str(media_path.readlink())
+        except OSError as exc:
+            item["linkTargetError"] = str(exc)
+    try:
+        target_stat = media_path.stat()
+        item.update(
             {
-                "event": event_dir.name,
-                "path": str(media_path),
-                "size": stat.st_size,
-                "mtimeNs": stat.st_mtime_ns,
+                "targetExists": True,
+                "targetIsFile": media_path.is_file(),
+                "size": target_stat.st_size,
+                "mtimeNs": target_stat.st_mtime_ns,
             }
         )
+    except OSError as exc:
+        item.update(
+            {
+                "targetExists": False,
+                "targetIsFile": False,
+                "targetError": str(exc),
+                "size": None,
+                "mtimeNs": None,
+            }
+        )
+    return item
+
+
+def fcpbundle_signature(bundle_path: Path, media_files: list[tuple[Path, Path]]) -> dict:
+    items = [fcpbundle_media_signature_item(event_dir, media_path) for event_dir, media_path in media_files]
     return {
         "syntheticSchemaVersion": FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION,
         "bundlePath": str(bundle_path),
@@ -417,29 +455,33 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
                 "start": "0s",
                 "offset": "0s",
             }
-            try:
-                metadata = probe_video_metadata(media_path, ffprobe)
-                format_id = f"r{asset_index}"
-                asset_index += 1
-                format_attrs = {
-                    "id": format_id,
-                    "frameDuration": time_string(metadata.frame_duration),
-                    "width": str(metadata.width),
-                    "height": str(metadata.height),
-                }
-                if metadata.color_space:
-                    format_attrs["colorSpace"] = metadata.color_space
-                ET.SubElement(
-                    resource_node,
-                    "format",
-                    format_attrs,
-                )
-                attrs["format"] = format_id
-                attrs["duration"] = time_string(metadata.duration)
-                clip_attrs["format"] = format_id
-                clip_attrs["duration"] = time_string(metadata.duration)
-            except Exception as exc:  # noqa: BLE001
-                attrs["stabilizerUnsupported"] = f"ffprobe metadata failed for original media: {exc}"
+            link_reason = fcpbundle_original_media_link_reason(media_path)
+            if link_reason:
+                attrs["stabilizerUnsupported"] = link_reason
+            else:
+                try:
+                    metadata = probe_video_metadata(media_path, ffprobe)
+                    format_id = f"r{asset_index}"
+                    asset_index += 1
+                    format_attrs = {
+                        "id": format_id,
+                        "frameDuration": time_string(metadata.frame_duration),
+                        "width": str(metadata.width),
+                        "height": str(metadata.height),
+                    }
+                    if metadata.color_space:
+                        format_attrs["colorSpace"] = metadata.color_space
+                    ET.SubElement(
+                        resource_node,
+                        "format",
+                        format_attrs,
+                    )
+                    attrs["format"] = format_id
+                    attrs["duration"] = time_string(metadata.duration)
+                    clip_attrs["format"] = format_id
+                    clip_attrs["duration"] = time_string(metadata.duration)
+                except Exception as exc:  # noqa: BLE001
+                    attrs["stabilizerUnsupported"] = f"ffprobe metadata failed for original media: {exc}"
             asset = ET.SubElement(resource_node, "asset", attrs)
             ET.SubElement(asset, "media-rep", {"kind": "original-media", "src": path_to_file_url(media_path)})
             ET.SubElement(event_node, "asset-clip", clip_attrs)

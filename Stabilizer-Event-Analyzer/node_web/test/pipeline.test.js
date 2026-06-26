@@ -163,7 +163,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
   const sourceManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(sourceManifest.syntheticSchemaVersion, 3);
+  assert.equal(sourceManifest.syntheticSchemaVersion, 4);
   assert.equal(sourceManifest.colorProcessing, "wide-hdr");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
@@ -198,7 +198,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(manifest.eventRoot, fs.realpathSync(path.join(bundle, "Event A")));
 });
 
-test("list_event_assets skips broken original media links from FCP library bundles", { skip: !(hasCommand("ffmpeg") && hasCommand("ffprobe")) }, () => {
+test("list_event_assets loads broken original media links as unselectable FCP library assets", { skip: !(hasCommand("ffmpeg") && hasCommand("ffprobe")) }, () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-fcpbundle-broken-link-"));
   const bundle = path.join(tmp, "Library.fcpbundle");
   const goodOriginalMedia = path.join(bundle, "Event A", "Original Media");
@@ -233,9 +233,17 @@ test("list_event_assets skips broken original media links from FCP library bundl
   const payload = run("python3", ["scripts/list_event_assets.py", "--fcpxml", bundle]);
   assert.equal(payload.status, "ok");
   assert.deepEqual(payload.eventNames, ["Event A", "Event B"]);
-  assert.equal(payload.assetCount, 1);
+  assert.equal(payload.assetCount, 2);
   assert.equal(payload.assets[0].name, "LibraryClip");
   assert.equal(payload.assets[0].eventName, "Event A");
+  assert.equal(payload.assets[0].supported, true);
+  assert.equal(payload.assets[1].name, "MissingOriginal");
+  assert.equal(payload.assets[1].eventName, "Event B");
+  assert.equal(payload.assets[1].mediaKind, "original-media");
+  assert.equal(payload.assets[1].mediaPath, path.join(fs.realpathSync(tmp), "MissingOriginal.mov"));
+  assert.equal(payload.assets[1].supported, false);
+  assert.match(payload.assets[1].unsupported, /Broken original link/);
+  assert.match(payload.assets[1].unsupported, /target not found/);
 });
 
 test("fcpxml_common maps ffprobe color metadata to FCPXML colorSpace labels", () => {
