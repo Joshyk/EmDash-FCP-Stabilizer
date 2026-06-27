@@ -1,15 +1,17 @@
 "use strict";
 
-const LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v1";
+const LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v2";
+const LEGACY_LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v1";
 const DEFAULT_ANALYSIS_DIR_NAME = "stablizer_analysis";
 
 const state = {
   config: null,
-  sourcePath: "",
-  exportItems: [],
+  activeSourcePath: "",
+  sources: [],
   assets: [],
-  selectedAssetIds: new Set(),
-  pendingPresetAssetIds: null,
+  selectedClipKeys: new Set(),
+  pendingPresetClipKeys: null,
+  importsOverride: "",
   currentJobId: "",
   lastResult: null,
 };
@@ -120,7 +122,10 @@ function renderBatchSummary(result) {
   el.batchSummary.classList.remove("hidden");
   const header = document.createElement("div");
   header.className = summary.fcpImportReady ? "status-ready" : "status-error";
-  header.textContent = summary.fcpImportReady ? "FCP import ready" : "FCP import blocked";
+  const sourceCounts = Number.isFinite(summary.sourceSuccessCount) && Number.isFinite(summary.sourceFailureCount)
+    ? ` | Sources ${summary.sourceSuccessCount} ok / ${summary.sourceFailureCount} failed`
+    : "";
+  header.textContent = `${summary.fcpImportReady ? "FCP import ready" : "FCP import blocked"}${sourceCounts}`;
   el.batchSummary.appendChild(header);
 
   const counts = document.createElement("div");
@@ -156,9 +161,9 @@ function renderBatchSummary(result) {
         ? `${inheritedEffects} inherited effect${inheritedEffects === 1 ? "" : "s"}`
         : (effectStack.unavailableReason || "no inherited effects");
       row.innerHTML = "<strong></strong><span></span><code></code>";
-      row.querySelector("strong").textContent = pkg.importReady ? "Ready" : "Blocked";
+      row.querySelector("strong").textContent = `${pkg.importReady ? "Ready" : "Blocked"} | ${pkg.sourceName || "Source"}`;
       row.querySelector("span").textContent = `sample ${sample} (${pixels}) | schema ${pkg.cacheSchemaVersion || "?"} | ${pkg.cacheIdentityShort || "no identity"} | ${cacheInstall} | ${effectStatus}`;
-      row.querySelector("code").textContent = pkg.packagePath || pkg.fcpxmldPath || "";
+      row.querySelector("code").textContent = pkg.fcpxmldPath || pkg.packagePath || "";
       list.appendChild(row);
     }
     el.batchSummary.appendChild(list);
@@ -168,7 +173,10 @@ function renderBatchSummary(result) {
   if (failed.length) {
     const failures = document.createElement("div");
     failures.className = "failure-list";
-    failures.textContent = failed.map((item) => item.reason || item.packagePath || "failed").join("\n");
+    failures.textContent = failed.map((item) => {
+      const prefix = item.sourceName ? `${item.sourceName}: ` : "";
+      return `${prefix}${item.reason || item.packagePath || "failed"}`;
+    }).join("\n");
     el.batchSummary.appendChild(failures);
   }
 }
@@ -186,24 +194,69 @@ function attachRunningJob(job) {
   return true;
 }
 
-function readLastAnalysisSettings() {
+function readStoredPreset(key) {
   try {
-    const text = window.localStorage.getItem(LAST_ANALYSIS_STORAGE_KEY);
-    if (!text) return null;
-    const preset = JSON.parse(text);
-    if (!preset || preset.version !== 1 || !preset.sourcePath) return null;
-    return preset;
+    const text = window.localStorage.getItem(key);
+    return text ? JSON.parse(text) : null;
   } catch {
     return null;
   }
 }
 
+function normalizePreset(preset) {
+  if (!preset) return null;
+  if (preset.version === 2 && Array.isArray(preset.sourceJobs)) {
+    const sourceJobs = preset.sourceJobs
+      .map((job) => ({
+        sourcePath: job.sourcePath || "",
+        sourceItem: job.sourceItem || currentExportItem(job.sourcePath || ""),
+        assetIds: Array.isArray(job.assetIds) ? job.assetIds.filter(Boolean) : [],
+        importsDir: job.importsDir || job.cacheRoot || "",
+        cacheRoot: job.cacheRoot || job.importsDir || "",
+      }))
+      .filter((job) => job.sourcePath && job.assetIds.length);
+    if (!sourceJobs.length) return null;
+    return {
+      version: 2,
+      sourceJobs,
+      sampleScalePercent: preset.sampleScalePercent,
+      savedAt: preset.savedAt,
+    };
+  }
+  if (preset.version === 1 && preset.sourcePath) {
+    const assetIds = Array.isArray(preset.assetIds) ? preset.assetIds.filter(Boolean) : [];
+    if (!assetIds.length) return null;
+    return {
+      version: 2,
+      sourceJobs: [{
+        sourcePath: preset.sourcePath,
+        sourceItem: preset.sourceItem || currentExportItem(preset.sourcePath),
+        assetIds,
+        importsDir: preset.importsDir || preset.cacheRoot || "",
+        cacheRoot: preset.cacheRoot || preset.importsDir || "",
+      }],
+      sampleScalePercent: preset.sampleScalePercent,
+      savedAt: preset.savedAt,
+    };
+  }
+  return null;
+}
+
+function readLastAnalysisSettings() {
+  return normalizePreset(readStoredPreset(LAST_ANALYSIS_STORAGE_KEY))
+    || normalizePreset(readStoredPreset(LEGACY_LAST_ANALYSIS_STORAGE_KEY));
+}
+
 function updateLastAnalysisState() {
   const preset = readLastAnalysisSettings();
   el.lastAnalysisButton.disabled = !preset;
-  el.lastAnalysisButton.title = preset
-    ? `Load ${preset.sourcePath}`
-    : "Run analysis once to create a Last Analysis setting";
+  if (!preset) {
+    el.lastAnalysisButton.title = "Run analysis once to create a Last Analysis setting";
+    return;
+  }
+  const firstSource = preset.sourceJobs[0] && preset.sourceJobs[0].sourcePath;
+  const suffix = preset.sourceJobs.length > 1 ? ` + ${preset.sourceJobs.length - 1} more` : "";
+  el.lastAnalysisButton.title = `Load ${firstSource || "last analysis"}${suffix}`;
 }
 
 function lowerPath(sourcePath) {
@@ -222,12 +275,12 @@ function exportKindForPath(sourcePath) {
 }
 
 function exportNameForPath(sourcePath) {
-  const parts = sourcePath.split("/");
+  const parts = String(sourcePath || "").split("/");
   return parts[parts.length - 1] || sourcePath;
 }
 
 function dirname(sourcePath) {
-  const parts = sourcePath.split("/");
+  const parts = String(sourcePath || "").split("/");
   parts.pop();
   return parts.join("/") || "/";
 }
@@ -248,7 +301,7 @@ function defaultImportsDirForSource(sourcePath) {
 }
 
 function currentExportItem(sourcePath) {
-  return state.exportItems.find((item) => item.path === sourcePath) || {
+  return state.sources.find((item) => item.path === sourcePath) || {
     name: exportNameForPath(sourcePath),
     path: sourcePath,
     importsDir: defaultImportsDirForSource(sourcePath),
@@ -257,25 +310,61 @@ function currentExportItem(sourcePath) {
   };
 }
 
-function setImportsDirForSource(sourcePath, sourceItem = null) {
-  el.cacheRootInput.value = (sourceItem && sourceItem.importsDir) || defaultImportsDirForSource(sourcePath);
-  updateRunState();
+function activeSources() {
+  if (state.sources.length) return state.sources;
+  const typedPath = el.sourcePathInput.value.trim();
+  return typedPath ? [currentExportItem(typedPath)] : [];
+}
+
+function clipKey(sourcePath, assetId) {
+  return JSON.stringify([sourcePath, assetId]);
+}
+
+function selectedClipCountForSource(sourcePath) {
+  return state.assets.filter((asset) => asset.sourcePath === sourcePath && state.selectedClipKeys.has(clipKey(asset.sourcePath, asset.assetId))).length;
+}
+
+function sourceAssetCount(sourcePath) {
+  return state.assets.filter((asset) => asset.sourcePath === sourcePath).length;
+}
+
+function importsDirForSource(sourceItem) {
+  if (state.importsOverride) return state.importsOverride;
+  return sourceItem.importsDir || defaultImportsDirForSource(sourceItem.path);
+}
+
+function updateImportsInput() {
+  if (state.importsOverride) {
+    el.cacheRootInput.value = state.importsOverride;
+    return;
+  }
+  const sources = activeSources();
+  if (sources.length === 1) {
+    el.cacheRootInput.value = importsDirForSource(sources[0]);
+  } else if (sources.length > 1) {
+    el.cacheRootInput.value = `${sources.length} source-specific ${DEFAULT_ANALYSIS_DIR_NAME} folders`;
+  } else {
+    el.cacheRootInput.value = state.config ? (state.config.cacheRoot || "") : "";
+  }
 }
 
 function saveLastAnalysisSettings(settings = null) {
-  const sourcePath = (settings && settings.sourcePath) || state.sourcePath || el.sourcePathInput.value.trim();
-  const assetIds = settings && Array.isArray(settings.assetIds)
-    ? settings.assetIds
-    : Array.from(state.selectedAssetIds);
-  const importsDir = (settings && settings.importsDir) || el.cacheRootInput.value.trim();
-  if (!sourcePath || !assetIds.length) return;
+  const sourceJobs = settings && Array.isArray(settings.sourceJobs)
+    ? settings.sourceJobs
+    : runBody().sourceJobs;
+  const selectedJobs = sourceJobs
+    .map((job) => ({
+      sourcePath: job.sourcePath,
+      sourceItem: job.sourceItem || currentExportItem(job.sourcePath),
+      assetIds: Array.isArray(job.assetIds) ? job.assetIds.filter(Boolean) : [],
+      importsDir: job.importsDir || job.cacheRoot || "",
+      cacheRoot: job.cacheRoot || job.importsDir || "",
+    }))
+    .filter((job) => job.sourcePath && job.assetIds.length);
+  if (!selectedJobs.length) return;
   const preset = {
-    version: 1,
-    sourcePath,
-    sourceItem: currentExportItem(sourcePath),
-    assetIds,
-    importsDir,
-    cacheRoot: importsDir,
+    version: 2,
+    sourceJobs: selectedJobs,
     sampleScalePercent: settings ? settings.sampleScalePercent : Number(el.sampleScaleInput.value),
     savedAt: Date.now(),
   };
@@ -303,9 +392,10 @@ function formatAssetStatus(asset) {
   return asset.unsupported || "Unsupported";
 }
 
-function renderExports(items) {
-  state.exportItems = items;
+function renderExports(items = state.sources) {
+  state.sources = items;
   el.exportsList.textContent = "";
+  updateImportsInput();
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "export-item";
@@ -316,17 +406,20 @@ function renderExports(items) {
   for (const item of items) {
     const row = document.createElement("button");
     row.type = "button";
-    row.className = `export-item${item.path === state.sourcePath ? " selected" : ""}`;
-    row.innerHTML = "<strong></strong><span></span><span></span>";
+    row.className = `export-item${item.path === state.activeSourcePath ? " selected" : ""}`;
+    row.innerHTML = "<strong></strong><span></span><span></span><span></span>";
     row.querySelector("strong").textContent = item.name;
     const spans = row.querySelectorAll("span");
+    const selectedCount = selectedClipCountForSource(item.path);
+    const loadedCount = sourceAssetCount(item.path);
     spans[0].textContent = `${item.kind} | ${formatMtime(item.mtimeMs)}`;
-    spans[1].textContent = item.path;
+    spans[1].textContent = loadedCount ? `${selectedCount}/${loadedCount} clip(s) selected` : "Not loaded";
+    spans[2].textContent = item.path;
     row.addEventListener("click", () => {
-      state.sourcePath = item.path;
+      state.activeSourcePath = item.path;
       el.sourcePathInput.value = item.path;
-      setImportsDirForSource(item.path, item);
-      loadAssets();
+      updateImportsInput();
+      renderExports();
     });
     el.exportsList.appendChild(row);
   }
@@ -335,11 +428,13 @@ function renderExports(items) {
 function renderAssets() {
   el.assetsBody.textContent = "";
   for (const asset of state.assets) {
-    const selected = state.selectedAssetIds.has(asset.assetId);
+    const key = clipKey(asset.sourcePath, asset.assetId);
+    const selected = state.selectedClipKeys.has(key);
     const row = document.createElement("tr");
     if (selected) row.className = "selected";
     row.innerHTML = `
       <td class="radio-cell"><input type="checkbox"></td>
+      <td></td>
       <td></td>
       <td></td>
       <td></td>
@@ -351,50 +446,53 @@ function renderAssets() {
     checkbox.checked = selected;
     checkbox.disabled = !asset.supported;
     const cells = row.querySelectorAll("td");
-    cells[1].textContent = asset.name || asset.assetId;
-    cells[2].textContent = asset.eventName || "-";
-    cells[3].textContent = formatDuration(asset);
-    cells[4].textContent = `${asset.width || "?"}x${asset.height || "?"} | ${asset.frameDuration || "fps ?"}`;
+    cells[1].textContent = asset.sourceName || exportNameForPath(asset.sourcePath);
+    cells[1].title = asset.sourcePath;
+    cells[2].textContent = asset.name || asset.assetId;
+    cells[3].textContent = asset.eventName || "-";
+    cells[4].textContent = formatDuration(asset);
+    cells[5].textContent = `${asset.width || "?"}x${asset.height || "?"} | ${asset.frameDuration || "fps ?"}`;
     const mediaKind = asset.mediaKind === "original-media" || asset.mediaKind === "asset-src"
       ? "Original"
       : asset.mediaKind || "Unknown";
-    cells[5].textContent = asset.mediaPath ? `${mediaKind}: ${asset.mediaPath}` : "";
-    cells[6].textContent = formatAssetStatus(asset);
-    cells[6].title = asset.unsupported || "";
-    cells[6].className = asset.supported ? "status-ready" : "status-error";
+    cells[6].textContent = asset.mediaPath ? `${mediaKind}: ${asset.mediaPath}` : "";
+    cells[7].textContent = formatAssetStatus(asset);
+    cells[7].title = asset.unsupported || "";
+    cells[7].className = asset.supported ? "status-ready" : "status-error";
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) {
-        state.selectedAssetIds.add(asset.assetId);
+        state.selectedClipKeys.add(key);
       } else {
-        state.selectedAssetIds.delete(asset.assetId);
+        state.selectedClipKeys.delete(key);
       }
       renderAssets();
     });
     row.addEventListener("click", (event) => {
       if (event.target !== checkbox && asset.supported) {
-        if (state.selectedAssetIds.has(asset.assetId)) {
-          state.selectedAssetIds.delete(asset.assetId);
+        if (state.selectedClipKeys.has(key)) {
+          state.selectedClipKeys.delete(key);
         } else {
-          state.selectedAssetIds.add(asset.assetId);
+          state.selectedClipKeys.add(key);
         }
         renderAssets();
       }
     });
     el.assetsBody.appendChild(row);
   }
+  renderExports();
   updateRunState();
 }
 
 function updateRunState() {
-  const count = state.selectedAssetIds.size;
-  el.selectedText.textContent = count ? `${count} media selected` : "No media selected";
-  el.runButton.disabled = Boolean(state.currentJobId) || !state.sourcePath || count === 0 || !el.cacheRootInput.value.trim();
+  const count = state.selectedClipKeys.size;
+  const sourceCount = new Set(state.assets.filter((asset) => state.selectedClipKeys.has(clipKey(asset.sourcePath, asset.assetId))).map((asset) => asset.sourcePath)).size;
+  el.selectedText.textContent = count ? `${count} media selected from ${sourceCount} source(s)` : "No media selected";
+  el.runButton.disabled = Boolean(state.currentJobId) || count === 0 || sourceCount === 0;
 }
 
 async function loadConfig() {
   state.config = await api("/api/config");
   renderAppVersion(state.config.appVersion || window.STABILIZER_EVENT_ANALYZER_VERSION, state.config);
-  el.cacheRootInput.value = state.config.cacheRoot || "";
   el.sampleScaleInput.value = String(state.config.defaultSampleScalePercent || 100);
   const schemaText = state.config.cacheSchemaVersion ? ` | Writer schema: ${state.config.cacheSchemaVersion}` : "";
   const analysisDirName = state.config.defaultAnalysisDirName || DEFAULT_ANALYSIS_DIR_NAME;
@@ -416,65 +514,92 @@ async function selectExportFiles() {
   const payload = await api("/api/select-exports", {
     method: "POST",
   });
-  renderExports(payload.items || []);
+  const items = payload.items || [];
+  state.sources = items;
+  state.activeSourcePath = items[0] ? items[0].path : "";
+  el.sourcePathInput.value = state.activeSourcePath;
+  state.importsOverride = "";
+  state.assets = [];
+  state.selectedClipKeys.clear();
+  renderExports(items);
+  renderAssets();
   const rejected = payload.rejected || [];
   const rejectionText = rejected.length ? ` (${rejected.length} rejected)` : "";
-  if (!(payload.items || []).length) {
+  if (!items.length) {
     setStatus(rejected.length ? rejected.map((item) => item.reason).join("\n") : "No source selected.", rejected.length ? "error" : "");
     return;
   }
-  const currentStillSelected = (payload.items || []).some((item) => item.path === state.sourcePath);
-  if (!currentStillSelected) {
-    state.sourcePath = payload.items[0].path;
-    el.sourcePathInput.value = state.sourcePath;
-    setImportsDirForSource(state.sourcePath, payload.items[0]);
-    await loadAssets();
-  }
-  setStatus(`Selected ${(payload.items || []).length} source(s)${rejectionText}.`, rejected.length ? "error" : "ok");
+  setStatus(`Selected ${items.length} source(s)${rejectionText}. Loading Event Media...`, rejected.length ? "error" : "ok");
+  await loadAssets();
 }
 
 async function loadAssets() {
-  state.sourcePath = el.sourcePathInput.value.trim();
-  if (!el.cacheRootInput.value.trim()) {
-    setImportsDirForSource(state.sourcePath);
+  let sources = activeSources();
+  if (!sources.length) {
+    setStatus("Set an FCP library, FCPXMLD, or Info.fcpxml path.", "error");
+    return;
   }
+  if (!state.sources.length) {
+    state.sources = sources;
+    state.activeSourcePath = sources[0].path;
+    renderExports();
+  }
+  sources = activeSources();
   state.assets = [];
-  state.selectedAssetIds.clear();
+  state.selectedClipKeys.clear();
   state.lastResult = null;
   el.resultActions.classList.add("hidden");
   renderBatchSummary(null);
   renderAssets();
-  if (!state.sourcePath) {
-    setStatus("Set an FCP library, FCPXMLD, or Info.fcpxml path.", "error");
-    return;
-  }
-  setStatus("Loading Event media...");
+  setStatus(`Loading Event media from ${sources.length} source(s)...`);
+  let loadedSourceCount = 0;
+  let failedSourceCount = 0;
+  const errors = [];
   try {
-    const payload = await api("/api/assets", {
-      method: "POST",
-      body: { sourcePath: state.sourcePath },
-    });
-    state.assets = payload.assets || [];
-    const eventNames = payload.eventNames || [];
-    el.sourceText.textContent = eventNames.length
-      ? `${eventNames.join(", ")} | ${payload.packagePath || payload.infoPath || state.sourcePath}`
-      : payload.packagePath || payload.infoPath || state.sourcePath;
-    if (state.pendingPresetAssetIds) {
-      for (const asset of state.assets) {
-        if (asset.supported && state.pendingPresetAssetIds.has(asset.assetId)) {
-          state.selectedAssetIds.add(asset.assetId);
+    for (const [index, source] of sources.entries()) {
+      setStatus(`Loading Event media ${index + 1}/${sources.length}: ${source.name || source.path}`);
+      try {
+        const payload = await api("/api/assets", {
+          method: "POST",
+          body: { sourcePath: source.path },
+        });
+        const sourceAssets = (payload.assets || []).map((asset) => ({
+          ...asset,
+          sourcePath: source.path,
+          sourceName: source.name || exportNameForPath(source.path),
+          sourceKind: source.kind || exportKindForPath(source.path),
+          sourceInfoPath: payload.infoPath,
+          sourcePackagePath: payload.packagePath,
+          sourceEventNames: payload.eventNames || [],
+        }));
+        state.assets.push(...sourceAssets);
+        loadedSourceCount += 1;
+        if (state.pendingPresetClipKeys) {
+          for (const asset of sourceAssets) {
+            const key = clipKey(asset.sourcePath, asset.assetId);
+            if (asset.supported && state.pendingPresetClipKeys.has(key)) {
+              state.selectedClipKeys.add(key);
+            }
+          }
+        } else if (!isFcpbundlePath(source.path)) {
+          for (const asset of sourceAssets) {
+            if (asset.supported) state.selectedClipKeys.add(clipKey(asset.sourcePath, asset.assetId));
+          }
         }
-      }
-      state.pendingPresetAssetIds = null;
-    } else if (!isFcpbundlePath(state.sourcePath)) {
-      for (const asset of state.assets) {
-        if (asset.supported) state.selectedAssetIds.add(asset.assetId);
+      } catch (error) {
+        failedSourceCount += 1;
+        errors.push(`${source.name || source.path}: ${error.message}`);
       }
     }
+    state.pendingPresetClipKeys = null;
     renderAssets();
     const supportedCount = state.assets.filter((asset) => asset.supported).length;
-    const selectHint = isFcpbundlePath(state.sourcePath) ? " Select the clip(s) to analyze." : "";
-    setStatus(`Loaded ${supportedCount}/${state.assets.length} supported Event media asset(s).${selectHint}`, "ok");
+    const fcpbundleCount = sources.filter((source) => isFcpbundlePath(source.path)).length;
+    const selectHint = fcpbundleCount ? " FCP library clips remain unselected until you choose them." : "";
+    el.sourceText.textContent = `${loadedSourceCount}/${sources.length} source(s) loaded | ${supportedCount}/${state.assets.length} supported clip(s)`;
+    const statusKind = failedSourceCount ? "error" : "ok";
+    const errorText = errors.length ? `\n${errors.join("\n")}` : "";
+    setStatus(`Loaded ${loadedSourceCount}/${sources.length} source(s), ${supportedCount}/${state.assets.length} supported Event media asset(s).${selectHint}${errorText}`, statusKind);
   } catch (error) {
     renderAssets();
     setStatus(error.message, "error");
@@ -483,37 +608,38 @@ async function loadAssets() {
 
 async function applyLastAnalysis() {
   const preset = readLastAnalysisSettings();
-  if (!preset || !preset.sourcePath) {
+  if (!preset) {
     setStatus("No last analysis saved yet.", "error");
     updateLastAnalysisState();
     return;
   }
-  const assetIds = Array.isArray(preset.assetIds) ? preset.assetIds.filter(Boolean) : [];
-  if (!assetIds.length) {
-    setStatus("Last analysis has no saved clip selection.", "error");
-    return;
+  const sourceJobs = preset.sourceJobs || [];
+  const sourceItems = sourceJobs.map((job) => ({
+    ...currentExportItem(job.sourcePath),
+    ...(job.sourceItem || {}),
+    path: job.sourcePath,
+    importsDir: job.importsDir || job.cacheRoot || (job.sourceItem && job.sourceItem.importsDir) || defaultImportsDirForSource(job.sourcePath),
+  }));
+  state.sources = sourceItems;
+  state.activeSourcePath = sourceItems[0] ? sourceItems[0].path : "";
+  el.sourcePathInput.value = state.activeSourcePath;
+  state.importsOverride = "";
+  state.pendingPresetClipKeys = new Set();
+  for (const job of sourceJobs) {
+    for (const assetId of job.assetIds || []) {
+      state.pendingPresetClipKeys.add(clipKey(job.sourcePath, assetId));
+    }
   }
-  const savedItem = preset.sourceItem && preset.sourceItem.path === preset.sourcePath
-    ? preset.sourceItem
-    : currentExportItem(preset.sourcePath);
-  state.sourcePath = preset.sourcePath;
-  el.sourcePathInput.value = preset.sourcePath;
-  const nextItems = [
-    savedItem,
-    ...state.exportItems.filter((item) => item.path !== preset.sourcePath),
-  ];
-  renderExports(nextItems);
-  state.pendingPresetAssetIds = new Set(assetIds);
-  el.cacheRootInput.value = preset.importsDir || preset.cacheRoot || defaultImportsDirForSource(preset.sourcePath);
   if (preset.sampleScalePercent) el.sampleScaleInput.value = String(preset.sampleScalePercent);
+  renderExports(sourceItems);
   setStatus("Loading last analysis...");
   await loadAssets();
-  const selectedCount = state.selectedAssetIds.size;
+  const selectedCount = state.selectedClipKeys.size;
   if (selectedCount === 0) {
-    setStatus("Last analysis loaded, but none of the saved clips matched this export.", "error");
+    setStatus("Last analysis loaded, but none of the saved clips matched the selected source(s).", "error");
     return;
   }
-  setStatus(`Last analysis loaded: ${selectedCount} clip(s) selected.`, "ok");
+  setStatus(`Last analysis loaded: ${selectedCount} clip(s) selected from ${sourceItems.length} source(s).`, "ok");
 }
 
 async function selectCacheRoot() {
@@ -525,26 +651,43 @@ async function selectCacheRoot() {
     setStatus("No Imports folder selected.");
     return;
   }
-  el.cacheRootInput.value = payload.item.path;
+  state.importsOverride = payload.item.path;
+  updateImportsInput();
   updateRunState();
   setStatus(`Selected Imports: ${payload.item.path}`, "ok");
 }
 
 function runBody() {
-  const importsDir = el.cacheRootInput.value.trim();
+  const sources = activeSources();
+  const sourceJobs = [];
+  for (const source of sources) {
+    const assetIds = state.assets
+      .filter((asset) => asset.sourcePath === source.path && state.selectedClipKeys.has(clipKey(asset.sourcePath, asset.assetId)))
+      .map((asset) => asset.assetId);
+    if (!assetIds.length) continue;
+    const importsDir = importsDirForSource(source);
+    sourceJobs.push({
+      sourcePath: source.path,
+      sourceItem: source,
+      cacheRoot: importsDir,
+      importsDir,
+      outputDir: importsDir,
+      assetIds,
+    });
+  }
   return {
-    sourcePath: state.sourcePath,
-    cacheRoot: importsDir,
-    importsDir,
-    outputDir: importsDir,
-    assetIds: Array.from(state.selectedAssetIds),
+    sourceJobs,
     sampleScalePercent: Number(el.sampleScaleInput.value),
   };
 }
 
 async function runAnalysis() {
   const body = runBody();
-  setStatus("Queueing serial analysis...");
+  if (!body.sourceJobs.length) {
+    setStatus("Select at least one supported clip.", "error");
+    return;
+  }
+  setStatus(`Queueing serial analysis for ${body.sourceJobs.length} source(s)...`);
   el.resultActions.classList.add("hidden");
   renderBatchSummary(null);
   const payload = await api("/api/run", { method: "POST", body });
@@ -566,7 +709,9 @@ async function pollJob() {
       state.lastResult = job.result;
       renderBatchSummary(job.result);
       const summary = job.result.summary || {};
-      setStatus(withProgress(job, `Done: ${summary.packageCreatedCount || job.result.resultCount} package(s), ${summary.validationPassCount || 0} validation pass.`), "ok");
+      const sourceFailures = summary.sourceFailureCount || 0;
+      const message = `Done: ${summary.packageCreatedCount || job.result.resultCount || 0} package(s), ${summary.validationPassCount || 0} validation pass, ${sourceFailures} source failure(s).`;
+      setStatus(withProgress(job, message), summary.fcpImportReady ? "ok" : "error");
       state.currentJobId = "";
       el.cancelButton.classList.add("hidden");
       el.cancelButton.disabled = false;
@@ -610,26 +755,48 @@ async function openPath(pathValue) {
   await api("/api/open", { method: "POST", body: { path: pathValue } });
 }
 
+function firstImportPath(result) {
+  if (!result) return "";
+  if (result.outputPackage) return result.outputPackage;
+  if (Array.isArray(result.outputPackages) && result.outputPackages[0]) return result.outputPackages[0];
+  const packages = result.summary && Array.isArray(result.summary.packages) ? result.summary.packages : [];
+  return (packages[0] && (packages[0].fcpxmldPath || packages[0].packagePath)) || "";
+}
+
+function firstCachePath(result) {
+  if (!result) return "";
+  if (result.cacheRoot) return result.cacheRoot;
+  const sourceResults = Array.isArray(result.sourceResults) ? result.sourceResults : [];
+  const readySource = sourceResults.find((item) => item && item.cacheRoot);
+  if (readySource) return readySource.cacheRoot;
+  const packages = result.summary && Array.isArray(result.summary.packages) ? result.summary.packages : [];
+  const readyPackage = packages.find((item) => item && item.eventCacheRoot);
+  return (readyPackage && readyPackage.eventCacheRoot) || "";
+}
+
 el.selectExportFilesButton.addEventListener("click", () => selectExportFiles().catch((error) => setStatus(error.message, "error")));
 el.lastAnalysisButton.addEventListener("click", () => applyLastAnalysis().catch((error) => setStatus(error.message, "error")));
 el.selectCacheRootButton.addEventListener("click", () => selectCacheRoot().catch((error) => setStatus(error.message, "error")));
-el.loadAssetsButton.addEventListener("click", loadAssets);
+el.loadAssetsButton.addEventListener("click", () => loadAssets().catch((error) => setStatus(error.message, "error")));
+el.sourcePathInput.addEventListener("input", () => {
+  if (!state.sources.length) updateImportsInput();
+});
 el.selectAllButton.addEventListener("click", () => {
   for (const asset of state.assets) {
-    if (asset.supported) state.selectedAssetIds.add(asset.assetId);
+    if (asset.supported) state.selectedClipKeys.add(clipKey(asset.sourcePath, asset.assetId));
   }
   renderAssets();
 });
 el.clearSelectionButton.addEventListener("click", () => {
-  state.selectedAssetIds.clear();
+  state.selectedClipKeys.clear();
   renderAssets();
 });
 el.cacheRootInput.addEventListener("input", updateRunState);
 el.runButton.addEventListener("click", () => runAnalysis().catch((error) => setStatus(error.message, "error")));
 el.cancelButton.addEventListener("click", () => cancelJob().catch((error) => setStatus(error.message, "error")));
-el.revealCacheButton.addEventListener("click", () => reveal(state.lastResult && state.lastResult.cacheRoot));
-el.revealImportButton.addEventListener("click", () => reveal(state.lastResult && state.lastResult.outputPackage));
-el.openImportButton.addEventListener("click", () => openPath(state.lastResult && state.lastResult.outputPackage));
+el.revealCacheButton.addEventListener("click", () => reveal(firstCachePath(state.lastResult)));
+el.revealImportButton.addEventListener("click", () => reveal(firstImportPath(state.lastResult)));
+el.openImportButton.addEventListener("click", () => openPath(firstImportPath(state.lastResult)));
 
 loadConfig()
   .catch((error) => setStatus(error.message, "error"));

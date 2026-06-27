@@ -7,9 +7,11 @@ const test = require("node:test");
 const {
   buildCacheRootFromAnalysis,
   cacheRootValue,
+  combineSourceSummaries,
   defaultImportsDirForSource,
   failedRunResult,
   isFcpBundleSource,
+  normalizeSourceJobs,
   outputDirValue,
   parseAnalyzerProgressLine,
   processFailureDetails,
@@ -70,6 +72,90 @@ test("xml sources still honor explicit output and cache roots", () => {
     cacheRootValue("/tmp/custom-cache", sourcePath, importsDir),
     path.resolve("/tmp/custom-cache")
   );
+});
+
+test("normalizeSourceJobs preserves legacy single source run bodies", () => {
+  const jobs = normalizeSourceJobs({
+    sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+    importsDir: "/tmp/imports",
+    cacheRoot: "/tmp/cache",
+    assetIds: ["r2"],
+  });
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].sourcePath, path.resolve("/Volumes/Edit/Project/Event.fcpxmld"));
+  assert.equal(jobs[0].importsDir, path.resolve("/tmp/imports"));
+  assert.equal(jobs[0].cacheRoot, path.resolve("/tmp/cache"));
+  assert.deepEqual(jobs[0].assetIds, ["r2"]);
+});
+
+test("normalizeSourceJobs scopes roots per source and still forces fcpbundle outputs beside the bundle", () => {
+  const jobs = normalizeSourceJobs({
+    sourceJobs: [
+      {
+        sourcePath: "/Volumes/Edit/Project/Library.fcpbundle",
+        importsDir: "/tmp/ignored-imports",
+        cacheRoot: "/tmp/ignored-cache",
+        assetIds: ["r2"],
+      },
+      {
+        sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+        importsDir: "/tmp/custom-imports",
+        cacheRoot: "/tmp/custom-cache",
+        assetIds: ["r2"],
+      },
+    ],
+  });
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[0].importsDir, path.resolve("/Volumes/Edit/Project/stablizer_analysis"));
+  assert.equal(jobs[0].cacheRoot, path.resolve("/Volumes/Edit/Project/stablizer_analysis"));
+  assert.equal(jobs[1].importsDir, path.resolve("/tmp/custom-imports"));
+  assert.equal(jobs[1].cacheRoot, path.resolve("/tmp/custom-cache"));
+});
+
+test("combineSourceSummaries keeps partial batch failures visible", () => {
+  const summary = combineSourceSummaries([
+    {
+      status: "ok",
+      sourceName: "Event A.fcpxmld",
+      summary: {
+        analyzedSuccessCount: 1,
+        analyzedFailureCount: 0,
+        packageCreatedCount: 1,
+        validationPassCount: 1,
+        validationFailCount: 0,
+        eventCacheInstallPassCount: 1,
+        eventCacheInstallFailCount: 0,
+        fcpImportReady: true,
+        failedClips: [],
+        packages: [{
+          sourceName: "Event A.fcpxmld",
+          fcpxmldPath: "/tmp/Event A-stabilizer.fcpxmld",
+          importReady: true,
+        }],
+      },
+    },
+    {
+      status: "error",
+      sourceName: "Event B.fcpxmld",
+      summary: {
+        analyzedSuccessCount: 0,
+        analyzedFailureCount: 1,
+        packageCreatedCount: 0,
+        validationPassCount: 0,
+        validationFailCount: 0,
+        eventCacheInstallPassCount: 0,
+        eventCacheInstallFailCount: 0,
+        fcpImportReady: false,
+        failedClips: [{ sourceName: "Event B.fcpxmld", reason: "native analyzer failed" }],
+        packages: [],
+      },
+    },
+  ]);
+  assert.equal(summary.sourceSuccessCount, 1);
+  assert.equal(summary.sourceFailureCount, 1);
+  assert.equal(summary.packageCreatedCount, 1);
+  assert.equal(summary.fcpImportReady, false);
+  assert.equal(summary.failedClips[0].sourceName, "Event B.fcpxmld");
 });
 
 test("readNativeAnalyzerCacheSchemaVersion exposes frontend writer schema", () => {

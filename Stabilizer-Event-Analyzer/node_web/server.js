@@ -242,6 +242,8 @@ function failedRunResult(error) {
       packageCreatedCount: 0,
       validationPassCount: 0,
       validationFailCount: 0,
+      eventCacheInstallPassCount: 0,
+      eventCacheInstallFailCount: 0,
       fcpImportReady: false,
       failedClips: [{ reason }],
       packages: [],
@@ -316,20 +318,24 @@ function runJsonProcess(command, args, options = {}) {
   });
 }
 
-function progressLineHandler(jobIdValue) {
+function progressLineHandler(jobIdValue, labelPrefix = "") {
   let pending = "";
   const applyLine = (line) => {
     const parsedProgress = parseAnalyzerProgressLine(line);
     if (parsedProgress) {
+      if (labelPrefix) {
+        parsedProgress.label = `${labelPrefix}: ${parsedProgress.label}`;
+      }
       updateJob(jobIdValue, {
         stage: "analyzing",
         progress: parsedProgress,
       });
       return;
     }
+    const message = labelPrefix ? `${labelPrefix}: ${line}` : line;
     updateJob(jobIdValue, {
       stage: "analyzing",
-      message: line,
+      message,
     });
   };
   return (text) => {
@@ -341,6 +347,9 @@ function progressLineHandler(jobIdValue) {
     }
     const pendingProgress = parseAnalyzerProgressLine(pending.trim());
     if (pendingProgress) {
+      if (labelPrefix) {
+        pendingProgress.label = `${labelPrefix}: ${pendingProgress.label}`;
+      }
       updateJob(jobIdValue, {
         stage: "analyzing",
         progress: pendingProgress,
@@ -551,19 +560,74 @@ function outputDirValue(value, sourcePath) {
   return resolved;
 }
 
-async function runAnalyzer(body, progress, forcedJobId) {
+function normalizeSampleScalePercent(value) {
+  const sampleScalePercent = Number(value || DEFAULT_SAMPLE_SCALE_PERCENT);
+  if (!SAMPLE_SCALE_PERCENT_CHOICES.includes(sampleScalePercent)) {
+    throw new Error(`sampleScalePercent must be one of ${SAMPLE_SCALE_PERCENT_CHOICES.join(", ")}`);
+  }
+  return sampleScalePercent;
+}
+
+function normalizeSourceJobs(body = {}) {
+  const requestedJobs = Array.isArray(body.sourceJobs) && body.sourceJobs.length
+    ? body.sourceJobs
+    : (body.sourcePath ? [{
+      sourcePath: body.sourcePath,
+      sourceItem: body.sourceItem || null,
+      cacheRoot: body.cacheRoot,
+      importsDir: body.importsDir,
+      outputDir: body.outputDir,
+      assetIds: body.assetIds,
+      analyzeAll: body.analyzeAll,
+    }] : []);
+  if (!requestedJobs.length) {
+    throw new Error("select at least one source");
+  }
+  return requestedJobs.map((job, index) => {
+    const sourcePath = expandPath(job.sourcePath);
+    if (!sourcePath) {
+      throw new Error(`sourceJobs[${index}].sourcePath is required`);
+    }
+    const assetIds = Array.isArray(job.assetIds) ? job.assetIds.filter(Boolean).map(String) : [];
+    const analyzeAll = job.analyzeAll === true;
+    if (!analyzeAll && !assetIds.length) {
+      throw new Error(`sourceJobs[${index}] must select at least one asset`);
+    }
+    const importsDir = outputDirValue(job.importsDir || job.outputDir || body.importsDir || body.outputDir, sourcePath);
+    const cacheRoot = cacheRootValue(job.cacheRoot || body.cacheRoot || importsDir, sourcePath, importsDir);
+    return {
+      sourcePath,
+      sourceItem: job.sourceItem || null,
+      sourceName: (job.sourceItem && job.sourceItem.name) || path.basename(sourcePath),
+      importsDir,
+      outputDir: importsDir,
+      cacheRoot,
+      assetIds,
+      analyzeAll,
+    };
+  });
+}
+
+function sourceResultDir(id, sourceIndex, totalSources) {
+  const root = path.join(JOB_DIR, id);
+  if (totalSources <= 1) return root;
+  return path.join(root, `source-${String(sourceIndex + 1).padStart(2, "0")}`);
+}
+
+async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId, sourceIndex = 0, totalSources = 1) {
   const id = forcedJobId || jobId();
-  const dir = path.join(JOB_DIR, id);
+  const dir = sourceResultDir(id, sourceIndex, totalSources);
   await fsp.mkdir(dir, { recursive: true });
   const sourcePath = expandPath(body.sourcePath);
   const importsDir = outputDirValue(body.importsDir || body.outputDir, sourcePath);
   const cacheRoot = cacheRootValue(body.cacheRoot || importsDir, sourcePath, importsDir);
-  const sampleScalePercent = Number(body.sampleScalePercent || DEFAULT_SAMPLE_SCALE_PERCENT);
-  if (!SAMPLE_SCALE_PERCENT_CHOICES.includes(sampleScalePercent)) {
-    throw new Error(`sampleScalePercent must be one of ${SAMPLE_SCALE_PERCENT_CHOICES.join(", ")}`);
-  }
+  const sourceName = body.sourceName || (body.sourceItem && body.sourceItem.name) || path.basename(sourcePath);
+  const sourcePrefix = totalSources > 1 ? `Source ${sourceIndex + 1}/${totalSources} ${sourceName}: ` : "";
+  const progressPatch = totalSources > 1
+    ? { currentSourceIndex: sourceIndex + 1, totalSources, currentSourcePath: sourcePath, currentSourceName: sourceName }
+    : {};
 
-  progress("analyzing", "Running serial Event media analysis.");
+  progress("analyzing", `${sourcePrefix}Running serial Event media analysis.`, progressPatch);
   assertNotCancelled(id);
   const analysisArgs = [
     scriptPath("analyze_event_assets.py"),
@@ -576,12 +640,15 @@ async function runAnalyzer(body, progress, forcedJobId) {
     ...selectedAssetArgs(body.assetIds, body.analyzeAll === true),
     "--progress",
   ];
-  const analysis = await runJsonProcess(PYTHON, analysisArgs, { jobId: id, onStderr: progressLineHandler(id) });
+  const analysis = await runJsonProcess(PYTHON, analysisArgs, {
+    jobId: id,
+    onStderr: progressLineHandler(id, sourcePrefix.replace(/:\s*$/, "")),
+  });
   const analysisPath = path.join(dir, "analysis.json");
   await fsp.writeFile(analysisPath, JSON.stringify(analysis, null, 2), "utf8");
   const analysisCacheRoot = buildCacheRootFromAnalysis(analysis);
 
-  progress("building", "Building analyzed-footage-only Stabilizer FCPXMLD import package.");
+  progress("building", `${sourcePrefix}Building analyzed-footage-only Stabilizer FCPXMLD import package.`, progressPatch);
   assertNotCancelled(id);
   const build = await runJsonProcess(PYTHON, [
     scriptPath("build_stabilizer_fcpxml_import.py"),
@@ -597,7 +664,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
     "--per-footage-packages",
   ], { jobId: id });
 
-  progress("validating", "Validating Stabilizer FCPXMLD package(s) before FCP import.");
+  progress("validating", `${sourcePrefix}Validating Stabilizer FCPXMLD package(s) before FCP import.`, progressPatch);
   assertNotCancelled(id);
   const packages = Array.isArray(build.packages) ? build.packages : [];
   const validations = [];
@@ -630,10 +697,13 @@ async function runAnalyzer(body, progress, forcedJobId) {
     const reason = (firstFailure.failures || [firstFailure.error || "validation failed"])[0];
     const error = new Error(`FCPXMLD validation failed for ${path.basename(firstFailure.packageDirectory || firstFailure.outputPackage || "package")}: ${reason}`);
     error.validations = validations;
+    error.packages = packages;
+    error.analysis = analysis;
+    error.build = build;
     throw error;
   }
 
-  progress("installing-cache", "Installing package cache payload(s) into source Event cache root.");
+  progress("installing-cache", `${sourcePrefix}Installing package cache payload(s) into source Event cache root.`, progressPatch);
   assertNotCancelled(id);
   const eventCacheInstallations = [];
   for (const pkg of packages) {
@@ -658,16 +728,25 @@ async function runAnalyzer(body, progress, forcedJobId) {
     const firstFailure = installFailures[0];
     const error = new Error(`Event cache install failed for ${path.basename(firstFailure.packageDirectory || firstFailure.outputPackage || "package")}: ${firstFailure.error || "install failed"}`);
     error.eventCacheInstallations = eventCacheInstallations;
+    error.validations = validations;
+    error.packages = packages;
+    error.analysis = analysis;
+    error.build = build;
     throw error;
   }
 
-  const summary = batchSummary(analysis, build, validations, eventCacheInstallations);
+  const source = { sourcePath, sourceName };
+  const summary = batchSummary(analysis, build, validations, eventCacheInstallations, source);
 
   return {
     status: "ok",
     jobId: id,
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     sourcePath,
+    sourceName,
+    sourceItem: body.sourceItem || null,
+    sourceIndex: sourceIndex + 1,
+    totalSources,
     cacheRoot: analysisCacheRoot,
     importsDir,
     analysisPath,
@@ -687,7 +766,7 @@ async function runAnalyzer(body, progress, forcedJobId) {
   };
 }
 
-function batchSummary(analysis, build, validations, eventCacheInstallations = []) {
+function batchSummary(analysis, build, validations, eventCacheInstallations = [], source = {}) {
   const results = Array.isArray(analysis.results) ? analysis.results : [];
   const skipped = Array.isArray(analysis.skipped) ? analysis.skipped : [];
   const packages = Array.isArray(build.packages) ? build.packages : [];
@@ -709,16 +788,18 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
       && eventCacheInstallFail === 0
       && eventCacheInstallPass === packages.length,
     failedClips: [
-      ...skipped.map((reason) => ({ reason })),
+      ...skipped.map((reason) => ({ ...source, reason })),
       ...validations
         .filter((item) => item.status !== "pass" || item.importReady !== true)
         .map((item) => ({
+          ...source,
           packagePath: item.packageDirectory || item.outputPackage,
           reason: (item.failures || [item.error || "validation failed"])[0],
         })),
       ...eventCacheInstallations
         .filter((item) => item.status !== "ok")
         .map((item) => ({
+          ...source,
           packagePath: item.packageDirectory || item.outputPackage,
           reason: item.error || "Event cache install failed",
         })),
@@ -728,6 +809,7 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
       const validationReady = validations.some((item) => item.outputPackage === pkg.outputPackage && item.importReady === true);
       const eventCacheInstalled = installation ? installation.status === "ok" : false;
       return {
+        ...source,
         packagePath: pkg.packageDirectory,
         fcpxmldPath: pkg.outputPackage,
         sampleScalePercent: pkg.sampleScalePercent,
@@ -744,6 +826,128 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
   };
 }
 
+function failedSourceResult(sourceJob, error, sourceIndex, totalSources) {
+  const sourcePath = sourceJob.sourcePath;
+  const sourceName = sourceJob.sourceName || path.basename(sourcePath);
+  const source = { sourcePath, sourceName };
+  const analysis = error.analysis || { results: [], skipped: [error.message || "analysis failed"] };
+  const build = error.build || { packages: error.packages || [] };
+  const validations = Array.isArray(error.validations) ? error.validations : [];
+  const eventCacheInstallations = Array.isArray(error.eventCacheInstallations) ? error.eventCacheInstallations : [];
+  const summary = batchSummary(analysis, build, validations, eventCacheInstallations, source);
+  if (!summary.failedClips.length) {
+    summary.failedClips.push({ ...source, reason: error.message || "analysis failed" });
+  }
+  summary.analyzedFailureCount = Math.max(1, summary.analyzedFailureCount || 0);
+  summary.fcpImportReady = false;
+  return {
+    status: "error",
+    sourcePath,
+    sourceName,
+    sourceItem: sourceJob.sourceItem || null,
+    sourceIndex: sourceIndex + 1,
+    totalSources,
+    error: error.message || "analysis failed",
+    resultCount: 0,
+    results: Array.isArray(analysis.results) ? analysis.results : [],
+    skipped: Array.isArray(analysis.skipped) ? analysis.skipped : [],
+    packages: Array.isArray(build.packages) ? build.packages : [],
+    validations,
+    eventCacheInstallations,
+    summary,
+  };
+}
+
+function combineSourceSummaries(sourceResults) {
+  const summaries = sourceResults.map((result) => result.summary || {});
+  const packages = summaries.flatMap((summary) => Array.isArray(summary.packages) ? summary.packages : []);
+  const failedClips = summaries.flatMap((summary) => Array.isArray(summary.failedClips) ? summary.failedClips : []);
+  const sourceSuccessCount = sourceResults.filter((result) => result.status === "ok").length;
+  const sourceFailureCount = Math.max(0, sourceResults.length - sourceSuccessCount);
+  const validationPassCount = summaries.reduce((sum, summary) => sum + Number(summary.validationPassCount || 0), 0);
+  const validationFailCount = summaries.reduce((sum, summary) => sum + Number(summary.validationFailCount || 0), 0);
+  const eventCacheInstallPassCount = summaries.reduce((sum, summary) => sum + Number(summary.eventCacheInstallPassCount || 0), 0);
+  const eventCacheInstallFailCount = summaries.reduce((sum, summary) => sum + Number(summary.eventCacheInstallFailCount || 0), 0);
+  return {
+    sourceCount: sourceResults.length,
+    sourceSuccessCount,
+    sourceFailureCount,
+    analyzedSuccessCount: summaries.reduce((sum, summary) => sum + Number(summary.analyzedSuccessCount || 0), 0),
+    analyzedFailureCount: summaries.reduce((sum, summary) => sum + Number(summary.analyzedFailureCount || 0), 0),
+    packageCreatedCount: packages.length,
+    validationPassCount,
+    validationFailCount,
+    eventCacheInstallPassCount,
+    eventCacheInstallFailCount,
+    fcpImportReady: sourceResults.length > 0
+      && sourceFailureCount === 0
+      && packages.length > 0
+      && validationFailCount === 0
+      && validationPassCount === packages.length
+      && eventCacheInstallFailCount === 0
+      && eventCacheInstallPassCount === packages.length,
+    failedClips,
+    packages,
+  };
+}
+
+async function runBatchAnalyzer(body, progress, forcedJobId) {
+  const id = forcedJobId || jobId();
+  const sourceJobs = normalizeSourceJobs(body);
+  const sampleScalePercent = normalizeSampleScalePercent(body.sampleScalePercent);
+  const sourceResults = [];
+  const failedSources = [];
+  for (const [index, sourceJob] of sourceJobs.entries()) {
+    assertNotCancelled(id);
+    try {
+      const result = await runSourceAnalyzer(sourceJob, sampleScalePercent, progress, id, index, sourceJobs.length);
+      sourceResults.push(result);
+    } catch (error) {
+      if (error instanceof CancelledError) throw error;
+      const failed = failedSourceResult(sourceJob, error, index, sourceJobs.length);
+      sourceResults.push(failed);
+      failedSources.push({
+        sourcePath: failed.sourcePath,
+        sourceName: failed.sourceName,
+        sourceIndex: failed.sourceIndex,
+        error: failed.error,
+      });
+      progress("source-failed", `Source ${index + 1}/${sourceJobs.length} ${failed.sourceName} failed: ${failed.error}`, {
+        currentSourceIndex: index + 1,
+        totalSources: sourceJobs.length,
+        currentSourcePath: failed.sourcePath,
+        currentSourceName: failed.sourceName,
+      });
+    }
+  }
+  const summary = combineSourceSummaries(sourceResults);
+  const successfulResults = sourceResults.filter((result) => result.status === "ok");
+  const packages = successfulResults.flatMap((result) => Array.isArray(result.packages) ? result.packages : []);
+  const validations = sourceResults.flatMap((result) => Array.isArray(result.validations) ? result.validations : []);
+  const eventCacheInstallations = sourceResults.flatMap((result) => Array.isArray(result.eventCacheInstallations) ? result.eventCacheInstallations : []);
+  return {
+    status: failedSources.length ? "partial" : "ok",
+    jobId: id,
+    cacheSchemaVersion: CACHE_SCHEMA_VERSION,
+    sourceCount: sourceJobs.length,
+    sourceResults,
+    failedSources,
+    cacheRoot: successfulResults[0] && successfulResults[0].cacheRoot,
+    importsDir: successfulResults[0] && successfulResults[0].importsDir,
+    resultCount: successfulResults.reduce((sum, result) => sum + Number(result.resultCount || 0), 0),
+    results: successfulResults.flatMap((result) => Array.isArray(result.results) ? result.results : []),
+    skipped: sourceResults.flatMap((result) => Array.isArray(result.skipped) ? result.skipped : []),
+    packages,
+    validations,
+    eventCacheInstallations,
+    summary,
+    outputPackage: packages[0] && packages[0].outputPackage,
+    outputPackages: packages.map((pkg) => pkg.outputPackage),
+    onlyAnalyzedAssets: true,
+    perFootagePackages: true,
+  };
+}
+
 function startRunJob(body) {
   const id = jobId();
   updateJob(id, {
@@ -754,7 +958,7 @@ function startRunJob(body) {
   });
   setImmediate(async () => {
     try {
-      const result = await runAnalyzer(body, (stage, message, patch = {}) => {
+      const result = await runBatchAnalyzer(body, (stage, message, patch = {}) => {
         updateJob(id, { stage, message, ...patch });
       }, id);
       updateJob(id, { status: "done", stage: "done", message: "Analysis complete.", result });
@@ -940,9 +1144,11 @@ if (require.main === module) {
 module.exports = {
   buildCacheRootFromAnalysis,
   cacheRootValue,
+  combineSourceSummaries,
   defaultImportsDirForSource,
   failedRunResult,
   isFcpBundleSource,
+  normalizeSourceJobs,
   outputDirValue,
   parseAnalyzerProgressLine,
   processFailureDetails,
