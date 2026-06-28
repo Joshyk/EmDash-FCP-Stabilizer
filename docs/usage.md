@@ -85,10 +85,10 @@ fallbacks.
   Far-field Warp and Turn Smoothing keep the stricter gate. Values above `1.0` can compensate when that
   frame-local score makes the detected impulse visibly under-corrected, but render output
   still clamps at full detected-impulse removal to avoid inverse shake. On X,
-  monotonic broad walking turns reduce Footstep Jitter confidence so TURN owns
-  that motion instead of letting many small footstep corrections modulate crop. The same
-  ownership gate is applied before the footstep-cleaned X path feeds Stride Wobble, so
-  Stride does not inherit turn motion already chopped by Footstep Jitter.
+  monotonic broad walking turns reduce but do not mute Footstep Jitter confidence, so TURN
+  owns the broad pan while frame-local shake remains removable. The same ownership gate is
+  applied before the footstep-cleaned X path feeds Stride Wobble, so Stride does not inherit
+  turn motion already chopped by Footstep Jitter.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
   default is `0.5` and the maximum is `4.0`. The default is intentionally conservative so
   walking footage does not lose a stable horizon. Values above `1.0` can compensate when

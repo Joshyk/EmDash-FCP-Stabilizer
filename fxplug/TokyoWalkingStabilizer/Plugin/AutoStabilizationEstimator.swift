@@ -95,13 +95,13 @@ struct StabilizerCorrectionStrengths {
 
     static let defaultStrengths = StabilizerCorrectionStrengths(
         microJitterX: 1.0,
-        microJitterY: 0.0,
-        microJitterRotation: 0.0,
+        microJitterY: 1.0,
+        microJitterRotation: 0.5,
         strideWobbleX: 1.0,
-        strideWobbleY: 0.0,
-        strideWobbleRotation: 0.0,
+        strideWobbleY: 1.0,
+        strideWobbleRotation: 0.5,
         panStabilizationStrength: 2.0,
-        farFieldWarp: 1.0
+        farFieldWarp: 0.5
     )
 }
 
@@ -597,7 +597,7 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleFullResponseScale: Float = 0.65
     private static let turnSmoothingFullScalePixels: Float = 2.0
     private static let maximumTurnSmoothingStrength: Float = 12.0
-    private static let turnOwnershipFootstepXSuppression: Float = 0.90
+    private static let turnOwnershipFootstepXSuppression: Float = 0.55
     private static let turnOwnershipStrideXSuppression: Float = 1.0
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
