@@ -2465,26 +2465,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         plannedSamples.reserveCapacity(samples.count)
         var minimumPlannedScale = Float.greatestFiniteMagnitude
         var maximumPlannedScale = Float(1.0)
-        var activeDemandStartIndex = protectedDemandSamples.startIndex
 
         for sample in samples {
-            while activeDemandStartIndex < protectedDemandSamples.endIndex {
-                let demandSample = protectedDemandSamples[activeDemandStartIndex]
-                let demandEndSeconds = min(lastTime, demandSample.seconds + holdSeconds + releaseSeconds)
-                if sample.seconds <= demandEndSeconds + 1e-9 {
-                    break
-                }
-                activeDemandStartIndex = protectedDemandSamples.index(after: activeDemandStartIndex)
-            }
-
             var scale = Float(1.0)
-            var demandIndex = activeDemandStartIndex
-            let latestInfluencingDemandSeconds = sample.seconds + leadSeconds + 1e-9
-            while demandIndex < protectedDemandSamples.endIndex {
-                let demandSample = protectedDemandSamples[demandIndex]
-                guard demandSample.seconds <= latestInfluencingDemandSeconds else {
-                    break
-                }
+            for demandSample in protectedDemandSamples {
                 let keypoint = AutoCropZoomKeypoint(
                     peakSeconds: demandSample.seconds,
                     startSeconds: max(firstTime, demandSample.seconds - leadSeconds),
@@ -2497,13 +2481,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     keypoint,
                     at: sample.seconds
                 )
-                if influence > 0.0001 {
-                    scale = max(
-                        scale,
-                        Float(1.0) + ((demandSample.scale - Float(1.0)) * influence)
-                    )
+                guard influence > 0.0001 else {
+                    continue
                 }
-                demandIndex = protectedDemandSamples.index(after: demandIndex)
+                scale = max(
+                    scale,
+                    Float(1.0) + ((demandSample.scale - Float(1.0)) * influence)
+                )
             }
             let quantizedScale = autoCropPlaybackQuantizedScale(scale)
             minimumPlannedScale = min(minimumPlannedScale, quantizedScale)

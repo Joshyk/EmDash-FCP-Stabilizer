@@ -722,6 +722,9 @@ enum AutoStabilizationEstimator {
             guard values.indices.contains(index) else {
                 return 0.0
             }
+            if valueProvider == nil && overrides.isEmpty {
+                return values[index]
+            }
             if let providedValue = valueProvider?(index) {
                 return providedValue
             }
@@ -804,15 +807,13 @@ enum AutoStabilizationEstimator {
             innerWindowSeconds: Double,
             outerWindowSeconds: Double
         ) -> EstimatedPath {
-            let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+            var values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
             guard !values.isEmpty else {
-                return EstimatedPath(values: values, overrides: [:])
+                return EstimatedPath(values: values)
             }
             let targetIndexSet = Set(indices)
-            var overrides: [Int: Float] = [:]
-            overrides.reserveCapacity(targetIndexSet.count)
             for index in targetIndexSet where values.indices.contains(index) && analysis.frames.indices.contains(index) {
-                overrides[index] = outerLinearPrediction(
+                values[index] = outerLinearPrediction(
                     kind,
                     analysis: analysis,
                     index: index,
@@ -820,7 +821,7 @@ enum AutoStabilizationEstimator {
                     outerWindowSeconds: outerWindowSeconds
                 )
             }
-            return EstimatedPath(values: values, overrides: overrides)
+            return EstimatedPath(values: values)
         }
 
         func locallyTimeWeightedAveragePath(
@@ -840,10 +841,8 @@ enum AutoStabilizationEstimator {
             for (index, value) in source.overrides where values.indices.contains(index) {
                 values[index] = value
             }
-            var overrides: [Int: Float] = [:]
-            overrides.reserveCapacity(targetIndexSet.count)
             for index in targetIndexSet where source.values.indices.contains(index) && analysis.frames.indices.contains(index) {
-                overrides[index] = localTimeWeightedAverage(
+                values[index] = localTimeWeightedAverage(
                     kind,
                     sourceRole: sourceRole,
                     sourceVariant: sourceVariant,
@@ -853,7 +852,7 @@ enum AutoStabilizationEstimator {
                     windowSeconds: windowSeconds
                 )
             }
-            return EstimatedPath(values: values, overrides: overrides)
+            return EstimatedPath(values: values)
         }
 
         private func outerLinearPrediction(
@@ -4289,8 +4288,7 @@ enum AutoStabilizationEstimator {
         guard !values.isEmpty else {
             return EstimatedPath(values: values)
         }
-        var overrides: [Int: Float] = [:]
-        overrides.reserveCapacity(indices.count)
+        var cleanedValues = values
         for index in indices {
             guard values.indices.contains(index),
                   baselineValues.values.indices.contains(index),
@@ -4323,9 +4321,9 @@ enum AutoStabilizationEstimator {
             )
             let confidenceScale = clamp(confidenceScales[index] ?? 1.0, min: 0.0, max: 1.0)
             let effectiveConfidence = confidence * confidenceScale
-            overrides[index] = rawValue - ((rawValue - baselineValue) * effectiveConfidence)
+            cleanedValues[index] = rawValue - ((rawValue - baselineValue) * effectiveConfidence)
         }
-        return EstimatedPath(values: values, overrides: overrides)
+        return EstimatedPath(values: cleanedValues)
     }
 
     private struct FootstepContinuityLimitResult {
