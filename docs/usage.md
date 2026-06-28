@@ -88,10 +88,11 @@ fallbacks.
   Far-field Warp and Turn Smoothing keep the stricter gate. Values above `1.0` can compensate when that
   frame-local score makes the detected impulse visibly under-corrected, but render output
   still clamps at full detected-impulse removal to avoid inverse shake. On X,
-  monotonic broad walking turns reduce but do not mute Footstep Jitter confidence, so TURN
-  owns the broad pan while frame-local shake remains removable. The same ownership gate is
-  applied before the footstep-cleaned X path feeds Stride Wobble, so Stride does not inherit
-  turn motion already chopped by Footstep Jitter.
+  monotonic broad walking turns now apply a turn-shake gate: X is suppressed most strongly,
+  while Y and roll are reduced only when TURN has clear ownership, so a real turn does not
+  get split into small walking corrections that vibrate the frame. The same ownership gate
+  is applied before the footstep-cleaned X path feeds Stride Wobble, so Stride does not
+  inherit turn motion already chopped by Footstep Jitter.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
   default is `0.5` and the maximum is `4.0`. The default is intentionally conservative so
   walking footage does not lose a stable horizon. Values above `1.0` can compensate when
@@ -344,10 +345,10 @@ FxPlug.
   handled by Footstep Jitter first and Stride Wobble second; Turn Smoothing does not apply to Y.
   This keeps horizontal segmented turns, fine high-frequency shake, medium walking wobble,
   and vertical walking wobble tunable without rerunning Host Analysis.
-  During monotonic X turns, a render-time turn ownership gate reduces Footstep Jitter X and
-  Stride Wobble X confidence so broad turn motion is not split into small walking corrections.
-  It also gates the footstep-cleaned X path before Stride input, keeping TURN as the owner
-  of that broad motion through the whole walking-band chain.
+  During monotonic X turns, a render-time turn ownership gate reduces Footstep Jitter X/Y/roll,
+  Stride Wobble X, and Far-field Warp confidence so broad turn motion is not split into small
+  walking or warp corrections. It also gates the footstep-cleaned X path before Stride input,
+  keeping TURN as the owner of that broad motion through the whole walking-band chain.
   Footstep Jitter confidence is evaluated on the current render frame instead of inheriting
   the worst residual from the wider turn-detection window.
 - `Far-field Warp Strength` defaults to `0.5` and controls bundled deskew/shear, yaw/pitch
