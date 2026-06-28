@@ -48,7 +48,7 @@ Current implementation to review:
     - `strideWobblePixelOffset` for Stride Wobble
   - `temporallySmoothedEstimate` samples neighboring render times symmetrically and blends the final automatic transform with zero phase.
   - Turn Smoothing applies only to X translation and requires both tracking evidence and a real X turn band, without a hidden minimum turn-confidence floor.
-  - Footstep Jitter X/Y and roll use the current center-frame impulse correction so fine ridge-line shake is not averaged away.
+  - Footstep Jitter X/Y and roll use only a short same-direction, confidence-aware neighborhood around the current center-frame impulse correction so fine ridge-line shake is smoother without being averaged away.
   - Footstep Jitter uses per-frame confidence without a hidden minimum floor before applying X/Y/roll correction, checks local baseline support plus surrounding footstep noise, and stays clamped at full detected-impulse removal.
   - Stride/Turn residual gates use robust window percentiles rather than the single worst residual in the window.
   - Far-field Warp render gating curves medium-confidence tracking/search-headroom evidence upward while preserving zero correction for zero evidence.

@@ -81,7 +81,10 @@ fallbacks.
   not produce a strong correction by itself. Moderate landing impulses reach useful
   confidence a little sooner than the surrounding-noise floor, and that surrounding-noise floor
   is capped below the full-response point so repeated walking motion does not hide a real
-  center-frame landing shock. Zero evidence remains zero. Walking-band correction eases block coverage only when enough blocks were accepted;
+  center-frame landing shock. Zero evidence remains zero. The final FJIT X/Y/roll correction
+  uses a short same-direction, similar-magnitude, confidence-weighted neighborhood so
+  multi-frame jitter is smoother while isolated landing impulses stay current-frame centered.
+  Walking-band correction eases block coverage only when enough blocks were accepted;
   Far-field Warp and Turn Smoothing keep the stricter gate. Values above `1.0` can compensate when that
   frame-local score makes the detected impulse visibly under-corrected, but render output
   still clamps at full detected-impulse removal to avoid inverse shake. On X,
@@ -302,11 +305,11 @@ FxPlug.
   over-weighted. This increases preview compute per frame but makes the pan correction as
   smooth as possible without rerunning Host Analysis. Debug output reports the raw
   center-frame transform and the smoothing delta so visible stepping can be diagnosed from
-  the Inspector. Footstep Jitter X/Y and roll keep the current render frame's impulse
-  correction after the wider Stride/Turn smoothing pass, so fine distant ridge-line shake
-  is not averaged out by temporal smoothing. Far-field Warp uses a shorter `0.20` second
-  in-range smoothing window so ridge-line correction remains responsive without turning
-  single-frame gate changes into swimming. Render-time window selection uses the sorted Host
+  the Inspector. Footstep Jitter X/Y and roll use only a short `0.18` second same-direction,
+  confidence-aware pass after the wider Stride/Turn smoothing pass, so fine distant ridge-line
+  shake is smoother without being averaged out by temporal smoothing. Far-field Warp uses a
+  shorter `0.20` second frame-sampled in-range smoothing window so ridge-line correction
+  remains responsive without turning single-frame gate changes into swimming. Render-time window selection uses the sorted Host
   Analysis frame times directly, so long prepared caches do not require repeated full-cache
   scans during playback. Stride and Turn confidence use robust residual percentiles
   rather than the single worst frame in the smoothing window.

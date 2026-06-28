@@ -577,6 +577,10 @@ enum AutoStabilizationEstimator {
     private static let renderTemporalSmoothingSampleCount = 7
     private static let renderTemporalSmoothingWindowSeconds = 1.20
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.20
+    private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
+    private static let renderFootstepJitterSmoothingMaxBlend: Float = 0.42
+    private static let renderFootstepJitterSmoothingPixelSimilarity: Float = 1.75
+    private static let renderFootstepJitterSmoothingRotationSimilarity: Float = 0.22
     private static let footstepImpulseFullScalePixels: Float = 0.35
     private static let footstepImpulseFullScaleDegrees: Float = 0.08
     private static let footstepNoiseFloorScale: Float = 0.08
@@ -1768,7 +1772,15 @@ enum AutoStabilizationEstimator {
             (transform: sample.transform, weight: sample.weight)
         }
         var smoothedTransform = weightedAverageTransform(broadTransformSamples)
-        let shortWarpSamples = farFieldWarpSmoothingSamples(weightedSamples)
+        let shortWarpSamples = farFieldWarpSmoothingSamples(
+            centerTransform: rawCenterTransform,
+            analysis: analysis,
+            renderSeconds: renderSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            cache: renderEstimateCache
+        )
         let smoothedWarpTransform = shortWarpSamples.isEmpty
             ? rawCenterTransform
             : weightedAverageTransform(shortWarpSamples)
@@ -1786,14 +1798,23 @@ enum AutoStabilizationEstimator {
         smoothedTransform.residual = rawCenterTransform.residual
         smoothedTransform.searchRadiusHitCount = rawCenterTransform.searchRadiusHitCount
         smoothedTransform.searchRadiusTotalCount = rawCenterTransform.searchRadiusTotalCount
+        let smoothedFootstepJitter = smoothedFootstepJitter(
+            centerTransform: rawCenterTransform,
+            analysis: analysis,
+            renderSeconds: renderSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            cache: renderEstimateCache
+        )
         // Footstep Jitter is frame-local; broad temporal smoothing is only for TURN/SWOB.
-        smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
-        smoothedTransform.footstepJitterRotationDegrees = rawCenterTransform.footstepJitterRotationDegrees
+        smoothedTransform.microPixelOffset = smoothedFootstepJitter.microPixelOffset
+        smoothedTransform.footstepJitterRotationDegrees = smoothedFootstepJitter.rotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
         smoothedTransform.microConfidence = rawCenterTransform.microConfidence
         smoothedTransform.footstepImpulse = rawCenterTransform.footstepImpulse
         smoothedTransform.rawFootstepCorrection = rawCenterTransform.rawFootstepCorrection
-        smoothedTransform.limitedFootstepCorrection = rawCenterTransform.limitedFootstepCorrection
+        smoothedTransform.limitedFootstepCorrection = smoothedFootstepJitter.microPixelOffset
         smoothedTransform.footstepPulseLimited = rawCenterTransform.footstepPulseLimited
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
             + smoothedTransform.microPixelOffset
@@ -1810,24 +1831,186 @@ enum AutoStabilizationEstimator {
     }
 
     private static func farFieldWarpSmoothingSamples(
-        _ samples: [(transform: StabilizerAutoTransform, weight: Float, offsetSeconds: Double)]
+        centerTransform: StabilizerAutoTransform,
+        analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        cache: RenderEstimateCache
     ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+        let frames = analysis.frames
         let halfWindow = renderFarFieldWarpSmoothingWindowSeconds * 0.5
-        let sigma = max(1e-6, halfWindow * 0.5)
-        var smoothedSamples: [(transform: StabilizerAutoTransform, weight: Float)] = []
-        smoothedSamples.reserveCapacity(samples.count)
-        for sample in samples {
-            if abs(sample.offsetSeconds) > halfWindow + 1e-9 {
+        let sigma = max(1e-6, halfWindow * 0.55)
+        let candidateIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: halfWindow
+        )
+        var smoothedSamples: [(transform: StabilizerAutoTransform, weight: Float)] = [(centerTransform, 1.0)]
+        smoothedSamples.reserveCapacity(candidateIndices.count + 1)
+        for index in candidateIndices where frames.indices.contains(index) {
+            let offset = frames[index].time - renderSeconds
+            if abs(offset) <= timeWindowSelectionEpsilon {
                 continue
             }
-            let normalizedDistance = sample.offsetSeconds / sigma
+            let normalizedDistance = offset / sigma
             let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
             if weight <= 0.0001 {
                 continue
             }
-            smoothedSamples.append((transform: sample.transform, weight: weight))
+            let transform = cache.rawTransform(
+                analysis: analysis,
+                index: index,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                limitFootstepContinuity: false,
+                includeFarFieldWarp: true
+            )
+            smoothedSamples.append((transform: transform, weight: weight))
         }
         return smoothedSamples
+    }
+
+    private static func smoothedFootstepJitter(
+        centerTransform: StabilizerAutoTransform,
+        analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        cache: RenderEstimateCache
+    ) -> (microPixelOffset: vector_float2, rotationDegrees: Float) {
+        let frames = analysis.frames
+        let halfWindow = renderFootstepJitterSmoothingWindowSeconds * 0.5
+        let sigma = max(1e-6, halfWindow * 0.55)
+        let candidateIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: halfWindow
+        )
+        var xSamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+        var ySamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+        var rollSamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+        xSamples.reserveCapacity(candidateIndices.count)
+        ySamples.reserveCapacity(candidateIndices.count)
+        rollSamples.reserveCapacity(candidateIndices.count)
+
+        for index in candidateIndices where frames.indices.contains(index) {
+            let offset = frames[index].time - renderSeconds
+            if abs(offset) <= timeWindowSelectionEpsilon {
+                continue
+            }
+            let normalizedDistance = offset / sigma
+            let timeWeight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            if timeWeight <= 0.0001 {
+                continue
+            }
+            let transform = cache.rawTransform(
+                analysis: analysis,
+                index: index,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                limitFootstepContinuity: true,
+                includeFarFieldWarp: false
+            )
+            xSamples.append((transform.microPixelOffset.x, transform.effectiveMicroJitterStrength.x, timeWeight))
+            ySamples.append((transform.microPixelOffset.y, transform.effectiveMicroJitterStrength.y, timeWeight))
+            rollSamples.append((transform.footstepJitterRotationDegrees, transform.effectiveMicroJitterStrength.z, timeWeight))
+        }
+
+        return (
+            microPixelOffset: vector_float2(
+                smoothedFootstepScalar(
+                    centerValue: centerTransform.microPixelOffset.x,
+                    centerConfidence: centerTransform.effectiveMicroJitterStrength.x,
+                    samples: xSamples,
+                    similarityScale: renderFootstepJitterSmoothingPixelSimilarity
+                ),
+                smoothedFootstepScalar(
+                    centerValue: centerTransform.microPixelOffset.y,
+                    centerConfidence: centerTransform.effectiveMicroJitterStrength.y,
+                    samples: ySamples,
+                    similarityScale: renderFootstepJitterSmoothingPixelSimilarity
+                )
+            ),
+            rotationDegrees: smoothedFootstepScalar(
+                centerValue: centerTransform.footstepJitterRotationDegrees,
+                centerConfidence: centerTransform.effectiveMicroJitterStrength.z,
+                samples: rollSamples,
+                similarityScale: renderFootstepJitterSmoothingRotationSimilarity
+            )
+        )
+    }
+
+    private static func smoothedFootstepScalar(
+        centerValue: Float,
+        centerConfidence: Float,
+        samples: [(value: Float, confidence: Float, timeWeight: Float)],
+        similarityScale: Float
+    ) -> Float {
+        guard centerValue.isFinite,
+              abs(centerValue) > Float.ulpOfOne,
+              similarityScale.isFinite,
+              similarityScale > Float.ulpOfOne
+        else {
+            return centerValue
+        }
+        let boundedCenterConfidence = clamp(centerConfidence, min: 0.0, max: 1.0)
+        guard boundedCenterConfidence > 0.02 else {
+            return centerValue
+        }
+
+        let centerWeight: Float = 0.55
+        let centerMagnitude = abs(centerValue)
+        var weightedTotal = centerValue * centerWeight
+        var totalWeight = centerWeight
+        var neighborWeight: Float = 0.0
+        for sample in samples {
+            guard sample.value.isFinite,
+                  sample.timeWeight.isFinite,
+                  sample.confidence.isFinite,
+                  sample.timeWeight > 0.0,
+                  sample.confidence > 0.0,
+                  sample.value * centerValue > 0.0
+            else {
+                continue
+            }
+            let sampleMagnitude = abs(sample.value)
+            let magnitudeSupport = confidenceRamp(
+                sampleMagnitude,
+                start: centerMagnitude * 0.15,
+                full: max(centerMagnitude * 0.65, Float.ulpOfOne)
+            )
+            let difference = abs(sample.value - centerValue)
+            let similarity = 1.0 - confidenceRamp(
+                difference,
+                start: similarityScale * 0.35,
+                full: max(similarityScale, centerMagnitude * 0.9)
+            )
+            let weight = sample.timeWeight
+                * clamp(sample.confidence, min: 0.0, max: 1.0)
+                * magnitudeSupport
+                * similarity
+            guard weight > 0.0001 else {
+                continue
+            }
+            weightedTotal += sample.value * weight
+            totalWeight += weight
+            neighborWeight += weight
+        }
+        guard neighborWeight > 0.05, totalWeight > Float.ulpOfOne else {
+            return centerValue
+        }
+
+        let localAverage = weightedTotal / totalWeight
+        let support = clamp(neighborWeight / totalWeight, min: 0.0, max: 1.0)
+        let blend = renderFootstepJitterSmoothingMaxBlend
+            * support
+            * max(0.35, boundedCenterConfidence)
+        return centerValue + ((localAverage - centerValue) * blend)
     }
 
     private static func weightedAverageTransform(

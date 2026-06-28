@@ -42,9 +42,10 @@ estimators, or Transform-keyframe writers back into this target.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
 - Combines per-frame Footstep Jitter, fixed-window Stride Wobble, Far-field Warp, and
   broader Turn Smoothing bands so walking-gimbal shake is separated by
-  time scale without rerunning Host Analysis. Footstep Jitter keeps the current render
-  frame's raw impulse after `1.20` second zero-phase smoothing; Far-field Warp uses a
-  shorter `0.20` second in-range smoothing window so ridge-line correction stays responsive.
+  time scale without rerunning Host Analysis. Footstep Jitter keeps a short `0.18` second
+  confidence-aware smoothing pass around the current render frame after `1.20` second
+  zero-phase broad smoothing; Far-field Warp uses a shorter `0.20` second in-range
+  frame-sampled smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
 - New schema 23 analysis writes higher precision prepared warp paths from extra upper-row
@@ -166,7 +167,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   mute Footstep Jitter confidence, so TURN owns the broad pan while frame-local shake remains
   removable. The same gate limits Footstep Jitter X removal before Stride Wobble reads the
   footstep-cleaned path, so Stride does not inherit a turn that Footstep already chopped into
-  small X corrections.
+  small X corrections. The final FJIT X/Y/roll correction uses only a short same-direction,
+  similar-magnitude, confidence-weighted neighborhood so multi-frame jitter is smoother while
+  isolated landing impulses remain centered on the current frame.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
   The default is `1.0`, and the maximum is `10.0`.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
@@ -198,8 +201,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   gates warp with walking-footage tracking quality and search-radius headroom, starts the
   tracking gate early enough for moderate 25% Host Analysis evidence, reaches full response
   more gradually, keeps the previous `4.0` strength response unchanged while exposing a `0.0`
-  to `12.0` range, uses short local tracking support and a `0.20` second render smoothing
-  window to reduce single-frame gate flicker, then
+  to `12.0` range, uses short local tracking support and a `0.20` second frame-sampled render
+  smoothing window to reduce single-frame gate flicker, then
   applies a tiny deadband and small render-only clamps so weak frames do not create wave-like
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,
   so long prepared caches do not require repeated full-cache scans during playback.
