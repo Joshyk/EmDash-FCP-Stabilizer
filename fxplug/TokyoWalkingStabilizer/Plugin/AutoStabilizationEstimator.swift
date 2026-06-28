@@ -809,14 +809,10 @@ enum AutoStabilizationEstimator {
                 return EstimatedPath(values: values, overrides: [:])
             }
             let targetIndexSet = Set(indices)
-            return EstimatedPath(values: values) { [self] index in
-                guard targetIndexSet.contains(index),
-                      values.indices.contains(index),
-                      analysis.frames.indices.contains(index)
-                else {
-                    return nil
-                }
-                return outerLinearPrediction(
+            var overrides: [Int: Float] = [:]
+            overrides.reserveCapacity(targetIndexSet.count)
+            for index in targetIndexSet where values.indices.contains(index) && analysis.frames.indices.contains(index) {
+                overrides[index] = outerLinearPrediction(
                     kind,
                     analysis: analysis,
                     index: index,
@@ -824,6 +820,7 @@ enum AutoStabilizationEstimator {
                     outerWindowSeconds: outerWindowSeconds
                 )
             }
+            return EstimatedPath(values: values, overrides: overrides)
         }
 
         func locallyTimeWeightedAveragePath(
@@ -839,14 +836,14 @@ enum AutoStabilizationEstimator {
                 return source
             }
             let targetIndexSet = Set(targetIndices)
-            return EstimatedPath(values: source.values) { [self] index in
-                guard source.values.indices.contains(index), analysis.frames.indices.contains(index) else {
-                    return nil
-                }
-                guard targetIndexSet.contains(index) else {
-                    return source[index]
-                }
-                return localTimeWeightedAverage(
+            var values = source.values
+            for (index, value) in source.overrides where values.indices.contains(index) {
+                values[index] = value
+            }
+            var overrides: [Int: Float] = [:]
+            overrides.reserveCapacity(targetIndexSet.count)
+            for index in targetIndexSet where source.values.indices.contains(index) && analysis.frames.indices.contains(index) {
+                overrides[index] = localTimeWeightedAverage(
                     kind,
                     sourceRole: sourceRole,
                     sourceVariant: sourceVariant,
@@ -856,6 +853,7 @@ enum AutoStabilizationEstimator {
                     windowSeconds: windowSeconds
                 )
             }
+            return EstimatedPath(values: values, overrides: overrides)
         }
 
         private func outerLinearPrediction(
