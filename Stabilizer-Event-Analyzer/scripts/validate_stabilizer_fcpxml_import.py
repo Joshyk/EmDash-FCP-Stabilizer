@@ -105,6 +105,20 @@ def filter_applies_to_project_media(
     return False
 
 
+def filter_applies_to_event_media(
+    element: ET.Element,
+    parents: dict[ET.Element, ET.Element],
+    asset_id: str | None,
+) -> bool:
+    current = parents.get(element)
+    while current is not None:
+        tag = local_name(current.tag)
+        if tag in {"asset-clip", "video"} and current.attrib.get("ref") == asset_id:
+            return has_ancestor(current, parents, "event") and not has_ancestor(current, parents, "project")
+        current = parents.get(current)
+    return False
+
+
 def has_media_rep(asset: ET.Element) -> bool:
     return any(local_name(child.tag) == "media-rep" and child.attrib.get("src") for child in asset)
 
@@ -241,6 +255,7 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
 
     project_count = 0
     project_stabilizer_count = 0
+    event_stabilizer_count = 0
     for element in root.iter():
         tag = local_name(element.tag)
         if tag == "project":
@@ -263,6 +278,8 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
                 failures.append("Tokyo Walking Stabilizer filter does not reference the expected effect resource")
             if name == EFFECT_NAME and filter_applies_to_project_media(element, parents, asset_id):
                 project_stabilizer_count += 1
+            if name == EFFECT_NAME and filter_applies_to_event_media(element, parents, asset_id):
+                event_stabilizer_count += 1
         if tag in {"asset-clip", "video"} and element.attrib.get("ref"):
             ref = element.attrib["ref"]
             if ref != asset_id:
@@ -283,6 +300,8 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
         failures.append(f"import package must contain exactly one review project, found {project_count}")
     if project_stabilizer_count == 0:
         failures.append("review project clip is missing Tokyo Walking Stabilizer filter")
+    if event_stabilizer_count == 0:
+        failures.append("event browser clip is missing Tokyo Walking Stabilizer filter")
 
     prepared = manifest.get("preparedMotionPath")
     if prepared is not True:

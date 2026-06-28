@@ -702,7 +702,7 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   ]);
   assert.equal(payload.status, "ok");
   assert.equal(payload.onlyAnalyzedAssets, true);
-  assert.equal(payload.insertedFilters, 1);
+  assert.equal(payload.insertedFilters, 2);
   const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.match(info, /<event name="AnalyzedOnly">/);
@@ -719,9 +719,13 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   assert.match(info, /<effect id="r5" name="Existing Effect"/);
   assert.match(
     info,
+    /<event name="AnalyzedOnly"><asset-clip ref="r2"[^>]+start="3600s"[\s\S]*?<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/asset-clip><project/
+  );
+  assert.match(
+    info,
     /<project name="P1000307 Stabilized Review">[\s\S]*?<spine><asset-clip ref="r2"[^>]+offset="0s"[\s\S]*?<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video>\s*<filter-video ref="r5" name="Existing Effect"\s*\/>/
   );
-  assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 1);
+  assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 2);
 });
 
 test("build_stabilizer_fcpxml_import remaps stale asset ids by exact mediaPath", () => {
@@ -801,6 +805,7 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   ]);
   assert.equal(payload.status, "ok");
   assert.equal(payload.perFootagePackages, true);
+  assert.equal(payload.insertedFilters, 2);
   assert.equal(payload.packages.length, 1);
   const pkg = payload.packages[0];
   assert.match(path.basename(pkg.packageDirectory), /^P1000307__sample10__schema19__300f__/);
@@ -810,7 +815,9 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.match(info, /<project name="P1000307 Stabilized Review">/);
   assert.match(info, /<asset[^>]+id="r2"[^>]+uid="[A-F0-9]{32}"/);
   assert.match(info, /<media-rep[^>]+sig="[A-F0-9]{32}"/);
+  assert.match(info, /<event name="gh6"><asset-clip ref="r2"[\s\S]*?<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"/);
   assert.match(info, /<spine><asset-clip ref="r2"[^>]+offset="0s"[\s\S]*?<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"/);
+  assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 2);
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
   assert.equal(manifest.footageFileName, "P1000307.mov");
   assert.equal(manifest.eventName, "gh6");

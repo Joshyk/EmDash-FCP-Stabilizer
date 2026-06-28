@@ -413,11 +413,17 @@ def append_event_asset_clip(
     parent: ET.Element,
     asset: ET.Element,
     source_clip: ET.Element | None,
+    effect_source_clip: ET.Element | None,
+    ref: str,
+    result: dict,
     *,
     offset: str | None = None,
 ) -> ET.Element:
     clip = ET.SubElement(parent, "asset-clip", clip_attributes(asset, source_clip, offset=offset))
     for child in filtered_pre_effect_children(source_clip):
+        clip.append(child)
+    clip.append(stabilizer_filter(ref, result))
+    for child in inherited_filter_children(effect_source_clip):
         clip.append(child)
     return clip
 
@@ -558,7 +564,7 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         if event is None:
             event = ET.SubElement(library, "event", {"name": event_name})
             event_nodes[event_name] = event
-        append_event_asset_clip(event, asset, source_clip)
+        append_event_asset_clip(event, asset, source_clip, effect_source_clip, ref, result)
         review = review_projects.get(event_name)
         if review is None:
             format_id = (source_clip.attrib.get("format") if source_clip is not None else None) or asset.attrib.get("format")
@@ -865,7 +871,7 @@ def main(argv: Iterable[str]) -> int:
                         "packages": packages,
                         "outputPackage": packages[0]["outputPackage"] if packages else None,
                         "infoPath": packages[0]["infoPath"] if packages else None,
-                        "insertedFilters": len(packages),
+                        "insertedFilters": len(packages) * 2,
                         "removedExistingFilters": 0,
                         "assetIds": sorted(results),
                         "sourceAssetResolutions": source_asset_resolutions(results),
@@ -895,7 +901,7 @@ def main(argv: Iterable[str]) -> int:
                     "status": "ok",
                     "outputPackage": str(package_path),
                     "infoPath": str(target_info),
-                    "insertedFilters": len(results),
+                    "insertedFilters": len(results) * 2,
                     "removedExistingFilters": 0,
                     "assetIds": sorted(results),
                     "sourceAssetResolutions": source_asset_resolutions(results),

@@ -19,11 +19,12 @@ The workflow is:
 6. Write schema-compatible Tokyo Walking Stabilizer persisted cache files to an
    explicit Imports staging folder.
 7. Build an import FCPXMLD containing only the analyzed Event media assets and
-   a single review project. The generated clips carry Tokyo Walking Stabilizer
-   filters with the generated cache identity.
-8. Import that FCPXMLD into Final Cut Pro, then open the generated
-   `Stabilized Review` project. The review project timeline clip is the import
-   target that carries the Stabilizer effect.
+   a single review project. The generated Event Browser clips and review
+   project timeline clips both carry Tokyo Walking Stabilizer filters with the
+   generated cache identity.
+8. Import that FCPXMLD into Final Cut Pro, then select the generated Event clip
+   or open the generated `Stabilized Review` project. The review project remains
+   the fastest place to check the stabilized timeline playback.
 
 Generated clips place `Tokyo Walking Stabilizer` first, then re-attach
 non-Stabilizer video filters from the matching source timeline clip so existing
