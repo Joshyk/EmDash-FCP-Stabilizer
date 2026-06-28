@@ -39,9 +39,11 @@ black outside-source pixels. `Edge Display Mode` defaults to `Black Outside`.
    the exported FCPXMLD. It
    analyzes the Event media full length and writes the Event-scoped persisted
    cache.
-3. Import the generated FCPXMLD back into Final Cut Pro.
-4. Apply or keep `Tokyo Walking Stabilizer` on the clip and wait for `Host
-   Analysis Status` to show `Persisted Analysis Loaded` or `Ready (... frames)`.
+3. Import the generated FCPXMLD back into Final Cut Pro and open its generated
+   `Stabilized Review` project.
+4. Keep the pre-applied `Tokyo Walking Stabilizer` effect on the review timeline
+   clip and wait for `Host Analysis Status` to show `Persisted Analysis Loaded`
+   or `Ready (... frames)`.
 5. Tune the strength controls while watching the preview.
 
 New effect instances no longer expose `Sample Size`, `Start Host Analysis`,

@@ -11,6 +11,7 @@ import shutil
 import sys
 import xml.etree.ElementTree as ET
 import zlib
+from fractions import Fraction
 from pathlib import Path
 from typing import Iterable
 
@@ -301,6 +302,19 @@ def clip_attributes(
     return attrs
 
 
+def append_event_asset_clip(
+    parent: ET.Element,
+    asset: ET.Element,
+    source_clip: ET.Element | None,
+    *,
+    offset: str | None = None,
+) -> ET.Element:
+    clip = ET.SubElement(parent, "asset-clip", clip_attributes(asset, source_clip, offset=offset))
+    for child in filtered_pre_effect_children(source_clip):
+        clip.append(child)
+    return clip
+
+
 def append_filtered_asset_clip(
     parent: ET.Element,
     asset: ET.Element,
@@ -329,6 +343,29 @@ def source_library_attrs(source_root: ET.Element) -> dict[str, str]:
             return {"colorProcessing": color_processing}
         return {}
     return {}
+
+
+def format_time(value: Fraction) -> str:
+    if value.denominator == 1:
+        return f"{value.numerator}s"
+    return f"{value.numerator}/{value.denominator}s"
+
+
+def clip_duration(asset: ET.Element, source_clip: ET.Element | None) -> Fraction:
+    duration = None
+    if source_clip is not None:
+        duration = source_clip.attrib.get("duration")
+    if not duration:
+        duration = asset.attrib.get("duration")
+    if not duration:
+        raise ValueError(f"analyzed asset {asset.attrib.get('id') or asset.attrib.get('name') or '<unknown>'} has no duration")
+    return parse_time(duration)
+
+
+def review_project_name(source_root: ET.Element, event_name: str, asset_id: str | None, result: dict | None, count: int) -> str:
+    if count == 1 and asset_id and result:
+        return f"{footage_stem(source_root, asset_id, result)} Stabilized Review"
+    return f"{event_name} Stabilized Review"
 
 
 def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) -> ET.Element:
@@ -373,6 +410,8 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     source_event_names = event_name_by_asset_id(source_root)
     fallback_event_name = (event_names(source_root) or ["Stabilized Analysis"])[0]
     event_nodes: dict[str, ET.Element] = {}
+    review_projects: dict[str, dict[str, ET.Element | Fraction]] = {}
+    result_count = len(results)
     for asset_id, result in results.items():
         asset = resource_by_id(source_root, asset_id)
         source_clip = first_event_asset_clip(source_root, asset_id) or first_asset_clip(source_root, asset_id)
@@ -382,7 +421,43 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         if event is None:
             event = ET.SubElement(library, "event", {"name": event_name})
             event_nodes[event_name] = event
-        append_filtered_asset_clip(event, asset, source_clip, effect_source_clip, ref, result)
+        append_event_asset_clip(event, asset, source_clip)
+        review = review_projects.get(event_name)
+        if review is None:
+            format_id = (source_clip.attrib.get("format") if source_clip is not None else None) or asset.attrib.get("format")
+            if not format_id:
+                raise ValueError(f"analyzed asset {asset_id} has no format for review project")
+            project = ET.SubElement(
+                event,
+                "project",
+                {"name": review_project_name(source_root, event_name, asset_id, result, result_count)},
+            )
+            sequence = ET.SubElement(
+                project,
+                "sequence",
+                {
+                    "format": format_id,
+                    "duration": "0s",
+                    "tcStart": "0s",
+                    "tcFormat": source_clip.attrib.get("tcFormat", "NDF") if source_clip is not None else "NDF",
+                },
+            )
+            spine = ET.SubElement(sequence, "spine")
+            review = {"sequence": sequence, "spine": spine, "offset": Fraction(0)}
+            review_projects[event_name] = review
+        offset = review["offset"]
+        if not isinstance(offset, Fraction):
+            raise ValueError("review project offset state is invalid")
+        spine = review["spine"]
+        if not isinstance(spine, ET.Element):
+            raise ValueError("review project spine state is invalid")
+        append_filtered_asset_clip(spine, asset, source_clip, effect_source_clip, ref, result, offset=format_time(offset))
+        next_offset = offset + clip_duration(asset, source_clip)
+        review["offset"] = next_offset
+        sequence = review["sequence"]
+        if not isinstance(sequence, ET.Element):
+            raise ValueError("review project sequence state is invalid")
+        sequence.attrib["duration"] = format_time(next_offset)
     return root
 
 

@@ -648,7 +648,7 @@ async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId
   await fsp.writeFile(analysisPath, JSON.stringify(analysis, null, 2), "utf8");
   const analysisCacheRoot = buildCacheRootFromAnalysis(analysis);
 
-  progress("building", `${sourcePrefix}Building analyzed-footage-only Stabilizer FCPXMLD import package.`, progressPatch);
+  progress("building", `${sourcePrefix}Building analyzed-footage Stabilizer FCPXMLD import package with review project.`, progressPatch);
   assertNotCancelled(id);
   const build = await runJsonProcess(PYTHON, [
     scriptPath("build_stabilizer_fcpxml_import.py"),
