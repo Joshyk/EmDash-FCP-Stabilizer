@@ -19,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 4
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 5
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -132,6 +132,24 @@ def time_string(value: Fraction) -> str:
     if value.denominator == 1:
         return f"{value.numerator}s"
     return f"{value.numerator}/{value.denominator}s"
+
+
+def stable_fcp_asset_uid(seed: str) -> str:
+    return hashlib.md5(seed.encode("utf-8")).hexdigest().upper()
+
+
+def fcpbundle_media_uid(media_path: Path) -> str:
+    try:
+        target = media_path.resolve(strict=False)
+    except OSError:
+        target = media_path
+    seed_parts = [str(target)]
+    try:
+        stat = media_path.stat()
+        seed_parts.extend([str(stat.st_size), str(stat.st_mtime_ns)])
+    except OSError:
+        pass
+    return stable_fcp_asset_uid("|".join(seed_parts))
 
 
 def transcoded_media_reason(path: Path) -> str | None:
@@ -446,6 +464,7 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
             attrs = {
                 "id": asset_id,
                 "name": media_path.stem,
+                "uid": fcpbundle_media_uid(media_path),
                 "start": "0s",
                 "hasVideo": "1",
             }
@@ -483,7 +502,11 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
                 except Exception as exc:  # noqa: BLE001
                     attrs["stabilizerUnsupported"] = f"ffprobe metadata failed for original media: {exc}"
             asset = ET.SubElement(resource_node, "asset", attrs)
-            ET.SubElement(asset, "media-rep", {"kind": "original-media", "src": path_to_file_url(media_path)})
+            ET.SubElement(
+                asset,
+                "media-rep",
+                {"kind": "original-media", "sig": attrs["uid"], "src": path_to_file_url(media_path)},
+            )
             ET.SubElement(event_node, "asset-clip", clip_attrs)
     try:
         ET.indent(root, space="  ")

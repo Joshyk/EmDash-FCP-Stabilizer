@@ -163,10 +163,12 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
   const sourceManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(sourceManifest.syntheticSchemaVersion, 4);
+  assert.equal(sourceManifest.syntheticSchemaVersion, 5);
   assert.equal(sourceManifest.colorProcessing, "wide-hdr");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
+  assert.match(info, /<asset[^>]+uid="[A-F0-9]{32}"/);
+  assert.match(info, /<media-rep[^>]+sig="[A-F0-9]{32}"/);
   assert.equal(payload.assets[0].name, "LibraryClip");
   assert.equal(payload.assets[0].eventName, "Event A");
   assert.equal(payload.assets[0].mediaKind, "original-media");
@@ -695,14 +697,14 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   assert.match(info, /<project name="P1000307 Stabilized Review">/);
   assert.match(info, /<sequence format="r1" duration="(?:300300\/30000|1001\/100)s" tcStart="0s" tcFormat="NDF">/);
   assert.match(info, /<asset[^>]+id="r2"[^>]+start="3600s"/);
-  assert.equal((info.match(/<asset-clip[^>]+ref="r2"[^>]+start="3600s"/g) || []).length, 1);
-  assert.equal((info.match(/<video[^>]+ref="r2"/g) || []).length, 1);
+  assert.equal((info.match(/<asset-clip[^>]+ref="r2"[^>]+start="3600s"/g) || []).length, 2);
+  assert.match(info, /<asset[^>]+id="r2"[^>]+uid="[A-F0-9]{32}"/);
   assert.doesNotMatch(info, /Large Existing Project/);
   assert.doesNotMatch(info, /Other/);
   assert.match(info, /<effect id="r5" name="Existing Effect"/);
   assert.match(
     info,
-    /<project name="P1000307 Stabilized Review">[\s\S]*?<spine><clip name="P1000307" offset="0s"[\s\S]*?<video ref="r2"[^>]*\s*\/>\s*<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video>\s*<filter-video ref="r5" name="Existing Effect"\s*\/>/
+    /<project name="P1000307 Stabilized Review">[\s\S]*?<spine><asset-clip ref="r2"[^>]+offset="0s"[\s\S]*?<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video>\s*<filter-video ref="r5" name="Existing Effect"\s*\/>/
   );
   assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 1);
 });
@@ -741,7 +743,9 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(path.basename(pkg.manifestPath), "P1000307.analysis-manifest.json");
   const info = fs.readFileSync(path.join(pkg.outputPackage, "Info.fcpxml"), "utf8");
   assert.match(info, /<project name="P1000307 Stabilized Review">/);
-  assert.match(info, /<spine><clip name="P1000307" offset="0s"[\s\S]*?<video ref="r2"[^>]*\s*\/>\s*<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"/);
+  assert.match(info, /<asset[^>]+id="r2"[^>]+uid="[A-F0-9]{32}"/);
+  assert.match(info, /<media-rep[^>]+sig="[A-F0-9]{32}"/);
+  assert.match(info, /<spine><asset-clip ref="r2"[^>]+offset="0s"[\s\S]*?<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"/);
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
   assert.equal(manifest.footageFileName, "P1000307.mov");
   assert.equal(manifest.eventName, "gh6");
@@ -813,7 +817,7 @@ test("build_stabilizer_fcpxml_import inherits source effects in per-footage pack
   assert.match(info, /<effect id="r5" name="Existing Effect"/);
   assert.match(
     info,
-    /<marker[^>]*value="keep"[^>]*\s*\/>\s*<video ref="r2"[^>]*\s*\/>\s*<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video>\s*<filter-video ref="r5" name="Existing Effect"\s*\/>/
+    /<marker[^>]*value="keep"[^>]*\s*\/>\s*<filter-video ref="r\d+" name="Tokyo Walking Stabilizer"[\s\S]*?<\/filter-video>\s*<filter-video ref="r5" name="Existing Effect"\s*\/>/
   );
   const manifest = JSON.parse(fs.readFileSync(builtPackage.manifestPath, "utf8"));
   assert.equal(manifest.sourceEffectStack.inheritedFilterCount, 1);
@@ -943,8 +947,8 @@ test("validate_stabilizer_fcpxml_import passes generated per-footage package", (
   assert.equal(fs.existsSync(pkg.validationPath), true);
 });
 
-test("validate_stabilizer_fcpxml_import rejects project asset-clips without video media", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-project-media-test-"));
+test("validate_stabilizer_fcpxml_import rejects missing asset media uid", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-asset-uid-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
   const analysis = analysisResult();
   const cacheRoot = writeCachePayload(tmp, analysis);
@@ -967,12 +971,7 @@ test("validate_stabilizer_fcpxml_import rejects project asset-clips without vide
   const pkg = build.packages[0];
   const infoPath = path.join(pkg.outputPackage, "Info.fcpxml");
   const validInfo = fs.readFileSync(infoPath, "utf8");
-  const brokenInfo = validInfo
-    .replace(
-      /<clip name="P1000307" offset="0s" start="0s" duration="300300\/30000s"><video ref="r2" offset="0s" start="0s" duration="300300\/30000s"\s*\/>/,
-      '<asset-clip ref="r2" name="P1000307" start="0s" duration="300300/30000s" offset="0s">'
-    )
-    .replace("</filter-video></clip>", "</filter-video></asset-clip>");
+  const brokenInfo = validInfo.replace(/\suid="[A-F0-9]{32}"/, "");
   fs.writeFileSync(infoPath, brokenInfo, "utf8");
   const result = spawnSync("python3", [
     "scripts/validate_stabilizer_fcpxml_import.py",
@@ -990,8 +989,7 @@ test("validate_stabilizer_fcpxml_import rejects project asset-clips without vide
   const validation = JSON.parse(result.stdout);
   assert.equal(validation.status, "fail");
   assert.equal(validation.importReady, false);
-  assert.match(validation.failures.join("\n"), /asset-clip directly/);
-  assert.match(validation.failures.join("\n"), /missing video media/);
+  assert.match(validation.failures.join("\n"), /missing FCP media uid/);
 });
 
 test("install_stabilizer_package_cache infers Event root from manifest mediaPath", () => {

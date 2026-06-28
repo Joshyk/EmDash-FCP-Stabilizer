@@ -24,6 +24,7 @@ from fcpxml_common import (
     resolve_info_path,
     resources,
     safe_file_component,
+    stable_fcp_asset_uid,
 )
 
 
@@ -315,40 +316,6 @@ def append_event_asset_clip(
     return clip
 
 
-def review_clip_attributes(
-    asset: ET.Element,
-    source_clip: ET.Element | None,
-    *,
-    offset: str,
-) -> dict[str, str]:
-    attrs: dict[str, str] = {
-        "name": asset.attrib.get("name") or asset.attrib["id"],
-        "offset": offset,
-    }
-    for key in ("start", "duration"):
-        if source_clip is not None and source_clip.attrib.get(key):
-            attrs[key] = source_clip.attrib[key]
-        elif asset.attrib.get(key):
-            attrs[key] = asset.attrib[key]
-    for key in ("tcFormat", "audioRole"):
-        if source_clip is not None and source_clip.attrib.get(key):
-            attrs[key] = source_clip.attrib[key]
-    return attrs
-
-
-def review_video_attributes(asset: ET.Element, source_clip: ET.Element | None) -> dict[str, str]:
-    attrs: dict[str, str] = {
-        "ref": asset.attrib["id"],
-        "offset": "0s",
-    }
-    for key in ("start", "duration"):
-        if source_clip is not None and source_clip.attrib.get(key):
-            attrs[key] = source_clip.attrib[key]
-        elif asset.attrib.get(key):
-            attrs[key] = asset.attrib[key]
-    return attrs
-
-
 def append_review_clip(
     parent: ET.Element,
     asset: ET.Element,
@@ -359,14 +326,43 @@ def append_review_clip(
     *,
     offset: str,
 ) -> ET.Element:
-    clip = ET.SubElement(parent, "clip", review_clip_attributes(asset, source_clip, offset=offset))
+    clip = ET.SubElement(parent, "asset-clip", clip_attributes(asset, source_clip, offset=offset))
     for child in filtered_pre_effect_children(source_clip):
         clip.append(child)
-    ET.SubElement(clip, "video", review_video_attributes(asset, source_clip))
     clip.append(stabilizer_filter(ref, result))
     for child in inherited_filter_children(effect_source_clip):
         clip.append(child)
     return clip
+
+
+def asset_uid_seed(asset: ET.Element) -> str:
+    media_sources = [
+        child.attrib.get("src", "")
+        for child in asset
+        if local_name(child.tag) == "media-rep" and child.attrib.get("src")
+    ]
+    parts = [
+        asset.attrib.get("name", ""),
+        asset.attrib.get("start", ""),
+        asset.attrib.get("duration", ""),
+        asset.attrib.get("format", ""),
+        "|".join(media_sources),
+    ]
+    return "|".join(parts)
+
+
+def normalized_resource_copy(resource: ET.Element) -> ET.Element:
+    copied = copy.deepcopy(resource)
+    if local_name(copied.tag) != "asset":
+        return copied
+    uid = copied.attrib.get("uid")
+    if not uid:
+        uid = stable_fcp_asset_uid(asset_uid_seed(copied))
+        copied.attrib["uid"] = uid
+    for child in copied:
+        if local_name(child.tag) == "media-rep" and child.attrib.get("src") and not child.attrib.get("sig"):
+            child.attrib["sig"] = uid
+    return copied
 
 
 def source_library_attrs(source_root: ET.Element) -> dict[str, str]:
@@ -430,14 +426,14 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         for resource in (fmt, asset):
             resource_id = resource.attrib.get("id")
             if resource_id and resource_id not in copied_resource_ids:
-                target_resources.append(copy.deepcopy(resource))
+                target_resources.append(normalized_resource_copy(resource))
                 copied_resource_ids.add(resource_id)
     for resource_id in sorted(extra_resource_ids):
         if resource_id in copied_resource_ids:
             continue
         resource = resource_by_id(source_root, resource_id)
         if resource is not None:
-            target_resources.append(copy.deepcopy(resource))
+            target_resources.append(normalized_resource_copy(resource))
             copied_resource_ids.add(resource_id)
 
     ref = ensure_effect_resource(root)
