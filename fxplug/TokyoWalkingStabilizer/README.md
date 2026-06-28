@@ -163,11 +163,12 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   still produces zero correction.
   Confidence also checks local baseline support and surrounding footstep noise, with the
   surrounding-noise floor capped below full response so repeated walking motion does not bury
-  a real center-frame landing impulse. During monotonic broad walking turns, a turn-shake gate
-  suppresses X most strongly and reduces Y/roll only when TURN clearly owns the motion, so the
-  broad pan is not reintroduced as small walking corrections that vibrate the frame. The same
-  gate limits Footstep Jitter X removal before Stride Wobble reads the footstep-cleaned path,
-  so Stride does not inherit a turn that Footstep already chopped into small X corrections.
+  a real center-frame landing impulse. During monotonic broad walking turns, a stronger
+  turn-shake gate suppresses X most strongly and reduces Y/roll only when TURN clearly owns
+  the motion, so the broad pan is not reintroduced as small walking corrections that vibrate
+  the frame. The same gate limits Footstep Jitter X removal before Stride Wobble reads the
+  footstep-cleaned path, so Stride does not inherit a turn that Footstep already chopped into
+  small X corrections.
   The final FJIT X/Y/roll correction uses only a short same-direction, similar-magnitude,
   confidence-weighted neighborhood so multi-frame jitter is smoother while isolated landing
   impulses remain centered on the current frame.
@@ -190,10 +191,11 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale.
   X and Y default to `1.0` and run up to `10.0`; the rotation default is `0.5`.
   The X band
-  uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
-  does not fight broad Turn Smoothing during real horizontal turns. FJIT and SWOB use a
-  count-aware walking-band tracking gate; WARP and TURN keep the stricter tracking gate, and
-  WARP is additionally reduced during clear TURN-owned motion to avoid turn-time frame shake.
+  uses the same turn ownership gate as Footstep Jitter, and Y/roll are also reduced when
+  TURN clearly owns the frame, so medium stride cleanup does not fight broad Turn Smoothing
+  during real horizontal turns. FJIT and SWOB use a count-aware walking-band tracking gate;
+  WARP and TURN keep the stricter tracking gate, and WARP is additionally reduced during
+  clear TURN-owned motion to avoid turn-time frame shake.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.

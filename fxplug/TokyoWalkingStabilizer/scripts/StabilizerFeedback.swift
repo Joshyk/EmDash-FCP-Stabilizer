@@ -473,11 +473,13 @@ private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
 private let strideFullResponseScale: Float = 0.65
 private let turnFullScalePixels: Float = 2.0
-private let turnOwnershipFootstepXSuppression: Float = 0.82
-private let turnOwnershipFootstepYSuppression: Float = 0.42
-private let turnOwnershipFootstepRollSuppression: Float = 0.55
+private let turnOwnershipFootstepXSuppression: Float = 1.0
+private let turnOwnershipFootstepYSuppression: Float = 0.68
+private let turnOwnershipFootstepRollSuppression: Float = 0.82
 private let turnOwnershipStrideXSuppression: Float = 1.0
-private let turnOwnershipFarFieldWarpSuppression: Float = 0.70
+private let turnOwnershipStrideYSuppression: Float = 0.55
+private let turnOwnershipStrideRollSuppression: Float = 0.70
+private let turnOwnershipFarFieldWarpSuppression: Float = 1.0
 private let farFieldWarpTrackingGateStart: Float = 0.26
 private let farFieldWarpTrackingGateFull: Float = 0.56
 private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
@@ -943,6 +945,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let footstepYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepYSuppression), min: 0.0, max: 1.0)
     let footstepRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepRollSuppression), min: 0.0, max: 1.0)
     let strideXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
+    let strideYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideYSuppression), min: 0.0, max: 1.0)
+    let strideRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideRollSuppression), min: 0.0, max: 1.0)
 
     let footX = analysis.footstepPathX[index] - footstepBaseX
     let footY = analysis.footstepPathY[index] - footstepBaseY
@@ -984,8 +988,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideY = footstepCleanY - strideSmoothY
     let strideR = footstepCleanR - strideSmoothR
     let strideQX = strideConfidence(bandValue: strideX, trackingConfidence: strideTracking, fullScale: strideFullScalePixels) * strideXTurnGate
-    let strideQY = strideConfidence(bandValue: strideY, trackingConfidence: strideTracking, fullScale: strideFullScalePixels)
-    let strideQR = strideConfidence(bandValue: strideR, trackingConfidence: strideTracking, fullScale: strideFullScaleDegrees)
+    let strideQY = strideConfidence(bandValue: strideY, trackingConfidence: strideTracking, fullScale: strideFullScalePixels) * strideYTurnGate
+    let strideQR = strideConfidence(bandValue: strideR, trackingConfidence: strideTracking, fullScale: strideFullScaleDegrees) * strideRollTurnGate
     let strideAppliedX = abs(strideX * xScale) * walkingCorrectionFactor(options.strengths.strideX, confidence: strideQX, maxStrength: 10.0)
     let strideAppliedY = abs(strideY * yScale) * walkingCorrectionFactor(options.strengths.strideY, confidence: strideQY, maxStrength: 10.0)
     let strideAppliedR = abs(strideR) * walkingCorrectionFactor(options.strengths.strideR, confidence: strideQR)
@@ -1576,8 +1580,8 @@ private func turnOwnershipConfidence(
 }
 
 private func turnStabilizerShakeSuppression(turnOwnership: Float, turnConfidence: Float) -> Float {
-    let ownershipQuality = confidenceRamp(turnOwnership, start: 0.28, full: 0.78)
-    let correctionQuality = confidenceRamp(turnConfidence, start: 0.16, full: 0.68)
+    let ownershipQuality = confidenceRamp(turnOwnership, start: 0.20, full: 0.62)
+    let correctionQuality = confidenceRamp(turnConfidence, start: 0.10, full: 0.48)
     return clamp(max(turnConfidence, ownershipQuality * correctionQuality), min: 0.0, max: 1.0)
 }
 

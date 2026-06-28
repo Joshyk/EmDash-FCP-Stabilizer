@@ -601,11 +601,13 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleFullResponseScale: Float = 0.65
     private static let turnSmoothingFullScalePixels: Float = 2.0
     private static let maximumTurnSmoothingStrength: Float = 12.0
-    private static let turnOwnershipFootstepXSuppression: Float = 0.82
-    private static let turnOwnershipFootstepYSuppression: Float = 0.42
-    private static let turnOwnershipFootstepRollSuppression: Float = 0.55
+    private static let turnOwnershipFootstepXSuppression: Float = 1.0
+    private static let turnOwnershipFootstepYSuppression: Float = 0.68
+    private static let turnOwnershipFootstepRollSuppression: Float = 0.82
     private static let turnOwnershipStrideXSuppression: Float = 1.0
-    private static let turnOwnershipFarFieldWarpSuppression: Float = 0.70
+    private static let turnOwnershipStrideYSuppression: Float = 0.55
+    private static let turnOwnershipStrideRollSuppression: Float = 0.70
+    private static let turnOwnershipFarFieldWarpSuppression: Float = 1.0
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
@@ -1413,12 +1415,12 @@ enum AutoStabilizationEstimator {
             trackingConfidence: strideTrackingConfidence,
             fullScale: strideWobbleFullScalePixels
         )
-        let strideYConfidence = strideWobbleConfidence(
+        let rawStrideYConfidence = strideWobbleConfidence(
             bandValue: strideBandY,
             trackingConfidence: strideTrackingConfidence,
             fullScale: strideWobbleFullScalePixels
         )
-        let strideRollConfidence = strideWobbleConfidence(
+        let rawStrideRollConfidence = strideWobbleConfidence(
             bandValue: strideBandRoll,
             trackingConfidence: strideTrackingConfidence,
             fullScale: strideWobbleFullScaleDegrees
@@ -1449,10 +1451,14 @@ enum AutoStabilizationEstimator {
         let footstepYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepYSuppression), min: 0.0, max: 1.0)
         let footstepRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepRollSuppression), min: 0.0, max: 1.0)
         let strideXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
+        let strideYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideYSuppression), min: 0.0, max: 1.0)
+        let strideRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideRollSuppression), min: 0.0, max: 1.0)
         let footstepXConfidence = rawFootstepXConfidence * footstepXTurnGate
         let footstepYConfidence = rawFootstepYConfidence * footstepYTurnGate
         let footstepRollConfidence = rawFootstepRollConfidence * footstepRollTurnGate
         let strideXConfidence = rawStrideXConfidence * strideXTurnGate
+        let strideYConfidence = rawStrideYConfidence * strideYTurnGate
+        let strideRollConfidence = rawStrideRollConfidence * strideRollTurnGate
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
         let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
@@ -4321,8 +4327,8 @@ enum AutoStabilizationEstimator {
         turnOwnership: Float,
         turnConfidence: Float
     ) -> Float {
-        let ownershipQuality = confidenceRamp(turnOwnership, start: 0.28, full: 0.78)
-        let correctionQuality = confidenceRamp(turnConfidence, start: 0.16, full: 0.68)
+        let ownershipQuality = confidenceRamp(turnOwnership, start: 0.20, full: 0.62)
+        let correctionQuality = confidenceRamp(turnConfidence, start: 0.10, full: 0.48)
         return clamp(max(turnConfidence, ownershipQuality * correctionQuality), min: 0.0, max: 1.0)
     }
 
