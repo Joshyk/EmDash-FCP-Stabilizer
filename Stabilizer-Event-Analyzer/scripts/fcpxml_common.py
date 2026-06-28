@@ -19,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 6
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 7
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -141,8 +141,8 @@ def stable_fcp_asset_uid(seed: str) -> str:
 
 
 def stable_fcp_resource_id(prefix: str, seed: str) -> str:
-    digest = hashlib.md5(seed.encode("utf-8")).hexdigest().upper()
-    return f"r{prefix}{digest[:20]}"
+    digest = hashlib.md5(f"{prefix}|{seed}".encode("utf-8")).hexdigest()
+    return f"r{int(digest[:12], 16) + 1}"
 
 
 def fcpbundle_media_uid(media_path: Path) -> str:

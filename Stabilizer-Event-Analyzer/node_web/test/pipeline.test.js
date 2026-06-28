@@ -169,11 +169,11 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
   const sourceManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(sourceManifest.syntheticSchemaVersion, 6);
+  assert.equal(sourceManifest.syntheticSchemaVersion, 7);
   assert.equal(sourceManifest.colorProcessing, "wide-hdr");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
-  assert.match(info, /<asset[^>]+id="rA[A-F0-9]{20}"/);
+  assert.match(info, /<asset[^>]+id="r[0-9]+"/);
   assert.match(info, /<asset[^>]+uid="[A-F0-9]{32}"/);
   assert.match(info, /<asset[^>]+hasAudio="1"/);
   assert.match(info, /<asset[^>]+videoSources="1"/);
