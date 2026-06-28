@@ -43,8 +43,8 @@ estimators, or Transform-keyframe writers back into this target.
 - Combines per-frame Footstep Jitter, fixed-window Stride Wobble, Far-field Warp, and
   broader Turn Smoothing bands so walking-gimbal shake is separated by
   time scale without rerunning Host Analysis. Footstep Jitter keeps a short `0.18` second
-  confidence-aware smoothing pass around the current render frame after `1.20` second
-  zero-phase broad smoothing; Far-field Warp uses a shorter `0.20` second in-range
+  confidence-aware smoothing pass around the current render frame after `1.20` second,
+  15-sample zero-phase broad smoothing; Far-field Warp uses a shorter `0.20` second in-range
   frame-sampled smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.

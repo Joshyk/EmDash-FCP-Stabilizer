@@ -300,10 +300,10 @@ FxPlug.
   jerk limiter used by broader pan and turn stages. Those raw footstep paths and their
   baselines are sampled continuously at render time so panning does not snap between nearest
   analyzed frames and frame-level shake is not erased before Footstep Jitter can correct it.
-  The final automatic transform is also sampled across a `1.20` second symmetric render-time
-  window and blended with zero phase. Near clip edges, out-of-range neighboring samples are
-  skipped instead of clamped to the first or last analysis frame, so the end frames are not
-  over-weighted. This increases preview compute per frame but makes the pan correction as
+  The final automatic transform is also sampled across a `1.20` second, 15-sample symmetric
+  render-time window and blended with zero phase. Near clip edges, out-of-range neighboring
+  samples are skipped instead of clamped to the first or last analysis frame, so the end
+  frames are not over-weighted. This increases preview compute per frame but makes the pan correction as
   smooth as possible without rerunning Host Analysis. Debug output reports the raw
   center-frame transform and the smoothing delta so visible stepping can be diagnosed from
   the Inspector. Footstep Jitter X/Y and roll use only a short `0.18` second same-direction,
@@ -345,7 +345,7 @@ FxPlug.
   handled by Footstep Jitter first and Stride Wobble second; Turn Smoothing does not apply to Y.
   This keeps horizontal segmented turns, fine high-frequency shake, medium walking wobble,
   and vertical walking wobble tunable without rerunning Host Analysis.
-  During monotonic X turns, a render-time turn ownership gate reduces Footstep Jitter X/Y/roll,
+  During monotonic X turns, a render-time turn ownership gate directly reduces Footstep Jitter X/Y/roll,
   Stride Wobble X/Y/roll, and Far-field Warp confidence so broad turn motion is not split
   into small walking or warp corrections. It also gates the footstep-cleaned X path before
   Stride input, keeping TURN as the owner of that broad motion through the whole walking-band chain.

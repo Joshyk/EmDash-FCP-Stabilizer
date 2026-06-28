@@ -1580,9 +1580,8 @@ private func turnOwnershipConfidence(
 }
 
 private func turnStabilizerShakeSuppression(turnOwnership: Float, turnConfidence: Float) -> Float {
-    let ownershipQuality = confidenceRamp(turnOwnership, start: 0.20, full: 0.62)
-    let correctionQuality = confidenceRamp(turnConfidence, start: 0.10, full: 0.48)
-    return clamp(max(turnConfidence, ownershipQuality * correctionQuality), min: 0.0, max: 1.0)
+    let ownershipQuality = confidenceRamp(turnOwnership, start: 0.12, full: 0.48)
+    return clamp(max(turnConfidence, ownershipQuality), min: 0.0, max: 1.0)
 }
 
 private func turnOwnershipGateScales(

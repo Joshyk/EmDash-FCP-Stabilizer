@@ -574,7 +574,7 @@ enum AutoStabilizationEstimator {
     private static let rotationGain: Float = 1.0
     private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
-    private static let renderTemporalSmoothingSampleCount = 7
+    private static let renderTemporalSmoothingSampleCount = 15
     private static let renderTemporalSmoothingWindowSeconds = 1.20
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.20
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -4327,9 +4327,8 @@ enum AutoStabilizationEstimator {
         turnOwnership: Float,
         turnConfidence: Float
     ) -> Float {
-        let ownershipQuality = confidenceRamp(turnOwnership, start: 0.20, full: 0.62)
-        let correctionQuality = confidenceRamp(turnConfidence, start: 0.10, full: 0.48)
-        return clamp(max(turnConfidence, ownershipQuality * correctionQuality), min: 0.0, max: 1.0)
+        let ownershipQuality = confidenceRamp(turnOwnership, start: 0.12, full: 0.48)
+        return clamp(max(turnConfidence, ownershipQuality), min: 0.0, max: 1.0)
     }
 
     private static func turnOwnershipGateScales(
