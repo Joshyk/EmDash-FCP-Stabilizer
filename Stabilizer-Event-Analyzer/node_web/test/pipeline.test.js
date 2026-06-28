@@ -154,6 +154,8 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
     "mpeg4",
     "-c:a",
     "aac",
+    "-timecode",
+    "01:02:03:04",
     clipPath,
   ], {
     cwd: repoRoot,
@@ -169,7 +171,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
   const sourceManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(sourceManifest.syntheticSchemaVersion, 9);
+  assert.equal(sourceManifest.syntheticSchemaVersion, 10);
   assert.equal(sourceManifest.colorProcessing, "wide-hdr");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
@@ -177,12 +179,15 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.match(info, /colorSpace="1-1-1 \(Rec\. 709\)"/);
   assert.match(info, /<asset[^>]+id="r[0-9]+"/);
   assert.match(info, /<asset[^>]+uid="[A-F0-9]{32}"/);
+  assert.match(info, /<asset[^>]+start="55847\/15s"/);
   assert.match(info, /<asset[^>]+hasAudio="1"/);
   assert.match(info, /<asset[^>]+videoSources="1"/);
   assert.match(info, /<asset[^>]+audioSources="1"/);
   assert.match(info, /<asset[^>]+audioChannels="1"/);
   assert.match(info, /<asset[^>]+audioRate="48000"/);
   assert.match(info, /<media-rep[^>]+sig="[A-F0-9]{32}"/);
+  assert.match(info, /<asset-clip[^>]+start="55847\/15s"/);
+  assert.match(info, /<asset-clip[^>]+tcStart="55847\/15s"/);
   assert.match(info, /<asset-clip[^>]+tcFormat="NDF"[^>]+audioRole="dialogue"/);
   assert.equal(payload.assets[0].name, "LibraryClip");
   assert.equal(payload.assets[0].eventName, "Event A");
@@ -271,6 +276,23 @@ from fcpxml_common import fcp_color_space
 assert fcp_color_space("bt2020", "arib-std-b67", "bt2020nc") == "9-18-9 (Rec. 2020 HLG)"
 assert fcp_color_space("bt709", "bt709", "bt709") == "1-1-1 (Rec. 709)"
 assert fcp_color_space("smpte170m", "bt709", "bt709") is None
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test("fcpxml_common converts drop-frame source timecode to FCPXML start time", () => {
+  const script = `
+import sys
+from fractions import Fraction
+sys.path.insert(0, "scripts")
+from fcpxml_common import source_start_from_timecode, time_string
+start, tc_format = source_start_from_timecode("03:16:30;48", Fraction(1001, 60000))
+assert time_string(start) == "11790779/1000s", time_string(start)
+assert tc_format == "DF", tc_format
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: repoRoot,

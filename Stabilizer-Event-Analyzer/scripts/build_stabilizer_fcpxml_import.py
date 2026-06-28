@@ -401,7 +401,7 @@ def clip_attributes(
             attrs[key] = source_clip.attrib[key]
         elif asset.attrib.get(key):
             attrs[key] = asset.attrib[key]
-    for key in ("tcFormat", "audioRole"):
+    for key in ("tcStart", "tcFormat", "audioRole"):
         if source_clip is not None and source_clip.attrib.get(key):
             attrs[key] = source_clip.attrib[key]
     if offset is not None:

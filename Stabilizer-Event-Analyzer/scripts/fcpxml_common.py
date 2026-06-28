@@ -19,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 9
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 10
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -61,6 +61,8 @@ class VideoMetadata:
     frame_duration: Fraction
     duration: Fraction
     color_space: str | None
+    source_start: Fraction
+    tc_format: str
     audio_channels: int | None = None
     audio_rate: int | None = None
 
@@ -360,6 +362,44 @@ def positive_fraction(value: str | None) -> Fraction | None:
     return fraction if fraction > 0 else None
 
 
+TIMECODE_PATTERN = re.compile(r"^(\d+):(\d{2}):(\d{2})([:;,.])(\d{2})$")
+
+
+def media_timecode(stream: dict, payload: dict) -> str | None:
+    for tags in (stream.get("tags"), (payload.get("format") or {}).get("tags")):
+        if isinstance(tags, dict) and tags.get("timecode"):
+            return str(tags["timecode"]).strip()
+    return None
+
+
+def source_start_from_timecode(timecode: str | None, frame_duration: Fraction) -> tuple[Fraction, str]:
+    if not timecode:
+        return Fraction(0), "NDF"
+    match = TIMECODE_PATTERN.match(timecode)
+    if not match:
+        raise RuntimeError(f"unsupported media timecode format from ffprobe: {timecode}")
+    hours, minutes, seconds, separator, frames = match.groups()
+    hour_count = int(hours)
+    minute_count = int(minutes)
+    second_count = int(seconds)
+    frame_count = int(frames)
+    if minute_count >= 60 or second_count >= 60:
+        raise RuntimeError(f"invalid media timecode from ffprobe: {timecode}")
+    fps = Fraction(1, 1) / frame_duration
+    nominal_fps = int(fps + Fraction(1, 2))
+    if frame_count >= nominal_fps:
+        raise RuntimeError(f"media timecode frame number exceeds nominal frame rate: {timecode}")
+    total_minutes = hour_count * 60 + minute_count
+    total_frames = ((hour_count * 3600 + minute_count * 60 + second_count) * nominal_fps) + frame_count
+    if separator in {";", ".", ","}:
+        if fps != Fraction(nominal_fps * 1000, 1001) or nominal_fps < 30:
+            raise RuntimeError(f"drop-frame timecode is incompatible with media frame rate: {timecode}")
+        drop_frames = 2 * max(1, nominal_fps // 30)
+        total_frames -= drop_frames * (total_minutes - total_minutes // 10)
+        return total_frames * frame_duration, "DF"
+    return total_frames * frame_duration, "NDF"
+
+
 def fcp_color_space(color_primaries: str | None, color_transfer: str | None, color_matrix: str | None) -> str | None:
     primaries = (color_primaries or "").lower()
     transfer = (color_transfer or "").lower()
@@ -389,7 +429,7 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,duration,color_space,color_transfer,color_primaries,channels,sample_rate:format=duration",
+            "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,duration,color_space,color_transfer,color_primaries,channels,sample_rate:stream_tags=timecode:format=duration:format_tags=timecode",
             "-of",
             "json",
             str(media_path),
@@ -435,6 +475,7 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
             audio_rate = None
     frame_duration = Fraction(fps.denominator, fps.numerator)
     frame_count = max(1, int((duration / frame_duration) + Fraction(1, 2)))
+    source_start, tc_format = source_start_from_timecode(media_timecode(stream, payload), frame_duration)
     return VideoMetadata(
         width=width,
         height=height,
@@ -445,6 +486,8 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
             stream.get("color_transfer"),
             stream.get("color_space"),
         ),
+        source_start=source_start,
+        tc_format=tc_format,
         audio_channels=audio_channels,
         audio_rate=audio_rate,
     )
@@ -526,6 +569,10 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
                     )
                     attrs["format"] = format_id
                     attrs["duration"] = time_string(metadata.duration)
+                    attrs["start"] = time_string(metadata.source_start)
+                    clip_attrs["start"] = time_string(metadata.source_start)
+                    clip_attrs["tcStart"] = time_string(metadata.source_start)
+                    clip_attrs["tcFormat"] = metadata.tc_format
                     if metadata.audio_channels is not None and metadata.audio_rate is not None:
                         attrs["hasAudio"] = "1"
                         attrs["audioSources"] = "1"
