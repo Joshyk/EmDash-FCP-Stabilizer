@@ -4808,7 +4808,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         bundleRoot.path,
                         Self.expectedRangeDescription(expectedRange)
                     )
-                    guard let eventResolution = Self.fcpEventRoot(containing: projectMediaURL, in: bundleRoot, expectedRange: expectedRange) else {
+                    guard let eventResolution = Self.fcpEventRoot(
+                        containing: projectMediaURL,
+                        in: bundleRoot,
+                        expectedRange: expectedRange,
+                        preferredCacheIdentity: currentPreferredHostAnalysisCacheIdentity()
+                    ) else {
                         let reason = "Ambiguous Event for Host Analysis cache. FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
                         NSLog("TokyoWalkingStabilizer: \(reason)")
                         os_log("Event cache resolver rejected mediaFolderURL %{public}@ in bundle %{public}@ because no unambiguous Event candidate was selected.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path, bundleRoot.path)
@@ -4842,6 +4847,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 if configureActiveFinalCutLibraryCacheDirectory(
                     markUnavailable: markUnavailable,
                     expectedRange: expectedRange,
+                    preferredCacheIdentity: currentPreferredHostAnalysisCacheIdentity(),
                     triggerReason: reason,
                     projectDocumentID: projectDocumentID,
                     forceRefresh: forceRefresh
@@ -4861,6 +4867,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                    configureActiveFinalCutLibraryCacheDirectory(
                         markUnavailable: markUnavailable,
                         expectedRange: expectedRange,
+                        preferredCacheIdentity: currentPreferredHostAnalysisCacheIdentity(),
                         triggerReason: reason,
                         projectDocumentID: projectDocumentID,
                         forceRefresh: forceRefresh
@@ -4880,6 +4887,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             if configureActiveFinalCutLibraryCacheDirectory(
                 markUnavailable: markUnavailable,
                 expectedRange: expectedRange,
+                preferredCacheIdentity: currentPreferredHostAnalysisCacheIdentity(),
                 triggerReason: reason,
                 projectDocumentID: nil,
                 forceRefresh: forceRefresh
@@ -4949,11 +4957,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private func configureActiveFinalCutLibraryCacheDirectory(
         markUnavailable: Bool,
         expectedRange: HostAnalysisExpectedRange?,
+        preferredCacheIdentity: String?,
         triggerReason: String,
         projectDocumentID: UInt?,
         forceRefresh: Bool
     ) -> Bool {
-        let lookup = Self.activeFinalCutLibraryEventRoot(expectedRange: expectedRange, projectDocumentID: projectDocumentID)
+        let lookup = Self.activeFinalCutLibraryEventRoot(
+            expectedRange: expectedRange,
+            preferredCacheIdentity: preferredCacheIdentity,
+            projectDocumentID: projectDocumentID
+        )
         guard let resolution = lookup.resolution else {
             let reason = "\(triggerReason) Active Final Cut library resolver failed: \(lookup.rejectReason)"
             os_log(
@@ -5154,14 +5167,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private struct FCPFinalCutLibrarySidebarSelection {
         let rawSelection: String
         let identifiers: [String]
+    }
 
-        var eventIdentifier: String? {
-            identifiers.last
-        }
+    private struct EventCacheIdentityIndex: Decodable {
+        let entries: [EventCacheIdentityIndexEntry]
+    }
+
+    private struct EventCacheIdentityIndexEntry: Decodable {
+        let cacheFileName: String
+        let cacheIdentity: String?
     }
 
     private static func activeFinalCutLibraryEventRoot(
         expectedRange: HostAnalysisExpectedRange?,
+        preferredCacheIdentity: String?,
         projectDocumentID: UInt?
     ) -> (resolution: FCPActiveLibraryEventResolution?, rejectReason: String) {
         let activeLibraries = activeFinalCutLibraryBundleURLs()
@@ -5238,7 +5257,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard let eventResolution = fcpEventRoot(
             containing: internalBundleHostAnalysisCacheRoot(in: bundleRoot),
             in: bundleRoot,
-            expectedRange: expectedRange
+            expectedRange: expectedRange,
+            preferredCacheIdentity: preferredCacheIdentity
         ) else {
             let sidebarSelection = activeFinalCutLibrarySidebarEventSelection(from: [bundleCandidate])
             if let selection = sidebarSelection.selection {
@@ -5540,10 +5560,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard let sidebarSelection = sidebarLookup.selection else {
             return (nil, "Final Cut Pro library sidebar selection unavailable: \(sidebarLookup.rejectReason)")
         }
-        guard let eventIdentifier = sidebarSelection.eventIdentifier else {
-            return (nil, "Final Cut Pro library sidebar selection has no Event identifier: \(sidebarSelection.rawSelection)")
-        }
-
         var matches: [FCPActiveLibraryEventSelection] = []
         var inspectedBundles: [String] = []
         for candidate in candidates {
@@ -5559,7 +5575,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 continue
             }
 
-            let eventLookup = eventRootForEventIdentifier(eventIdentifier, in: bundleRoot)
+            let eventLookup = eventRootForSidebarSelection(sidebarSelection, in: bundleRoot)
             guard let eventRoot = eventLookup.eventRoot else {
                 inspectedBundles.append("\(bundleRoot.path)(sidebarIDs:yes,event:no: \(eventLookup.rejectReason))")
                 continue
@@ -5715,6 +5731,35 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return (eventRoot, "")
     }
 
+    private static func eventRootForSidebarSelection(
+        _ selection: FCPFinalCutLibrarySidebarSelection,
+        in bundleRoot: URL
+    ) -> (eventRoot: URL?, rejectReason: String) {
+        var matches: [(identifier: String, eventRoot: URL)] = []
+        var rejectionReasons: [String] = []
+        for identifier in selection.identifiers.reversed() {
+            let lookup = eventRootForEventIdentifier(identifier, in: bundleRoot)
+            if let eventRoot = lookup.eventRoot {
+                matches.append((identifier, eventRoot))
+            } else {
+                rejectionReasons.append("\(identifier): \(lookup.rejectReason)")
+            }
+        }
+        if matches.count == 1, let match = matches.first {
+            return (match.eventRoot, "selected Event identifier \(match.identifier)")
+        }
+        if matches.isEmpty {
+            return (
+                nil,
+                "no Event identifier in sidebar selection \(selection.rawSelection); \(rejectionReasons.joined(separator: " | "))"
+            )
+        }
+        return (
+            nil,
+            "multiple Event identifiers in sidebar selection \(selection.rawSelection): \(matches.map { "\($0.identifier) -> \($0.eventRoot.path)" }.joined(separator: " | "))"
+        )
+    }
+
     private static func eventMetadataBlobForEventIdentifier(
         _ eventIdentifier: String,
         libraryMarkerURL: URL
@@ -5810,8 +5855,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let allowedClasses: [AnyClass] = [
                 NSDictionary.self,
                 NSMutableDictionary.self,
+                NSArray.self,
+                NSMutableArray.self,
                 NSString.self,
                 NSNumber.self,
+                NSData.self,
+                NSMutableData.self,
                 NSNull.self
             ]
             guard let dictionary = try NSKeyedUnarchiver.unarchivedObject(
@@ -5877,7 +5926,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static func fcpEventRoot(
         containing url: URL,
         in bundleRoot: URL,
-        expectedRange: HostAnalysisExpectedRange?
+        expectedRange: HostAnalysisExpectedRange?,
+        preferredCacheIdentity: String?
     ) -> FCPEventRootResolution? {
         let bundleRoot = bundleRoot.standardizedFileURL
         let eventRoots = topLevelEventRoots(in: bundleRoot)
@@ -5946,6 +5996,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 sourceDescription: "FCP Stabilization range match"
             )
         }
+        if analysisFilesEventRoots.count > 1,
+           let cacheIdentityMatch = eventRootMatchingTokyoWalkingCacheIdentity(
+                preferredCacheIdentity,
+                in: analysisFilesEventRoots
+           ) {
+            os_log(
+                "Event cache resolver selected Event %{public}@ by saved Tokyo Walking cache identity.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                cacheIdentityMatch.path
+            )
+            return FCPEventRootResolution(
+                eventRoot: cacheIdentityMatch,
+                sourceDescription: "saved Tokyo Walking cache identity"
+            )
+        }
         if eventRoots.count == 1,
            let onlyEventRoot = eventRoots.first {
             os_log(
@@ -5968,6 +6034,89 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             expectedRangeDescription(expectedRange)
         )
         return nil
+    }
+
+    private static func eventRootMatchingTokyoWalkingCacheIdentity(
+        _ preferredCacheIdentity: String?,
+        in eventRoots: [URL]
+    ) -> URL? {
+        guard let preferredCacheIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !preferredCacheIdentity.isEmpty
+        else {
+            return nil
+        }
+
+        var matches: [(eventRoot: URL, cacheFileName: String)] = []
+        for eventRoot in eventRoots {
+            let cacheRoot = eventHostAnalysisCacheRoot(in: eventRoot)
+            let indexURL = cacheRoot.appendingPathComponent("host-analysis-index-v2.json", isDirectory: false)
+            guard FileManager.default.fileExists(atPath: indexURL.path) else {
+                continue
+            }
+            do {
+                let data = try Data(contentsOf: indexURL)
+                let index = try JSONDecoder().decode(EventCacheIdentityIndex.self, from: data)
+                let storageURL = cacheRoot.appendingPathComponent("caches", isDirectory: true)
+                for entry in index.entries where entry.cacheIdentity == preferredCacheIdentity {
+                    let cacheURL = storageURL.appendingPathComponent(entry.cacheFileName, isDirectory: false)
+                    if FileManager.default.fileExists(atPath: cacheURL.path) {
+                        matches.append((eventRoot.standardizedFileURL, entry.cacheFileName))
+                    } else {
+                        os_log(
+                            "Event cache resolver ignored stale Tokyo Walking cache identity entry in Event %{public}@ because cache file is missing: %{public}@.",
+                            log: stabilizerHostAnalysisLog,
+                            type: .default,
+                            eventRoot.path,
+                            entry.cacheFileName
+                        )
+                    }
+                }
+            } catch {
+                os_log(
+                    "Event cache resolver could not inspect Tokyo Walking cache index %{public}@: %{public}@.",
+                    log: stabilizerHostAnalysisLog,
+                    type: .error,
+                    indexURL.path,
+                    error.localizedDescription
+                )
+            }
+        }
+
+        let uniqueMatches = uniqueEventCacheIdentityMatches(matches)
+        if uniqueMatches.count == 1, let match = uniqueMatches.first {
+            os_log(
+                "Event cache resolver matched saved Tokyo Walking cache identity to Event %{public}@ file %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                match.eventRoot.path,
+                match.cacheFileName
+            )
+            return match.eventRoot
+        }
+        if uniqueMatches.count > 1 {
+            os_log(
+                "Event cache resolver rejected saved Tokyo Walking cache identity because it matched multiple Events: %{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                uniqueMatches.map { "\($0.eventRoot.path)(\($0.cacheFileName))" }.joined(separator: " | ")
+            )
+        }
+        return nil
+    }
+
+    private static func uniqueEventCacheIdentityMatches(
+        _ matches: [(eventRoot: URL, cacheFileName: String)]
+    ) -> [(eventRoot: URL, cacheFileName: String)] {
+        var seen = Set<String>()
+        var unique: [(eventRoot: URL, cacheFileName: String)] = []
+        for match in matches {
+            let eventRoot = match.eventRoot.standardizedFileURL
+            guard seen.insert(eventRoot.path).inserted else {
+                continue
+            }
+            unique.append((eventRoot, match.cacheFileName))
+        }
+        return unique
     }
 
     private static func eventRootsWithExistingAnalysisFiles(from eventRoots: [URL]) -> [URL] {
