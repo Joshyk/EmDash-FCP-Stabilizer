@@ -52,6 +52,8 @@ let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabi
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 private let stabilizerDefaultTurnDetectionWindowSeconds = 6.0
+private let stabilizerDefaultTurnSmoothingStrength = 2.0
+private let stabilizerMaximumTurnSmoothingStrength = 12.0
 private let stabilizerMaximumFarFieldWarpStrength = 12.0
 private let stabilizerDefaultAutoCropTransitionDuration = 10.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
@@ -1092,11 +1094,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Turn Smoothing Strength",
             parameterID: ParameterID.panStabilizationStrength.rawValue,
-            defaultValue: 0.2,
+            defaultValue: stabilizerDefaultTurnSmoothingStrength,
             parameterMin: 0.0,
-            parameterMax: 4.0,
+            parameterMax: stabilizerMaximumTurnSmoothingStrength,
             sliderMin: 0.0,
-            sliderMax: 4.0,
+            sliderMax: stabilizerMaximumTurnSmoothingStrength,
             delta: 0.01,
             parameterFlags: flags
         )
@@ -1254,7 +1256,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleXStrength: 1.0,
             strideWobbleYStrength: 1.0,
             strideWobbleRotationStrength: 0.5,
-            panStabilizationStrength: 0.2,
+            panStabilizationStrength: stabilizerDefaultTurnSmoothingStrength,
             farFieldWarpStrength: 0.5,
             panSmoothSeconds: stabilizerDefaultTurnDetectionWindowSeconds,
             autoCropTransitionDuration: stabilizerDefaultAutoCropTransitionDuration,

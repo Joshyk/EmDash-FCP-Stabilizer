@@ -133,7 +133,7 @@ fallbacks.
   Pull this down if close grass, roads, water, or frame edges start to swim.
 - `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
   walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
-  correction is bypassed; the default is `1.0` and the maximum is `4.0`. Values above `1.0`
+  correction is bypassed; the default is `2.0` and the maximum is `12.0`. Values above `1.0`
   push through low-confidence gating when stop-and-go panning is still visible, but render
   output still clamps at full detected turn-band removal. The turn intent is a monotonic
   S-curve through the detection window instead of a straight-line fit. The X turn band

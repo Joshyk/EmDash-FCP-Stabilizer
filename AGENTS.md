@@ -404,7 +404,8 @@ Because this changes prepared path semantics, bump the Host Analysis cache schem
 changes, while preserving backward read compatibility for still-valid older schema entries.
 Large segmented walking turns should be controlled by the render-time `Turn Smoothing
 Strength` slider, where higher values concatenate stop-and-go X-axis pan motion into a
-smoother monotonic S-curve turn intent instead of a straight-line fit. The exposed maximum is `4.0`;
+smoother monotonic S-curve turn intent instead of a straight-line fit. The default is `2.0`,
+the exposed maximum is `12.0`;
 values above `1.0` may compensate for low-confidence gating when turn correction is too
 weak, but applied correction must clamp at full detected turn-band removal. Turn smoothing
 must not apply Y or roll correction. Macro X turn correction should be soft-limited to a

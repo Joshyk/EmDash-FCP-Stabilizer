@@ -203,8 +203,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,
   so long prepared caches do not require repeated full-cache scans during playback.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
-  It does not change Y or roll, and the macro correction is soft-limited to a small
-  output-edge budget.
+  It does not change Y or roll, defaults to `2.0`, runs up to `12.0`, and the macro
+  correction is soft-limited to a small output-edge budget.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
   motion paths. The default is `6.0` seconds. The UI value is used as the TURN window,
   and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run

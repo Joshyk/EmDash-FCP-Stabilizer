@@ -124,7 +124,8 @@ does not fight broad Turn Smoothing during real horizontal turns.
 
 `Turn Smoothing Strength` smooths segmented horizontal walking turns into a
 more continuous S-curve intent. It applies only to X translation, does not change
-Y or roll, and is soft-limited to a small output-edge budget during render.
+Y or roll, defaults to `2.0`, runs up to `12.0`, and is soft-limited to a small
+output-edge budget during render.
 `Turn Detection Window` defaults to `6.0` seconds and comes from the Inspector UI
 value. Its UI minimum is the fixed `2.0` second Stride Wobble window, so TURN
 cannot run shorter than SWOB.

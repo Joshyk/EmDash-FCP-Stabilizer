@@ -100,7 +100,7 @@ struct StabilizerCorrectionStrengths {
         strideWobbleX: 1.0,
         strideWobbleY: 0.0,
         strideWobbleRotation: 0.0,
-        panStabilizationStrength: 0.2,
+        panStabilizationStrength: 2.0,
         farFieldWarp: 1.0
     )
 }
@@ -596,6 +596,7 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleFullScaleDegrees: Float = 0.16
     private static let strideWobbleFullResponseScale: Float = 0.65
     private static let turnSmoothingFullScalePixels: Float = 2.0
+    private static let maximumTurnSmoothingStrength: Float = 12.0
     private static let turnOwnershipFootstepXSuppression: Float = 0.90
     private static let turnOwnershipStrideXSuppression: Float = 1.0
     private static let maxFarFieldShear: Float = 0.008
@@ -4152,7 +4153,7 @@ enum AutoStabilizationEstimator {
     }
 
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
-        let requestedRemoval = clamp(Float(strength), min: 0.0, max: 4.0)
+        let requestedRemoval = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
         let confidenceResponse = correctionConfidenceResponse(confidence)
         let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
         let confidenceBoost = max(0.0, requestedRemoval - 1.0)
