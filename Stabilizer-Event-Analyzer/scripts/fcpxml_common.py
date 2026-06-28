@@ -19,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 5
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 6
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -61,6 +61,8 @@ class VideoMetadata:
     frame_duration: Fraction
     duration: Fraction
     color_space: str | None
+    audio_channels: int | None = None
+    audio_rate: int | None = None
 
 
 def local_name(tag: str) -> str:
@@ -136,6 +138,11 @@ def time_string(value: Fraction) -> str:
 
 def stable_fcp_asset_uid(seed: str) -> str:
     return hashlib.md5(seed.encode("utf-8")).hexdigest().upper()
+
+
+def stable_fcp_resource_id(prefix: str, seed: str) -> str:
+    digest = hashlib.md5(seed.encode("utf-8")).hexdigest().upper()
+    return f"r{prefix}{digest[:20]}"
 
 
 def fcpbundle_media_uid(media_path: Path) -> str:
@@ -375,10 +382,8 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
             ffprobe,
             "-v",
             "error",
-            "-select_streams",
-            "v:0",
             "-show_entries",
-            "stream=width,height,avg_frame_rate,r_frame_rate,duration,color_space,color_transfer,color_primaries:format=duration",
+            "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,duration,color_space,color_transfer,color_primaries,channels,sample_rate:format=duration",
             "-of",
             "json",
             str(media_path),
@@ -392,9 +397,9 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
         raise RuntimeError((result.stderr or result.stdout or "ffprobe failed").strip())
     payload = json.loads(result.stdout or "{}")
     streams = payload.get("streams") or []
-    if not streams:
+    stream = next((item for item in streams if item.get("codec_type") == "video"), None)
+    if stream is None:
         raise RuntimeError("ffprobe found no video stream")
-    stream = streams[0]
     width = int(stream.get("width") or 0)
     height = int(stream.get("height") or 0)
     if width <= 0 or height <= 0:
@@ -408,6 +413,20 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
     )
     if duration is None:
         raise RuntimeError("ffprobe did not return a usable video duration")
+    audio_stream = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    audio_channels = None
+    audio_rate = None
+    if audio_stream is not None:
+        try:
+            parsed_channels = int(audio_stream.get("channels") or 0)
+            audio_channels = parsed_channels if parsed_channels > 0 else None
+        except (TypeError, ValueError):
+            audio_channels = None
+        try:
+            parsed_rate = int(audio_stream.get("sample_rate") or 0)
+            audio_rate = parsed_rate if parsed_rate > 0 else None
+        except (TypeError, ValueError):
+            audio_rate = None
     frame_duration = Fraction(fps.denominator, fps.numerator)
     frame_count = max(1, int((duration / frame_duration) + Fraction(1, 2)))
     return VideoMetadata(
@@ -420,6 +439,8 @@ def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
             stream.get("color_transfer"),
             stream.get("color_space"),
         ),
+        audio_channels=audio_channels,
+        audio_rate=audio_rate,
     )
 
 
@@ -454,25 +475,25 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
     if color_processing:
         library_attrs["colorProcessing"] = color_processing
     library_node = ET.SubElement(root, "library", library_attrs)
-    asset_index = 1
     for event_dir in fcpbundle_event_dirs(bundle_path):
         event_node = ET.SubElement(library_node, "event", {"name": event_dir.name})
         event_media = [media_path for media_event, media_path in media_files if media_event == event_dir]
         for media_path in event_media:
-            asset_id = f"r{asset_index}"
-            asset_index += 1
+            asset_id = stable_fcp_resource_id("A", str(media_path))
             attrs = {
                 "id": asset_id,
                 "name": media_path.stem,
                 "uid": fcpbundle_media_uid(media_path),
                 "start": "0s",
                 "hasVideo": "1",
+                "videoSources": "1",
             }
             clip_attrs = {
                 "name": media_path.stem,
                 "ref": asset_id,
                 "start": "0s",
                 "offset": "0s",
+                "tcFormat": "NDF",
             }
             link_reason = fcpbundle_original_media_link_reason(media_path)
             if link_reason:
@@ -480,8 +501,7 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
             else:
                 try:
                     metadata = probe_video_metadata(media_path, ffprobe)
-                    format_id = f"r{asset_index}"
-                    asset_index += 1
+                    format_id = stable_fcp_resource_id("F", f"{media_path}|format")
                     format_attrs = {
                         "id": format_id,
                         "frameDuration": time_string(metadata.frame_duration),
@@ -497,6 +517,12 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
                     )
                     attrs["format"] = format_id
                     attrs["duration"] = time_string(metadata.duration)
+                    if metadata.audio_channels is not None and metadata.audio_rate is not None:
+                        attrs["hasAudio"] = "1"
+                        attrs["audioSources"] = "1"
+                        attrs["audioChannels"] = str(metadata.audio_channels)
+                        attrs["audioRate"] = str(metadata.audio_rate)
+                        clip_attrs["audioRole"] = "dialogue"
                     clip_attrs["format"] = format_id
                     clip_attrs["duration"] = time_string(metadata.duration)
                 except Exception as exc:  # noqa: BLE001

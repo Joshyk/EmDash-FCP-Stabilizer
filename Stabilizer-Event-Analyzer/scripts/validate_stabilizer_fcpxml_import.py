@@ -11,7 +11,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Iterable
 
-from fcpxml_common import SCHEMA_VERSION, local_name, parse_time, resolve_info_path, resources
+from fcpxml_common import SCHEMA_VERSION, file_url_to_path, local_name, parse_time, resolve_info_path, resources
 from build_stabilizer_fcpxml_import import EFFECT_NAME, EFFECT_UID, LEGACY_FILTER_NAMES
 
 
@@ -103,6 +103,39 @@ def has_media_rep(asset: ET.Element) -> bool:
     return any(local_name(child.tag) == "media-rep" and child.attrib.get("src") for child in asset)
 
 
+def normalized_path_identity(path: Path) -> str:
+    try:
+        return str(path.expanduser().resolve(strict=False))
+    except OSError:
+        return str(path.expanduser())
+
+
+def asset_media_paths(asset: ET.Element) -> list[Path]:
+    urls = []
+    if asset.attrib.get("src"):
+        urls.append(asset.attrib["src"])
+    urls.extend(
+        child.attrib["src"]
+        for child in asset
+        if local_name(child.tag) == "media-rep" and child.attrib.get("src")
+    )
+    paths: list[Path] = []
+    for url in urls:
+        try:
+            paths.append(file_url_to_path(url))
+        except ValueError:
+            continue
+    return paths
+
+
+def asset_matches_manifest_media_path(asset: ET.Element, manifest: dict) -> bool:
+    media_path = manifest.get("mediaPath")
+    if not media_path:
+        return True
+    expected = normalized_path_identity(Path(str(media_path)))
+    return any(normalized_path_identity(path) == expected for path in asset_media_paths(asset))
+
+
 def valid_time(value: str | None, *, positive: bool = False) -> bool:
     try:
         parsed = parse_time(value)
@@ -173,6 +206,8 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
             failures.append(f"asset format resource is missing: {asset_id}")
         if not has_media_rep(asset):
             failures.append(f"asset has no media-rep src: {asset_id}")
+        elif not asset_matches_manifest_media_path(asset, manifest):
+            failures.append(f"asset media-rep does not match manifest mediaPath: {asset_id}")
         if not valid_time(asset.attrib.get("start"), positive=False):
             failures.append(f"asset start is invalid: {asset_id}")
         if not valid_time(asset.attrib.get("duration"), positive=True):

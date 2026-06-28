@@ -141,13 +141,19 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
     "lavfi",
     "-i",
     "testsrc=size=160x90:rate=30",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=1000:sample_rate=48000",
     "-frames:v",
     "30",
-    "-an",
+    "-shortest",
     "-pix_fmt",
     "yuv420p",
     "-c:v",
     "mpeg4",
+    "-c:a",
+    "aac",
     clipPath,
   ], {
     cwd: repoRoot,
@@ -163,12 +169,19 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
   const sourceManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(sourceManifest.syntheticSchemaVersion, 5);
+  assert.equal(sourceManifest.syntheticSchemaVersion, 6);
   assert.equal(sourceManifest.colorProcessing, "wide-hdr");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
+  assert.match(info, /<asset[^>]+id="rA[A-F0-9]{20}"/);
   assert.match(info, /<asset[^>]+uid="[A-F0-9]{32}"/);
+  assert.match(info, /<asset[^>]+hasAudio="1"/);
+  assert.match(info, /<asset[^>]+videoSources="1"/);
+  assert.match(info, /<asset[^>]+audioSources="1"/);
+  assert.match(info, /<asset[^>]+audioChannels="1"/);
+  assert.match(info, /<asset[^>]+audioRate="48000"/);
   assert.match(info, /<media-rep[^>]+sig="[A-F0-9]{32}"/);
+  assert.match(info, /<asset-clip[^>]+tcFormat="NDF"[^>]+audioRole="dialogue"/);
   assert.equal(payload.assets[0].name, "LibraryClip");
   assert.equal(payload.assets[0].eventName, "Event A");
   assert.equal(payload.assets[0].mediaKind, "original-media");
@@ -179,7 +192,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assets[0].frameDuration, "1/30s");
 
   const analysis = analysisResult(payload.assets[0].assetId, "LibraryClip");
-  analysis.mediaPath = "/Volumes/External Media/LibraryClip.mov";
+  analysis.mediaPath = fs.realpathSync(clipPath);
   const cacheRoot = writeCachePayload(tmp, analysis);
   const analysisPath = path.join(tmp, "analysis.json");
   fs.writeFileSync(analysisPath, JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }), "utf8");
@@ -709,6 +722,56 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
   assert.equal((info.match(/<filter-video[^>]+name="Tokyo Walking Stabilizer"/g) || []).length, 1);
 });
 
+test("build_stabilizer_fcpxml_import remaps stale asset ids by exact mediaPath", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-asset-remap-test-"));
+  const pkg = path.join(tmp, "AssetRemap.fcpxmld");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(
+    path.join(pkg, "Info.fcpxml"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<fcpxml version="1.11">
+  <resources>
+    <format id="r1" name="FFVideoFormat1080p30" frameDuration="1001/30000s" width="1920" height="1080"/>
+    <asset id="r2" name="WrongClip" start="0s" duration="300300/30000s" hasVideo="1" format="r1">
+      <media-rep kind="original-media" src="${pathToFileURL("/tmp/WrongClip.mov").href}"/>
+    </asset>
+    <asset id="r3" name="P1000307" start="0s" duration="300300/30000s" hasVideo="1" format="r1">
+      <media-rep kind="original-media" src="${pathToFileURL("/tmp/P1000307.mov").href}"/>
+    </asset>
+  </resources>
+  <library>
+    <event name="AssetRemap">
+      <asset-clip name="WrongClip" ref="r2" start="0s" duration="300300/30000s" format="r1"/>
+      <asset-clip name="P1000307" ref="r3" start="0s" duration="300300/30000s" format="r1"/>
+    </event>
+  </library>
+</fcpxml>
+`,
+    "utf8"
+  );
+  const analysis = analysisResult("r2", "P1000307");
+  analysis.mediaPath = "/tmp/P1000307.mov";
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(analysisPath, JSON.stringify({ status: "ok", results: [analysis] }), "utf8");
+  const payload = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    pkg,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+  ]);
+  assert.equal(payload.status, "ok");
+  assert.deepEqual(payload.assetIds, ["r3"]);
+  assert.equal(payload.sourceAssetResolutions[0].requestedAssetId, "r2");
+  assert.equal(payload.sourceAssetResolutions[0].resolvedAssetId, "r3");
+  const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
+  assert.match(info, /<asset[^>]+id="r3"[^>]+name="P1000307"/);
+  assert.doesNotMatch(info, /WrongClip Stabilized Review/);
+});
+
 test("build_stabilizer_fcpxml_import emits one package directory per footage", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-per-footage-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
@@ -992,13 +1055,10 @@ test("validate_stabilizer_fcpxml_import rejects missing asset media uid", () => 
   assert.match(validation.failures.join("\n"), /missing FCP media uid/);
 });
 
-test("install_stabilizer_package_cache infers Event root from manifest mediaPath", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-test-"));
-  const eventRoot = path.join(tmp, "Library.fcpbundle", "Event A");
-  fs.mkdirSync(path.join(eventRoot, "Original Media"), { recursive: true });
+test("validate_stabilizer_fcpxml_import rejects manifest mediaPath mismatch", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-media-path-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
   const analysis = analysisResult();
-  analysis.mediaPath = path.join(eventRoot, "Original Media", "P1000307.mov");
   const cacheRoot = writeCachePayload(tmp, analysis);
   fs.writeFileSync(
     analysisPath,
@@ -1017,25 +1077,35 @@ test("install_stabilizer_package_cache infers Event root from manifest mediaPath
     "--per-footage-packages",
   ]);
   const pkg = build.packages[0];
-  const install = run("python3", [
-    "scripts/install_stabilizer_package_cache.py",
+  const infoPath = path.join(pkg.outputPackage, "Info.fcpxml");
+  const validInfo = fs.readFileSync(infoPath, "utf8");
+  const brokenInfo = validInfo.replace("file:///tmp/P1000307.mov", "file:///tmp/WrongClip.mov");
+  fs.writeFileSync(infoPath, brokenInfo, "utf8");
+  const result = spawnSync("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    pkg.outputPackage,
     "--manifest",
     pkg.manifestPath,
-  ]);
-  assert.equal(install.status, "ok");
-  const resolvedEventRoot = fs.realpathSync(eventRoot);
-  assert.equal(install.eventRoot, resolvedEventRoot);
-  assert.equal(install.cacheRoot, path.join(resolvedEventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"));
-  assert.equal(fs.existsSync(path.join(install.cacheRoot, "caches", analysis.cacheFileName)), true);
+    "--output",
+    pkg.validationPath,
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  const validation = JSON.parse(result.stdout);
+  assert.equal(validation.status, "fail");
+  assert.equal(validation.importReady, false);
+  assert.match(validation.failures.join("\n"), /does not match manifest mediaPath/);
 });
 
-test("install_stabilizer_package_cache uses manifest eventRoot when mediaPath is external", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-event-root-test-"));
+test("install_stabilizer_package_cache infers Event root from manifest mediaPath", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-test-"));
   const eventRoot = path.join(tmp, "Library.fcpbundle", "Event A");
   fs.mkdirSync(path.join(eventRoot, "Original Media"), { recursive: true });
   const analysisPath = path.join(tmp, "analysis.json");
   const analysis = analysisResult();
-  analysis.mediaPath = "/Volumes/External Media/P1000307.mov";
   const cacheRoot = writeCachePayload(tmp, analysis);
   fs.writeFileSync(
     analysisPath,
@@ -1055,6 +1125,46 @@ test("install_stabilizer_package_cache uses manifest eventRoot when mediaPath is
   ]);
   const pkg = build.packages[0];
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  manifest.mediaPath = path.join(eventRoot, "Original Media", "P1000307.mov");
+  fs.writeFileSync(pkg.manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const install = run("python3", [
+    "scripts/install_stabilizer_package_cache.py",
+    "--manifest",
+    pkg.manifestPath,
+  ]);
+  assert.equal(install.status, "ok");
+  const resolvedEventRoot = fs.realpathSync(eventRoot);
+  assert.equal(install.eventRoot, resolvedEventRoot);
+  assert.equal(install.cacheRoot, path.join(resolvedEventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"));
+  assert.equal(fs.existsSync(path.join(install.cacheRoot, "caches", analysis.cacheFileName)), true);
+});
+
+test("install_stabilizer_package_cache uses manifest eventRoot when mediaPath is external", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-event-root-test-"));
+  const eventRoot = path.join(tmp, "Library.fcpbundle", "Event A");
+  fs.mkdirSync(path.join(eventRoot, "Original Media"), { recursive: true });
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  manifest.mediaPath = "/Volumes/External Media/P1000307.mov";
   manifest.eventRoot = eventRoot;
   fs.writeFileSync(pkg.manifestPath, JSON.stringify(manifest, null, 2), "utf8");
   const targetCacheRoot = path.join(eventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis");

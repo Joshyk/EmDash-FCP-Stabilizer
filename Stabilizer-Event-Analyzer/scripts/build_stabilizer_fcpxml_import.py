@@ -19,6 +19,7 @@ from fcpxml_common import (
     SCHEMA_VERSION,
     event_name_by_asset_id,
     event_names,
+    file_url_to_path,
     local_name,
     parse_time,
     resolve_info_path,
@@ -192,6 +193,111 @@ def resource_by_id(root: ET.Element, resource_id: str) -> ET.Element | None:
         if child.attrib.get("id") == resource_id:
             return child
     return None
+
+
+def normalized_path_identity(path: Path) -> str:
+    try:
+        return str(path.expanduser().resolve(strict=False))
+    except OSError:
+        return str(path.expanduser())
+
+
+def result_media_path(result: dict) -> Path | None:
+    value = result.get("mediaPath")
+    if not value:
+        return None
+    return Path(str(value))
+
+
+def asset_media_paths(asset: ET.Element) -> list[Path]:
+    urls = []
+    if asset.attrib.get("src"):
+        urls.append(asset.attrib["src"])
+    urls.extend(
+        child.attrib["src"]
+        for child in asset
+        if local_name(child.tag) == "media-rep" and child.attrib.get("src")
+    )
+    paths: list[Path] = []
+    for url in urls:
+        try:
+            paths.append(file_url_to_path(url))
+        except ValueError:
+            continue
+    return paths
+
+
+def media_path_matches(asset: ET.Element, path: Path) -> bool:
+    expected = normalized_path_identity(path)
+    return any(normalized_path_identity(candidate) == expected for candidate in asset_media_paths(asset))
+
+
+def asset_media_summary(asset: ET.Element | None) -> str:
+    if asset is None:
+        return "missing"
+    paths = [normalized_path_identity(path) for path in asset_media_paths(asset)]
+    return ", ".join(paths) if paths else "no media path"
+
+
+def find_asset_ids_by_media_path(root: ET.Element, path: Path) -> list[str]:
+    matches = []
+    for child in resources(root):
+        if local_name(child.tag) != "asset" or not child.attrib.get("id"):
+            continue
+        if media_path_matches(child, path):
+            matches.append(child.attrib["id"])
+    return matches
+
+
+def resolve_analysis_asset_id(root: ET.Element, requested_asset_id: str, result: dict) -> tuple[str, dict]:
+    copied = dict(result)
+    copied["requestedAssetId"] = requested_asset_id
+    media_path = result_media_path(result)
+    requested_asset = resource_by_id(root, requested_asset_id)
+    if requested_asset is not None and (media_path is None or media_path_matches(requested_asset, media_path)):
+        copied["assetId"] = requested_asset_id
+        return requested_asset_id, copied
+    if media_path is None:
+        raise ValueError(f"analyzed asset resource is missing: {requested_asset_id}")
+    matches = find_asset_ids_by_media_path(root, media_path)
+    if len(matches) == 1:
+        resolved_asset_id = matches[0]
+        copied["assetId"] = resolved_asset_id
+        copied["sourceAssetResolution"] = {
+            "requestedAssetId": requested_asset_id,
+            "resolvedAssetId": resolved_asset_id,
+            "mediaPath": normalized_path_identity(media_path),
+            "reason": "analysis assetId did not match the source media path; resolved by exact mediaPath",
+        }
+        return resolved_asset_id, copied
+    if len(matches) > 1:
+        raise ValueError(
+            "analysis mediaPath matched multiple source assets: "
+            f"{normalized_path_identity(media_path)} -> {', '.join(matches)}"
+        )
+    raise ValueError(
+        "analysis assetId does not match source media: "
+        f"{requested_asset_id} points to {asset_media_summary(requested_asset)}, "
+        f"analysis mediaPath is {normalized_path_identity(media_path)}"
+    )
+
+
+def resolve_analysis_results(root: ET.Element, results: dict[str, dict]) -> dict[str, dict]:
+    resolved: dict[str, dict] = {}
+    for requested_asset_id, result in results.items():
+        resolved_asset_id, resolved_result = resolve_analysis_asset_id(root, requested_asset_id, result)
+        if resolved_asset_id in resolved:
+            raise ValueError(f"multiple analysis results resolved to the same source asset: {resolved_asset_id}")
+        resolved[resolved_asset_id] = resolved_result
+    return resolved
+
+
+def source_asset_resolutions(results: dict[str, dict]) -> list[dict]:
+    return [
+        result["sourceAssetResolution"]
+        for result in results.values()
+        if isinstance(result.get("sourceAssetResolution"), dict)
+    ]
 
 
 def first_event_asset_clip(root: ET.Element, asset_id: str) -> ET.Element | None:
@@ -606,6 +712,8 @@ def analysis_manifest(
     return {
         "manifestSchemaVersion": 1,
         "assetId": asset_id,
+        "requestedAssetId": result.get("requestedAssetId", asset_id),
+        "sourceAssetResolution": result.get("sourceAssetResolution"),
         "footageName": result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
         "footageFileName": result.get("footageFileName") or result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
         "eventName": source_event_name,
@@ -677,6 +785,8 @@ def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict]
         write_json(manifest_path, manifest)
         packages.append({
             "assetId": asset_id,
+            "requestedAssetId": result.get("requestedAssetId", asset_id),
+            "sourceAssetResolution": result.get("sourceAssetResolution"),
             "footageName": manifest["footageName"],
             "packageDirectory": str(package_dir),
             "outputPackage": str(fcpxmld_path),
@@ -739,6 +849,7 @@ def main(argv: Iterable[str]) -> int:
         if args.only_analyzed_assets or args.per_footage_packages:
             tree = ET.parse(info_path)
             root = tree.getroot()
+            results = resolve_analysis_results(root, results)
             if args.per_footage_packages:
                 packages = build_per_footage_packages(
                     root,
@@ -757,6 +868,7 @@ def main(argv: Iterable[str]) -> int:
                         "insertedFilters": len(packages),
                         "removedExistingFilters": 0,
                         "assetIds": sorted(results),
+                        "sourceAssetResolutions": source_asset_resolutions(results),
                         "onlyAnalyzedAssets": True,
                         "perFootagePackages": True,
                     }
@@ -771,6 +883,8 @@ def main(argv: Iterable[str]) -> int:
             package_path, target_info = copy_source_package(args.source_fcpxml, info_path, args.output_dir)
             tree = ET.parse(target_info)
         root = tree.getroot()
+        if not all("requestedAssetId" in result for result in results.values()):
+            results = resolve_analysis_results(root, results)
         if args.only_analyzed_assets:
             root = build_analyzed_only_tree(root, results)
             tree = ET.ElementTree(root)
@@ -784,6 +898,7 @@ def main(argv: Iterable[str]) -> int:
                     "insertedFilters": len(results),
                     "removedExistingFilters": 0,
                     "assetIds": sorted(results),
+                    "sourceAssetResolutions": source_asset_resolutions(results),
                     "safeName": safe_file_component(package_path.stem),
                     "onlyAnalyzedAssets": True,
                 }
@@ -833,6 +948,7 @@ def main(argv: Iterable[str]) -> int:
                 "insertedFilters": inserted,
                 "removedExistingFilters": removed,
                 "assetIds": sorted(results),
+                "sourceAssetResolutions": source_asset_resolutions(results),
                 "safeName": safe_file_component(package_path.stem),
             }
         )
