@@ -85,13 +85,23 @@ def has_ancestor(element: ET.Element, parents: dict[ET.Element, ET.Element], tag
     return False
 
 
-def containing_ref_clip(element: ET.Element, parents: dict[ET.Element, ET.Element]) -> ET.Element | None:
+def filter_applies_to_project_video(
+    element: ET.Element,
+    parents: dict[ET.Element, ET.Element],
+    asset_id: str | None,
+) -> bool:
     current = parents.get(element)
     while current is not None:
-        if local_name(current.tag) in {"asset-clip", "video"} and current.attrib.get("ref"):
-            return current
+        tag = local_name(current.tag)
+        if tag in {"asset-clip", "video"} and current.attrib.get("ref") == asset_id:
+            return has_ancestor(current, parents, "project")
+        if tag == "clip" and has_ancestor(current, parents, "project"):
+            return any(
+                local_name(child.tag) == "video" and child.attrib.get("ref") == asset_id
+                for child in current.iter()
+            )
         current = parents.get(current)
-    return None
+    return False
 
 
 def has_media_rep(asset: ET.Element) -> bool:
@@ -189,6 +199,7 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
 
     project_count = 0
     project_stabilizer_count = 0
+    project_video_count = 0
     for element in root.iter():
         tag = local_name(element.tag)
         if tag == "project":
@@ -202,14 +213,17 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
                 failures.append(f"legacy filter remains: {name}")
             if name == EFFECT_NAME and element.attrib.get("ref") not in effect_ids:
                 failures.append("Tokyo Walking Stabilizer filter does not reference the expected effect resource")
-            if name == EFFECT_NAME and has_ancestor(element, parents, "project"):
-                clip = containing_ref_clip(element, parents)
-                if clip is not None and clip.attrib.get("ref") == asset_id:
-                    project_stabilizer_count += 1
+            if name == EFFECT_NAME and filter_applies_to_project_video(element, parents, asset_id):
+                project_stabilizer_count += 1
         if tag in {"asset-clip", "video"} and element.attrib.get("ref"):
             ref = element.attrib["ref"]
             if ref != asset_id:
                 failures.append(f"import package contains non-analyzed footage ref: {ref}")
+            if has_ancestor(element, parents, "project"):
+                if tag == "asset-clip":
+                    failures.append("review project uses asset-clip directly instead of a clip with video media")
+                elif tag == "video":
+                    project_video_count += 1
             if not valid_time(element.attrib.get("start"), positive=False):
                 failures.append(f"{tag} start is invalid for ref {ref}")
             if not valid_time(element.attrib.get("duration"), positive=True):
@@ -226,6 +240,8 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
         failures.append(f"import package must contain exactly one review project, found {project_count}")
     if project_stabilizer_count == 0:
         failures.append("review project clip is missing Tokyo Walking Stabilizer filter")
+    if project_video_count == 0:
+        failures.append("review project clip is missing video media")
 
     prepared = manifest.get("preparedMotionPath")
     if prepared is not True:

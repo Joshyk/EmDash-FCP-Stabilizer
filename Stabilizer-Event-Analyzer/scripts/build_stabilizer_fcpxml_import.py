@@ -315,7 +315,41 @@ def append_event_asset_clip(
     return clip
 
 
-def append_filtered_asset_clip(
+def review_clip_attributes(
+    asset: ET.Element,
+    source_clip: ET.Element | None,
+    *,
+    offset: str,
+) -> dict[str, str]:
+    attrs: dict[str, str] = {
+        "name": asset.attrib.get("name") or asset.attrib["id"],
+        "offset": offset,
+    }
+    for key in ("start", "duration"):
+        if source_clip is not None and source_clip.attrib.get(key):
+            attrs[key] = source_clip.attrib[key]
+        elif asset.attrib.get(key):
+            attrs[key] = asset.attrib[key]
+    for key in ("tcFormat", "audioRole"):
+        if source_clip is not None and source_clip.attrib.get(key):
+            attrs[key] = source_clip.attrib[key]
+    return attrs
+
+
+def review_video_attributes(asset: ET.Element, source_clip: ET.Element | None) -> dict[str, str]:
+    attrs: dict[str, str] = {
+        "ref": asset.attrib["id"],
+        "offset": "0s",
+    }
+    for key in ("start", "duration"):
+        if source_clip is not None and source_clip.attrib.get(key):
+            attrs[key] = source_clip.attrib[key]
+        elif asset.attrib.get(key):
+            attrs[key] = asset.attrib[key]
+    return attrs
+
+
+def append_review_clip(
     parent: ET.Element,
     asset: ET.Element,
     source_clip: ET.Element | None,
@@ -323,11 +357,12 @@ def append_filtered_asset_clip(
     ref: str,
     result: dict,
     *,
-    offset: str | None = None,
+    offset: str,
 ) -> ET.Element:
-    clip = ET.SubElement(parent, "asset-clip", clip_attributes(asset, source_clip, offset=offset))
+    clip = ET.SubElement(parent, "clip", review_clip_attributes(asset, source_clip, offset=offset))
     for child in filtered_pre_effect_children(source_clip):
         clip.append(child)
+    ET.SubElement(clip, "video", review_video_attributes(asset, source_clip))
     clip.append(stabilizer_filter(ref, result))
     for child in inherited_filter_children(effect_source_clip):
         clip.append(child)
@@ -451,7 +486,7 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         spine = review["spine"]
         if not isinstance(spine, ET.Element):
             raise ValueError("review project spine state is invalid")
-        append_filtered_asset_clip(spine, asset, source_clip, effect_source_clip, ref, result, offset=format_time(offset))
+        append_review_clip(spine, asset, source_clip, effect_source_clip, ref, result, offset=format_time(offset))
         next_offset = offset + clip_duration(asset, source_clip)
         review["offset"] = next_offset
         sequence = review["sequence"]
