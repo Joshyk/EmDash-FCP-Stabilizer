@@ -37,7 +37,8 @@ estimators, or Transform-keyframe writers back into this target.
   analysis range, render accepts the active cache only after that source-frame fingerprint
   validation succeeds.
 - Refuses proxy-scaled frames for unvalidated persisted-cache validation. Once original-media
-  validation succeeds, proxy playback can render from the prepared analysis path.
+  validation succeeds, proxy playback renders through the same prepared motion-path,
+  correction, confidence, and Debug Overlay path as original/optimized media.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
 - Combines per-frame Footstep Jitter, fixed-window Stride Wobble, Far-field Warp, and
   broader Turn Smoothing bands so walking-gimbal shake is separated by
@@ -239,7 +240,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - The effect uses prepared analysis from the local Event Analyzer support tool. Incomplete or missing
   persisted analysis renders identity for that source instead of silently switching modes.
   Proxy media is rejected for unvalidated persisted-cache validation, but a validated
-  analysis continues to render during proxy playback.
+  analysis continues to render during proxy playback with the same correction and
+  confidence logic used for original/optimized media.
 - `Debug Overlay` shows labeled top-left diagnostics while checking runtime behavior.
 - Existing timeline instances from older builds may still contain hidden `Start Host
   Analysis`, `Clear Host Analysis Cache`, `Sample Size`, or `Queue` parameters. New effect
@@ -294,7 +296,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
   runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R###` means
   the current FxPlug runtime is rendering original/optimized frames, and `P###` means proxy
-  playback is using the saved analysis path. The digits are derived from the active FxPlug
+  playback is using the same saved-analysis correction path. The digits are derived from the active FxPlug
   version. The overlay scales from the current render output so
   the top-left panel occupies roughly half of the viewer height in original, optimized, and
   proxy playback. These labels are raw English control/diagnostic

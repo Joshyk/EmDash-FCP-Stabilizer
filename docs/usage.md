@@ -205,8 +205,8 @@ fallbacks.
   `WARP`, `TURN`, live `F Q`/`S Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
   checking runtime behavior. `R###` means the current FxPlug runtime is rendering
-  original/optimized frames, while `P###` means proxy playback is using the saved analysis
-  path; the digits are derived from the active FxPlug version.
+  original/optimized frames, while `P###` means proxy playback is using the same
+  saved-analysis correction path; the digits are derived from the active FxPlug version.
   The overlay scales from the current render output so the top-left panel occupies roughly
   half of the viewer height in original, optimized, and proxy playback.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
@@ -288,7 +288,8 @@ FxPlug.
   then renders from the prepared motion path.
 - Proxy/scaled media is rejected only for unvalidated persisted-cache validation. After an
   original-media cache has been validated, playback can use proxy media while rendering from
-  the prepared original-media motion path.
+  the same prepared motion-path, correction, confidence, and Debug Overlay path used for
+  original/optimized media.
 - Playback uses prepared motion paths from completed analysis. It must not run full
   frame-to-frame block matching on every rendered playback frame. Host Analysis stores
   separate raw X/Y/roll impulse paths for Footstep Jitter before applying the zero-phase

@@ -3312,31 +3312,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         outputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
-        samplingProfile: AutoCropSamplingProfile,
+        samplingProfile _: AutoCropSamplingProfile,
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> StabilizerAutoTransform {
         let sampleTime = CMTimeMakeWithSeconds(seconds, preferredTimescale: 60000)
-        switch samplingProfile {
-        case .playback:
-            return AutoStabilizationEstimator.proxyPlaybackEstimate(
-                preparedAnalysis: preparedAnalysis,
-                renderTime: sampleTime,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths
-            )
-        case .full:
-            return cachedAutoTransform(
-                preparedAnalysis: preparedAnalysis,
-                renderTime: sampleTime,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
-            )
-        }
+        return cachedAutoTransform(
+            preparedAnalysis: preparedAnalysis,
+            renderTime: sampleTime,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
     }
 
     private static func autoCropZoomPlanSample(
@@ -3699,7 +3688,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         outputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
-        samplingProfile: AutoCropSamplingProfile,
+        samplingProfile _: AutoCropSamplingProfile,
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> StabilizerAutoTransform {
@@ -3707,26 +3696,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return currentTransform
         }
         let sampleTime = CMTimeMakeWithSeconds(sampleSeconds, preferredTimescale: 60000)
-        switch samplingProfile {
-        case .playback:
-            return AutoStabilizationEstimator.proxyPlaybackEstimate(
-                preparedAnalysis: preparedAnalysis,
-                renderTime: sampleTime,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths
-            )
-        case .full:
-            return cachedAutoTransform(
-                preparedAnalysis: preparedAnalysis,
-                renderTime: sampleTime,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
-            )
-        }
+        return cachedAutoTransform(
+            preparedAnalysis: preparedAnalysis,
+            renderTime: sampleTime,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
     }
 
     private static func autoCropSampleTransform(
@@ -6666,26 +6644,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 sourceImage: sourceImage,
                 preparedAnalysis: preparedAnalysis
             )
-            let usesLightweightPreviewStabilization = renderSourceIsProxy || state.renderQualityLevel == 0
-            if usesLightweightPreviewStabilization {
-                autoTransform = AutoStabilizationEstimator.proxyPlaybackEstimate(
-                    preparedAnalysis: preparedAnalysis,
-                    renderTime: analysisRenderTime,
-                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                    panSmoothSeconds: state.panSmoothSeconds,
-                    strengths: correctionStrengths
-                )
-            } else {
-                autoTransform = Self.cachedAutoTransform(
-                    preparedAnalysis: preparedAnalysis,
-                    renderTime: analysisRenderTime,
-                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                    panSmoothSeconds: state.panSmoothSeconds,
-                    strengths: correctionStrengths,
-                    analysisRevision: renderStoreRevision,
-                    cacheIdentity: renderCacheIdentity
-                )
-            }
+            autoTransform = Self.cachedAutoTransform(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: analysisRenderTime,
+                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                panSmoothSeconds: state.panSmoothSeconds,
+                strengths: correctionStrengths,
+                analysisRevision: renderStoreRevision,
+                cacheIdentity: renderCacheIdentity
+            )
         } else {
             autoTransform = .identity
         }
@@ -6796,23 +6763,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoTransform.macroPixelOffset.x / turnScaleX,
                 autoTransform.macroPixelOffset.y / turnScaleY
             ))
-            let collapsedProxyTurnActivity = abs(autoTransform.pixelOffset.x) / turnScaleX
-                * min(1.0, autoTransform.turnConfidence)
-            let turnActivity = min(1.0, max(separatedTurnActivity, collapsedProxyTurnActivity))
+            let turnActivity = min(1.0, separatedTurnActivity)
             let separatedTemporalSmoothingActivity = max(
                 simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale,
                 abs(autoTransform.temporalSmoothingRotationDelta) / 0.05
             )
-            let collapsedProxySmoothingActivity = autoTransform.temporalSmoothingSampleCount > 1
-                ? max(
-                    simd_length(autoTransform.pixelOffset) / temporalSmoothingScale,
-                    abs(autoTransform.rotationDegrees) / 0.05
-                )
-                : 0.0
-            let temporalSmoothingActivity = min(1.0, max(
-                separatedTemporalSmoothingActivity,
-                collapsedProxySmoothingActivity
-            ))
+            let temporalSmoothingActivity = min(1.0, separatedTemporalSmoothingActivity)
             let footstepJitterActivity = min(1.0, max(
                 simd_length(vector_float2(
                     autoTransform.limitedFootstepCorrection.x / diagnosticScaleX,
