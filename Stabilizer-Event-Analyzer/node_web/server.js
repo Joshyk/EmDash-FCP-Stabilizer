@@ -477,7 +477,7 @@ async function selectExportFiles() {
     }
     throw error;
   }
-  const paths = stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  const paths = uniqueStrings(stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean));
   const items = [];
   const rejected = [];
   for (const selectedPath of paths) {
@@ -533,9 +533,22 @@ async function listAssets(sourcePath) {
   return runJsonProcess(PYTHON, [scriptPath("list_event_assets.py"), "--fcpxml", resolved]);
 }
 
+function uniqueStrings(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of Array.isArray(values) ? values : []) {
+    if (value === null || value === undefined || value === "") continue;
+    const stringValue = String(value);
+    if (!stringValue || seen.has(stringValue)) continue;
+    seen.add(stringValue);
+    result.push(stringValue);
+  }
+  return result;
+}
+
 function selectedAssetArgs(assetIds, analyzeAll) {
   if (analyzeAll) return ["--all"];
-  const ids = Array.isArray(assetIds) ? assetIds.filter(Boolean) : [];
+  const ids = uniqueStrings(assetIds);
   if (!ids.length) throw new Error("select at least one asset");
   return ids.flatMap((id) => ["--asset-id", String(id)]);
 }
@@ -583,29 +596,47 @@ function normalizeSourceJobs(body = {}) {
   if (!requestedJobs.length) {
     throw new Error("select at least one source");
   }
-  return requestedJobs.map((job, index) => {
+  const mergedJobs = [];
+  const jobsBySourcePath = new Map();
+  for (const [index, job] of requestedJobs.entries()) {
     const sourcePath = expandPath(job.sourcePath);
     if (!sourcePath) {
       throw new Error(`sourceJobs[${index}].sourcePath is required`);
     }
-    const assetIds = Array.isArray(job.assetIds) ? job.assetIds.filter(Boolean).map(String) : [];
+    const assetIds = uniqueStrings(job.assetIds);
     const analyzeAll = job.analyzeAll === true;
     if (!analyzeAll && !assetIds.length) {
       throw new Error(`sourceJobs[${index}] must select at least one asset`);
     }
     const importsDir = outputDirValue(job.importsDir || job.outputDir || body.importsDir || body.outputDir, sourcePath);
     const cacheRoot = cacheRootValue(job.cacheRoot || body.cacheRoot || importsDir, sourcePath, importsDir);
-    return {
+    const normalizedJob = {
       sourcePath,
       sourceItem: job.sourceItem || null,
       sourceName: (job.sourceItem && job.sourceItem.name) || path.basename(sourcePath),
       importsDir,
       outputDir: importsDir,
       cacheRoot,
-      assetIds,
+      assetIds: analyzeAll ? [] : assetIds,
       analyzeAll,
     };
-  });
+    const existing = jobsBySourcePath.get(sourcePath);
+    if (!existing) {
+      jobsBySourcePath.set(sourcePath, normalizedJob);
+      mergedJobs.push(normalizedJob);
+      continue;
+    }
+    if (existing.importsDir !== normalizedJob.importsDir || existing.cacheRoot !== normalizedJob.cacheRoot) {
+      throw new Error(`sourceJobs contain duplicate sourcePath with conflicting output or cache roots: ${sourcePath}`);
+    }
+    existing.analyzeAll = existing.analyzeAll || normalizedJob.analyzeAll;
+    existing.assetIds = existing.analyzeAll ? [] : uniqueStrings([...existing.assetIds, ...normalizedJob.assetIds]);
+    if (!existing.sourceItem && normalizedJob.sourceItem) {
+      existing.sourceItem = normalizedJob.sourceItem;
+      existing.sourceName = normalizedJob.sourceName;
+    }
+  }
+  return mergedJobs;
 }
 
 function sourceResultDir(id, sourceIndex, totalSources) {

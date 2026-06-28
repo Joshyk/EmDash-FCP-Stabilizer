@@ -88,6 +88,52 @@ test("normalizeSourceJobs preserves legacy single source run bodies", () => {
   assert.deepEqual(jobs[0].assetIds, ["r2"]);
 });
 
+test("normalizeSourceJobs merges duplicate source jobs and asset IDs", () => {
+  const jobs = normalizeSourceJobs({
+    sourceJobs: [
+      {
+        sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+        importsDir: "/tmp/imports",
+        cacheRoot: "/tmp/cache",
+        assetIds: ["r2", "r2", "r3"],
+      },
+      {
+        sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+        importsDir: "/tmp/imports",
+        cacheRoot: "/tmp/cache",
+        assetIds: ["r3", "r4"],
+      },
+    ],
+  });
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].sourcePath, path.resolve("/Volumes/Edit/Project/Event.fcpxmld"));
+  assert.equal(jobs[0].importsDir, path.resolve("/tmp/imports"));
+  assert.equal(jobs[0].cacheRoot, path.resolve("/tmp/cache"));
+  assert.deepEqual(jobs[0].assetIds, ["r2", "r3", "r4"]);
+});
+
+test("normalizeSourceJobs rejects duplicate source jobs with conflicting roots", () => {
+  assert.throws(
+    () => normalizeSourceJobs({
+      sourceJobs: [
+        {
+          sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+          importsDir: "/tmp/imports-a",
+          cacheRoot: "/tmp/cache-a",
+          assetIds: ["r2"],
+        },
+        {
+          sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+          importsDir: "/tmp/imports-b",
+          cacheRoot: "/tmp/cache-b",
+          assetIds: ["r2"],
+        },
+      ],
+    }),
+    /duplicate sourcePath with conflicting output or cache roots/
+  );
+});
+
 test("normalizeSourceJobs scopes roots per source and still forces fcpbundle outputs beside the bundle", () => {
   const jobs = normalizeSourceJobs({
     sourceJobs: [
