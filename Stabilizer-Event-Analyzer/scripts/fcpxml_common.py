@@ -19,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 8
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 9
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -371,6 +371,17 @@ def fcp_color_space(color_primaries: str | None, color_transfer: str | None, col
     return None
 
 
+def fcp_format_frame_rate_label(frame_duration: Fraction) -> str:
+    fps = Fraction(1, 1) / frame_duration
+    if fps.denominator == 1:
+        return str(fps.numerator)
+    return f"{int(round(float(fps) * 100)):04d}"
+
+
+def fcp_format_name(width: int, height: int, frame_duration: Fraction) -> str:
+    return f"FFVideoFormat{width}x{height}p{fcp_format_frame_rate_label(frame_duration)}"
+
+
 def probe_video_metadata(media_path: Path, ffprobe: str) -> VideoMetadata:
     result = subprocess.run(
         [
@@ -502,12 +513,12 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
                     asset_index += 1
                     format_attrs = {
                         "id": format_id,
+                        "name": fcp_format_name(metadata.width, metadata.height, metadata.frame_duration),
                         "frameDuration": time_string(metadata.frame_duration),
                         "width": str(metadata.width),
                         "height": str(metadata.height),
+                        "colorSpace": metadata.color_space or "1-1-1 (Rec. 709)",
                     }
-                    if metadata.color_space:
-                        format_attrs["colorSpace"] = metadata.color_space
                     ET.SubElement(
                         resource_node,
                         "format",

@@ -245,6 +245,13 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
         tag = local_name(element.tag)
         if tag == "project":
             project_count += 1
+        if tag == "sequence":
+            format_id = element.attrib.get("format")
+            format_resource = resource_map.get(format_id or "")
+            if format_id and format_resource is None:
+                failures.append(f"sequence format resource is missing: {format_id}")
+            elif format_resource is not None and not (format_resource.attrib.get("name") or format_resource.attrib.get("colorSpace")):
+                failures.append(f"sequence format resource lacks FCP format name/colorSpace: {format_id}")
         if tag == "filter-video":
             invalid_attrs = invalid_filter_video_attrs(root, element)
             if invalid_attrs:
