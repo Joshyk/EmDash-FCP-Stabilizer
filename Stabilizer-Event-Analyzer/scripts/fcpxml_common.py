@@ -19,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 7
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 8
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -138,11 +138,6 @@ def time_string(value: Fraction) -> str:
 
 def stable_fcp_asset_uid(seed: str) -> str:
     return hashlib.md5(seed.encode("utf-8")).hexdigest().upper()
-
-
-def stable_fcp_resource_id(prefix: str, seed: str) -> str:
-    digest = hashlib.md5(f"{prefix}|{seed}".encode("utf-8")).hexdigest()
-    return f"r{int(digest[:12], 16) + 1}"
 
 
 def fcpbundle_media_uid(media_path: Path) -> str:
@@ -475,11 +470,13 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
     if color_processing:
         library_attrs["colorProcessing"] = color_processing
     library_node = ET.SubElement(root, "library", library_attrs)
+    asset_index = 1
     for event_dir in fcpbundle_event_dirs(bundle_path):
         event_node = ET.SubElement(library_node, "event", {"name": event_dir.name})
         event_media = [media_path for media_event, media_path in media_files if media_event == event_dir]
         for media_path in event_media:
-            asset_id = stable_fcp_resource_id("A", str(media_path))
+            asset_id = f"r{asset_index}"
+            asset_index += 1
             attrs = {
                 "id": asset_id,
                 "name": media_path.stem,
@@ -501,7 +498,8 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
             else:
                 try:
                     metadata = probe_video_metadata(media_path, ffprobe)
-                    format_id = stable_fcp_resource_id("F", f"{media_path}|format")
+                    format_id = f"r{asset_index}"
+                    asset_index += 1
                     format_attrs = {
                         "id": format_id,
                         "frameDuration": time_string(metadata.frame_duration),

@@ -169,7 +169,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
   const sourceManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(sourceManifest.syntheticSchemaVersion, 7);
+  assert.equal(sourceManifest.syntheticSchemaVersion, 8);
   assert.equal(sourceManifest.colorProcessing, "wide-hdr");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
@@ -1098,6 +1098,51 @@ test("validate_stabilizer_fcpxml_import rejects manifest mediaPath mismatch", ()
   assert.equal(validation.status, "fail");
   assert.equal(validation.importReady, false);
   assert.match(validation.failures.join("\n"), /does not match manifest mediaPath/);
+});
+
+test("validate_stabilizer_fcpxml_import rejects non-numeric resource ids", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-resource-id-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const infoPath = path.join(pkg.outputPackage, "Info.fcpxml");
+  const validInfo = fs.readFileSync(infoPath, "utf8");
+  const brokenInfo = validInfo.replace(/id="r1"/, 'id="rFABC"').replace(/format="r1"/g, 'format="rFABC"');
+  fs.writeFileSync(infoPath, brokenInfo, "utf8");
+  const result = spawnSync("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    pkg.outputPackage,
+    "--manifest",
+    pkg.manifestPath,
+    "--output",
+    pkg.validationPath,
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  const validation = JSON.parse(result.stdout);
+  assert.equal(validation.status, "fail");
+  assert.equal(validation.importReady, false);
+  assert.match(validation.failures.join("\n"), /resource id is not FCP numeric r-id/);
 });
 
 test("install_stabilizer_package_cache infers Event root from manifest mediaPath", () => {

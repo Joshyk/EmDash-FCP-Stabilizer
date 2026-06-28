@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import xml.etree.ElementTree as ET
 from fractions import Fraction
@@ -17,6 +18,7 @@ from build_stabilizer_fcpxml_import import EFFECT_NAME, EFFECT_UID, LEGACY_FILTE
 
 ALWAYS_INVALID_FILTER_VIDEO_ATTRS = {"videoOverride"}
 NAME_OVERRIDE_MIN_VERSION = (1, 12)
+FCP_RESOURCE_ID_PATTERN = re.compile(r"^r[0-9]+$")
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -70,6 +72,10 @@ def resource_by_id(root: ET.Element) -> dict[str, ET.Element]:
         for child in resources(root)
         if child.attrib.get("id")
     }
+
+
+def valid_fcp_resource_id(value: str | None) -> bool:
+    return bool(value and FCP_RESOURCE_ID_PATTERN.fullmatch(value))
 
 
 def parent_map(root: ET.Element) -> dict[ET.Element, ET.Element]:
@@ -195,6 +201,10 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
         failures.append("manifest is missing assetId")
     if not cache_identity:
         failures.append("manifest is missing cacheIdentity")
+    for resource in resources(root):
+        resource_id = resource.attrib.get("id")
+        if resource_id and not valid_fcp_resource_id(resource_id):
+            failures.append(f"resource id is not FCP numeric r-id: {resource_id}")
     if asset is None or local_name(asset.tag) != "asset":
         failures.append(f"analyzed asset resource is missing: {asset_id}")
     else:
