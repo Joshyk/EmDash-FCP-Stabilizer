@@ -2461,33 +2461,49 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let leadSeconds = max(0.0, leadTimeSeconds.isFinite ? leadTimeSeconds : 0.0)
         let holdSeconds = max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0)
         let releaseSeconds = max(0.0, transitionDurationSeconds.isFinite ? transitionDurationSeconds : 0.0)
+        let playbackKeypoints = protectedDemandSamples.map { demandSample in
+            AutoCropZoomKeypoint(
+                peakSeconds: demandSample.seconds,
+                startSeconds: max(firstTime, demandSample.seconds - leadSeconds),
+                holdEndSeconds: min(lastTime, demandSample.seconds + holdSeconds),
+                endSeconds: min(lastTime, demandSample.seconds + holdSeconds + releaseSeconds),
+                scale: demandSample.scale,
+                positionPixels: vector_float2(0.0, 0.0)
+            )
+        }
         var plannedSamples: [AutoCropPlaybackScaleSample] = []
         plannedSamples.reserveCapacity(samples.count)
         var minimumPlannedScale = Float.greatestFiniteMagnitude
         var maximumPlannedScale = Float(1.0)
+        var activeKeypointStartIndex = playbackKeypoints.startIndex
 
         for sample in samples {
+            while activeKeypointStartIndex < playbackKeypoints.endIndex {
+                let keypoint = playbackKeypoints[activeKeypointStartIndex]
+                guard keypoint.endSeconds < sample.seconds - 1e-9 else {
+                    break
+                }
+                activeKeypointStartIndex = playbackKeypoints.index(after: activeKeypointStartIndex)
+            }
+
             var scale = Float(1.0)
-            for demandSample in protectedDemandSamples {
-                let keypoint = AutoCropZoomKeypoint(
-                    peakSeconds: demandSample.seconds,
-                    startSeconds: max(firstTime, demandSample.seconds - leadSeconds),
-                    holdEndSeconds: min(lastTime, demandSample.seconds + holdSeconds),
-                    endSeconds: min(lastTime, demandSample.seconds + holdSeconds + releaseSeconds),
-                    scale: demandSample.scale,
-                    positionPixels: vector_float2(0.0, 0.0)
-                )
+            var keypointIndex = activeKeypointStartIndex
+            while keypointIndex < playbackKeypoints.endIndex {
+                let keypoint = playbackKeypoints[keypointIndex]
+                guard keypoint.startSeconds <= sample.seconds + 1e-9 else {
+                    break
+                }
                 let influence = autoCropZoomKeypointInfluence(
                     keypoint,
                     at: sample.seconds
                 )
-                guard influence > 0.0001 else {
-                    continue
+                if influence > 0.0001 {
+                    scale = max(
+                        scale,
+                        Float(1.0) + ((keypoint.scale - Float(1.0)) * influence)
+                    )
                 }
-                scale = max(
-                    scale,
-                    Float(1.0) + ((demandSample.scale - Float(1.0)) * influence)
-                )
+                keypointIndex = playbackKeypoints.index(after: keypointIndex)
             }
             let quantizedScale = autoCropPlaybackQuantizedScale(scale)
             minimumPlannedScale = min(minimumPlannedScale, quantizedScale)
