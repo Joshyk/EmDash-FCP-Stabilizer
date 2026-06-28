@@ -1786,6 +1786,15 @@ enum AutoStabilizationEstimator {
         smoothedTransform.residual = rawCenterTransform.residual
         smoothedTransform.searchRadiusHitCount = rawCenterTransform.searchRadiusHitCount
         smoothedTransform.searchRadiusTotalCount = rawCenterTransform.searchRadiusTotalCount
+        // Footstep Jitter is frame-local; broad temporal smoothing is only for TURN/SWOB.
+        smoothedTransform.microPixelOffset = rawCenterTransform.microPixelOffset
+        smoothedTransform.footstepJitterRotationDegrees = rawCenterTransform.footstepJitterRotationDegrees
+        smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
+        smoothedTransform.microConfidence = rawCenterTransform.microConfidence
+        smoothedTransform.footstepImpulse = rawCenterTransform.footstepImpulse
+        smoothedTransform.rawFootstepCorrection = rawCenterTransform.rawFootstepCorrection
+        smoothedTransform.limitedFootstepCorrection = rawCenterTransform.limitedFootstepCorrection
+        smoothedTransform.footstepPulseLimited = rawCenterTransform.footstepPulseLimited
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
             + smoothedTransform.microPixelOffset
             + smoothedTransform.strideWobblePixelOffset
