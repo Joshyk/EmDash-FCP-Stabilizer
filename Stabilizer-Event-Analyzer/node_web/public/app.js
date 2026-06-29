@@ -3,6 +3,7 @@
 const LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v2";
 const LEGACY_LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v1";
 const DEFAULT_ANALYSIS_DIR_NAME = "stablizer_analysis";
+const HIDDEN_CLIP_NAME_TOKEN = "(fcp1)";
 
 const state = {
   config: null,
@@ -320,6 +321,10 @@ function clipKey(sourcePath, assetId) {
   return JSON.stringify([sourcePath, assetId]);
 }
 
+function shouldListAsset(asset) {
+  return !String((asset && asset.name) || "").toLowerCase().includes(HIDDEN_CLIP_NAME_TOKEN);
+}
+
 function selectedClipCountForSource(sourcePath) {
   return state.assets.filter((asset) => asset.sourcePath === sourcePath && state.selectedClipKeys.has(clipKey(asset.sourcePath, asset.assetId))).length;
 }
@@ -563,15 +568,17 @@ async function loadAssets() {
           method: "POST",
           body: { sourcePath: source.path },
         });
-        const sourceAssets = (payload.assets || []).map((asset) => ({
-          ...asset,
-          sourcePath: source.path,
-          sourceName: source.name || exportNameForPath(source.path),
-          sourceKind: source.kind || exportKindForPath(source.path),
-          sourceInfoPath: payload.infoPath,
-          sourcePackagePath: payload.packagePath,
-          sourceEventNames: payload.eventNames || [],
-        }));
+        const sourceAssets = (payload.assets || [])
+          .filter(shouldListAsset)
+          .map((asset) => ({
+            ...asset,
+            sourcePath: source.path,
+            sourceName: source.name || exportNameForPath(source.path),
+            sourceKind: source.kind || exportKindForPath(source.path),
+            sourceInfoPath: payload.infoPath,
+            sourcePackagePath: payload.packagePath,
+            sourceEventNames: payload.eventNames || [],
+          }));
         state.assets.push(...sourceAssets);
         loadedSourceCount += 1;
         if (state.pendingPresetClipKeys) {
