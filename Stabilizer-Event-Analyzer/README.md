@@ -111,7 +111,7 @@ cache files are staged below that folder:
 ```text
 Exports/
 Exports/SomeLibrary.fcpbundle
-Exports/stablizer_analysis/P1000304__sample100__schema25__63720f__2026-06-22/P1000304.fcpxmld/
+Exports/stablizer_analysis/P1000304__sample100__schema26__63720f__2026-06-22/P1000304.fcpxmld/
 Exports/stablizer_analysis/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
 ```
 

@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 25
+private let cacheSchemaVersion = 26
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -34,8 +34,9 @@ private let maxFarFieldShear: Float = 0.008
 private let maxFarFieldYawPitchProxy: Float = 0.004
 private let maxFarFieldPerspective: Float = 0.003
 private let coarseMotionSearchStep = 6
-private let fineMotionSearchRadius = 4
+private let fineMotionSearchRadius = 3
 private let fineMotionSearchStep = 1
+private let progressMinimumPublishIntervalSeconds = 0.5
 private let progressOutputIsTerminal = isatty(STDERR_FILENO) == 1
 private let analyzerVideoOutputSettings: [String: Any] = [
     kCVPixelBufferPixelFormatTypeKey as String: [
@@ -764,6 +765,7 @@ private final class AnalyzerFrameProgressReporter {
     private var submittedFrameCount = 0
     private var lastPublishedCompletedFrameCount = 0
     private var lastPublishedSubmittedFrameCount = 0
+    private var lastPublishedAt = Date.distantPast
 
     init(enabled: Bool, label: String, totalFrameCount: Int) {
         self.enabled = enabled
@@ -796,14 +798,17 @@ private final class AnalyzerFrameProgressReporter {
         lock.lock()
         completedFrameCount = min(totalFrameCount, completedFrameCount + completedFrameCountDelta)
         submittedFrameCount = min(totalFrameCount, max(submittedFrameCount + submittedFrameCountDelta, completedFrameCount))
+        let now = Date()
+        let frameDeltaReached = completedFrameCount - lastPublishedCompletedFrameCount >= publishEveryFrameCount
+            || submittedFrameCount - lastPublishedSubmittedFrameCount >= publishEveryFrameCount
         let shouldPublish = force
             || completedFrameCount >= totalFrameCount
             || submittedFrameCount >= totalFrameCount
-            || completedFrameCount - lastPublishedCompletedFrameCount >= publishEveryFrameCount
-            || submittedFrameCount - lastPublishedSubmittedFrameCount >= publishEveryFrameCount
+            || (frameDeltaReached && now.timeIntervalSince(lastPublishedAt) >= progressMinimumPublishIntervalSeconds)
         if shouldPublish {
             lastPublishedCompletedFrameCount = completedFrameCount
             lastPublishedSubmittedFrameCount = submittedFrameCount
+            lastPublishedAt = now
             message = progressMessageLocked()
         } else {
             message = nil
@@ -2467,7 +2472,7 @@ private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int
 private func analyzerTextureCacheFlushInterval(sourcePixelCount: Int) -> Int {
     let bytesPerSourceFrame = max(1, sourcePixelCount * 4)
     let memoryGB = analyzerPhysicalMemoryGB()
-    let textureCacheBudget = Int((memoryGB <= 18 ? 128 : memoryGB <= 36 ? 384 : 768) * 1024 * 1024)
+    let textureCacheBudget = Int((memoryGB < 16 ? 128 : memoryGB <= 18 ? 256 : memoryGB <= 36 ? 384 : 768) * 1024 * 1024)
     return max(1, min(60, textureCacheBudget / bytesPerSourceFrame))
 }
 
