@@ -14,6 +14,7 @@ from typing import Iterable
 
 from fcpxml_common import SCHEMA_VERSION, file_url_to_path, local_name, parse_time, resolve_info_path, resources
 from build_stabilizer_fcpxml_import import EFFECT_NAME, EFFECT_UID, LEGACY_FILTER_NAMES
+from event_cache_resolution import resolve_event_root_from_manifest
 
 
 ALWAYS_INVALID_FILTER_VIDEO_ATTRS = {"videoOverride"}
@@ -203,27 +204,30 @@ def cache_index_entry(manifest_path: Path, manifest: dict, cache_identity: str) 
     return None
 
 
-def manifest_event_root_failures(manifest: dict) -> list[str]:
+def manifest_event_root_validation(manifest: dict, manifest_path: Path, cache_identity: str) -> tuple[list[str], dict | None]:
     event_root_value = manifest.get("eventRoot")
     if not event_root_value:
-        return []
+        return [], None
 
-    event_root = Path(str(event_root_value)).expanduser()
+    cache_file_name = manifest.get("cacheFileName")
+    resolution = resolve_event_root_from_manifest(
+        manifest,
+        manifest_path,
+        cache_identity,
+        str(cache_file_name) if cache_file_name else None,
+    )
+    if resolution.get("status") != "ok":
+        return [str(resolution.get("message") or "manifest Event root could not be resolved")], resolution
+
+    event_root = Path(str(resolution["eventRoot"])).expanduser()
     failures = []
-    if not event_root.exists():
-        failures.append(f"manifest Event root is missing: {event_root}")
-        return failures
-    if not event_root.is_dir():
-        failures.append(f"manifest Event root is not a directory: {event_root}")
-        return failures
-
     event_name = manifest.get("eventName")
-    if event_name and event_root.name != event_name:
+    if resolution.get("source") == "manifest-event-root" and event_name and event_root.name != event_name:
         failures.append(f"manifest eventName does not match eventRoot folder name: {event_name} != {event_root.name}")
-    return failures
+    return failures, resolution
 
 
-def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]:
+def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> tuple[list[str], dict | None]:
     failures: list[str] = []
     asset_id = manifest.get("assetId")
     cache_identity = (manifest.get("cacheIdentity") or "").strip()
@@ -235,7 +239,10 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
         failures.append("manifest is missing assetId")
     if not cache_identity:
         failures.append("manifest is missing cacheIdentity")
-    failures.extend(manifest_event_root_failures(manifest))
+    event_root_resolution = None
+    if cache_identity:
+        event_root_failures, event_root_resolution = manifest_event_root_validation(manifest, manifest_path, cache_identity)
+        failures.extend(event_root_failures)
     for resource in resources(root):
         resource_id = resource.attrib.get("id")
         if resource_id and not valid_fcp_resource_id(resource_id):
@@ -357,7 +364,7 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"cache payload is unreadable: {exc}")
 
-    return sorted(set(failures))
+    return sorted(set(failures)), event_root_resolution
 
 
 def main(argv: Iterable[str]) -> int:
@@ -366,7 +373,7 @@ def main(argv: Iterable[str]) -> int:
         info_path, package_path = resolve_info_path(args.fcpxml)
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
         root = ET.parse(info_path).getroot()
-        failures = validate(root, manifest, args.manifest)
+        failures, event_root_resolution = validate(root, manifest, args.manifest)
         payload = {
             "schemaVersion": SCHEMA_VERSION,
             "status": "pass" if not failures else "fail",
@@ -376,6 +383,7 @@ def main(argv: Iterable[str]) -> int:
             "assetId": manifest.get("assetId"),
             "cacheIdentity": manifest.get("cacheIdentity"),
             "cacheIdentityShort": manifest.get("cacheIdentityShort"),
+            "eventRootResolution": event_root_resolution,
             "failures": failures,
             "importReady": not failures,
         }

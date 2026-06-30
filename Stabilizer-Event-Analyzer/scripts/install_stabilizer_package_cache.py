@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 from fcpxml_common import SCHEMA_VERSION
+from event_cache_resolution import resolve_event_root_from_manifest
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -116,11 +117,32 @@ def main(argv: Iterable[str]) -> int:
         if index_entry.get("cacheFileName") != source_cache_file.name:
             raise ValueError("cache payload index file name does not match manifest")
 
-        event_root = (
-            args.event_root.expanduser().resolve()
-            if args.event_root
-            else event_root_from_manifest(manifest) or infer_event_root(manifest)
-        )
+        if args.event_root:
+            event_root = args.event_root.expanduser().resolve()
+            event_root_resolution = {
+                "status": "ok",
+                "source": "explicit-event-root",
+                "eventRoot": str(event_root),
+                "message": "explicit --event-root was used",
+            }
+        elif not manifest.get("eventRoot"):
+            event_root = infer_event_root(manifest)
+            event_root_resolution = {
+                "status": "ok",
+                "source": "manifest-media-path",
+                "eventRoot": str(event_root),
+                "message": "Event root inferred from manifest mediaPath",
+            }
+        else:
+            event_root_resolution = resolve_event_root_from_manifest(
+                manifest,
+                manifest_path,
+                cache_identity,
+                source_cache_file.name,
+            )
+            if event_root_resolution.get("status") != "ok" or not event_root_resolution.get("eventRoot"):
+                raise ValueError(str(event_root_resolution.get("message") or "FCP Event root could not be resolved"))
+            event_root = Path(str(event_root_resolution["eventRoot"])).expanduser().resolve()
         if not event_root.exists() or not event_root.is_dir():
             raise FileNotFoundError(f"FCP Event root is missing: {event_root}")
         cache_root = event_root / "Analysis Files" / "TokyoWalkingStabilizerHostAnalysis"
@@ -147,6 +169,7 @@ def main(argv: Iterable[str]) -> int:
                 "status": "ok",
                 "eventRoot": str(event_root),
                 "cacheRoot": str(cache_root),
+                "eventRootResolution": event_root_resolution,
                 "cacheIdentity": cache_identity,
                 "cacheIdentityShort": manifest.get("cacheIdentityShort"),
                 "installedFiles": installed_files,

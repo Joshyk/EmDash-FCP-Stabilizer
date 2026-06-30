@@ -1085,6 +1085,51 @@ test("validate_stabilizer_fcpxml_import rejects stale manifest Event root", () =
   assert.match(validation.failures.join("\n"), /manifest Event root is missing/);
 });
 
+test("validate_stabilizer_fcpxml_import resolves renamed Event by cache identity", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-renamed-event-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const renamedEventRoot = path.join(tmp, "Library.fcpbundle", "Renamed Event");
+  fs.mkdirSync(path.join(renamedEventRoot, "Original Media"), { recursive: true });
+  writeCachePayload(renamedEventRoot, analysis);
+
+  const pkg = build.packages[0];
+  const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  manifest.eventName = "Old Event";
+  manifest.eventRoot = path.join(tmp, "Library.fcpbundle", "Old Event");
+  fs.writeFileSync(pkg.manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const validation = run("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    pkg.outputPackage,
+    "--manifest",
+    pkg.manifestPath,
+    "--output",
+    pkg.validationPath,
+  ]);
+  assert.equal(validation.status, "pass");
+  assert.equal(validation.importReady, true);
+  assert.equal(validation.eventRootResolution.source, "cache-identity-in-current-bundle");
+  assert.equal(validation.eventRootResolution.eventRoot, fs.realpathSync(renamedEventRoot));
+});
+
 test("validate_stabilizer_fcpxml_import rejects missing asset media uid", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-asset-uid-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
@@ -1313,6 +1358,50 @@ test("install_stabilizer_package_cache uses manifest eventRoot when mediaPath is
   const installedIndex = JSON.parse(fs.readFileSync(path.join(install.cacheRoot, "host-analysis-index-v2.json"), "utf8"));
   assert.equal(installedIndex.entries.some((entry) => entry.cacheIdentity === "old-cache-identity"), true);
   assert.equal(installedIndex.entries.some((entry) => entry.cacheIdentity === analysis.cacheIdentity), true);
+});
+
+test("install_stabilizer_package_cache resolves renamed Event by cache identity", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-renamed-event-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const renamedEventRoot = path.join(tmp, "Library.fcpbundle", "Renamed Event");
+  fs.mkdirSync(path.join(renamedEventRoot, "Original Media"), { recursive: true });
+  writeCachePayload(renamedEventRoot, analysis);
+
+  const pkg = build.packages[0];
+  const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  manifest.mediaPath = "/Volumes/External Media/P1000307.mov";
+  manifest.eventName = "Old Event";
+  manifest.eventRoot = path.join(tmp, "Library.fcpbundle", "Old Event");
+  fs.writeFileSync(pkg.manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const install = run("python3", [
+    "scripts/install_stabilizer_package_cache.py",
+    "--manifest",
+    pkg.manifestPath,
+  ]);
+  const resolvedEventRoot = fs.realpathSync(renamedEventRoot);
+  assert.equal(install.status, "ok");
+  assert.equal(install.eventRoot, resolvedEventRoot);
+  assert.equal(install.eventRootResolution.source, "cache-identity-in-current-bundle");
+  assert.equal(install.cacheRoot, path.join(resolvedEventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"));
+  assert.equal(fs.existsSync(path.join(install.cacheRoot, "caches", analysis.cacheFileName)), true);
 });
 
 test("validate_stabilizer_fcpxml_import fails cache identity mismatch before FCP import", () => {
