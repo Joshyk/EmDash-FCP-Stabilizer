@@ -576,8 +576,9 @@ enum AutoStabilizationEstimator {
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 15
     private static let renderTemporalSmoothingWindowSeconds = 1.20
-    private static let renderTurnTransitionSmoothingSampleCount = 21
-    private static let renderTurnTransitionSmoothingWindowSeconds = 2.0
+    private static let renderTurnTransitionSmoothingSampleCount = 29
+    private static let renderTurnTransitionSmoothingWindowSeconds = 2.8
+    private static let renderTurnTransitionMinimumMacroPixels: Float = 0.5
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.20
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -1449,6 +1450,10 @@ enum AutoStabilizationEstimator {
             trackingConfidence: turnTrackingConfidence
         )
         let confidence = turnBandConfidence * turnOwnershipX
+        let turnCorrectionConfidence = turnCorrectionConfidence(
+            confidence: confidence,
+            turnOwnership: turnOwnershipX
+        )
         let rawTurnShakeSuppression = turnStabilizerShakeSuppression(
             turnOwnership: turnOwnershipX,
             turnConfidence: confidence
@@ -1473,7 +1478,7 @@ enum AutoStabilizationEstimator {
         let strideRollConfidence = rawStrideRollConfidence * strideRollTurnGate
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-        let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: confidence)
+        let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidence)
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -1713,7 +1718,7 @@ enum AutoStabilizationEstimator {
             warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             strideConfidence: strideConfidence,
-            turnConfidence: confidence,
+            turnConfidence: turnCorrectionConfidence,
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount,
             yawPitchProxy: yawPitchProxy,
@@ -1896,8 +1901,8 @@ enum AutoStabilizationEstimator {
         let denominator = Double(max(1, sampleCount - 1))
         let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
         let sigma = max(1e-6, halfWindow * 0.55)
-        var samples: [(transform: StabilizerAutoTransform, weight: Float)] = [(centerTransform, 1.0)]
-        samples.reserveCapacity(sampleCount)
+        var rawSamples: [(transform: StabilizerAutoTransform, timeWeight: Float, isCenter: Bool)] = [(centerTransform, 1.0, true)]
+        rawSamples.reserveCapacity(sampleCount)
         for sampleIndex in 0..<sampleCount {
             guard sampleIndex != centerSample else {
                 continue
@@ -1922,7 +1927,50 @@ enum AutoStabilizationEstimator {
                 limitFootstepContinuity: false,
                 includeFarFieldWarp: false
             )
-            samples.append((transform: transform, weight: weight))
+            rawSamples.append((transform: transform, timeWeight: weight, isCenter: false))
+        }
+
+        let supportMagnitude = rawSamples.reduce(Float(0.0)) { magnitude, sample in
+            max(magnitude, abs(sample.transform.macroPixelOffset.x))
+        }
+        guard supportMagnitude >= renderTurnTransitionMinimumMacroPixels else {
+            return [(centerTransform, 1.0)]
+        }
+        let signedSupport = rawSamples.reduce(Float(0.0)) { total, sample in
+            let confidenceWeight = 0.20 + turnCorrectionConfidenceResponse(sample.transform.turnConfidence)
+            return total + (sample.transform.macroPixelOffset.x * sample.timeWeight * confidenceWeight)
+        }
+        let dominantSign: Float = signedSupport >= 0.0 ? 1.0 : -1.0
+        let samples = rawSamples.compactMap { sample -> (transform: StabilizerAutoTransform, weight: Float)? in
+            let macroX = sample.transform.macroPixelOffset.x
+            let macroMagnitude = abs(macroX)
+            let confidenceWeight = 0.20 + (turnCorrectionConfidenceResponse(sample.transform.turnConfidence) * 1.25)
+            let magnitudeSupport = confidenceRamp(
+                macroMagnitude,
+                start: supportMagnitude * 0.10,
+                full: max(supportMagnitude * 0.45, renderTurnTransitionMinimumMacroPixels)
+            )
+            let directionSupport: Float
+            if macroMagnitude < renderTurnTransitionMinimumMacroPixels {
+                directionSupport = sample.isCenter ? 0.25 : 0.10
+            } else {
+                directionSupport = (macroX * dominantSign) >= 0.0 ? 1.0 : 0.15
+            }
+            let centerScale: Float = sample.isCenter
+                ? 0.25 + (turnCorrectionConfidenceResponse(sample.transform.turnConfidence) * 0.75)
+                : 1.0
+            let weight = sample.timeWeight
+                * confidenceWeight
+                * max(0.15, magnitudeSupport)
+                * directionSupport
+                * centerScale
+            guard weight > 0.0001 else {
+                return nil
+            }
+            return (transform: sample.transform, weight: weight)
+        }
+        guard !samples.isEmpty else {
+            return [(centerTransform, 1.0)]
         }
         return samples
     }
@@ -4216,12 +4264,12 @@ enum AutoStabilizationEstimator {
 
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
         let requestedRemoval = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
-        let confidenceResponse = correctionConfidenceResponse(confidence)
+        let confidenceResponse = turnCorrectionConfidenceResponse(confidence)
         let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
         let confidenceBoost = max(0.0, requestedRemoval - 1.0)
-            * 0.20
+            * 0.40
             * confidenceResponse
-            * (1.0 - (confidenceResponse * 0.35))
+            * (1.0 - (confidenceResponse * 0.25))
         return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
     }
 
@@ -4239,6 +4287,12 @@ enum AutoStabilizationEstimator {
     private static func correctionConfidenceResponse(_ confidence: Float) -> Float {
         let boundedConfidence = clamp(confidence, min: 0.0, max: 1.0)
         return boundedConfidence * boundedConfidence * (3.0 - (2.0 * boundedConfidence))
+    }
+
+    private static func turnCorrectionConfidenceResponse(_ confidence: Float) -> Float {
+        let boundedConfidence = clamp(confidence, min: 0.0, max: 1.0)
+        let eased = boundedConfidence * (1.0 + ((1.0 - boundedConfidence) * 1.0))
+        return clamp(eased, min: 0.0, max: 1.0)
     }
 
     private static func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {
@@ -4441,6 +4495,14 @@ enum AutoStabilizationEstimator {
     ) -> Float {
         let ownershipQuality = confidenceRamp(turnOwnership, start: 0.12, full: 0.48)
         return clamp(max(turnConfidence, ownershipQuality), min: 0.0, max: 1.0)
+    }
+
+    private static func turnCorrectionConfidence(
+        confidence: Float,
+        turnOwnership: Float
+    ) -> Float {
+        let ownershipFloor = confidenceRamp(turnOwnership, start: 0.12, full: 0.48) * 0.42
+        return clamp(max(confidence, ownershipFloor), min: 0.0, max: 1.0)
     }
 
     private static func smoothedTurnShakeSuppression(

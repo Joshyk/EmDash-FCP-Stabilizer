@@ -45,11 +45,12 @@ estimators, or Transform-keyframe writers back into this target.
   broader Turn Smoothing bands so walking-gimbal shake is separated by
   time scale without rerunning Host Analysis. Footstep Jitter keeps a short `0.18` second
   confidence-aware smoothing pass around the current render frame after `1.20` second,
-  15-sample zero-phase broad smoothing. Turn Smoothing then gets a separate `2.0` second,
-  21-sample zero-phase transition pass for macro X correction only, while TURN ownership
-  gates are smoothed across `0.90` seconds so FJIT/SWOB/WARP do not toggle abruptly during
-  turn entry and exit. Far-field Warp uses a shorter `0.20` second in-range frame-sampled
-  smoothing window so ridge-line correction stays responsive.
+  15-sample zero-phase broad smoothing. Turn Smoothing then gets a separate `2.8` second,
+  29-sample zero-phase transition pass for macro X correction only. That pass weights
+  same-direction, high-confidence TURN corrections over broken center frames, while TURN
+  ownership gates are smoothed across `0.90` seconds so FJIT/SWOB/WARP do not toggle abruptly
+  during turn entry and exit. Far-field Warp uses a shorter `0.20` second in-range
+  frame-sampled smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
 - New schema 26 analysis keeps the schema 25 coarse full-radius pass, tightens the fine
@@ -220,8 +221,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, defaults to `2.0`, runs up to `12.0`, and the macro
   correction is soft-limited to a small output-edge budget. Render playback applies an
-  additional `2.0` second zero-phase transition pass to the macro X correction so the start
-  and end of walking turns do not step between corrections.
+  additional `2.8` second zero-phase transition pass to the macro X correction so the start
+  and end of walking turns do not step between corrections, even across short low-confidence
+  tracking dropouts.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
   motion paths. The default is `6.0` seconds. The UI value is used as the TURN window,
   and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run
@@ -301,6 +303,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   Missing or unusable caches show `External Analysis Required - Run Event Analyzer`,
   `Cache Unsupported - Run Event Analyzer`, `Cache Incomplete - Run Event Analyzer`, or
   `Cache Rejected - Run Event Analyzer`.
+  The local Event Analyzer keeps full sample quality when it speeds up analysis; on 16 GB
+  Apple Silicon and larger machines it runs three GPU frame slots per hardware
+  VideoToolbox reader lane instead of reducing sample scale or motion-search density.
 - `Sample Info`: read-only Inspector row built from the structured cache snapshot as
   `Sample: <percent or unknown> -> <WxH> | Analysis: <N>f`. It does not fall back to hidden
   `Sample Size` or parse status strings. `Clip Range` and `Queue` are deprecated from the

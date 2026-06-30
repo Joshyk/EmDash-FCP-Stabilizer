@@ -2462,10 +2462,12 @@ private func analyzerInFlightLimit(pixelCount: Int, readerLaneCount: Int) -> Int
     let laneCount = max(1, readerLaneCount)
     let bytesPerFrameSlot = max(4 * 1024 * 1024, pixelCount * 6)
     let memoryGB = analyzerPhysicalMemoryGB()
-    let memoryDivisor: UInt64 = memoryGB <= 18 ? 24 : 16
-    let memoryBudget = max(bytesPerFrameSlot * laneCount * 2, Int(ProcessInfo.processInfo.physicalMemory / memoryDivisor))
-    let memoryLimitedTotalSlotCount = max(laneCount * 2, memoryBudget / bytesPerFrameSlot)
-    let memoryLimitedSlotCountPerLane = max(2, memoryLimitedTotalSlotCount / laneCount)
+    let targetSlotCountPerLane = memoryGB <= 10 ? 2 : memoryGB <= 18 ? 3 : 4
+    let memoryDivisor: UInt64 = memoryGB <= 10 ? 24 : memoryGB <= 18 ? 12 : 10
+    let minimumPipelineBudget = bytesPerFrameSlot * laneCount * targetSlotCountPerLane
+    let memoryBudget = max(minimumPipelineBudget, Int(ProcessInfo.processInfo.physicalMemory / memoryDivisor))
+    let memoryLimitedTotalSlotCount = max(laneCount * targetSlotCountPerLane, memoryBudget / bytesPerFrameSlot)
+    let memoryLimitedSlotCountPerLane = max(targetSlotCountPerLane, memoryLimitedTotalSlotCount / laneCount)
     return memoryLimitedSlotCountPerLane
 }
 

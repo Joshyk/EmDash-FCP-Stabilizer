@@ -38,7 +38,7 @@ private struct Strengths {
         strideX: 5.0,
         strideY: 5.0,
         strideR: 0.75,
-        turn: 1.0,
+        turn: 2.0,
         warp: 1.0
     )
 }
@@ -939,10 +939,11 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         turnBandValue: turnBandX,
         trackingConfidence: turnTracking
     )
-    let turnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
+    let rawTurnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
+    let turnQ = turnCorrectionConfidence(confidence: rawTurnQ, turnOwnership: turnOwnershipX)
     let rawTurnShakeSuppression = turnStabilizerShakeSuppression(
         turnOwnership: turnOwnershipX,
-        turnConfidence: turnQ
+        turnConfidence: rawTurnQ
     )
     let turnShakeSuppression = smoothedTurnShakeSuppression(
         rawSuppression: rawTurnShakeSuppression,
@@ -1593,6 +1594,11 @@ private func turnStabilizerShakeSuppression(turnOwnership: Float, turnConfidence
     return clamp(max(turnConfidence, ownershipQuality), min: 0.0, max: 1.0)
 }
 
+private func turnCorrectionConfidence(confidence: Float, turnOwnership: Float) -> Float {
+    let ownershipFloor = confidenceRamp(turnOwnership, start: 0.12, full: 0.48) * 0.42
+    return clamp(max(confidence, ownershipFloor), min: 0.0, max: 1.0)
+}
+
 private func smoothedTurnShakeSuppression(
     rawSuppression: Float,
     gateScales: [Int: Float],
@@ -1921,10 +1927,10 @@ private func percentileValue(_ values: [Float], indices: [Int], percentile: Floa
 }
 
 private func correctionFactor(_ strength: Double, confidence: Float) -> Float {
-    let requested = clamp(Float(strength), min: 0.0, max: 4.0)
-    let response = correctionConfidenceResponse(confidence)
+    let requested = clamp(Float(strength), min: 0.0, max: 12.0)
+    let response = turnCorrectionConfidenceResponse(confidence)
     let direct = min(requested, 1.0) * response
-    let boost = max(0.0, requested - 1.0) * 0.20 * response * (1.0 - (response * 0.35))
+    let boost = max(0.0, requested - 1.0) * 0.40 * response * (1.0 - (response * 0.25))
     return clamp(direct + boost, min: 0.0, max: 1.0)
 }
 
@@ -1939,6 +1945,12 @@ private func walkingCorrectionFactor(_ strength: Double, confidence: Float, maxS
 private func correctionConfidenceResponse(_ confidence: Float) -> Float {
     let bounded = clamp(confidence, min: 0.0, max: 1.0)
     return bounded * bounded * (3.0 - (2.0 * bounded))
+}
+
+private func turnCorrectionConfidenceResponse(_ confidence: Float) -> Float {
+    let bounded = clamp(confidence, min: 0.0, max: 1.0)
+    let eased = bounded * (1.0 + ((1.0 - bounded) * 1.0))
+    return clamp(eased, min: 0.0, max: 1.0)
 }
 
 private func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {
