@@ -47,8 +47,9 @@ estimators, or Transform-keyframe writers back into this target.
   confidence-aware smoothing pass around the current render frame after `1.20` second,
   15-sample zero-phase broad smoothing. Turn Smoothing then gets a separate `2.8` second,
   29-sample zero-phase transition pass for macro X correction only. That pass weights
-  same-direction, high-confidence TURN corrections over broken center frames, while TURN
-  ownership gates are smoothed across `0.90` seconds so FJIT/SWOB/WARP do not toggle abruptly
+  same-direction, high-confidence TURN corrections over broken center frames and preserves
+  a confident center-frame TURN correction when the bridge average would otherwise weaken it.
+  TURN ownership gates are smoothed across `0.90` seconds so FJIT/SWOB/WARP do not toggle abruptly
   during turn entry and exit. Far-field Warp uses a shorter `0.20` second in-range
   frame-sampled smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first

@@ -255,6 +255,26 @@ private struct BandAssessment {
     let note: String
 }
 
+private struct TurnCorrectionSample {
+    let bandX: Float
+    let detected: Float
+    let applied: Float
+    let macroPixelOffsetX: Float
+    let confidence: Float
+    let rawConfidence: Float
+    let ownership: Float
+}
+
+private struct RenderTurnBridgeAssessment {
+    let applied: Float
+    let remaining: Float
+    let confidence: Float
+    let sampleCount: Int
+    let rawApplied: Float
+    let delta: Float
+    let note: String
+}
+
 private struct FrameAssessment {
     let index: Int
     let absoluteTime: Double
@@ -288,6 +308,7 @@ private struct FrameAssessment {
     let footstepLimitedCorrectionY: Float
     let footstepPulseLimitedX: Float
     let footstepPulseLimitedY: Float
+    let renderTurnBridge: RenderTurnBridgeAssessment
     let bands: [BandAssessment]
 
     var topBand: BandAssessment {
@@ -482,6 +503,9 @@ private let turnOwnershipStrideXSuppression: Float = 1.0
 private let turnOwnershipStrideYSuppression: Float = 0.55
 private let turnOwnershipStrideRollSuppression: Float = 0.70
 private let turnOwnershipFarFieldWarpSuppression: Float = 1.0
+private let renderTurnTransitionSmoothingSampleCount = 29
+private let renderTurnTransitionSmoothingWindowSeconds = 2.8
+private let renderTurnTransitionMinimumMacroPixels: Float = 0.5
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -873,7 +897,257 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
     return nil
 }
 
-private func assessment(for context: AssessmentContext, index: Int, options: Options) -> FrameAssessment {
+private func turnCorrectionSample(for context: AssessmentContext, index: Int, options: Options) -> TurnCorrectionSample {
+    let analysis = context.analysis
+    guard analysis.frames.indices.contains(index),
+          context.turnStrideSmoothedXPath.indices.contains(index)
+    else {
+        return TurnCorrectionSample(
+            bandX: 0.0,
+            detected: 0.0,
+            applied: 0.0,
+            macroPixelOffsetX: 0.0,
+            confidence: 0.0,
+            rawConfidence: 0.0,
+            ownership: 0.0
+        )
+    }
+    let frame = analysis.frames[index]
+    let outputWidth = options.outputSize?.width ?? Float(analysis.sampleWidth)
+    let xScale = outputWidth / Float(max(1, analysis.sampleWidth))
+    let turnWindowSeconds = max(strideWindowSeconds, options.turnWindowSeconds)
+    let turnIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: turnWindowSeconds)
+    let centerResidual = analysis.residuals[index]
+    let quality = frameTrackingQuality(
+        motionConfidence: analysis.analysisConfidence[index],
+        residual: centerResidual,
+        blurAmount: analysis.blurAmounts[index],
+        acceptedBlockCount: analysis.acceptedBlockCounts[index],
+        totalBlockCount: analysis.totalBlockCounts[index],
+        qualityModel: analysis.qualityModel
+    )
+    let tracking = frameTrackingConfidence(quality)
+    let turnResidual = percentileValue(analysis.residuals, indices: turnIndices, percentile: 0.75)
+    let turnTracking = residualAdjustedTrackingConfidence(
+        tracking,
+        residual: turnResidual,
+        multiplier: 0.9,
+        qualityModel: analysis.qualityModel
+    )
+    let turnSmoothX = timeWeightedMonotonicSCurveValue(
+        context.turnStrideSmoothedXPath,
+        frames: analysis.frames,
+        indices: turnIndices,
+        centerTime: frame.time,
+        windowSeconds: turnWindowSeconds
+    ) ?? timeWeightedAverage(
+        context.turnStrideSmoothedXPath,
+        frames: analysis.frames,
+        indices: turnIndices,
+        centerTime: frame.time,
+        windowSeconds: turnWindowSeconds
+    )
+    let turnBandX = context.turnStrideSmoothedXPath[index] - turnSmoothX
+    let turnOwnershipX = turnOwnershipConfidence(
+        values: context.turnStrideSmoothedXPath,
+        frames: analysis.frames,
+        indices: turnIndices,
+        turnBandValue: turnBandX,
+        trackingConfidence: turnTracking
+    )
+    let rawTurnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
+    let turnQ = turnCorrectionConfidence(confidence: rawTurnQ, turnOwnership: turnOwnershipX)
+    let correction = correctionFactor(options.strengths.turn, confidence: turnQ)
+    let detected = abs(turnBandX * xScale)
+    let macroPixelOffsetX = -(turnBandX * xScale) * correction
+    return TurnCorrectionSample(
+        bandX: turnBandX,
+        detected: detected,
+        applied: detected * correction,
+        macroPixelOffsetX: macroPixelOffsetX,
+        confidence: turnQ,
+        rawConfidence: rawTurnQ,
+        ownership: turnOwnershipX
+    )
+}
+
+private func nearestFrameIndex(at time: Double, in frames: [AnalysisFrame]) -> Int {
+    guard !frames.isEmpty else {
+        return 0
+    }
+    guard frames.count > 1 else {
+        return 0
+    }
+    if time <= frames[0].time {
+        return 0
+    }
+    let lastIndex = frames.count - 1
+    if time >= frames[lastIndex].time {
+        return lastIndex
+    }
+    let lowerBoundIndex = lowerBoundFrameIndex(frames, time: time)
+    if lowerBoundIndex <= frames.startIndex {
+        return frames.startIndex
+    }
+    if lowerBoundIndex >= frames.endIndex {
+        return lastIndex
+    }
+    let previousIndex = lowerBoundIndex - 1
+    let previousDistance = abs(frames[previousIndex].time - time)
+    let nextDistance = abs(frames[lowerBoundIndex].time - time)
+    return previousDistance <= nextDistance ? previousIndex : lowerBoundIndex
+}
+
+private func renderTurnBridgeAssessment(
+    for context: AssessmentContext,
+    index: Int,
+    options: Options,
+    centerSample: TurnCorrectionSample
+) -> RenderTurnBridgeAssessment {
+    let analysis = context.analysis
+    let frames = analysis.frames
+    guard frames.indices.contains(index),
+          let firstTime = frames.first?.time,
+          let lastTime = frames.last?.time
+    else {
+        return RenderTurnBridgeAssessment(
+            applied: centerSample.applied,
+            remaining: max(0.0, centerSample.detected - centerSample.applied),
+            confidence: centerSample.confidence,
+            sampleCount: 1,
+            rawApplied: centerSample.applied,
+            delta: 0.0,
+            note: "render bridge unavailable"
+        )
+    }
+
+    let sampleCount = max(3, renderTurnTransitionSmoothingSampleCount)
+    let centerSampleIndex = sampleCount / 2
+    let halfWindow = renderTurnTransitionSmoothingWindowSeconds * 0.5
+    let denominator = Double(max(1, sampleCount - 1))
+    let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
+    let sigma = max(1e-6, halfWindow * 0.55)
+    let renderSeconds = frames[index].time
+    var rawSamples: [(sample: TurnCorrectionSample, timeWeight: Float, isCenter: Bool)] = [
+        (centerSample, 1.0, true)
+    ]
+    rawSamples.reserveCapacity(sampleCount)
+    for sampleIndex in 0..<sampleCount {
+        guard sampleIndex != centerSampleIndex else {
+            continue
+        }
+        let offset = Double(sampleIndex - centerSampleIndex) * sampleStep
+        let sampleSeconds = renderSeconds + offset
+        guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+            continue
+        }
+        let normalizedDistance = offset / sigma
+        let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+        guard weight > 0.0001 else {
+            continue
+        }
+        let sampleFrameIndex = nearestFrameIndex(at: sampleSeconds, in: frames)
+        rawSamples.append((
+            turnCorrectionSample(for: context, index: sampleFrameIndex, options: options),
+            weight,
+            false
+        ))
+    }
+
+    let supportMagnitude = rawSamples.reduce(Float(0.0)) { magnitude, sample in
+        max(magnitude, abs(sample.sample.macroPixelOffsetX))
+    }
+    guard supportMagnitude >= renderTurnTransitionMinimumMacroPixels else {
+        return RenderTurnBridgeAssessment(
+            applied: centerSample.applied,
+            remaining: max(0.0, centerSample.detected - centerSample.applied),
+            confidence: centerSample.confidence,
+            sampleCount: rawSamples.count,
+            rawApplied: centerSample.applied,
+            delta: 0.0,
+            note: "render bridge below support threshold"
+        )
+    }
+
+    let signedSupport = rawSamples.reduce(Float(0.0)) { total, sample in
+        let confidenceWeight = 0.20 + turnCorrectionConfidenceResponse(sample.sample.confidence)
+        return total + (sample.sample.macroPixelOffsetX * sample.timeWeight * confidenceWeight)
+    }
+    let dominantSign: Float = signedSupport >= 0.0 ? 1.0 : -1.0
+    var weightedMacro: Float = 0.0
+    var weightedConfidence: Float = 0.0
+    var totalWeight: Float = 0.0
+    var acceptedSamples = 0
+    for sample in rawSamples {
+        let macroX = sample.sample.macroPixelOffsetX
+        let macroMagnitude = abs(macroX)
+        let confidenceWeight = 0.20 + (turnCorrectionConfidenceResponse(sample.sample.confidence) * 1.25)
+        let magnitudeSupport = confidenceRamp(
+            macroMagnitude,
+            start: supportMagnitude * 0.10,
+            full: max(supportMagnitude * 0.45, renderTurnTransitionMinimumMacroPixels)
+        )
+        let directionSupport: Float
+        if macroMagnitude < renderTurnTransitionMinimumMacroPixels {
+            directionSupport = sample.isCenter ? 0.25 : 0.10
+        } else {
+            directionSupport = (macroX * dominantSign) >= 0.0 ? 1.0 : 0.15
+        }
+        let centerScale: Float = sample.isCenter
+            ? 0.25 + (turnCorrectionConfidenceResponse(sample.sample.confidence) * 0.75)
+            : 1.0
+        let weight = sample.timeWeight
+            * confidenceWeight
+            * max(0.15, magnitudeSupport)
+            * directionSupport
+            * centerScale
+        guard weight > 0.0001 else {
+            continue
+        }
+        weightedMacro += macroX * weight
+        weightedConfidence += sample.sample.confidence * weight
+        totalWeight += weight
+        acceptedSamples += 1
+    }
+    guard totalWeight > 0.0 else {
+        return RenderTurnBridgeAssessment(
+            applied: centerSample.applied,
+            remaining: max(0.0, centerSample.detected - centerSample.applied),
+            confidence: centerSample.confidence,
+            sampleCount: 1,
+            rawApplied: centerSample.applied,
+            delta: 0.0,
+            note: "render bridge had no weighted samples"
+        )
+    }
+
+    let averagedMacro = weightedMacro / totalWeight
+    let centerMacro = centerSample.macroPixelOffsetX
+    let bridgedMacro: Float
+    if abs(centerMacro) >= renderTurnTransitionMinimumMacroPixels,
+       abs(centerMacro) > abs(averagedMacro),
+       (centerMacro * averagedMacro) > 0.0
+    {
+        let centerResponse = turnCorrectionConfidenceResponse(centerSample.confidence)
+        let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
+        bridgedMacro = averagedMacro + ((centerMacro - averagedMacro) * centerPreservation)
+    } else {
+        bridgedMacro = averagedMacro
+    }
+    let bridgedApplied = abs(bridgedMacro)
+    let bridgedConfidence = clamp(weightedConfidence / totalWeight, min: 0.0, max: 1.0)
+    return RenderTurnBridgeAssessment(
+        applied: bridgedApplied,
+        remaining: max(0.0, centerSample.detected - bridgedApplied),
+        confidence: bridgedConfidence,
+        sampleCount: acceptedSamples,
+        rawApplied: centerSample.applied,
+        delta: bridgedApplied - centerSample.applied,
+        note: String(format: "29-sample %.2fs bridge support %.3f centerKeep %.3f", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, abs(bridgedMacro - averagedMacro))
+    )
+}
+
+private func assessment(for context: AssessmentContext, index: Int, options: Options, includeRenderTurnBridge: Bool = false) -> FrameAssessment {
     let analysis = context.analysis
     let frame = analysis.frames[index]
     let outputWidth = options.outputSize?.width ?? Float(analysis.sampleWidth)
@@ -882,8 +1156,6 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let yScale = outputHeight / Float(max(1, analysis.sampleHeight))
 
     let strideIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: strideWindowSeconds)
-    let turnWindowSeconds = max(strideWindowSeconds, options.turnWindowSeconds)
-    let turnIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: turnWindowSeconds)
     let warpGateIndices = activeIndices(analysis.frames, centerTime: frame.time, windowSeconds: farFieldOuterWindowSeconds)
     let centerResidual = analysis.residuals[index]
     let quality = frameTrackingQuality(
@@ -913,34 +1185,19 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideSmoothX = context.strideSmoothedXPath[index]
     let strideSmoothY = context.strideSmoothedYPath[index]
     let strideSmoothR = context.strideSmoothedRPath[index]
-    let turnStrideSmoothX = context.turnStrideSmoothedXPath[index]
-    let turnSmoothX = timeWeightedMonotonicSCurveValue(context.turnStrideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
-        ?? timeWeightedAverage(context.turnStrideSmoothedXPath, frames: analysis.frames, indices: turnIndices, centerTime: frame.time, windowSeconds: turnWindowSeconds)
 
     let strideResidual = percentileValue(analysis.residuals, indices: strideIndices, percentile: 0.70)
-    let turnResidual = percentileValue(analysis.residuals, indices: turnIndices, percentile: 0.75)
     let strideTracking = residualAdjustedTrackingConfidence(
         walkingTracking,
         residual: strideResidual,
         multiplier: 0.6,
         qualityModel: analysis.qualityModel
     )
-    let turnTracking = residualAdjustedTrackingConfidence(
-        tracking,
-        residual: turnResidual,
-        multiplier: 0.9,
-        qualityModel: analysis.qualityModel
-    )
-    let turnBandX = turnStrideSmoothX - turnSmoothX
-    let turnOwnershipX = turnOwnershipConfidence(
-        values: context.turnStrideSmoothedXPath,
-        frames: analysis.frames,
-        indices: turnIndices,
-        turnBandValue: turnBandX,
-        trackingConfidence: turnTracking
-    )
-    let rawTurnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
-    let turnQ = turnCorrectionConfidence(confidence: rawTurnQ, turnOwnership: turnOwnershipX)
+    let turnSample = turnCorrectionSample(for: context, index: index, options: options)
+    let turnBandX = turnSample.bandX
+    let turnOwnershipX = turnSample.ownership
+    let rawTurnQ = turnSample.rawConfidence
+    let turnQ = turnSample.confidence
     let rawTurnShakeSuppression = turnStabilizerShakeSuppression(
         turnOwnership: turnOwnershipX,
         turnConfidence: rawTurnQ
@@ -1006,8 +1263,19 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideDetected = hypotf(strideX * xScale, strideY * yScale) + (abs(strideR) * 12.0)
     let strideApplied = hypotf(strideAppliedX, strideAppliedY) + (strideAppliedR * 12.0)
 
-    let turnDetected = abs(turnBandX * xScale)
-    let turnApplied = turnDetected * correctionFactor(options.strengths.turn, confidence: turnQ)
+    let turnDetected = turnSample.detected
+    let turnApplied = turnSample.applied
+    let renderTurnBridge = includeRenderTurnBridge
+        ? renderTurnBridgeAssessment(for: context, index: index, options: options, centerSample: turnSample)
+        : RenderTurnBridgeAssessment(
+            applied: turnApplied,
+            remaining: max(0.0, turnDetected - turnApplied),
+            confidence: turnQ,
+            sampleCount: 1,
+            rawApplied: turnApplied,
+            delta: 0.0,
+            note: "render bridge evaluated after candidate selection"
+        )
 
     let rawWarpConfidence = analysis.warpConfidence[index]
     let warpTracking = stableFarFieldWarpTrackingConfidence(
@@ -1100,6 +1368,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         footstepLimitedCorrectionY: limitedFootCorrectionY,
         footstepPulseLimitedX: abs(rawFootCorrectionX - limitedFootCorrectionX),
         footstepPulseLimitedY: abs(rawFootCorrectionY - limitedFootCorrectionY),
+        renderTurnBridge: renderTurnBridge,
         bands: bands
     )
 }
@@ -2026,13 +2295,15 @@ private func chooseAssessments(analysis: Analysis, options: Options) throws -> [
         let indices = analysis.frames.indices.filter { abs(analysis.frames[$0].time - absoluteTime) <= halfWindow + timeWindowSelectionEpsilon }
         let candidates = (indices.isEmpty ? [nearestIndex(in: analysis, absoluteTime: absoluteTime)] : Array(indices))
             .map { assessment(for: context, index: $0, options: options) }
-        return [candidates.max { $0.score < $1.score } ?? assessment(for: context, index: nearestIndex(in: analysis, absoluteTime: absoluteTime), options: options)]
+        let selectedIndex = candidates.max { $0.score < $1.score }?.index ?? nearestIndex(in: analysis, absoluteTime: absoluteTime)
+        return [assessment(for: context, index: selectedIndex, options: options, includeRenderTurnBridge: true)]
     }
-    return analysis.frames.indices
+    let selectedIndices = analysis.frames.indices
         .map { assessment(for: context, index: $0, options: options) }
         .sorted { $0.score > $1.score }
         .prefix(max(1, options.limit))
-        .map { $0 }
+        .map(\.index)
+    return selectedIndices.map { assessment(for: context, index: $0, options: options, includeRenderTurnBridge: true) }
 }
 
 private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, options: Options) {
@@ -2085,6 +2356,14 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
                          band.confidence,
                          band.note))
         }
+        let bridge = assessment.renderTurnBridge
+        print(String(format: "  REND TURN bridge applied %.3f remaining %.3f q %.2f samples %d delta %.3f | %@",
+                     bridge.applied,
+                     bridge.remaining,
+                     bridge.confidence,
+                     bridge.sampleCount,
+                     bridge.delta,
+                     bridge.note))
         print("")
     }
 }
@@ -2139,6 +2418,15 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
                 "footstepLimitedCorrectionY": assessment.footstepLimitedCorrectionY,
                 "footstepPulseLimitedX": assessment.footstepPulseLimitedX,
                 "footstepPulseLimitedY": assessment.footstepPulseLimitedY,
+                "renderTurnBridge": [
+                    "applied": assessment.renderTurnBridge.applied,
+                    "remaining": assessment.renderTurnBridge.remaining,
+                    "confidence": assessment.renderTurnBridge.confidence,
+                    "sampleCount": assessment.renderTurnBridge.sampleCount,
+                    "rawApplied": assessment.renderTurnBridge.rawApplied,
+                    "delta": assessment.renderTurnBridge.delta,
+                    "note": assessment.renderTurnBridge.note
+                ] as [String: Any],
                 "topBand": assessment.topBand.name,
                 "bands": assessment.bands.map { band in
                     [

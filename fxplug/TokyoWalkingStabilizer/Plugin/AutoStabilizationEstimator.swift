@@ -1819,7 +1819,18 @@ enum AutoStabilizationEstimator {
         )
         if !turnTransitionSamples.isEmpty {
             let smoothedTurnTransform = weightedAverageTransform(turnTransitionSamples)
-            smoothedTransform.macroPixelOffset = smoothedTurnTransform.macroPixelOffset
+            var bridgedMacroOffset = smoothedTurnTransform.macroPixelOffset
+            let centerMacroX = rawCenterTransform.macroPixelOffset.x
+            let bridgedMacroX = bridgedMacroOffset.x
+            if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
+               abs(centerMacroX) > abs(bridgedMacroX),
+               (centerMacroX * bridgedMacroX) > 0.0
+            {
+                let centerResponse = turnCorrectionConfidenceResponse(rawCenterTransform.turnConfidence)
+                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
+                bridgedMacroOffset.x = bridgedMacroX + ((centerMacroX - bridgedMacroX) * centerPreservation)
+            }
+            smoothedTransform.macroPixelOffset = bridgedMacroOffset
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
         }
         let shortWarpSamples = farFieldWarpSmoothingSamples(
