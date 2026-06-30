@@ -203,6 +203,26 @@ def cache_index_entry(manifest_path: Path, manifest: dict, cache_identity: str) 
     return None
 
 
+def manifest_event_root_failures(manifest: dict) -> list[str]:
+    event_root_value = manifest.get("eventRoot")
+    if not event_root_value:
+        return []
+
+    event_root = Path(str(event_root_value)).expanduser()
+    failures = []
+    if not event_root.exists():
+        failures.append(f"manifest Event root is missing: {event_root}")
+        return failures
+    if not event_root.is_dir():
+        failures.append(f"manifest Event root is not a directory: {event_root}")
+        return failures
+
+    event_name = manifest.get("eventName")
+    if event_name and event_root.name != event_name:
+        failures.append(f"manifest eventName does not match eventRoot folder name: {event_name} != {event_root.name}")
+    return failures
+
+
 def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]:
     failures: list[str] = []
     asset_id = manifest.get("assetId")
@@ -215,6 +235,7 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> list[str]
         failures.append("manifest is missing assetId")
     if not cache_identity:
         failures.append("manifest is missing cacheIdentity")
+    failures.extend(manifest_event_root_failures(manifest))
     for resource in resources(root):
         resource_id = resource.attrib.get("id")
         if resource_id and not valid_fcp_resource_id(resource_id):

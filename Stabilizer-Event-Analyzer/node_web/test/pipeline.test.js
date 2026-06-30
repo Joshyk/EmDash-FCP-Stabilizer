@@ -1041,6 +1041,50 @@ test("validate_stabilizer_fcpxml_import passes generated per-footage package", (
   assert.equal(fs.existsSync(pkg.validationPath), true);
 });
 
+test("validate_stabilizer_fcpxml_import rejects stale manifest Event root", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-stale-event-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  manifest.eventRoot = path.join(tmp, "Library.fcpbundle", "Old Event");
+  fs.writeFileSync(pkg.manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const result = spawnSync("python3", [
+    "scripts/validate_stabilizer_fcpxml_import.py",
+    "--fcpxml",
+    pkg.outputPackage,
+    "--manifest",
+    pkg.manifestPath,
+    "--output",
+    pkg.validationPath,
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  const validation = JSON.parse(result.stdout);
+  assert.equal(validation.status, "fail");
+  assert.equal(validation.importReady, false);
+  assert.match(validation.failures.join("\n"), /manifest Event root is missing/);
+});
+
 test("validate_stabilizer_fcpxml_import rejects missing asset media uid", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-validator-asset-uid-test-"));
   const analysisPath = path.join(tmp, "analysis.json");
