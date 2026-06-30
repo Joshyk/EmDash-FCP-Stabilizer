@@ -225,6 +225,16 @@ original/proxy playback presents one readable viewer footprint; high-resolution 
 frames must not make the bars tiny, and proxy output must not make them balloon over the
 preview.
 
+When verifying a Final Cut Pro-visible playback problem, especially zoom pulsing, wobble,
+crop breathing, turn smoothness, or proxy playback heaviness, do not rely only on still
+screenshots or Inspector/log state. Capture a short screen-recorded video of the Final Cut
+Pro Viewer around the reported time range, using the same project, clip, proxy/original
+setting, and effect controls the user reported. Inspect the recording visually and, when the
+problem is motion/scale related, analyze the captured frames with `ffmpeg`/OpenCV or an
+equivalent local tool to measure frame-to-frame apparent scale/translation changes. Treat
+that video evidence as part of the verification result before claiming the visible issue is
+fixed.
+
 ## Playback And Render
 
 Analysis playback must render from prepared motion paths for the active FxPlug runtime.
