@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.17"
+private let tokyoWalkingStabilizerVersion = "1.0.18"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -84,7 +84,8 @@ private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
 private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
-private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 0.25
+private let stabilizerAutoCropDemandMinimumStepSeconds = 0.125
+private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 0.125
 private let stabilizerAutoCropPlaybackScaleQuantization: Float = 0.0005
 private let stabilizerAutoCropPlaybackMinimumClipScaleDelta: Float = 0.03
 private let stabilizerAutoCropPlaybackEnvelopeRadiusSeconds = 1.25
@@ -2015,18 +2016,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 cacheIdentity: cacheIdentity
             )
             let playbackScale = autoCropPlaybackScalePlanSample(playbackScalePlan, at: renderSeconds)
-            let neutralFrameScale = requiredAutoCropScale(
-                context: context,
-                cropPositionPixels: scaleDemand.neutralPositionPixels,
-                sampleSteps: samplingProfile.scaleSearchSampleSteps,
-                iterations: samplingProfile.scaleSearchIterations
-            )
             let visualPlaybackScale = autoCropPlaybackMinimumClippedScale(
                 autoCropPlaybackVisualScaleCap(playbackScale)
             )
-            let neutralFloorScale = autoCropPlaybackMinimumClippedScale(neutralFrameScale)
             let finalScale = autoCropKeypointScale(
-                protectedScale: max(neutralFloorScale, visualPlaybackScale)
+                protectedScale: visualPlaybackScale
             )
             let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
                 stablePositionPixels: scaleDemand.currentPositionPixels,
@@ -2041,6 +2035,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 context: context,
                 samplingProfile: samplingProfile
             ) {
+                let neutralFrameScale = requiredAutoCropScale(
+                    context: context,
+                    cropPositionPixels: scaleDemand.neutralPositionPixels,
+                    sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                    iterations: samplingProfile.scaleSearchIterations
+                )
+                let neutralFloorScale = autoCropPlaybackMinimumClippedScale(neutralFrameScale)
                 let currentFrameScale = requiredAutoCropScale(
                     context: context,
                     cropPositionPixels: scaleDemand.currentPositionPixels,
@@ -3381,7 +3382,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> [AutoCropZoomDemandSample] {
-        let step = max(stepSeconds, 0.25)
+        let step = max(stepSeconds, stabilizerAutoCropDemandMinimumStepSeconds)
         var samples: [AutoCropZoomDemandSample] = []
         var seconds = startSeconds
         while seconds <= endSeconds + 1e-9 {
