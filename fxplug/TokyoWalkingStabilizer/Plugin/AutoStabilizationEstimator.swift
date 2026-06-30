@@ -590,7 +590,7 @@ enum AutoStabilizationEstimator {
     private static let footstepNoiseFloorScale: Float = 0.08
     private static let footstepSurroundingNoiseMultiplier: Float = 1.10
     private static let footstepSurroundingNoiseFloorCapScale: Float = 0.45
-    private static let footstepFullResponseScale: Float = 0.65
+    private static let footstepFullResponseScale: Float = 0.55
     private static let footstepConfidenceStabilityWindowSeconds = 0.18
     private static let footstepConfidenceCenterBlend: Float = 0.65
     private static let footstepPersistentSignWindowStartSeconds = 0.055
@@ -602,16 +602,16 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleWindowSeconds = 2.0
     private static let strideWobbleFullScalePixels: Float = 0.75
     private static let strideWobbleFullScaleDegrees: Float = 0.16
-    private static let strideWobbleFullResponseScale: Float = 0.65
+    private static let strideWobbleFullResponseScale: Float = 0.55
     private static let turnSmoothingFullScalePixels: Float = 2.0
     private static let maximumTurnSmoothingStrength: Float = 12.0
     private static let turnOwnershipFootstepXSuppression: Float = 1.0
-    private static let turnOwnershipFootstepYSuppression: Float = 0.68
-    private static let turnOwnershipFootstepRollSuppression: Float = 0.82
+    private static let turnOwnershipFootstepYSuppression: Float = 0.45
+    private static let turnOwnershipFootstepRollSuppression: Float = 0.55
     private static let turnOwnershipStrideXSuppression: Float = 1.0
-    private static let turnOwnershipStrideYSuppression: Float = 0.55
-    private static let turnOwnershipStrideRollSuppression: Float = 0.70
-    private static let turnOwnershipFarFieldWarpSuppression: Float = 1.0
+    private static let turnOwnershipStrideYSuppression: Float = 0.38
+    private static let turnOwnershipStrideRollSuppression: Float = 0.50
+    private static let turnOwnershipFarFieldWarpSuppression: Float = 0.55
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
@@ -4278,7 +4278,7 @@ enum AutoStabilizationEstimator {
         let confidenceResponse = turnCorrectionConfidenceResponse(confidence)
         let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
         let confidenceBoost = max(0.0, requestedRemoval - 1.0)
-            * 0.40
+            * 0.55
             * confidenceResponse
             * (1.0 - (confidenceResponse * 0.25))
         return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
@@ -4308,7 +4308,7 @@ enum AutoStabilizationEstimator {
 
     private static func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {
         let boundedConfidence = clamp(confidence, min: 0.0, max: 1.0)
-        return boundedConfidence * (1.0 + ((1.0 - boundedConfidence) * 0.65))
+        return boundedConfidence * (1.0 + ((1.0 - boundedConfidence) * 0.90))
     }
 
     private static func farFieldWarpRenderGate(

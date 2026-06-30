@@ -487,22 +487,22 @@ private let footstepFullScaleDegrees: Float = 0.08
 private let footstepNoiseFloorScale: Float = 0.08
 private let footstepSurroundingNoiseMultiplier: Float = 1.10
 private let footstepSurroundingNoiseFloorCapScale: Float = 0.45
-private let footstepFullResponseScale: Float = 0.65
+private let footstepFullResponseScale: Float = 0.55
 private let footstepXYContinuityWindowSeconds = 0.15
 private let footstepXYContinuityMaxSamples = 9
 private let footstepXYContinuityMinimumSpikePixels: Float = 0.75
 private let footstepXYContinuityMadMultiplier: Float = 3.0
 private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
-private let strideFullResponseScale: Float = 0.65
+private let strideFullResponseScale: Float = 0.55
 private let turnFullScalePixels: Float = 2.0
 private let turnOwnershipFootstepXSuppression: Float = 1.0
-private let turnOwnershipFootstepYSuppression: Float = 0.68
-private let turnOwnershipFootstepRollSuppression: Float = 0.82
+private let turnOwnershipFootstepYSuppression: Float = 0.45
+private let turnOwnershipFootstepRollSuppression: Float = 0.55
 private let turnOwnershipStrideXSuppression: Float = 1.0
-private let turnOwnershipStrideYSuppression: Float = 0.55
-private let turnOwnershipStrideRollSuppression: Float = 0.70
-private let turnOwnershipFarFieldWarpSuppression: Float = 1.0
+private let turnOwnershipStrideYSuppression: Float = 0.38
+private let turnOwnershipStrideRollSuppression: Float = 0.50
+private let turnOwnershipFarFieldWarpSuppression: Float = 0.55
 private let renderTurnTransitionSmoothingSampleCount = 29
 private let renderTurnTransitionSmoothingWindowSeconds = 2.8
 private let renderTurnTransitionMinimumMacroPixels: Float = 0.5
@@ -2199,7 +2199,7 @@ private func correctionFactor(_ strength: Double, confidence: Float) -> Float {
     let requested = clamp(Float(strength), min: 0.0, max: 12.0)
     let response = turnCorrectionConfidenceResponse(confidence)
     let direct = min(requested, 1.0) * response
-    let boost = max(0.0, requested - 1.0) * 0.40 * response * (1.0 - (response * 0.25))
+    let boost = max(0.0, requested - 1.0) * 0.55 * response * (1.0 - (response * 0.25))
     return clamp(direct + boost, min: 0.0, max: 1.0)
 }
 
@@ -2224,7 +2224,7 @@ private func turnCorrectionConfidenceResponse(_ confidence: Float) -> Float {
 
 private func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {
     let bounded = clamp(confidence, min: 0.0, max: 1.0)
-    return bounded * (1.0 + ((1.0 - bounded) * 0.65))
+    return bounded * (1.0 + ((1.0 - bounded) * 0.90))
 }
 
 private func confidenceRamp(_ value: Float, start: Float, full: Float) -> Float {

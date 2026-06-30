@@ -49,8 +49,14 @@ estimators, or Transform-keyframe writers back into this target.
   29-sample zero-phase transition pass for macro X correction only. That pass weights
   same-direction, high-confidence TURN corrections over broken center frames and preserves
   a confident center-frame TURN correction when the bridge average would otherwise weaken it.
-  TURN ownership gates are smoothed across `0.90` seconds so FJIT/SWOB/WARP do not toggle abruptly
-  during turn entry and exit. Far-field Warp uses a shorter `0.20` second in-range
+  Strength values above `1.0` use a more assertive confidence boost for TURN only, while
+  still clamping at full detected turn-band removal so the render path does not add inverse
+  pan shake. TURN ownership gates are smoothed across `0.90` seconds so FJIT/SWOB/WARP do not toggle abruptly
+  during turn entry and exit. TURN owns macro X pan, but Y/roll walking correction and
+  Far-field Warp remain partially active during turns so gimbal pitch/yaw/roll shake is not
+  muted just because the clip is changing direction. Moderate Footstep Jitter and Stride
+  Wobble bands reach full default response earlier, with the final applied correction still
+  clamped to the detected walking-band removal. Far-field Warp uses a shorter `0.20` second in-range
   frame-sampled smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
