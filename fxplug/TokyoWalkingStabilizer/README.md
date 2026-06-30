@@ -45,8 +45,11 @@ estimators, or Transform-keyframe writers back into this target.
   broader Turn Smoothing bands so walking-gimbal shake is separated by
   time scale without rerunning Host Analysis. Footstep Jitter keeps a short `0.18` second
   confidence-aware smoothing pass around the current render frame after `1.20` second,
-  15-sample zero-phase broad smoothing; Far-field Warp uses a shorter `0.20` second in-range
-  frame-sampled smoothing window so ridge-line correction stays responsive.
+  15-sample zero-phase broad smoothing. Turn Smoothing then gets a separate `2.0` second,
+  21-sample zero-phase transition pass for macro X correction only, while TURN ownership
+  gates are smoothed across `0.90` seconds so FJIT/SWOB/WARP do not toggle abruptly during
+  turn entry and exit. Far-field Warp uses a shorter `0.20` second in-range frame-sampled
+  smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
 - New schema 26 analysis keeps the schema 25 coarse full-radius pass, tightens the fine
@@ -216,7 +219,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   so long prepared caches do not require repeated full-cache scans during playback.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, defaults to `2.0`, runs up to `12.0`, and the macro
-  correction is soft-limited to a small output-edge budget.
+  correction is soft-limited to a small output-edge budget. Render playback applies an
+  additional `2.0` second zero-phase transition pass to the macro X correction so the start
+  and end of walking turns do not step between corrections.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
   motion paths. The default is `6.0` seconds. The UI value is used as the TURN window,
   and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run

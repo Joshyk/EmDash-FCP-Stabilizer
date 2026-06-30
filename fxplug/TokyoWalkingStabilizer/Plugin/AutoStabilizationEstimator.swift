@@ -576,6 +576,9 @@ enum AutoStabilizationEstimator {
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 15
     private static let renderTemporalSmoothingWindowSeconds = 1.20
+    private static let renderTurnTransitionSmoothingSampleCount = 21
+    private static let renderTurnTransitionSmoothingWindowSeconds = 2.0
+    private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.20
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
     private static let renderFootstepJitterSmoothingMaxBlend: Float = 0.42
@@ -1446,9 +1449,15 @@ enum AutoStabilizationEstimator {
             trackingConfidence: turnTrackingConfidence
         )
         let confidence = turnBandConfidence * turnOwnershipX
-        let turnShakeSuppression = turnStabilizerShakeSuppression(
+        let rawTurnShakeSuppression = turnStabilizerShakeSuppression(
             turnOwnership: turnOwnershipX,
             turnConfidence: confidence
+        )
+        let turnShakeSuppression = smoothedTurnShakeSuppression(
+            rawSuppression: rawTurnShakeSuppression,
+            gateScales: footstepXTurnGateScales,
+            frames: frames,
+            centerTime: renderSeconds
         )
         let footstepXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
         let footstepYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepYSuppression), min: 0.0, max: 1.0)
@@ -1794,6 +1803,20 @@ enum AutoStabilizationEstimator {
             (transform: sample.transform, weight: sample.weight)
         }
         var smoothedTransform = weightedAverageTransform(broadTransformSamples)
+        let turnTransitionSamples = turnTransitionSmoothingSamples(
+            centerTransform: rawCenterTransform,
+            analysis: analysis,
+            renderSeconds: renderSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            cache: renderEstimateCache
+        )
+        if !turnTransitionSamples.isEmpty {
+            let smoothedTurnTransform = weightedAverageTransform(turnTransitionSamples)
+            smoothedTransform.macroPixelOffset = smoothedTurnTransform.macroPixelOffset
+            smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
+        }
         let shortWarpSamples = farFieldWarpSmoothingSamples(
             centerTransform: rawCenterTransform,
             analysis: analysis,
@@ -1850,6 +1873,58 @@ enum AutoStabilizationEstimator {
         smoothedTransform.temporalSmoothingSampleCount = Int32(weightedSamples.count)
         smoothedTransform.temporalSmoothingWindowSeconds = Float(renderTemporalSmoothingWindowSeconds)
         return smoothedTransform
+    }
+
+    private static func turnTransitionSmoothingSamples(
+        centerTransform: StabilizerAutoTransform,
+        analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        cache: RenderEstimateCache
+    ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+        let frames = analysis.frames
+        guard let firstTime = frames.first?.time,
+              let lastTime = frames.last?.time
+        else {
+            return [(centerTransform, 1.0)]
+        }
+        let sampleCount = max(3, renderTurnTransitionSmoothingSampleCount)
+        let centerSample = sampleCount / 2
+        let halfWindow = renderTurnTransitionSmoothingWindowSeconds * 0.5
+        let denominator = Double(max(1, sampleCount - 1))
+        let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
+        let sigma = max(1e-6, halfWindow * 0.55)
+        var samples: [(transform: StabilizerAutoTransform, weight: Float)] = [(centerTransform, 1.0)]
+        samples.reserveCapacity(sampleCount)
+        for sampleIndex in 0..<sampleCount {
+            guard sampleIndex != centerSample else {
+                continue
+            }
+            let offset = Double(sampleIndex - centerSample) * sampleStep
+            let sampleSeconds = renderSeconds + offset
+            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                continue
+            }
+            let normalizedDistance = offset / sigma
+            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard weight > 0.0001 else {
+                continue
+            }
+            let sampleFrameIndex = frameLookup(at: sampleSeconds, in: frames).centerIndex
+            let transform = cache.rawTransform(
+                analysis: analysis,
+                index: sampleFrameIndex,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                limitFootstepContinuity: false,
+                includeFarFieldWarp: false
+            )
+            samples.append((transform: transform, weight: weight))
+        }
+        return samples
     }
 
     private static func farFieldWarpSmoothingSamples(
@@ -4366,6 +4441,46 @@ enum AutoStabilizationEstimator {
     ) -> Float {
         let ownershipQuality = confidenceRamp(turnOwnership, start: 0.12, full: 0.48)
         return clamp(max(turnConfidence, ownershipQuality), min: 0.0, max: 1.0)
+    }
+
+    private static func smoothedTurnShakeSuppression(
+        rawSuppression: Float,
+        gateScales: [Int: Float],
+        frames: [StabilizerAnalysisFrame],
+        centerTime: Double
+    ) -> Float {
+        let boundedRaw = clamp(rawSuppression, min: 0.0, max: 1.0)
+        guard !gateScales.isEmpty,
+              renderTurnGateSmoothingWindowSeconds > 0.0
+        else {
+            return boundedRaw
+        }
+        let halfWindow = renderTurnGateSmoothingWindowSeconds * 0.5
+        let sigma = max(1e-6, halfWindow * 0.55)
+        let centerWeight: Float = 0.75
+        var weightedSuppression = boundedRaw * centerWeight
+        var totalWeight = centerWeight
+        for index in indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindow) {
+            guard frames.indices.contains(index),
+                  let gateScale = gateScales[index]
+            else {
+                continue
+            }
+            let offset = frames[index].time - centerTime
+            let normalizedDistance = offset / sigma
+            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard weight > 0.0001 else {
+                continue
+            }
+            let localSuppression = clamp(1.0 - gateScale, min: 0.0, max: 1.0)
+            weightedSuppression += localSuppression * weight
+            totalWeight += weight
+        }
+        guard totalWeight > Float.ulpOfOne else {
+            return boundedRaw
+        }
+        let smoothedSuppression = weightedSuppression / totalWeight
+        return clamp(max(boundedRaw, smoothedSuppression), min: 0.0, max: 1.0)
     }
 
     private static func turnOwnershipGateScales(

@@ -311,6 +311,7 @@ private struct AssessmentContext {
     let strideSmoothedYPath: [Float]
     let strideSmoothedRPath: [Float]
     let turnStrideSmoothedXPath: [Float]
+    let footstepXTurnGateScales: [Int: Float]
     let warpMagnitudes: [Float]
 
     init(analysis: Analysis, turnWindowSeconds: Double) {
@@ -396,6 +397,7 @@ private struct AssessmentContext {
             windowSeconds: strideWindowSeconds
         )
         turnStrideSmoothedXPath = turnStrideSmoothedX
+        self.footstepXTurnGateScales = footstepXTurnGateScales
 
         let baselineYaw = outerLinearPredictionPath(
             analysis.pathYaw,
@@ -480,6 +482,7 @@ private let turnOwnershipStrideXSuppression: Float = 1.0
 private let turnOwnershipStrideYSuppression: Float = 0.55
 private let turnOwnershipStrideRollSuppression: Float = 0.70
 private let turnOwnershipFarFieldWarpSuppression: Float = 1.0
+private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
 private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
@@ -937,9 +940,15 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         trackingConfidence: turnTracking
     )
     let turnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
-    let turnShakeSuppression = turnStabilizerShakeSuppression(
+    let rawTurnShakeSuppression = turnStabilizerShakeSuppression(
         turnOwnership: turnOwnershipX,
         turnConfidence: turnQ
+    )
+    let turnShakeSuppression = smoothedTurnShakeSuppression(
+        rawSuppression: rawTurnShakeSuppression,
+        gateScales: context.footstepXTurnGateScales,
+        frames: analysis.frames,
+        centerTime: frame.time
     )
     let footstepXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
     let footstepYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepYSuppression), min: 0.0, max: 1.0)
@@ -1582,6 +1591,46 @@ private func turnOwnershipConfidence(
 private func turnStabilizerShakeSuppression(turnOwnership: Float, turnConfidence: Float) -> Float {
     let ownershipQuality = confidenceRamp(turnOwnership, start: 0.12, full: 0.48)
     return clamp(max(turnConfidence, ownershipQuality), min: 0.0, max: 1.0)
+}
+
+private func smoothedTurnShakeSuppression(
+    rawSuppression: Float,
+    gateScales: [Int: Float],
+    frames: [AnalysisFrame],
+    centerTime: Double
+) -> Float {
+    let boundedRaw = clamp(rawSuppression, min: 0.0, max: 1.0)
+    guard !gateScales.isEmpty,
+          renderTurnGateSmoothingWindowSeconds > 0.0
+    else {
+        return boundedRaw
+    }
+    let halfWindow = renderTurnGateSmoothingWindowSeconds * 0.5
+    let sigma = max(1e-6, halfWindow * 0.55)
+    let centerWeight: Float = 0.75
+    var weightedSuppression = boundedRaw * centerWeight
+    var totalWeight = centerWeight
+    for index in indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindow) {
+        guard frames.indices.contains(index),
+              let gateScale = gateScales[index]
+        else {
+            continue
+        }
+        let offset = frames[index].time - centerTime
+        let normalizedDistance = offset / sigma
+        let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+        guard weight > 0.0001 else {
+            continue
+        }
+        let localSuppression = clamp(1.0 - gateScale, min: 0.0, max: 1.0)
+        weightedSuppression += localSuppression * weight
+        totalWeight += weight
+    }
+    guard totalWeight > Float.ulpOfOne else {
+        return boundedRaw
+    }
+    let smoothedSuppression = weightedSuppression / totalWeight
+    return clamp(max(boundedRaw, smoothedSuppression), min: 0.0, max: 1.0)
 }
 
 private func turnOwnershipGateScales(
