@@ -638,21 +638,59 @@ def copy_cache_payload(package_dir: Path, footage: str, result: dict, cache_root
         raise ValueError("cache root is required for per-footage packages")
     cache_root_path = Path(cache_root).expanduser()
     cache_file_name = result.get("cacheFileName")
+    cache_identity = (result.get("cacheIdentity") or "").strip()
     if not cache_file_name:
         raise ValueError(f"analysis result for {result.get('name') or result.get('assetId') or 'footage'} is missing cacheFileName")
+    if not cache_identity:
+        raise ValueError(f"analysis result for {result.get('name') or result.get('assetId') or 'footage'} is missing cacheIdentity")
     source_cache_file = cache_root_path / "caches" / cache_file_name
     if not source_cache_file.exists():
         raise FileNotFoundError(f"cache file is missing: {source_cache_file}")
+    source_index_path = cache_root_path / "host-analysis-index-v2.json"
+    if not source_index_path.exists():
+        raise FileNotFoundError(f"cache index is missing: {source_index_path}")
+    source_index = json.loads(source_index_path.read_text(encoding="utf-8"))
+    index_entry = next(
+        (
+            entry
+            for entry in source_index.get("entries") or []
+            if (entry.get("cacheIdentity") or "").strip() == cache_identity
+            and (entry.get("cacheFileName") or "").strip() == cache_file_name
+        ),
+        None,
+    )
+    if index_entry is None:
+        raise ValueError(f"cache index does not contain the analysis result identity for {cache_file_name}")
+    cache_payload = json.loads(source_cache_file.read_text(encoding="utf-8"))
+    if cache_payload.get("schemaVersion") != result.get("cacheSchemaVersion"):
+        raise ValueError(f"cache file schema does not match analysis result for {cache_file_name}")
     payload_dir = package_dir / f"{footage}.analysis-cache"
     caches_dir = payload_dir / "caches"
     caches_dir.mkdir(parents=True)
     shutil.copy2(source_cache_file, caches_dir / cache_file_name)
     copied = [str((caches_dir / cache_file_name).relative_to(package_dir))]
-    for sidecar in ("host-analysis-index-v2.json", "host-analysis-v2.json", "host-analysis-render-offset-v2.json"):
-        source_sidecar = cache_root_path / sidecar
-        if source_sidecar.exists():
-            shutil.copy2(source_sidecar, payload_dir / sidecar)
-            copied.append(str((payload_dir / sidecar).relative_to(package_dir)))
+    payload_index_path = payload_dir / "host-analysis-index-v2.json"
+    payload_index_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": source_index.get("schemaVersion", result.get("cacheSchemaVersion")),
+                "entries": [index_entry],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    copied.append(str(payload_index_path.relative_to(package_dir)))
+    payload_latest_path = payload_dir / "host-analysis-v2.json"
+    payload_latest_path.write_text(json.dumps(cache_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    copied.append(str(payload_latest_path.relative_to(package_dir)))
+    source_render_offset = cache_root_path / "host-analysis-render-offset-v2.json"
+    if source_render_offset.exists():
+        shutil.copy2(source_render_offset, payload_dir / source_render_offset.name)
+        copied.append(str((payload_dir / source_render_offset.name).relative_to(package_dir)))
     return {
         "cachePayloadDirectory": str(payload_dir.relative_to(package_dir)),
         "cachePayloadFiles": copied,

@@ -56,7 +56,7 @@ def infer_event_root(manifest: dict) -> Path:
     return bundle_root / relative_parts[0]
 
 
-def merge_cache_index(source_path: Path, target_path: Path) -> None:
+def merge_cache_index(source_path: Path, target_path: Path, preferred_identity: str, preferred_file_name: str) -> None:
     source = json.loads(source_path.read_text(encoding="utf-8"))
     source_entries = source.get("entries") or []
     existing_entries = []
@@ -68,9 +68,18 @@ def merge_cache_index(source_path: Path, target_path: Path) -> None:
         except Exception:  # noqa: BLE001
             existing_entries = []
 
+    preferred_entries = [
+        entry
+        for entry in source_entries
+        if (entry.get("cacheIdentity") or "").strip() == preferred_identity
+        and (entry.get("cacheFileName") or "").strip() == preferred_file_name
+    ]
+    if not preferred_entries:
+        raise ValueError("cache payload index does not contain manifest identity")
+
     merged_entries = []
     seen: set[tuple[str, str]] = set()
-    for entry in [*source_entries, *existing_entries]:
+    for entry in [*preferred_entries, *source_entries, *existing_entries]:
         identity = (entry.get("cacheIdentity") or "").strip()
         file_name = (entry.get("cacheFileName") or "").strip()
         key = (identity, file_name)
@@ -158,7 +167,9 @@ def main(argv: Iterable[str]) -> int:
             if source_sidecar.exists():
                 target_sidecar = cache_root / sidecar
                 if sidecar == "host-analysis-index-v2.json":
-                    merge_cache_index(source_sidecar, target_sidecar)
+                    merge_cache_index(source_sidecar, target_sidecar, cache_identity, source_cache_file.name)
+                elif sidecar == "host-analysis-v2.json":
+                    shutil.copy2(source_cache_file, target_sidecar)
                 else:
                     shutil.copy2(source_sidecar, target_sidecar)
                 installed_files.append(str(target_sidecar))

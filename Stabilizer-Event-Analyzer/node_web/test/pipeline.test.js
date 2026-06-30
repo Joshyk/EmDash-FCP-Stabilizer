@@ -805,6 +805,44 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   const analysisPath = path.join(tmp, "analysis.json");
   const result = analysisResult();
   const cacheRoot = writeCachePayload(tmp, result);
+  const stale = analysisResult("r99", "P1000999");
+  fs.writeFileSync(
+    path.join(cacheRoot, "caches", stale.cacheFileName),
+    JSON.stringify({
+      schemaVersion: stale.cacheSchemaVersion,
+      clipLabel: stale.name,
+      frames: [],
+    }),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(cacheRoot, "host-analysis-v2.json"),
+    JSON.stringify({
+      schemaVersion: stale.cacheSchemaVersion,
+      clipLabel: stale.name,
+      frames: [],
+    }),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(cacheRoot, "host-analysis-index-v2.json"),
+    JSON.stringify({
+      schemaVersion: result.cacheSchemaVersion,
+      entries: [
+        {
+          cacheIdentity: stale.cacheIdentity,
+          cacheFileName: stale.cacheFileName,
+          frameCount: stale.frameCount,
+        },
+        {
+          cacheIdentity: result.cacheIdentity,
+          cacheFileName: result.cacheFileName,
+          frameCount: result.frameCount,
+        },
+      ],
+    }),
+    "utf8"
+  );
   fs.writeFileSync(
     analysisPath,
     JSON.stringify({
@@ -848,6 +886,12 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(manifest.preparedMotionPath, true);
   assert.equal(manifest.sourceEffectStack.inheritedFilterCount, 0);
   assert.equal(fs.existsSync(path.join(pkg.packageDirectory, manifest.cachePayloadCacheFile)), true);
+  const payloadDir = path.join(pkg.packageDirectory, manifest.cachePayloadDirectory);
+  const packageIndex = JSON.parse(fs.readFileSync(path.join(payloadDir, "host-analysis-index-v2.json"), "utf8"));
+  assert.deepEqual(packageIndex.entries.map((entry) => entry.cacheIdentity), [result.cacheIdentity]);
+  const packageLatest = JSON.parse(fs.readFileSync(path.join(payloadDir, "host-analysis-v2.json"), "utf8"));
+  assert.equal(packageLatest.frames.length, result.frameCount);
+  assert.notEqual(packageLatest.clipLabel, stale.name);
   assert.equal(fs.existsSync(path.join(pkg.outputPackage, "Info.fcpxml")), true);
 });
 
@@ -1329,6 +1373,23 @@ test("install_stabilizer_package_cache uses manifest eventRoot when mediaPath is
   ]);
   const pkg = build.packages[0];
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
+  const payloadDir = path.join(pkg.packageDirectory, manifest.cachePayloadDirectory);
+  const packageIndexPath = path.join(payloadDir, "host-analysis-index-v2.json");
+  const packageIndex = JSON.parse(fs.readFileSync(packageIndexPath, "utf8"));
+  packageIndex.entries.unshift({
+    cacheIdentity: "old-cache-identity",
+    cacheFileName: "old-cache.json",
+  });
+  fs.writeFileSync(packageIndexPath, JSON.stringify(packageIndex), "utf8");
+  fs.writeFileSync(
+    path.join(payloadDir, "host-analysis-v2.json"),
+    JSON.stringify({
+      schemaVersion: analysis.cacheSchemaVersion,
+      clipLabel: "OldClip",
+      frames: [],
+    }),
+    "utf8"
+  );
   manifest.mediaPath = "/Volumes/External Media/P1000307.mov";
   manifest.eventRoot = eventRoot;
   fs.writeFileSync(pkg.manifestPath, JSON.stringify(manifest, null, 2), "utf8");
@@ -1356,8 +1417,12 @@ test("install_stabilizer_package_cache uses manifest eventRoot when mediaPath is
   assert.equal(install.cacheRoot, path.join(resolvedEventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"));
   assert.equal(fs.existsSync(path.join(install.cacheRoot, "caches", analysis.cacheFileName)), true);
   const installedIndex = JSON.parse(fs.readFileSync(path.join(install.cacheRoot, "host-analysis-index-v2.json"), "utf8"));
+  assert.equal(installedIndex.entries[0].cacheIdentity, analysis.cacheIdentity);
   assert.equal(installedIndex.entries.some((entry) => entry.cacheIdentity === "old-cache-identity"), true);
   assert.equal(installedIndex.entries.some((entry) => entry.cacheIdentity === analysis.cacheIdentity), true);
+  const installedLatest = JSON.parse(fs.readFileSync(path.join(install.cacheRoot, "host-analysis-v2.json"), "utf8"));
+  assert.equal(installedLatest.frames.length, analysis.frameCount);
+  assert.notEqual(installedLatest.clipLabel, "OldClip");
 });
 
 test("install_stabilizer_package_cache resolves renamed Event by cache identity", () => {
