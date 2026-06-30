@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 23
+private let cacheSchemaVersion = 24
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -25,6 +25,9 @@ private let minimumFarFieldMotionBlocks = 3
 private let staggeredMotionBlockFarFieldThreshold: Float = 0.70
 private let detailMotionBlockFarFieldThreshold: Float = 0.70
 private let denseSampleMotionBlockFarFieldThreshold: Float = 0.70
+private let verticalDetailMotionBlockFarFieldThreshold: Float = 0.85
+private let attitudeDetailMotionBlockFarFieldThreshold: Float = 0.45
+private let attitudeDetailMotionBlockColumnRadius = 1
 private let staggeredMotionBlockMinimumWidth = 18
 private let staggeredMotionBlockMinimumHeight = 12
 private let maxFarFieldShear: Float = 0.008
@@ -181,29 +184,13 @@ private struct DecodedVideoFrame {
 
 private enum DecoderMode {
     case hardwareRequired
-    case softwareFallback(reason: String)
 
     var description: String {
-        switch self {
-        case .hardwareRequired:
-            return "hardware-required VideoToolbox"
-        case .softwareFallback:
-            return "software-only VideoToolbox fallback"
-        }
+        "hardware-required VideoToolbox"
     }
 
     var requiresHardware: Bool {
-        if case .hardwareRequired = self {
-            return true
-        }
-        return false
-    }
-
-    var fallbackReason: String? {
-        if case .softwareFallback(let reason) = self {
-            return reason
-        }
-        return nil
+        true
     }
 }
 
@@ -381,17 +368,7 @@ private func decoderLanePlan(url: URL, requestedLimit: Int) throws -> DecoderLan
         return DecoderLanePlan(laneCount: hardwareProbe.sessionCount, mode: .hardwareRequired)
     }
     let hardwareFailure = hardwareProbe.firstFailureDescription ?? "hardware-required VideoToolbox decoder unavailable"
-    let softwareMode = DecoderMode.softwareFallback(reason: hardwareFailure)
-    let softwareProbe = try decoderSessionLimit(
-        url: url,
-        requestedLimit: requestedLimit,
-        mode: softwareMode
-    )
-    guard softwareProbe.sessionCount > 0 else {
-        let detail = softwareProbe.firstFailureDescription.map { ": \($0)" } ?? ""
-        throw AnalyzerError("VideoToolbox decoder unavailable for \(url.path)\(detail). Hardware decode failed first: \(hardwareFailure)")
-    }
-    return DecoderLanePlan(laneCount: softwareProbe.sessionCount, mode: softwareMode)
+    throw AnalyzerError("hardware-required VideoToolbox decoder unavailable for \(url.path): \(hardwareFailure)")
 }
 
 private final class VideoToolboxDecodedFrameReader {
@@ -402,6 +379,7 @@ private final class VideoToolboxDecodedFrameReader {
     private let decoderMode: DecoderMode
     private var session: VTDecompressionSession?
     private var decodedFrames: [DecodedVideoFrame] = []
+    private var decodedFrameReadIndex = 0
     private var decodeError: Error?
     private var pendingDecodeCount = 0
     private var reachedEnd = false
@@ -505,10 +483,20 @@ private final class VideoToolboxDecodedFrameReader {
     private func popDecodedFrame() -> DecodedVideoFrame? {
         lock.lock()
         defer { lock.unlock() }
-        if decodedFrames.isEmpty {
+        guard decodedFrameReadIndex < decodedFrames.count else {
+            if decodedFrameReadIndex > 0 {
+                decodedFrames.removeAll(keepingCapacity: true)
+                decodedFrameReadIndex = 0
+            }
             return nil
         }
-        return decodedFrames.removeFirst()
+        let frame = decodedFrames[decodedFrameReadIndex]
+        decodedFrameReadIndex += 1
+        if decodedFrameReadIndex >= 64 && decodedFrameReadIndex * 2 >= decodedFrames.count {
+            decodedFrames.removeFirst(decodedFrameReadIndex)
+            decodedFrameReadIndex = 0
+        }
+        return frame
     }
 
     private func throwPendingDecodeError() throws {
@@ -1137,6 +1125,40 @@ private final class MetalMotionWorkspace {
                 let midX = (x0 + x1) / 2
                 appendBlock(x0: x0, x1: midX, y0: y0, y1: y1)
                 appendBlock(x0: midX, x1: x1, y0: y0, y1: y1)
+            }
+        }
+        for row in 0..<rows {
+            let y0 = rowEdges[row].y0
+            let y1 = rowEdges[row].y1
+            let centerY = Float(y0) + (Float(y1 - y0) * 0.5)
+            guard farFieldWeight(centerY: centerY, height: height) >= verticalDetailMotionBlockFarFieldThreshold else {
+                continue
+            }
+            let midY = (y0 + y1) / 2
+            for column in 0..<columns {
+                let x0 = columnEdges[column].x0
+                let x1 = columnEdges[column].x1
+                appendBlock(x0: x0, x1: x1, y0: y0, y1: midY)
+                appendBlock(x0: x0, x1: x1, y0: midY, y1: y1)
+            }
+        }
+        let centerColumn = columns / 2
+        for row in 0..<rows {
+            let y0 = rowEdges[row].y0
+            let y1 = rowEdges[row].y1
+            let centerY = Float(y0) + (Float(y1 - y0) * 0.5)
+            guard farFieldWeight(centerY: centerY, height: height) >= attitudeDetailMotionBlockFarFieldThreshold else {
+                continue
+            }
+            let midY = (y0 + y1) / 2
+            for column in 0..<columns where abs(column - centerColumn) <= attitudeDetailMotionBlockColumnRadius {
+                let x0 = columnEdges[column].x0
+                let x1 = columnEdges[column].x1
+                let midX = (x0 + x1) / 2
+                appendBlock(x0: x0, x1: midX, y0: y0, y1: midY)
+                appendBlock(x0: midX, x1: x1, y0: y0, y1: midY)
+                appendBlock(x0: x0, x1: midX, y0: midY, y1: y1)
+                appendBlock(x0: midX, x1: x1, y0: midY, y1: y1)
             }
         }
         return blocks
@@ -2229,11 +2251,30 @@ private func textureCacheFlushDescription(interval: Int) -> String {
     interval <= 1 ? "every completed frame" : "every \(interval) completed frames"
 }
 
+private func analysisDurationSeconds(durationSeconds: Double, frameDurationSeconds: Double, maxFrames: Int?) -> Double {
+    let boundedDuration = max(frameDurationSeconds, durationSeconds)
+    guard let maxFrames else {
+        return boundedDuration
+    }
+    let limitedFrameCount = max(1, maxFrames)
+    return min(boundedDuration, max(frameDurationSeconds, Double(limitedFrameCount) * frameDurationSeconds))
+}
+
 private func shouldUseParallelReaders(plan: AssetPlan, maxFrames: Int?, readerLaneCount: Int) -> Bool {
-    if maxFrames != nil || readerLaneCount <= 1 {
+    if readerLaneCount <= 1 {
         return false
     }
-    return plan.durationSeconds > max(0.10, plan.frameDurationSeconds * 4.0)
+    let frameDuration = plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
+    let analysisDuration = analysisDurationSeconds(
+        durationSeconds: plan.durationSeconds,
+        frameDurationSeconds: frameDuration,
+        maxFrames: maxFrames
+    )
+    let analysisFrameCount = estimatedFrameCount(
+        durationSeconds: analysisDuration,
+        frameDurationSeconds: frameDuration
+    )
+    return analysisFrameCount >= max(12, readerLaneCount * 3)
 }
 
 private func estimatedFrameCount(durationSeconds: Double, frameDurationSeconds: Double, maxFrames: Int? = nil) -> Int {
@@ -2458,11 +2499,18 @@ private func readFramesInParallel(
     sample: AnalysisSampleSize,
     sourcePixelCount: Int,
     decoderPlan: DecoderLanePlan,
+    maxFrames: Int?,
     progressEnabled: Bool
 ) throws -> PreparedAnalysis {
-    let chunks = makeFrameReadChunks(
+    let frameDuration = plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
+    let analysisDuration = analysisDurationSeconds(
         durationSeconds: plan.durationSeconds,
-        frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
+        frameDurationSeconds: frameDuration,
+        maxFrames: maxFrames
+    )
+    let chunks = makeFrameReadChunks(
+        durationSeconds: analysisDuration,
+        frameDurationSeconds: frameDuration,
         readerLaneCount: decoderPlan.laneCount
     )
     let basePTS = try firstPresentationTimeSeconds(url: url)
@@ -2473,8 +2521,8 @@ private func readFramesInParallel(
         enabled: progressEnabled,
         label: plan.name,
         totalFrameCount: estimatedFrameCount(
-            durationSeconds: plan.durationSeconds,
-            frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
+            durationSeconds: analysisDuration,
+            frameDurationSeconds: frameDuration
         )
     )
     progressReporter.start()
@@ -2485,10 +2533,10 @@ private func readFramesInParallel(
     for chunk in chunks {
         let expectedOutputFrameCount = estimatedFrameCount(
             durationSeconds: max(
-                plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
+                frameDuration,
                 chunk.outputEndSeconds - chunk.outputStartSeconds
             ),
-            frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
+            frameDurationSeconds: frameDuration
         )
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -2577,22 +2625,17 @@ func readFrames(
         if decoderPlan.laneCount < readerLaneProbeLimit {
             progress(progressEnabled, "\(decoderPlan.description) accepted \(decoderPlan.laneCount)/\(readerLaneProbeLimit) active processor reader lane(s) for \(plan.name); using the decoder-detected maximum")
         }
-        if let fallbackReason = decoderPlan.mode.fallbackReason {
-            progress(progressEnabled, "hardware-required VideoToolbox decode unavailable for \(plan.name); using visible CPU/software decode fallback with Metal analysis: \(fallbackReason)")
-        }
         return try readFramesInParallel(
             url: url,
             plan: plan,
             sample: sample,
             sourcePixelCount: sourcePixelCount,
             decoderPlan: decoderPlan,
+            maxFrames: maxFrames,
             progressEnabled: progressEnabled
         )
     }
     let serialDecoderPlan = try decoderLanePlan(url: url, requestedLimit: 1)
-    if let fallbackReason = serialDecoderPlan.mode.fallbackReason {
-        progress(progressEnabled, "hardware-required VideoToolbox decode unavailable for \(plan.name); using visible CPU/software decode fallback with Metal analysis: \(fallbackReason)")
-    }
     let serialChunk = FrameReadChunk(
         index: 0,
         totalCount: 1,
@@ -3062,7 +3105,7 @@ func run() throws {
     progress(arguments.progress, "using Metal analyzer device: \(metalContext.deviceName)")
     progress(
         arguments.progress,
-        "processing \(plan.assets.count) selected asset(s) serially with automatic VideoToolbox decode and Metal GPU analysis; hardware decode is preferred, software decode fallback is visible when required"
+        "processing \(plan.assets.count) selected asset(s) with hardware-required VideoToolbox decode and Metal GPU analysis"
     )
     var results: [AnalysisResult] = []
     for (assetIndex, asset) in plan.assets.enumerated() {

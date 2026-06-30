@@ -480,14 +480,14 @@ private let turnOwnershipStrideXSuppression: Float = 1.0
 private let turnOwnershipStrideYSuppression: Float = 0.55
 private let turnOwnershipStrideRollSuppression: Float = 0.70
 private let turnOwnershipFarFieldWarpSuppression: Float = 1.0
-private let farFieldWarpTrackingGateStart: Float = 0.26
-private let farFieldWarpTrackingGateFull: Float = 0.56
+private let farFieldWarpTrackingGateStart: Float = 0.24
+private let farFieldWarpTrackingGateFull: Float = 0.52
 private let farFieldWarpTrackingGateMedianBlend: Float = 0.45
 private let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
 private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
 private let maximumFarFieldWarpStrength: Float = 12.0
-private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23]
+private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {

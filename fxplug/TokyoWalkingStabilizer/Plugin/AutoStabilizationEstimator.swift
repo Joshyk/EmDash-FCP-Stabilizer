@@ -611,12 +611,12 @@ enum AutoStabilizationEstimator {
     private static let maxFarFieldShear: Float = 0.008
     private static let maxFarFieldYawPitchProxy: Float = 0.004
     private static let maxFarFieldPerspective: Float = 0.003
-    private static let maxRenderedFarFieldShear: Float = 0.004
-    private static let maxRenderedFarFieldYawPitchProxy: Float = 0.0025
-    private static let maxRenderedFarFieldPerspective: Float = 0.0015
+    private static let maxRenderedFarFieldShear: Float = 0.0048
+    private static let maxRenderedFarFieldYawPitchProxy: Float = 0.0032
+    private static let maxRenderedFarFieldPerspective: Float = 0.0020
     private static let maximumFarFieldWarpStrength: Float = 12.0
-    private static let farFieldWarpTrackingGateStart: Float = 0.26
-    private static let farFieldWarpTrackingGateFull: Float = 0.56
+    private static let farFieldWarpTrackingGateStart: Float = 0.24
+    private static let farFieldWarpTrackingGateFull: Float = 0.52
     private static let farFieldWarpTrackingGateMedianBlend: Float = 0.45
     private static let farFieldWarpTrackingGateStabilityLimit: Float = 0.15
     private static let farFieldWarpEdgeQualityGateStart: Float = 0.55
@@ -630,6 +630,9 @@ enum AutoStabilizationEstimator {
     private static let minimumFarFieldMotionBlocks = 3
     private static let staggeredMotionBlockFarFieldThreshold: Float = 0.70
     private static let detailMotionBlockFarFieldThreshold: Float = 0.70
+    private static let verticalDetailMotionBlockFarFieldThreshold: Float = 0.85
+    private static let attitudeDetailMotionBlockFarFieldThreshold: Float = 0.45
+    private static let attitudeDetailMotionBlockColumnRadius = 1
     private static let staggeredMotionBlockMinimumWidth = 18
     private static let staggeredMotionBlockMinimumHeight = 12
     private static let motionPathJerkLimitMultiplier: Float = 4.0
@@ -2628,6 +2631,40 @@ enum AutoStabilizationEstimator {
                 let midX = (x0 + x1) / 2
                 appendBlock(x0: x0, x1: midX, y0: y0, y1: y1)
                 appendBlock(x0: midX, x1: x1, y0: y0, y1: y1)
+            }
+        }
+        for row in 0..<rows {
+            let y0 = rowEdges[row].y0
+            let y1 = rowEdges[row].y1
+            let centerY = Float(y0) + (Float(y1 - y0) * 0.5)
+            guard farFieldWeight(centerY: centerY, sampleHeight: sampleHeight) >= verticalDetailMotionBlockFarFieldThreshold else {
+                continue
+            }
+            let midY = (y0 + y1) / 2
+            for column in 0..<columns {
+                let x0 = columnEdges[column].x0
+                let x1 = columnEdges[column].x1
+                appendBlock(x0: x0, x1: x1, y0: y0, y1: midY)
+                appendBlock(x0: x0, x1: x1, y0: midY, y1: y1)
+            }
+        }
+        let centerColumn = columns / 2
+        for row in 0..<rows {
+            let y0 = rowEdges[row].y0
+            let y1 = rowEdges[row].y1
+            let centerY = Float(y0) + (Float(y1 - y0) * 0.5)
+            guard farFieldWeight(centerY: centerY, sampleHeight: sampleHeight) >= attitudeDetailMotionBlockFarFieldThreshold else {
+                continue
+            }
+            let midY = (y0 + y1) / 2
+            for column in 0..<columns where abs(column - centerColumn) <= attitudeDetailMotionBlockColumnRadius {
+                let x0 = columnEdges[column].x0
+                let x1 = columnEdges[column].x1
+                let midX = (x0 + x1) / 2
+                appendBlock(x0: x0, x1: midX, y0: y0, y1: midY)
+                appendBlock(x0: midX, x1: x1, y0: y0, y1: midY)
+                appendBlock(x0: x0, x1: midX, y0: midY, y1: y1)
+                appendBlock(x0: midX, x1: x1, y0: midY, y1: y1)
             }
         }
         return blocks
