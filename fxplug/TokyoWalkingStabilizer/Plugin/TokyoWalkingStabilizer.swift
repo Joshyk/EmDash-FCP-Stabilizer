@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.10"
+private let tokyoWalkingStabilizerVersion = "1.0.11"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -2440,11 +2440,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return .identity
         }
 
-        let demandSamples = autoCropZoomDemandSamples(
+        let samples = autoCropZoomDemandSamples(
             preparedAnalysis: preparedAnalysis,
             startSeconds: firstTime,
             endSeconds: lastTime,
-            stepSeconds: samplingProfile.zoomKeypointCoarseStepSeconds,
+            stepSeconds: stabilizerAutoCropPlaybackScalePlanStepSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
@@ -2453,85 +2453,62 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity
         )
-        guard !demandSamples.isEmpty else {
+        guard !samples.isEmpty else {
             return .identity
         }
 
-        let localMaxima = autoCropZoomLocalMaxima(
-            demandSamples,
-            thresholdDelta: stabilizerAutoCropKeypointScaleThresholdDelta
-        )
-        let playbackCandidateLimit = max(16, stabilizerAutoCropKeypointMaximumCount / 2)
-        let rawCandidates = localMaxima.isEmpty
-            ? Array(demandSamples.sorted { $0.scale > $1.scale }.prefix(playbackCandidateLimit))
-            : Array(localMaxima.sorted { $0.scale > $1.scale }.prefix(playbackCandidateLimit))
-        let refinedCandidates = rawCandidates.compactMap { candidate in
-            autoCropRefinedZoomDemandSample(
-                around: candidate.seconds,
-                firstTime: firstTime,
-                lastTime: lastTime,
-                preparedAnalysis: preparedAnalysis,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                masterStrength: masterStrength,
-                samplingProfile: samplingProfile,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
-            )
-        }.filter { $0.scale > Float(1.0) + stabilizerAutoCropKeypointScaleThresholdDelta }
-
-        let minimumSpacingSeconds = max(
-            samplingProfile.zoomKeypointMinimumSpacingSeconds,
-            max(0.0, leadTimeSeconds)
-                + max(0.0, holdTimeSeconds)
-                + max(0.0, transitionDurationSeconds)
-        )
-        var selectedDemandSamples: [AutoCropZoomDemandSample] = []
-        for candidate in refinedCandidates.sorted(by: { $0.scale > $1.scale }) {
-            guard !selectedDemandSamples.contains(where: { abs($0.seconds - candidate.seconds) < minimumSpacingSeconds }) else {
-                continue
-            }
-            selectedDemandSamples.append(candidate)
-            if selectedDemandSamples.count >= playbackCandidateLimit {
-                break
-            }
-        }
-        guard !selectedDemandSamples.isEmpty else {
-            return .identity
-        }
-
-        let playbackKeypoints = autoCropZoomKeypoints(
-            from: selectedDemandSamples,
-            firstTime: firstTime,
-            lastTime: lastTime,
-            leadTimeSeconds: leadTimeSeconds,
-            holdTimeSeconds: holdTimeSeconds,
-            transitionDurationSeconds: transitionDurationSeconds
-        )
-        guard !playbackKeypoints.isEmpty else {
-            return .identity
-        }
-
+        var protectedDemandSamples: [AutoCropPlaybackScaleSample] = []
+        protectedDemandSamples.reserveCapacity(samples.count)
         var peakScale = Float(1.0)
         var peakSeconds: Double?
-        for keypoint in playbackKeypoints {
-            if keypoint.scale > peakScale {
-                peakScale = keypoint.scale
-                peakSeconds = keypoint.peakSeconds
+        for sample in samples {
+            guard sample.scale > Float(1.0) + stabilizerAutoCropKeypointCoverageThresholdDelta else {
+                continue
             }
+            let protectedScale = max(
+                autoCropZoomKeypointScale(forDemandScale: sample.scale),
+                autoCropPlaybackQuantizedScale(sample.scale)
+            )
+            protectedDemandSamples.append(
+                AutoCropPlaybackScaleSample(
+                    seconds: sample.seconds,
+                    scale: protectedScale
+                )
+            )
+            if protectedScale > peakScale {
+                peakScale = protectedScale
+                peakSeconds = sample.seconds
+            }
+        }
+
+        guard !protectedDemandSamples.isEmpty else {
+            return .identity
+        }
+
+        let leadSeconds = max(0.0, leadTimeSeconds.isFinite ? leadTimeSeconds : 0.0)
+        let holdSeconds = max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0)
+        let releaseSeconds = max(0.0, transitionDurationSeconds.isFinite ? transitionDurationSeconds : 0.0)
+        let playbackKeypoints = protectedDemandSamples.map { demandSample in
+            AutoCropZoomKeypoint(
+                peakSeconds: demandSample.seconds,
+                startSeconds: max(firstTime, demandSample.seconds - leadSeconds),
+                holdEndSeconds: min(lastTime, demandSample.seconds + holdSeconds),
+                endSeconds: min(lastTime, demandSample.seconds + holdSeconds + releaseSeconds),
+                scale: demandSample.scale,
+                positionPixels: vector_float2(0.0, 0.0)
+            )
         }
 
         var plannedSamples: [AutoCropPlaybackScaleSample] = []
+        plannedSamples.reserveCapacity(samples.count)
         var minimumPlannedScale = Float.greatestFiniteMagnitude
         var maximumPlannedScale = Float(1.0)
         var activeKeypointStartIndex = playbackKeypoints.startIndex
-        var sampleSeconds = firstTime
 
-        while sampleSeconds <= lastTime + 1e-9 {
+        for sample in samples {
             while activeKeypointStartIndex < playbackKeypoints.endIndex {
                 let keypoint = playbackKeypoints[activeKeypointStartIndex]
-                guard keypoint.endSeconds < sampleSeconds - 1e-9 else {
+                guard keypoint.endSeconds < sample.seconds - 1e-9 else {
                     break
                 }
                 activeKeypointStartIndex = playbackKeypoints.index(after: activeKeypointStartIndex)
@@ -2541,12 +2518,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             var keypointIndex = activeKeypointStartIndex
             while keypointIndex < playbackKeypoints.endIndex {
                 let keypoint = playbackKeypoints[keypointIndex]
-                guard keypoint.startSeconds <= sampleSeconds + 1e-9 else {
+                guard keypoint.startSeconds <= sample.seconds + 1e-9 else {
                     break
                 }
                 let influence = autoCropZoomKeypointInfluence(
                     keypoint,
-                    at: sampleSeconds
+                    at: sample.seconds
                 )
                 if influence > 0.0001 {
                     scale = max(
@@ -2561,40 +2538,30 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             maximumPlannedScale = max(maximumPlannedScale, quantizedScale)
             plannedSamples.append(
                 AutoCropPlaybackScaleSample(
-                    seconds: sampleSeconds,
+                    seconds: sample.seconds,
                     scale: quantizedScale
-                )
-            )
-            sampleSeconds += stabilizerAutoCropPlaybackScalePlanStepSeconds
-        }
-        if abs((plannedSamples.last?.seconds ?? firstTime) - lastTime) > 1e-6 {
-            plannedSamples.append(
-                AutoCropPlaybackScaleSample(
-                    seconds: lastTime,
-                    scale: autoCropPlaybackScalePlanKeypointScale(playbackKeypoints, at: lastTime)
                 )
             )
         }
 
         os_log(
-            "Auto Crop playback scale plan | samples %d demandSamples %d keypoints %d step %.3f peak %.3f peakScale %.4f minScale %.4f maxScale %.4f lead %.3f hold %.3f release %.3f",
+            "Auto Crop playback scale plan | samples %d demandSamples %d step %.3f peak %.3f peakScale %.4f minScale %.4f maxScale %.4f lead %.3f hold %.3f release %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
-            plannedSamples.count,
-            demandSamples.count,
-            playbackKeypoints.count,
+            samples.count,
+            protectedDemandSamples.count,
             stabilizerAutoCropPlaybackScalePlanStepSeconds,
             peakSeconds ?? -1.0,
             peakScale,
             minimumPlannedScale.isFinite ? minimumPlannedScale : Float(1.0),
             maximumPlannedScale,
-            max(0.0, leadTimeSeconds.isFinite ? leadTimeSeconds : 0.0),
-            max(0.0, holdTimeSeconds.isFinite ? holdTimeSeconds : 0.0),
-            max(0.0, transitionDurationSeconds.isFinite ? transitionDurationSeconds : 0.0)
+            leadSeconds,
+            holdSeconds,
+            releaseSeconds
         )
         return AutoCropPlaybackScalePlan(
             samples: plannedSamples,
-            sampleCount: plannedSamples.count,
+            sampleCount: samples.count,
             peakSeconds: peakSeconds,
             peakScale: peakScale
         )
@@ -2608,20 +2575,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         let cappedDelta = min(proportionalDelta, stabilizerAutoCropPlaybackLookaheadMaximumDelta)
         return safeScale + cappedDelta
-    }
-
-    private static func autoCropPlaybackScalePlanKeypointScale(
-        _ keypoints: [AutoCropZoomKeypoint],
-        at seconds: Double
-    ) -> Float {
-        var scale = Float(1.0)
-        for keypoint in keypoints where keypoint.startSeconds <= seconds + 1e-9 && keypoint.endSeconds >= seconds - 1e-9 {
-            let influence = autoCropZoomKeypointInfluence(keypoint, at: seconds)
-            if influence > 0.0001 {
-                scale = max(scale, Float(1.0) + ((keypoint.scale - Float(1.0)) * influence))
-            }
-        }
-        return autoCropPlaybackQuantizedScale(scale)
     }
 
     private static func autoCropPlaybackScalePlanSample(
