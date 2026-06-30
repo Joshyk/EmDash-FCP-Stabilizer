@@ -698,6 +698,20 @@ enum AutoStabilizationEstimator {
         let includeFarFieldWarp: Bool
     }
 
+    private struct ResidualPercentileCacheKey: Hashable {
+        let lowerIndex: Int
+        let upperIndex: Int
+        let count: Int
+        let percentile: UInt32
+    }
+
+    private struct FootstepConfidenceCacheKey: Hashable {
+        let kind: MotionPathKind
+        let index: Int
+        let trackingConfidence: UInt32
+        let fullImpulseScale: UInt32
+    }
+
     private struct RenderEstimateCacheStoreKey: Hashable {
         let frameCount: Int
         let firstTime: UInt64
@@ -754,6 +768,8 @@ enum AutoStabilizationEstimator {
         private var localAverages: [LocalAverageCacheKey: Float] = [:]
         private var rawTransforms: [RawTransformCacheKey: StabilizerAutoTransform] = [:]
         private var rawTransformOrder: [RawTransformCacheKey] = []
+        private var residualPercentiles: [ResidualPercentileCacheKey: Float] = [:]
+        private var footstepConfidences: [FootstepConfidenceCacheKey: Float] = [:]
         private let rawTransformLimit = 4096
 
         func rawTransform(
@@ -814,6 +830,94 @@ enum AutoStabilizationEstimator {
             let stored = rawTransforms[key] ?? transform
             lock.unlock()
             return stored
+        }
+
+        func residualPercentile(
+            analysis: StabilizerPreparedAnalysis,
+            indices: [Int],
+            percentile: Float
+        ) -> Float {
+            guard let key = residualPercentileCacheKey(indices: indices, percentile: percentile) else {
+                return AutoStabilizationEstimator.percentileValue(
+                    analysis.residuals,
+                    indices: indices,
+                    percentile: percentile
+                )
+            }
+
+            lock.lock()
+            if let cached = residualPercentiles[key] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+
+            let value = AutoStabilizationEstimator.percentileValue(
+                analysis.residuals,
+                indices: indices,
+                percentile: percentile
+            )
+
+            lock.lock()
+            residualPercentiles[key] = value
+            lock.unlock()
+            return value
+        }
+
+        private func residualPercentileCacheKey(
+            indices: [Int],
+            percentile: Float
+        ) -> ResidualPercentileCacheKey? {
+            guard let firstIndex = indices.first,
+                  let lastIndex = indices.last,
+                  firstIndex >= 0,
+                  indices.count == (lastIndex - firstIndex + 1)
+            else {
+                return nil
+            }
+            return ResidualPercentileCacheKey(
+                lowerIndex: firstIndex,
+                upperIndex: lastIndex + 1,
+                count: indices.count,
+                percentile: percentile.bitPattern
+            )
+        }
+
+        func footstepFrameConfidence(
+            kind: MotionPathKind,
+            values: [Float],
+            baselineValues: EstimatedPath,
+            frames: [StabilizerAnalysisFrame],
+            index: Int,
+            trackingConfidence: Float,
+            fullImpulseScale: Float
+        ) -> Float {
+            let key = FootstepConfidenceCacheKey(
+                kind: kind,
+                index: index,
+                trackingConfidence: trackingConfidence.bitPattern,
+                fullImpulseScale: fullImpulseScale.bitPattern
+            )
+            lock.lock()
+            if let cached = footstepConfidences[key] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+
+            let confidence = AutoStabilizationEstimator.footstepFrameConfidenceAtIndex(
+                values: values,
+                baselineValues: baselineValues,
+                frames: frames,
+                index: index,
+                trackingConfidence: trackingConfidence,
+                fullImpulseScale: fullImpulseScale
+            )
+
+            lock.lock()
+            footstepConfidences[key] = confidence
+            lock.unlock()
+            return confidence
         }
 
         func outerLinearPredictionPath(
@@ -1256,8 +1360,8 @@ enum AutoStabilizationEstimator {
         let sampleHeight = frames[centerIndex].sampleHeight
         let xScale = outputSize.x / Float(max(1, sampleWidth))
         let yScale = outputSize.y / Float(max(1, sampleHeight))
-        let turnResidual = percentileValue(analysis.residuals, indices: activeIndices, percentile: 0.75)
-        let strideResidual = percentileValue(analysis.residuals, indices: strideWobbleActiveIndices, percentile: 0.70)
+        let turnResidual = cache.residualPercentile(analysis: analysis, indices: activeIndices, percentile: 0.75)
+        let strideResidual = cache.residualPercentile(analysis: analysis, indices: strideWobbleActiveIndices, percentile: 0.70)
         let centerResidual = interpolatedValue(analysis.residuals, using: frameInterpolation)
         let blurAmount = timeWeightedAverage(analysis.blurAmounts, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
         let centerBlurAmount = interpolatedValue(analysis.blurAmounts, using: frameInterpolation)
@@ -1313,29 +1417,36 @@ enum AutoStabilizationEstimator {
             values: turnStrideSmoothedXPath,
             analysis: analysis,
             targetIndices: strideSupportIndices,
-            windowSeconds: smoothWindowSeconds
+            windowSeconds: smoothWindowSeconds,
+            cache: cache
         )
         let footstepCleanXPath = confidenceCleanedFootstepPath(
+            .footstepX,
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
             analysis: analysis,
             indices: strideSupportIndices,
             fullImpulseScale: footstepImpulseFullScalePixels,
-            confidenceScales: footstepXTurnGateScales
+            confidenceScales: footstepXTurnGateScales,
+            cache: cache
         )
         let footstepCleanYPath = confidenceCleanedFootstepPath(
+            .footstepY,
             values: analysis.footstepPathY,
             baselineValues: footstepBaselineYPath,
             analysis: analysis,
             indices: strideSupportIndices,
-            fullImpulseScale: footstepImpulseFullScalePixels
+            fullImpulseScale: footstepImpulseFullScalePixels,
+            cache: cache
         )
         let footstepCleanRollPath = confidenceCleanedFootstepPath(
+            .footstepRoll,
             values: analysis.footstepPathRoll,
             baselineValues: footstepBaselineRollPath,
             analysis: analysis,
             indices: strideSupportIndices,
-            fullImpulseScale: footstepImpulseFullScaleDegrees
+            fullImpulseScale: footstepImpulseFullScaleDegrees,
+            cache: cache
         )
         let strideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
             .footstepX,
@@ -1384,28 +1495,34 @@ enum AutoStabilizationEstimator {
         let strideSmoothRoll = interpolatedValue(strideSmoothedRollPath, using: frameInterpolation)
         let turnStrideSmoothX = interpolatedValue(turnStrideSmoothedXPath, using: frameInterpolation)
         let rawFootstepXConfidence = footstepFrameConfidence(
+            .footstepX,
             values: analysis.footstepPathX,
             baselineValues: footstepBaselineXPath,
             frames: frames,
             interpolation: frameInterpolation,
             trackingConfidence: walkingTrackingConfidence,
-            fullImpulseScale: footstepImpulseFullScalePixels
+            fullImpulseScale: footstepImpulseFullScalePixels,
+            cache: cache
         )
         let rawFootstepYConfidence = footstepFrameConfidence(
+            .footstepY,
             values: analysis.footstepPathY,
             baselineValues: footstepBaselineYPath,
             frames: frames,
             interpolation: frameInterpolation,
             trackingConfidence: walkingTrackingConfidence,
-            fullImpulseScale: footstepImpulseFullScalePixels
+            fullImpulseScale: footstepImpulseFullScalePixels,
+            cache: cache
         )
         let rawFootstepRollConfidence = footstepFrameConfidence(
+            .footstepRoll,
             values: analysis.footstepPathRoll,
             baselineValues: footstepBaselineRollPath,
             frames: frames,
             interpolation: frameInterpolation,
             trackingConfidence: walkingTrackingConfidence,
-            fullImpulseScale: footstepImpulseFullScaleDegrees
+            fullImpulseScale: footstepImpulseFullScaleDegrees,
+            cache: cache
         )
         let strideBandX = footstepCleanXAtRender - strideSmoothX
         let strideBandY = footstepCleanYAtRender - strideSmoothY
@@ -1501,6 +1618,7 @@ enum AutoStabilizationEstimator {
         let rawMicroCompensationY = -(footstepPathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
         let limitedMicroCompensationX = limitFootstepContinuity && strengths.microJitterX > 0.0
             ? footstepContinuityLimitedCorrection(
+                .footstepX,
                 values: analysis.footstepPathX,
                 baselineValues: footstepBaselineXPath,
                 analysis: analysis,
@@ -1509,11 +1627,13 @@ enum AutoStabilizationEstimator {
                 outputScale: xScale,
                 requestedStrength: strengths.microJitterX,
                 fullImpulseScale: footstepImpulseFullScalePixels,
-                confidenceScale: footstepXTurnGate
+                confidenceScale: footstepXTurnGate,
+                cache: cache
             )
             : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationX, limitedAmount: 0.0)
         let limitedMicroCompensationY = limitFootstepContinuity && strengths.microJitterY > 0.0
             ? footstepContinuityLimitedCorrection(
+                .footstepY,
                 values: analysis.footstepPathY,
                 baselineValues: footstepBaselineYPath,
                 analysis: analysis,
@@ -1522,7 +1642,8 @@ enum AutoStabilizationEstimator {
                 outputScale: yScale,
                 requestedStrength: strengths.microJitterY,
                 fullImpulseScale: footstepImpulseFullScalePixels,
-                confidenceScale: footstepYTurnGate
+                confidenceScale: footstepYTurnGate,
+                cache: cache
             )
             : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationY, limitedAmount: 0.0)
         let microCompensationX = limitedMicroCompensationX.limitedCorrection
@@ -4560,7 +4681,8 @@ enum AutoStabilizationEstimator {
         values: EstimatedPath,
         analysis: StabilizerPreparedAnalysis,
         targetIndices: [Int],
-        windowSeconds: Double
+        windowSeconds: Double,
+        cache: RenderEstimateCache
     ) -> [Int: Float] {
         guard !targetIndices.isEmpty else {
             return [:]
@@ -4607,7 +4729,7 @@ enum AutoStabilizationEstimator {
                     windowSeconds: windowSeconds
                 )
             let turnBand = values[index] - turnSmooth
-            let residual = percentileValue(analysis.residuals, indices: activeIndices, percentile: 0.75)
+            let residual = cache.residualPercentile(analysis: analysis, indices: activeIndices, percentile: 0.75)
             let trackingConfidence = frameTrackingConfidence(
                 motionConfidence: analysis.analysisConfidence[index],
                 residual: analysis.residuals[index],
@@ -4722,12 +4844,14 @@ enum AutoStabilizationEstimator {
     }
 
     private static func confidenceCleanedFootstepPath(
+        _ kind: MotionPathKind,
         values: [Float],
         baselineValues: EstimatedPath,
         analysis: StabilizerPreparedAnalysis,
         indices: [Int],
         fullImpulseScale: Float,
-        confidenceScales: [Int: Float] = [:]
+        confidenceScales: [Int: Float] = [:],
+        cache: RenderEstimateCache
     ) -> EstimatedPath {
         guard !values.isEmpty else {
             return EstimatedPath(values: values)
@@ -4755,7 +4879,8 @@ enum AutoStabilizationEstimator {
             )
             let rawValue = values[index]
             let baselineValue = baselineValues[index]
-            let confidence = footstepFrameConfidenceAtIndex(
+            let confidence = cache.footstepFrameConfidence(
+                kind: kind,
                 values: values,
                 baselineValues: baselineValues,
                 frames: analysis.frames,
@@ -4776,6 +4901,7 @@ enum AutoStabilizationEstimator {
     }
 
     private static func footstepContinuityLimitedCorrection(
+        _ kind: MotionPathKind,
         values: [Float],
         baselineValues: EstimatedPath,
         analysis: StabilizerPreparedAnalysis,
@@ -4784,7 +4910,8 @@ enum AutoStabilizationEstimator {
         outputScale: Float,
         requestedStrength: Double,
         fullImpulseScale: Float,
-        confidenceScale: Float = 1.0
+        confidenceScale: Float = 1.0,
+        cache: RenderEstimateCache
     ) -> FootstepContinuityLimitResult {
         guard rawCorrection.isFinite,
               outputScale.isFinite,
@@ -4838,12 +4965,14 @@ enum AutoStabilizationEstimator {
                 qualityModel: analysis.qualityModel
             )
             let confidence = footstepFrameConfidence(
+                kind,
                 values: values,
                 baselineValues: baselineValues,
                 frames: analysis.frames,
                 interpolation: FrameInterpolation(lowerIndex: index, upperIndex: index, fraction: 0.0),
                 trackingConfidence: trackingConfidence,
-                fullImpulseScale: fullImpulseScale
+                fullImpulseScale: fullImpulseScale,
+                cache: cache
             )
             let correctionStrength = walkingConfidenceCompensatedCorrectionFactor(
                 requestedStrength,
@@ -4904,14 +5033,17 @@ enum AutoStabilizationEstimator {
     }
 
     private static func footstepFrameConfidence(
+        _ kind: MotionPathKind,
         values: [Float],
         baselineValues: EstimatedPath,
         frames: [StabilizerAnalysisFrame],
         interpolation: FrameInterpolation,
         trackingConfidence: Float,
-        fullImpulseScale: Float
+        fullImpulseScale: Float,
+        cache: RenderEstimateCache
     ) -> Float {
-        let lowerConfidence = footstepFrameConfidenceAtIndex(
+        let lowerConfidence = cache.footstepFrameConfidence(
+            kind: kind,
             values: values,
             baselineValues: baselineValues,
             frames: frames,
@@ -4927,10 +5059,13 @@ enum AutoStabilizationEstimator {
                 centerTime: frames.indices.contains(interpolation.lowerIndex) ? frames[interpolation.lowerIndex].time : 0.0,
                 instantConfidence: lowerConfidence,
                 trackingConfidence: trackingConfidence,
-                fullImpulseScale: fullImpulseScale
+                fullImpulseScale: fullImpulseScale,
+                kind: kind,
+                cache: cache
             )
         }
-        let upperConfidence = footstepFrameConfidenceAtIndex(
+        let upperConfidence = cache.footstepFrameConfidence(
+            kind: kind,
             values: values,
             baselineValues: baselineValues,
             frames: frames,
@@ -4949,7 +5084,9 @@ enum AutoStabilizationEstimator {
             centerTime: centerTime,
             instantConfidence: instantConfidence,
             trackingConfidence: trackingConfidence,
-            fullImpulseScale: fullImpulseScale
+            fullImpulseScale: fullImpulseScale,
+            kind: kind,
+            cache: cache
         )
     }
 
@@ -4960,7 +5097,9 @@ enum AutoStabilizationEstimator {
         centerTime: Double,
         instantConfidence: Float,
         trackingConfidence: Float,
-        fullImpulseScale: Float
+        fullImpulseScale: Float,
+        kind: MotionPathKind,
+        cache: RenderEstimateCache
     ) -> Float {
         guard centerTime.isFinite, !frames.isEmpty else {
             return instantConfidence
@@ -4982,7 +5121,8 @@ enum AutoStabilizationEstimator {
             guard weight > 0.0001 else {
                 continue
             }
-            let confidence = footstepFrameConfidenceAtIndex(
+            let confidence = cache.footstepFrameConfidence(
+                kind: kind,
                 values: values,
                 baselineValues: baselineValues,
                 frames: frames,
