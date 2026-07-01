@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.22"
+private let tokyoWalkingStabilizerVersion = "1.0.24"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -84,8 +84,8 @@ private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
 private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
-private let stabilizerAutoCropDemandMinimumStepSeconds = 0.125
-private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 0.125
+private let stabilizerAutoCropDemandMinimumStepSeconds = 1.0 / 30.0
+private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 1.0 / 30.0
 private let stabilizerAutoCropPlaybackScaleQuantization: Float = 0.0005
 private let stabilizerAutoCropPlaybackMinimumClipScaleDelta: Float = 0.03
 private let stabilizerAutoCropPlaybackEnvelopeRadiusSeconds = 1.25
@@ -2679,8 +2679,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
 
-        let plannedSamples = autoCropPlaybackEnvelopeSamples(rawPlannedSamples)
         let positionSamples = autoCropPlaybackPositionEnvelopeSamples(rawPositionSamples)
+        let coverageRepairedSamples = autoCropPlaybackCoverageRepairedScaleSamples(
+            rawPlannedSamples,
+            demandSamples: samples,
+            preparedAnalysis: preparedAnalysis,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
+        let plannedSamples = autoCropPlaybackEnvelopeSamples(coverageRepairedSamples.samples)
         let scaleBounds = plannedSamples.reduce(
             (minimum: Float.greatestFiniteMagnitude, maximum: Float(1.0))
         ) { bounds, sample in
@@ -2692,12 +2704,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         os_log(
-            "Auto Crop playback scale plan | samples %d demandSamples %d minimumClippedDemandSamples %d step %.3f minClip %.4f envelopeRadius %.3f peak %.3f peakScale %.4f minScale %.4f maxScale %.4f lead %.3f hold %.3f release %.3f capLead %.3f capHold %.3f capRelease %.3f",
+            "Auto Crop playback scale plan | samples %d demandSamples %d minimumClippedDemandSamples %d coverageFloorSamples %d step %.3f minClip %.4f envelopeRadius %.3f peak %.3f peakScale %.4f minScale %.4f maxScale %.4f lead %.3f hold %.3f release %.3f capLead %.3f capHold %.3f capRelease %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             samples.count,
             protectedDemandSamples.count,
             minimumClippedDemandSampleCount,
+            coverageRepairedSamples.repairCount,
             stabilizerAutoCropPlaybackScalePlanStepSeconds,
             Float(1.0) + stabilizerAutoCropPlaybackMinimumClipScaleDelta,
             stabilizerAutoCropPlaybackEnvelopeRadiusSeconds,
@@ -2786,6 +2799,81 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 scale: autoCropPlaybackQuantizedScale(envelopeScale)
             )
         }
+    }
+
+    private static func autoCropPlaybackCoverageRepairedScaleSamples(
+        _ plannedSamples: [AutoCropPlaybackScaleSample],
+        demandSamples: [AutoCropZoomDemandSample],
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> (samples: [AutoCropPlaybackScaleSample], repairCount: Int) {
+        guard plannedSamples.count == demandSamples.count else {
+            return (plannedSamples, 0)
+        }
+
+        var repairedSamples: [AutoCropPlaybackScaleSample] = []
+        repairedSamples.reserveCapacity(plannedSamples.count)
+        var repairCount = 0
+
+        for index in plannedSamples.indices {
+            let plannedSample = plannedSamples[index]
+            let demandSample = demandSamples[index]
+            let transform = autoCropTimelineTransform(
+                preparedAnalysis: preparedAnalysis,
+                seconds: plannedSample.seconds,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+            let context = AutoCropTransformContext(
+                transform: transform,
+                outputSize: outputSize,
+                masterStrength: masterStrength
+            )
+            let currentScale = requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: demandSample.positionPixels,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            )
+            let neutralPositionPixels = blackSafeAutoCropPosition(
+                preferredPositionPixels: vector_float2(0.0, 0.0),
+                context: context,
+                samplingProfile: samplingProfile
+            )
+            let neutralScale = requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: neutralPositionPixels,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            )
+            let currentFloorScale = autoCropPlaybackMinimumClippedScale(currentScale)
+            let neutralFloorScale = autoCropPlaybackMinimumClippedScale(neutralScale)
+            let coverageFloorScale = currentFloorScale <= neutralFloorScale + stabilizerAutoCropKeypointCoverageToleranceDelta
+                ? currentFloorScale
+                : neutralFloorScale
+            let repairedScale = autoCropPlaybackQuantizedScale(max(plannedSample.scale, coverageFloorScale))
+            if repairedScale > plannedSample.scale + 0.00001 {
+                repairCount += 1
+            }
+            repairedSamples.append(
+                AutoCropPlaybackScaleSample(
+                    seconds: plannedSample.seconds,
+                    scale: repairedScale
+                )
+            )
+        }
+
+        return (repairedSamples, repairCount)
     }
 
     private static func autoCropPlaybackPositionEnvelopeSamples(
