@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.69"
+private let tokyoWalkingStabilizerVersion = "1.0.70"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -84,10 +84,12 @@ private let stabilizerAutoCropIdleScaleTolerance: Float = 0.012
 private let stabilizerAutoCropIdleReleaseStartSeconds = 1.0
 private let stabilizerAutoCropIdleReleaseEndSeconds = 2.5
 private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
-private let stabilizerAutoCropDemandMinimumStepSeconds = 1.0 / 30.0
-private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 1.0 / 30.0
+private let stabilizerAutoCropDemandMinimumStepSeconds = 1.0 / 60.0
+private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 1.0 / 60.0
 private let stabilizerAutoCropPlaybackScaleQuantization: Float = 0.0005
 private let stabilizerAutoCropPlaybackMinimumClipScaleDelta: Float = 0.03
+private let stabilizerAutoCropPlaybackAdaptiveClipPaddingDelta: Float = 0.004
+private let stabilizerAutoCropPlaybackAdaptiveClipMultiplier: Float = 1.5
 private let stabilizerAutoCropPlaybackEnvelopeRadiusSeconds = 1.25
 private let stabilizerAutoCropPlaybackPositionEnvelopeRadiusSeconds = 1.25
 private let stabilizerAutoCropPlaybackLookaheadMinimumDelta: Float = 0.22
@@ -337,7 +339,7 @@ private enum AutoCropSamplingProfile: Int32 {
     var positionEnvelopeSampleLimit: Int {
         switch self {
         case .playback:
-            return 120
+            return 240
         case .full:
             return 240
         }
@@ -346,7 +348,7 @@ private enum AutoCropSamplingProfile: Int32 {
     var positionEnvelopeStepSeconds: Double {
         switch self {
         case .playback:
-            return 1.0 / 30.0
+            return 1.0 / 60.0
         case .full:
             return 1.0 / 60.0
         }
@@ -2804,7 +2806,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func autoCropPlaybackMinimumClippedScale(_ scale: Float) -> Float {
         let safeScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
-        let minimumClipScale = Float(1.0) + stabilizerAutoCropPlaybackMinimumClipScaleDelta
+        let demandDelta = max(Float(0.0), safeScale - Float(1.0))
+        guard demandDelta > stabilizerAutoCropKeypointCoverageThresholdDelta else {
+            return safeScale
+        }
+        let adaptiveMinimumDelta = min(
+            stabilizerAutoCropPlaybackMinimumClipScaleDelta,
+            max(
+                demandDelta + stabilizerAutoCropPlaybackAdaptiveClipPaddingDelta,
+                demandDelta * stabilizerAutoCropPlaybackAdaptiveClipMultiplier
+            )
+        )
+        let minimumClipScale = Float(1.0) + adaptiveMinimumDelta
         return max(minimumClipScale, safeScale)
     }
 

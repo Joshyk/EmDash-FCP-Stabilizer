@@ -19,6 +19,7 @@ Options:
   --video PATH                 Capture output or existing recording to evaluate.
   --viewer-roi x,y,w,h         Override absolute FCP Viewer ROI in the screen recording.
   --output-dir PATH            Directory for evaluator diagnostics.
+  --capture-backend NAME       screencapture or avfoundation-roi. Default: screencapture.
   --assume-current-fcp-state   Do not open the project by UI helper; use current FCP state.
 
 Capture prerequisites:
@@ -48,6 +49,41 @@ for part in dotted.split("."):
     value = value[part]
 print(value)
 PY
+}
+
+viewer_roi_field() {
+	local roi="$1"
+	local field="$2"
+	python3 - "$roi" "$field" <<'PY'
+import sys
+
+parts = sys.argv[1].split(",")
+field = int(sys.argv[2])
+if len(parts) != 4:
+    raise SystemExit("viewer ROI must be x,y,w,h")
+try:
+    values = [int(part) for part in parts]
+except ValueError:
+    raise SystemExit("viewer ROI values must be integers")
+if values[2] <= 0 or values[3] <= 0:
+    raise SystemExit("viewer ROI width/height must be positive")
+print(values[field])
+PY
+}
+
+viewer_roi_zero_origin() {
+	local roi="$1"
+	local width
+	local height
+	width="$(viewer_roi_field "$roi" 2)"
+	height="$(viewer_roi_field "$roi" 3)"
+	if (( width % 2 == 1 )); then
+		width=$((width - 1))
+	fi
+	if (( height % 2 == 1 )); then
+		height=$((height - 1))
+	fi
+	printf '0,0,%s,%s\n' "$width" "$height"
 }
 
 press_space() {
@@ -191,6 +227,8 @@ capture_case() {
 	local case_file="$1"
 	local video_path="$2"
 	local assume_current="$3"
+	local viewer_roi="$4"
+	local capture_backend="$5"
 	local case_id
 	local duration
 	local record_seconds
@@ -216,8 +254,48 @@ PY
 	sleep 0.6
 	preflight_playback_alerts "$timecode_entry"
 
-	printf 'Recording FCP Viewer E2E case %s for %ss: %s\n' "$case_id" "$record_seconds" "$video_path"
-	/usr/sbin/screencapture -v -V "$record_seconds" "$video_path" &
+	printf 'Recording FCP Viewer E2E case %s for %ss via %s: %s\n' "$case_id" "$record_seconds" "$capture_backend" "$video_path"
+	case "$capture_backend" in
+		screencapture)
+			/usr/sbin/screencapture -v -V "$record_seconds" "$video_path" &
+			;;
+		avfoundation-roi)
+			[[ -n "$viewer_roi" ]] || fail "--capture-backend avfoundation-roi requires --viewer-roi"
+			local ffmpeg_bin
+			ffmpeg_bin="$(command -v ffmpeg || true)"
+			[[ -n "$ffmpeg_bin" ]] || fail "ffmpeg is required for --capture-backend avfoundation-roi"
+			local crop_x
+			local crop_y
+			local crop_w
+			local crop_h
+			crop_x="$(viewer_roi_field "$viewer_roi" 0)"
+			crop_y="$(viewer_roi_field "$viewer_roi" 1)"
+			crop_w="$(viewer_roi_field "$viewer_roi" 2)"
+			crop_h="$(viewer_roi_field "$viewer_roi" 3)"
+			if (( crop_w % 2 == 1 )); then
+				crop_w=$((crop_w - 1))
+			fi
+			if (( crop_h % 2 == 1 )); then
+				crop_h=$((crop_h - 1))
+			fi
+			"$ffmpeg_bin" -y -hide_banner \
+				-f avfoundation \
+				-framerate 60 \
+				-capture_cursor 0 \
+				-pixel_format bgr0 \
+				-i "1:none" \
+				-t "$record_seconds" \
+				-vf "crop=${crop_w}:${crop_h}:${crop_x}:${crop_y}" \
+				-an \
+				-c:v h264_videotoolbox \
+				-b:v 8M \
+				-allow_sw 0 \
+				"$video_path" &
+			;;
+		*)
+			fail "unknown capture backend: $capture_backend"
+			;;
+	esac
 	local capture_pid=$!
 	sleep 0.8
 	press_space
@@ -262,6 +340,7 @@ video_path=""
 viewer_roi=""
 output_dir=""
 assume_current=0
+capture_backend="${STABILIZER_E2E_CAPTURE_BACKEND:-screencapture}"
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -280,14 +359,19 @@ while [[ $# -gt 0 ]]; do
 			[[ -n "$viewer_roi" ]] || fail "--viewer-roi requires x,y,w,h"
 			shift 2
 			;;
-		--output-dir)
-			output_dir="${2:-}"
-			[[ -n "$output_dir" ]] || fail "--output-dir requires a path"
-			shift 2
-			;;
-		--assume-current-fcp-state)
-			assume_current=1
-			shift
+			--output-dir)
+				output_dir="${2:-}"
+				[[ -n "$output_dir" ]] || fail "--output-dir requires a path"
+				shift 2
+				;;
+			--capture-backend)
+				capture_backend="${2:-}"
+				[[ -n "$capture_backend" ]] || fail "--capture-backend requires a backend name"
+				shift 2
+				;;
+			--assume-current-fcp-state)
+				assume_current=1
+				shift
 			;;
 		-h|--help)
 			usage
@@ -309,14 +393,22 @@ fi
 
 case "$command_name" in
 	capture)
-		capture_case "$case_file" "$video_path" "$assume_current"
+		capture_case "$case_file" "$video_path" "$assume_current" "$viewer_roi" "$capture_backend"
 		;;
 	evaluate)
-		evaluate_case "$case_file" "$video_path" "$viewer_roi" "$output_dir"
+		evaluation_viewer_roi="$viewer_roi"
+		if [[ "$capture_backend" == "avfoundation-roi" && -n "$viewer_roi" ]]; then
+			evaluation_viewer_roi="$(viewer_roi_zero_origin "$viewer_roi")"
+		fi
+		evaluate_case "$case_file" "$video_path" "$evaluation_viewer_roi" "$output_dir"
 		;;
 	run)
-		capture_case "$case_file" "$video_path" "$assume_current"
-		evaluate_case "$case_file" "$video_path" "$viewer_roi" "$output_dir"
+		capture_case "$case_file" "$video_path" "$assume_current" "$viewer_roi" "$capture_backend"
+		evaluation_viewer_roi="$viewer_roi"
+		if [[ "$capture_backend" == "avfoundation-roi" && -n "$viewer_roi" ]]; then
+			evaluation_viewer_roi="$(viewer_roi_zero_origin "$viewer_roi")"
+		fi
+		evaluate_case "$case_file" "$video_path" "$evaluation_viewer_roi" "$output_dir"
 		;;
 	-h|--help)
 		usage

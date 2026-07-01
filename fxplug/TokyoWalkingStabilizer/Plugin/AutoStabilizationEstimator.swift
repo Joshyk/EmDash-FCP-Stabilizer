@@ -597,6 +597,10 @@ enum AutoStabilizationEstimator {
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
     private static let renderTemporalSmoothingSampleCount = 25
     private static let renderTemporalSmoothingWindowSeconds = 2.20
+    private static let renderFrameLocalSmoothingRadiusFrames = 2
+    private static let renderFrameLocalSmoothingBaseWeight: Float = 1.25
+    private static let renderFrameLocalSmoothingMinimumStepSeconds = 1.0 / 120.0
+    private static let renderFrameLocalSmoothingMaximumStepSeconds = 1.0 / 24.0
     private static let renderTurnTransitionSmoothingSampleCount = 29
     private static let renderTurnTransitionSmoothingWindowSeconds = 2.8
     private static let renderTurnTransitionMinimumMacroPixels: Float = 0.5
@@ -1968,7 +1972,8 @@ enum AutoStabilizationEstimator {
         let sigma = max(1e-6, halfWindow * 0.5)
         let farFieldWarpHalfWindow = renderFarFieldWarpSmoothingWindowSeconds * 0.5
         var weightedSamples: [(transform: StabilizerAutoTransform, weight: Float, offsetSeconds: Double)] = []
-        weightedSamples.reserveCapacity(sampleCount)
+        weightedSamples.reserveCapacity(sampleCount + (renderFrameLocalSmoothingRadiusFrames * 2))
+        let centerFrameIndex = frameLookup(at: renderSeconds, in: frames).centerIndex
 
         for sampleIndex in 0..<sampleCount {
             let offset = (Double(sampleIndex - centerSample) * sampleStep)
@@ -1998,6 +2003,37 @@ enum AutoStabilizationEstimator {
                 )
             }
             weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
+        }
+        let frameStepSeconds = localFrameStepSeconds(frames: frames, centerIndex: centerFrameIndex)
+        let duplicateOffsetTolerance = max(0.0005, frameStepSeconds * 0.25)
+        if frameStepSeconds > 0.0 {
+            for offsetFrame in (-renderFrameLocalSmoothingRadiusFrames)...renderFrameLocalSmoothingRadiusFrames where offsetFrame != 0 {
+                let offset = Double(offsetFrame) * frameStepSeconds
+                let sampleSeconds = renderSeconds + offset
+                guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                    continue
+                }
+                if weightedSamples.contains(where: { abs($0.offsetSeconds - offset) <= duplicateOffsetTolerance }) {
+                    continue
+                }
+                let sampleFrameIndex = frameLookup(at: sampleSeconds, in: frames).centerIndex
+                guard sampleFrameIndex != centerFrameIndex else {
+                    continue
+                }
+                let includeFarFieldWarp = abs(offset) <= farFieldWarpHalfWindow + 1e-9
+                let transform = renderEstimateCache.rawTransform(
+                    analysis: analysis,
+                    index: sampleFrameIndex,
+                    outputSize: outputSize,
+                    panSmoothSeconds: panSmoothSeconds,
+                    strengths: strengths,
+                    limitFootstepContinuity: false,
+                    includeFarFieldWarp: includeFarFieldWarp
+                )
+                let distanceWeight = Float(max(1, abs(offsetFrame)))
+                let weight = renderFrameLocalSmoothingBaseWeight / distanceWeight
+                weightedSamples.append((transform: transform, weight: weight, offsetSeconds: offset))
+            }
         }
 
         guard !weightedSamples.isEmpty else {
@@ -4349,6 +4385,39 @@ enum AutoStabilizationEstimator {
         }
         let fraction = clamp(Float((time - lowerTime) / duration), min: 0.0, max: 1.0)
         return FrameLookup(centerIndex: centerIndex, interpolation: FrameInterpolation(lowerIndex: lowerIndex, upperIndex: upperIndex, fraction: fraction))
+    }
+
+    private static func localFrameStepSeconds(frames: [StabilizerAnalysisFrame], centerIndex: Int) -> Double {
+        guard frames.count > 1 else {
+            return 1.0 / 60.0
+        }
+
+        var candidates: [Double] = []
+        func appendDelta(_ lowerIndex: Int, _ upperIndex: Int) {
+            guard frames.indices.contains(lowerIndex),
+                  frames.indices.contains(upperIndex)
+            else {
+                return
+            }
+            let delta = frames[upperIndex].time - frames[lowerIndex].time
+            if delta.isFinite, delta > 0.0 {
+                candidates.append(delta)
+            }
+        }
+
+        appendDelta(centerIndex - 2, centerIndex - 1)
+        appendDelta(centerIndex - 1, centerIndex)
+        appendDelta(centerIndex, centerIndex + 1)
+        appendDelta(centerIndex + 1, centerIndex + 2)
+        guard !candidates.isEmpty else {
+            return 1.0 / 60.0
+        }
+        candidates.sort()
+        let median = candidates[candidates.count / 2]
+        return min(
+            max(median, renderFrameLocalSmoothingMinimumStepSeconds),
+            renderFrameLocalSmoothingMaximumStepSeconds
+        )
     }
 
     private static func interpolatedValue(_ values: [Float], using interpolation: FrameInterpolation) -> Float {

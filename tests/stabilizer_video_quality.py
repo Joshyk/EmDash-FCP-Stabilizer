@@ -40,6 +40,36 @@ def parse_roi(text: str) -> Roi:
     return x, y, w, h
 
 
+def parse_frame_rate(value: Any, fallback: float) -> float:
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "source":
+            return fallback
+        if "/" in text:
+            numerator, denominator = text.split("/", 1)
+            try:
+                parsed = float(numerator) / float(denominator)
+            except ValueError:
+                fail(f"invalid frame rate: {value}")
+            if parsed > 0.0 and math.isfinite(parsed):
+                return parsed
+            fail(f"invalid frame rate: {value}")
+        try:
+            parsed = float(text)
+        except ValueError:
+            fail(f"invalid frame rate: {value}")
+        if parsed > 0.0 and math.isfinite(parsed):
+            return parsed
+        fail(f"invalid frame rate: {value}")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if parsed > 0.0 and math.isfinite(parsed):
+        return parsed
+    return fallback
+
+
 def roi_from_case(value: dict[str, Any], name: str) -> Roi:
     try:
         roi = (int(value["x"]), int(value["y"]), int(value["w"]), int(value["h"]))
@@ -181,8 +211,13 @@ def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     if not rows:
         path.write_text("", encoding="utf-8")
         return
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -260,17 +295,57 @@ def summarize_failures(
     low_inlier_rows = [row for row in scale_rows if not bool(row.get("trackingOk"))]
     low_inlier_ratio = (len(low_inlier_rows) / len(scale_rows)) if scale_rows else 1.0
     scale_quality_ratio = (len(scale_quality_rows) / len(scale_rows)) if scale_rows else 0.0
+    max_jump_x = 0.0
+    max_jump_y = 0.0
+    max_jump_vector = 0.0
+    max_jump_frame = None
+    max_jump_time = None
+    jump_pair_count = 0
+    previous_row: dict[str, Any] | None = None
+    for row in sorted(scale_rows, key=lambda item: int(item.get("frame", 0))):
+        row_quality_ok = bool(row.get("scaleQualityOk", row.get("trackingOk")))
+        if previous_row is not None and row_quality_ok and bool(previous_row.get("scaleQualityOk", previous_row.get("trackingOk"))):
+            try:
+                is_adjacent_sample = int(row.get("previousFrame", -1)) == int(previous_row.get("frame", -2))
+            except (TypeError, ValueError):
+                is_adjacent_sample = False
+            if is_adjacent_sample:
+                jump_x = float(row.get("dx", 0.0)) - float(previous_row.get("dx", 0.0))
+                jump_y = float(row.get("dy", 0.0)) - float(previous_row.get("dy", 0.0))
+                jump_vector = math.hypot(jump_x, jump_y)
+                row["frameJumpX"] = jump_x
+                row["frameJumpY"] = jump_y
+                row["frameJumpPixels"] = jump_vector
+                jump_pair_count += 1
+                if abs(jump_x) > max_jump_x:
+                    max_jump_x = abs(jump_x)
+                if abs(jump_y) > max_jump_y:
+                    max_jump_y = abs(jump_y)
+                if jump_vector > max_jump_vector:
+                    max_jump_vector = jump_vector
+                    max_jump_frame = int(row.get("frame", 0))
+                    max_jump_time = float(row.get("time", 0.0))
+        previous_row = row
 
     scale_limit = float(quality.get("maxScaleResidualPercent", 0.85))
     edge_limit = float(quality.get("maxBlackEdgeResidualPixels", 18.0))
     low_inlier_limit = float(quality.get("maxLowInlierRatio", 0.1))
     scale_quality_limit = float(quality.get("minScaleQualityRatio", 0.5))
+    jump_vector_limit = float(quality.get("maxFrameTranslationJumpPixels", float("inf")))
+    jump_x_limit = float(quality.get("maxFrameXJumpPixels", jump_vector_limit))
+    jump_y_limit = float(quality.get("maxFrameYJumpPixels", jump_vector_limit))
 
     failures: list[str] = []
     if max_scale > scale_limit:
         failures.append(f"scale residual {max_scale:.3f}% exceeds {scale_limit:.3f}%")
     if max_edge > edge_limit:
         failures.append(f"black-edge residual {max_edge:.1f}px exceeds {edge_limit:.1f}px")
+    if max_jump_vector > jump_vector_limit:
+        failures.append(f"frame translation jump {max_jump_vector:.3f}px exceeds {jump_vector_limit:.3f}px")
+    if max_jump_x > jump_x_limit:
+        failures.append(f"frame x jump {max_jump_x:.3f}px exceeds {jump_x_limit:.3f}px")
+    if max_jump_y > jump_y_limit:
+        failures.append(f"frame y jump {max_jump_y:.3f}px exceeds {jump_y_limit:.3f}px")
     if low_inlier_ratio > low_inlier_limit:
         failures.append(f"low tracking ratio {low_inlier_ratio:.3f} exceeds {low_inlier_limit:.3f}")
     if scale_quality_ratio < scale_quality_limit:
@@ -279,6 +354,12 @@ def summarize_failures(
     summary = {
         "maxAbsScaleResidualPercent": max_scale,
         "maxBlackEdgeResidualPixels": max_edge,
+        "maxFrameTranslationJumpPixels": max_jump_vector,
+        "maxFrameXJumpPixels": max_jump_x,
+        "maxFrameYJumpPixels": max_jump_y,
+        "maxFrameJumpFrame": max_jump_frame,
+        "maxFrameJumpTimeSeconds": max_jump_time,
+        "frameJumpPairCount": jump_pair_count,
         "lowTrackingRatio": low_inlier_ratio,
         "scaleQualityRatio": scale_quality_ratio,
         "scaleFrameCount": len(scale_rows),
@@ -287,6 +368,9 @@ def summarize_failures(
         "thresholds": {
             "maxScaleResidualPercent": scale_limit,
             "maxBlackEdgeResidualPixels": edge_limit,
+            "maxFrameTranslationJumpPixels": jump_vector_limit,
+            "maxFrameXJumpPixels": jump_x_limit,
+            "maxFrameYJumpPixels": jump_y_limit,
             "maxLowInlierRatio": low_inlier_limit,
             "minScaleQualityRatio": scale_quality_limit,
         },
@@ -312,7 +396,9 @@ def main() -> int:
     quality = dict(case.get("quality", {}))
     viewer_roi = parse_roi(args.viewer_roi) if args.viewer_roi else roi_from_case(case["viewerRoi"], "viewerRoi")
     content_roi = roi_from_case(case["contentRoi"], "contentRoi")
-    sample_fps = float(args.sample_fps or quality.get("targetSampleFps", 30.0))
+    source_frame_rate = parse_frame_rate(case.get("source", {}).get("frameRate", 30.0), 30.0)
+    sample_fps = parse_frame_rate(args.sample_fps or quality.get("targetSampleFps", "source"), source_frame_rate)
+    sample_every_captured_frame = bool(quality.get("sampleEveryCapturedFrame", False))
     ignore_start = float(quality.get("ignoreStartSeconds", 1.0))
     ignore_end = float(quality.get("ignoreEndSeconds", 0.5))
     median_seconds = float(quality.get("rollingMedianWindowSeconds", 0.5))
@@ -334,7 +420,8 @@ def main() -> int:
         fps = sample_fps
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     duration = frame_count / fps if frame_count > 0 else 0.0
-    sample_step = max(1, int(round(fps / sample_fps)))
+    sample_step = 1 if sample_every_captured_frame else max(1, int(round(fps / sample_fps)))
+    effective_sample_fps = fps / sample_step
 
     ok, first_frame = cap.read()
     if not ok:
@@ -402,7 +489,7 @@ def main() -> int:
     if not edge_rows:
         fail("no sampled frames were read")
 
-    median_window = max(3, int(round(median_seconds * sample_fps)))
+    median_window = max(3, int(round(median_seconds * effective_sample_fps)))
     if median_window % 2 == 0:
         median_window += 1
 
@@ -453,7 +540,10 @@ def main() -> int:
             "frameCount": frame_count,
             "durationSeconds": duration,
             "sampleStep": sample_step,
-            "sampleFps": fps / sample_step,
+            "sampleFps": effective_sample_fps,
+            "targetSampleFps": sample_fps,
+            "sourceFrameRate": source_frame_rate,
+            "sampleEveryCapturedFrame": sample_every_captured_frame,
             "viewerRoi": {"x": viewer_roi[0], "y": viewer_roi[1], "w": viewer_roi[2], "h": viewer_roi[3]},
             "contentRoi": {"x": content_roi[0], "y": content_roi[1], "w": content_roi[2], "h": content_roi[3]},
             "ignoreStartSeconds": ignore_start,
@@ -475,6 +565,11 @@ def main() -> int:
         key=lambda row: abs(float(row.get("scaleResidualPercent", 0.0))),
         reverse=True,
     )[:6]
+    jump_spikes = sorted(
+        [row for row in filtered_scales if "frameJumpPixels" in row],
+        key=lambda row: float(row.get("frameJumpPixels", 0.0)),
+        reverse=True,
+    )[:6]
     edge_spikes = sorted(
         filtered_edges,
         key=lambda row: float(row.get("edgeResidualPx", 0.0)),
@@ -483,6 +578,8 @@ def main() -> int:
     spike_frames: list[tuple[int, str]] = []
     for row in scale_spikes:
         spike_frames.append((int(row["frame"]), f"scale {float(row['scaleResidualPercent']):+.2f}% t={float(row['time']):.2f}s"))
+    for row in jump_spikes:
+        spike_frames.append((int(row["frame"]), f"jump {float(row['frameJumpX']):+.1f},{float(row['frameJumpY']):+.1f} t={float(row['time']):.2f}s"))
     for row in edge_spikes:
         spike_frames.append((int(row["frame"]), f"edge {float(row['edgeResidualPx']):.1f}px t={float(row['time']):.2f}s"))
     write_contact_sheet(args.video, output_dir / "spikes_contact_sheet.png", viewer_roi, spike_frames)
@@ -498,6 +595,11 @@ def main() -> int:
         "  max black-edge residual: "
         f"{summary['maxBlackEdgeResidualPixels']:.1f}px "
         f"(limit {summary['thresholds']['maxBlackEdgeResidualPixels']:.1f}px)"
+    )
+    print(
+        "  max frame jump: "
+        f"{summary['maxFrameTranslationJumpPixels']:.3f}px "
+        f"(x {summary['maxFrameXJumpPixels']:.3f}px, y {summary['maxFrameYJumpPixels']:.3f}px)"
     )
     print(
         "  low tracking ratio: "

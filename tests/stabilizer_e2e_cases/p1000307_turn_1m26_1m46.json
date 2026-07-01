@@ -40,13 +40,17 @@
     "h": 470
   },
   "quality": {
-    "targetSampleFps": 30.0,
+    "targetSampleFps": "source",
+    "sampleEveryCapturedFrame": true,
     "ignoreStartSeconds": 1.0,
     "ignoreEndSeconds": 0.5,
     "rollingMedianWindowSeconds": 0.5,
     "blackThreshold": 8,
     "maxScaleResidualPercent": 1.0,
     "maxBlackEdgeResidualPixels": 18.0,
+    "maxFrameTranslationJumpPixels": 1.6,
+    "maxFrameXJumpPixels": 1.25,
+    "maxFrameYJumpPixels": 1.25,
     "minTrackingInliers": 40,
     "minScaleInlierRatio": 0.65,
     "maxScaleDisplacementFraction": 0.035,
