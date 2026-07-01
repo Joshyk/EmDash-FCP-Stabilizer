@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.21"
+private let tokyoWalkingStabilizerVersion = "1.0.22"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -2027,7 +2027,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let visualPlaybackScale = autoCropPlaybackMinimumClippedScale(
                 autoCropPlaybackVisualScaleCap(playbackScale)
             )
-            let finalScale = autoCropKeypointScale(
+            var finalScale = autoCropKeypointScale(
                 protectedScale: visualPlaybackScale
             )
             let plannedPositionPixels = autoCropPlaybackPositionPlanSample(
@@ -2035,9 +2035,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 at: renderSeconds,
                 fallback: scaleDemand.currentPositionPixels
             )
-            let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
+            var finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
                 stablePositionPixels: plannedPositionPixels,
-                clampPositionPixels: scaleDemand.neutralPositionPixels,
+                clampPositionPixels: scaleDemand.currentPositionPixels,
                 context: context,
                 scale: finalScale,
                 samplingProfile: samplingProfile
@@ -2061,17 +2061,53 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     sampleSteps: samplingProfile.scaleSearchSampleSteps,
                     iterations: samplingProfile.scaleSearchIterations
                 )
+                let currentFloorScale = autoCropPlaybackMinimumClippedScale(currentFrameScale)
+                let useCurrentClamp = currentFloorScale <= neutralFloorScale + stabilizerAutoCropKeypointCoverageToleranceDelta
+                let repairClampPositionPixels = useCurrentClamp
+                    ? scaleDemand.currentPositionPixels
+                    : scaleDemand.neutralPositionPixels
+                let repairScale = max(
+                    finalScale,
+                    useCurrentClamp ? currentFloorScale : neutralFloorScale
+                )
+                let repairedPositionPixels = autoCropStableScaleBudgetedPositionPixels(
+                    stablePositionPixels: plannedPositionPixels,
+                    clampPositionPixels: repairClampPositionPixels,
+                    context: context,
+                    scale: repairScale,
+                    samplingProfile: samplingProfile
+                )
+                let repairPositionFits = autoCropPosition(
+                    repairedPositionPixels,
+                    fitsWithinScale: repairScale,
+                    context: context,
+                    samplingProfile: samplingProfile
+                )
+                if repairPositionFits {
+                    finalScale = repairScale
+                    finalPositionPixels = repairedPositionPixels
+                }
+                let coverageRepaired = autoCropPosition(
+                    finalPositionPixels,
+                    fitsWithinScale: finalScale,
+                    context: context,
+                    samplingProfile: samplingProfile
+                )
                 os_log(
-                    "Auto Crop playback coverage miss | render %.3f scale %.4f planScale %.4f visualScale %.4f neutral %.4f neutralFloor %.4f current %.4f planSamples %d peak %.3f peakScale %.4f",
+                    "Auto Crop playback coverage repair | render %.3f scale %.4f repairedScale %.4f planScale %.4f visualScale %.4f neutral %.4f neutralFloor %.4f current %.4f currentFloor %.4f clamp %{public}@ repaired %{public}@ planSamples %d peak %.3f peakScale %.4f",
                     log: stabilizerHostAnalysisLog,
-                    type: .error,
+                    type: coverageRepaired ? .default : .error,
                     renderSeconds,
                     finalScale,
+                    repairScale,
                     playbackScale,
                     visualPlaybackScale,
                     neutralFrameScale,
                     neutralFloorScale,
                     currentFrameScale,
+                    currentFloorScale,
+                    useCurrentClamp ? "current" : "neutral",
+                    coverageRepaired ? "yes" : "no",
                     playbackScalePlan.sampleCount,
                     playbackScalePlan.peakSeconds ?? -1.0,
                     playbackScalePlan.peakScale
