@@ -579,8 +579,10 @@ enum AutoStabilizationEstimator {
     private static let renderTurnTransitionSmoothingSampleCount = 29
     private static let renderTurnTransitionSmoothingWindowSeconds = 2.8
     private static let renderTurnTransitionMinimumMacroPixels: Float = 0.5
-    private static let renderTurnTransitionBridgeMinimumBlend: Float = 0.25
-    private static let renderTurnTransitionBridgeMaximumBlend: Float = 0.90
+    private static let renderTurnTransitionBridgeMinimumBlend: Float = 0.0
+    private static let renderTurnTransitionBridgeMaximumBlend: Float = 0.86
+    private static let renderTurnTransitionBridgeEdgeGateStart: Float = 0.45
+    private static let renderTurnTransitionBridgeEdgeGateFull: Float = 0.78
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.20
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -2127,9 +2129,18 @@ enum AutoStabilizationEstimator {
             start: 0.12,
             full: 0.52
         ) * 0.85
-        let trackingSupport = max(centerTrackingSupport, centerWalkingSupport)
-        let centerTurnSupport = turnCorrectionConfidenceResponse(centerTransform.turnConfidence)
-        let bridgeTurnSupport = turnCorrectionConfidenceResponse(bridgeTransform.turnConfidence) * max(0.30, trackingSupport)
+        let centerEdgeQuality = searchRadiusEdgeQuality(
+            hitCount: centerTransform.searchRadiusHitCount,
+            totalCount: centerTransform.searchRadiusTotalCount
+        )
+        let centerEdgeSupport = confidenceRamp(
+            centerEdgeQuality,
+            start: renderTurnTransitionBridgeEdgeGateStart,
+            full: renderTurnTransitionBridgeEdgeGateFull
+        )
+        let centerTrackingQualitySupport = min(max(centerTrackingSupport, centerWalkingSupport), centerEdgeSupport)
+        let centerTurnSupport = turnCorrectionConfidenceResponse(centerTransform.turnConfidence) * centerEdgeSupport
+        let bridgeTurnSupport = turnCorrectionConfidenceResponse(bridgeTransform.turnConfidence) * centerTrackingQualitySupport
         let evidenceSupport = max(centerTurnSupport, bridgeTurnSupport)
         return clamp(
             renderTurnTransitionBridgeMinimumBlend

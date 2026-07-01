@@ -263,6 +263,9 @@ private struct TurnCorrectionSample {
     let confidence: Float
     let rawConfidence: Float
     let ownership: Float
+    let trackingConfidence: Float
+    let walkingTrackingConfidence: Float
+    let edgeQuality: Float
 }
 
 private struct RenderTurnBridgeAssessment {
@@ -506,8 +509,10 @@ private let turnOwnershipFarFieldWarpSuppression: Float = 0.55
 private let renderTurnTransitionSmoothingSampleCount = 29
 private let renderTurnTransitionSmoothingWindowSeconds = 2.8
 private let renderTurnTransitionMinimumMacroPixels: Float = 0.5
-private let renderTurnTransitionBridgeMinimumBlend: Float = 0.25
-private let renderTurnTransitionBridgeMaximumBlend: Float = 0.90
+private let renderTurnTransitionBridgeMinimumBlend: Float = 0.0
+private let renderTurnTransitionBridgeMaximumBlend: Float = 0.86
+private let renderTurnTransitionBridgeEdgeGateStart: Float = 0.45
+private let renderTurnTransitionBridgeEdgeGateFull: Float = 0.78
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -911,7 +916,10 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
             macroPixelOffsetX: 0.0,
             confidence: 0.0,
             rawConfidence: 0.0,
-            ownership: 0.0
+            ownership: 0.0,
+            trackingConfidence: 0.0,
+            walkingTrackingConfidence: 0.0,
+            edgeQuality: 0.0
         )
     }
     let frame = analysis.frames[index]
@@ -929,6 +937,18 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
         qualityModel: analysis.qualityModel
     )
     let tracking = frameTrackingConfidence(quality)
+    let walkingTracking = walkingBandTrackingConfidence(
+        motionConfidence: analysis.analysisConfidence[index],
+        residual: centerResidual,
+        blurAmount: analysis.blurAmounts[index],
+        acceptedBlockCount: analysis.acceptedBlockCounts[index],
+        totalBlockCount: analysis.totalBlockCounts[index],
+        qualityModel: analysis.qualityModel
+    )
+    let edgeQuality = searchRadiusEdgeQuality(
+        hitCount: analysis.searchRadiusHitCounts[index],
+        totalCount: analysis.searchRadiusTotalCounts[index]
+    )
     let turnResidual = percentileValue(analysis.residuals, indices: turnIndices, percentile: 0.75)
     let turnTracking = residualAdjustedTrackingConfidence(
         tracking,
@@ -969,7 +989,10 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
         macroPixelOffsetX: macroPixelOffsetX,
         confidence: turnQ,
         rawConfidence: rawTurnQ,
-        ownership: turnOwnershipX
+        ownership: turnOwnershipX,
+        trackingConfidence: tracking,
+        walkingTrackingConfidence: walkingTracking,
+        edgeQuality: edgeQuality
     )
 }
 
@@ -1139,8 +1162,9 @@ private func renderTurnBridgeAssessment(
     let bridgedConfidence = clamp(weightedConfidence / totalWeight, min: 0.0, max: 1.0)
     let bridgeBlend = turnTransitionBridgeBlend(
         centerTurnConfidence: centerSample.confidence,
-        centerTrackingConfidence: centerSample.rawConfidence,
-        centerWalkingTrackingConfidence: centerSample.rawConfidence,
+        centerTrackingConfidence: centerSample.trackingConfidence,
+        centerWalkingTrackingConfidence: centerSample.walkingTrackingConfidence,
+        centerEdgeQuality: centerSample.edgeQuality,
         bridgeTurnConfidence: bridgedConfidence
     )
     let blendedMacro = centerMacro + ((bridgedMacro - centerMacro) * bridgeBlend)
@@ -1160,6 +1184,7 @@ private func turnTransitionBridgeBlend(
     centerTurnConfidence: Float,
     centerTrackingConfidence: Float,
     centerWalkingTrackingConfidence: Float,
+    centerEdgeQuality: Float,
     bridgeTurnConfidence: Float
 ) -> Float {
     let centerTrackingSupport = confidenceRamp(
@@ -1172,9 +1197,14 @@ private func turnTransitionBridgeBlend(
         start: 0.12,
         full: 0.52
     ) * 0.85
-    let trackingSupport = max(centerTrackingSupport, centerWalkingSupport)
-    let centerTurnSupport = turnCorrectionConfidenceResponse(centerTurnConfidence)
-    let bridgeTurnSupport = turnCorrectionConfidenceResponse(bridgeTurnConfidence) * max(0.30, trackingSupport)
+    let centerEdgeSupport = confidenceRamp(
+        clamp(centerEdgeQuality, min: 0.0, max: 1.0),
+        start: renderTurnTransitionBridgeEdgeGateStart,
+        full: renderTurnTransitionBridgeEdgeGateFull
+    )
+    let centerTrackingQualitySupport = min(max(centerTrackingSupport, centerWalkingSupport), centerEdgeSupport)
+    let centerTurnSupport = turnCorrectionConfidenceResponse(centerTurnConfidence) * centerEdgeSupport
+    let bridgeTurnSupport = turnCorrectionConfidenceResponse(bridgeTurnConfidence) * centerTrackingQualitySupport
     let evidenceSupport = max(centerTurnSupport, bridgeTurnSupport)
     return clamp(
         renderTurnTransitionBridgeMinimumBlend
