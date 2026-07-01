@@ -26,9 +26,10 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Uses schema 26 tighter fine-refined hierarchical block motion search, schema 24 chunked
-  frame fingerprints, and higher precision far-field block motion evidence for
-  persisted-cache validation, while keeping compatible schema 17-25 caches
+- Uses schema 27 wider far-field consensus motion search, schema 26 tighter fine-refined
+  hierarchical block motion search, schema 24 chunked frame fingerprints, and higher
+  precision far-field block motion evidence for persisted-cache validation, while keeping
+  compatible schema 17-26 caches
   readable.
 - Reuses persisted analysis only after the current source frame validates against saved
   frame fingerprints.
@@ -60,12 +61,15 @@ estimators, or Transform-keyframe writers back into this target.
   frame-sampled smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
-- New schema 26 analysis keeps the schema 25 coarse full-radius pass, tightens the fine
-  one-pixel local refinement radius for higher throughput, and retains schema 24 higher
-  precision prepared warp paths from extra upper-row far-field detail blocks, high far-field
-  vertical detail blocks, central attitude-detail blocks for yaw/pitch/roll evidence,
-  denser high far-field in-block sampling, and sub-pixel block shift refinement. Older
-  complete schema 17-25 caches remain readable.
+- New schema 27 analysis keeps the schema 26 hierarchical block search, widens the coarse
+  motion radius for large turn frames, and lets coherent far-field blocks preserve
+  yaw/pitch/shear/perspective confidence even when near-field parallax lowers whole-frame
+  tracking confidence. Schema 26 retains the tighter fine one-pixel local refinement radius
+  for higher throughput and the schema 24 higher precision prepared warp paths from extra
+  upper-row far-field detail blocks, high far-field vertical detail blocks, central
+  attitude-detail blocks for yaw/pitch/roll evidence, denser high far-field in-block
+  sampling, and sub-pixel block shift refinement. Older complete schema 17-26 caches remain
+  readable.
 - `Remove Black Edges` is on by default and applies dynamic Auto Crop framing during
   render. Turning it off skips Auto Crop window sampling and framing entirely, so
   `Edge Display Mode` directly switches preview edges between stretched source edges and

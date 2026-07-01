@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 26
+private let cacheSchemaVersion = 27
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -20,6 +20,7 @@ private let minimumTranslationJerkLimit: Float = 0.5
 private let minimumRotationAccelerationLimit: Float = 0.04
 private let minimumRotationJerkLimit: Float = 0.03
 private let localSearchRadius = 5
+private let maximumMotionSearchRadius = 36
 private let minimumAcceptedMotionBlocks = 3
 private let minimumFarFieldMotionBlocks = 3
 private let staggeredMotionBlockFarFieldThreshold: Float = 0.70
@@ -33,6 +34,10 @@ private let staggeredMotionBlockMinimumHeight = 12
 private let maxFarFieldShear: Float = 0.008
 private let maxFarFieldYawPitchProxy: Float = 0.004
 private let maxFarFieldPerspective: Float = 0.003
+private let farFieldConsensusConfidenceFloor: Float = 0.04
+private let farFieldConsensusMinimumWeight: Float = 3.0
+private let farFieldConsensusFullWeight: Float = 18.0
+private let farFieldConsensusCoherenceFrameFraction: Float = 0.010
 private let coarseMotionSearchStep = 6
 private let fineMotionSearchRadius = 3
 private let fineMotionSearchStep = 1
@@ -982,9 +987,9 @@ private final class MetalMotionWorkspace {
     init(width: Int, height: Int, device: MTLDevice) throws {
         self.width = width
         self.height = height
-        let radius = min(24, max(localSearchRadius, min(width, height) / 40))
+        let radius = min(maximumMotionSearchRadius, max(localSearchRadius, min(width, height) / 32))
         let coarseSearchStep = width > 1400 || height > 900 ? coarseMotionSearchStep : 1
-        let fineRadius = coarseSearchStep <= 1 ? 0 : fineMotionSearchRadius
+        let fineRadius = coarseSearchStep <= 1 ? 0 : max(fineMotionSearchRadius, coarseSearchStep / 2)
         let fineSearchStep = fineMotionSearchStep
         let blockSpecs = Self.motionBlocks(width: width, height: height)
         guard !blockSpecs.isEmpty else {
@@ -1318,8 +1323,17 @@ private final class MetalMotionWorkspace {
         }
 
         let farFieldCoverage = Float(farFieldShifts.count) / Float(max(1, shifts.count))
-        let confidence = clamp(analysisConfidence * farFieldCoverage, 0.0, 1.0)
-        guard confidence >= 0.08 else {
+        let consensusConfidence = farFieldConsensusConfidence(
+            farFieldShifts: farFieldShifts,
+            allShiftCount: shifts.count,
+            width: width,
+            height: height
+        )
+        let confidence = max(
+            clamp(analysisConfidence * farFieldCoverage, 0.0, 1.0),
+            consensusConfidence
+        )
+        guard confidence >= farFieldConsensusConfidenceFloor else {
             return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, confidence)
         }
         return (
@@ -1331,6 +1345,68 @@ private final class MetalMotionWorkspace {
             perspectiveY: (weightedMedian(perspectiveYCandidates) ?? 0.0) * confidence,
             confidence: confidence
         )
+    }
+
+    private static func farFieldConsensusConfidence(
+        farFieldShifts: [BlockShift],
+        allShiftCount: Int,
+        width: Int,
+        height: Int
+    ) -> Float {
+        guard farFieldShifts.count >= minimumFarFieldMotionBlocks else {
+            return 0.0
+        }
+
+        let weightedDx = weightedMedian(farFieldShifts.map {
+            ($0.dx, farFieldConsensusWeight($0))
+        }) ?? 0.0
+        let weightedDy = weightedMedian(farFieldShifts.map {
+            ($0.dy, farFieldConsensusWeight($0))
+        }) ?? 0.0
+        let medianDistance = median(farFieldShifts.map {
+            hypotf($0.dx - weightedDx, $0.dy - weightedDy)
+        }) ?? farFieldConsensusCoherencePixels(width: width, height: height)
+        let coherencePixels = farFieldConsensusCoherencePixels(width: width, height: height)
+        let coherence = clamp(
+            1.0 - (medianDistance / coherencePixels),
+            0.0,
+            1.0
+        )
+        let totalWeight = farFieldShifts.reduce(Float(0.0)) {
+            $0 + farFieldConsensusWeight($1)
+        }
+        let weightSupport = confidenceRamp(
+            totalWeight,
+            start: farFieldConsensusMinimumWeight,
+            full: farFieldConsensusFullWeight
+        )
+        let coverage = Float(farFieldShifts.count) / Float(max(1, allShiftCount))
+        let coverageSupport = confidenceRamp(coverage, start: 0.08, full: 0.32)
+        let searchHeadroom = farFieldShifts.isEmpty ? Float(0.0) : (
+            Float(farFieldShifts.filter { !$0.searchRadiusHit }.count) / Float(farFieldShifts.count)
+        )
+        let saturationSupport = clamp(0.35 + (searchHeadroom * 0.65), 0.0, 1.0)
+        return clamp(weightSupport * coherence * max(coverageSupport, 0.25) * saturationSupport, 0.0, 1.0)
+    }
+
+    private static func farFieldConsensusCoherencePixels(width: Int, height: Int) -> Float {
+        max(6.0, Float(max(1, min(width, height))) * farFieldConsensusCoherenceFrameFraction)
+    }
+
+    private static func farFieldConsensusWeight(_ shift: BlockShift) -> Float {
+        guard shift.score.isFinite else {
+            return shift.block.farFieldWeight * 0.05
+        }
+        let scoreQuality = clamp(1.0 - (shift.score / 48.0), 0.05, 1.0)
+        let searchHeadroom: Float = shift.searchRadiusHit ? 0.65 : 1.0
+        return shift.block.farFieldWeight * scoreQuality * searchHeadroom
+    }
+
+    private static func confidenceRamp(_ value: Float, start: Float, full: Float) -> Float {
+        guard full > start else {
+            return value >= full ? 1.0 : 0.0
+        }
+        return clamp((value - start) / (full - start), 0.0, 1.0)
     }
 
     private static func average(_ values: [Float]) -> Float {

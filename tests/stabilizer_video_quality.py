@@ -306,6 +306,7 @@ def main() -> int:
     median_seconds = float(quality.get("rollingMedianWindowSeconds", 0.5))
     black_threshold = int(quality.get("blackThreshold", 8))
     min_inliers = int(quality.get("minTrackingInliers", 40))
+    min_duration = float(quality.get("minDurationSeconds", case.get("durationSeconds", 0.0)))
 
     output_dir = args.output_dir or Path("/tmp/stabilizer_e2e") / args.video.stem
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -414,6 +415,9 @@ def main() -> int:
     filtered_scales = [row for row in scale_rows if ignore_start <= float(row["time"]) <= cutoff_end]
 
     passed, failures, summary = summarize_failures(filtered_scales, filtered_edges, quality)
+    if min_duration > 0.0 and duration + 1e-6 < min_duration:
+        failures.append(f"recording duration {duration:.3f}s is shorter than required {min_duration:.3f}s")
+        passed = False
     summary.update(
         {
             "caseId": case.get("caseId"),
@@ -427,6 +431,7 @@ def main() -> int:
             "contentRoi": {"x": content_roi[0], "y": content_roi[1], "w": content_roi[2], "h": content_roi[3]},
             "ignoreStartSeconds": ignore_start,
             "ignoreEndSeconds": ignore_end,
+            "minDurationSeconds": min_duration,
             "pass": passed,
             "failures": failures,
         }

@@ -62,6 +62,86 @@ end tell
 APPLESCRIPT
 }
 
+dismiss_fcp_modal_alerts() {
+	/usr/bin/osascript <<'APPLESCRIPT'
+tell application "Final Cut Pro" to activate
+tell application "System Events"
+	tell process "Final Cut Pro"
+		set frontmost to true
+		repeat with targetWindow in windows
+			try
+				if exists button "OK" of targetWindow then
+					click button "OK" of targetWindow
+					return "dismissed"
+				end if
+				if exists sheet 1 of targetWindow then
+					if exists button "OK" of sheet 1 of targetWindow then
+						click button "OK" of sheet 1 of targetWindow
+						return "dismissed"
+					end if
+				end if
+			end try
+		end repeat
+	end tell
+end tell
+return "none"
+APPLESCRIPT
+}
+
+dismiss_known_screen_blockers() {
+	/usr/bin/osascript <<'APPLESCRIPT'
+tell application "System Events"
+	if exists process "osascript" then
+		tell process "osascript"
+			repeat with targetWindow in windows
+				try
+					if (name of targetWindow as text) is "Osmo Pocket Concatenate" then
+						if exists button "OK" of targetWindow then
+							click button "OK" of targetWindow
+							return "dismissed-osmo-pocket-concatenate"
+						end if
+					end if
+				end try
+			end repeat
+		end tell
+	end if
+end tell
+return "none"
+APPLESCRIPT
+}
+
+focus_timeline() {
+	/usr/bin/osascript >/dev/null <<'APPLESCRIPT'
+tell application "Final Cut Pro" to activate
+tell application "System Events"
+	tell process "Final Cut Pro"
+		set frontmost to true
+		click menu item "Timeline" of menu 1 of menu item "Go To" of menu "Window" of menu bar 1
+	end tell
+end tell
+APPLESCRIPT
+}
+
+preflight_playback_alerts() {
+	local timecode_entry="$1"
+	printf 'Preflighting FCP playback alerts before recording...\n'
+	press_space
+	sleep 1.2
+	local dismiss_result
+	dismiss_result="$(dismiss_fcp_modal_alerts)"
+	printf 'FCP playback alert preflight: %s\n' "$dismiss_result"
+	dismiss_result="$(dismiss_known_screen_blockers)"
+	printf 'Known screen-blocking dialog preflight: %s\n' "$dismiss_result"
+	sleep 0.2
+	press_space
+	seek_timecode "$timecode_entry"
+	sleep 0.6
+	dismiss_result="$(dismiss_fcp_modal_alerts)"
+	printf 'FCP alert state before recording: %s\n' "$dismiss_result"
+	dismiss_result="$(dismiss_known_screen_blockers)"
+	printf 'Known screen-blocking dialog state before recording: %s\n' "$dismiss_result"
+}
+
 seek_timecode() {
 	local timecode_entry="$1"
 	/usr/bin/osascript - "$timecode_entry" <<'APPLESCRIPT'
@@ -71,6 +151,8 @@ on run argv
 	tell application "System Events"
 		tell process "Final Cut Pro"
 			set frontmost to true
+			click menu item "Timeline" of menu 1 of menu item "Go To" of menu "Window" of menu bar 1
+			delay 0.1
 			key code 35 using control down
 			delay 0.1
 			keystroke timecodeEntry
@@ -126,8 +208,13 @@ PY
 
 	mkdir -p "$(dirname "$video_path")"
 	open_case_project "$case_file" "$assume_current"
+	local blocker_result
+	blocker_result="$(dismiss_known_screen_blockers)"
+	printf 'Known screen-blocking dialog state before seek: %s\n' "$blocker_result"
+	focus_timeline
 	seek_timecode "$timecode_entry"
 	sleep 0.6
+	preflight_playback_alerts "$timecode_entry"
 
 	printf 'Recording FCP Viewer E2E case %s for %ss: %s\n' "$case_id" "$record_seconds" "$video_path"
 	/usr/sbin/screencapture -v -V "$record_seconds" "$video_path" &
