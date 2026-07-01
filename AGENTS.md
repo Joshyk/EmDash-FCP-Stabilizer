@@ -234,6 +234,16 @@ problem is motion/scale related, analyze the captured frames with `ffmpeg`/OpenC
 equivalent local tool to measure frame-to-frame apparent scale/translation changes. Treat
 that video evidence as part of the verification result before claiming the visible issue is
 fixed.
+For development changes that affect stabilization smoothness, Auto Crop / Remove Black
+Edges, turn smoothing, playback zoom, or proxy playback behavior, run the repo E2E
+screen-capture case for `P1000307.mov` before claiming the issue is fixed. The canonical
+case is `tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json`: open
+`/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle`, use the
+`P1000307 Stabilized Review` project, play the `00:01:26` to `00:01:46` turn section in
+proxy with the Stabilizer effect and Remove Black Edges / crop enabled, record the Final Cut
+Pro Viewer, then evaluate the recording with `scripts/stabilizer_fcp_screen_capture_e2e.sh`.
+If the screen-capture evaluator reports zoom pulse, visible black-edge breathing, or
+insufficient tracking confidence, treat that as a blocking regression and keep iterating.
 
 ## Playback And Render
 

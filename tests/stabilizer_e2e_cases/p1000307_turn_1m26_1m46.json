@@ -1,0 +1,53 @@
+{
+  "caseId": "p1000307_turn_1m26_1m46",
+  "description": "Final Cut Pro Viewer screen-capture E2E for P1000307.mov turn smoothness and Auto Crop stability.",
+  "library": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle",
+  "project": "P1000307 Stabilized Review",
+  "sourceClip": "P1000307.mov",
+  "originalMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/🖼️稲尾真夏🫨🎨/Original Media/P1000307.mov",
+  "proxyMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/🖼️稲尾真夏🫨🎨/Transcoded Media/Proxy Media/P1000307.mov",
+  "startTimecode": "00:01:26;00",
+  "startTimecodeEntry": "00012600",
+  "endTimecode": "00:01:46;00",
+  "durationSeconds": 20.0,
+  "playbackMode": "Proxy Preferred",
+  "removeBlackEdges": true,
+  "expectedEffect": "Tokyo Walking Stabilizer",
+  "source": {
+    "width": 5728,
+    "height": 3024,
+    "frameRate": "60000/1001",
+    "durationSeconds": 175.175,
+    "frameCount": 10500
+  },
+  "proxy": {
+    "width": 960,
+    "height": 507,
+    "frameRate": "60000/1001",
+    "durationSeconds": 175.175,
+    "frameCount": 10500
+  },
+  "viewerRoi": {
+    "x": 1120,
+    "y": 580,
+    "w": 1120,
+    "h": 600
+  },
+  "contentRoi": {
+    "x": 240,
+    "y": 30,
+    "w": 820,
+    "h": 470
+  },
+  "quality": {
+    "targetSampleFps": 30.0,
+    "ignoreStartSeconds": 1.0,
+    "ignoreEndSeconds": 0.5,
+    "rollingMedianWindowSeconds": 0.5,
+    "blackThreshold": 8,
+    "maxScaleResidualPercent": 0.85,
+    "maxBlackEdgeResidualPixels": 18.0,
+    "minTrackingInliers": 40,
+    "maxLowInlierRatio": 0.1
+  }
+}
