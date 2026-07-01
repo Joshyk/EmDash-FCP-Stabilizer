@@ -211,8 +211,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 27
-    private static let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+    private static let cacheSchemaVersion = 28
+    private static let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1009,7 +1009,12 @@ final class StabilizerHostAnalysisStore {
             if let activeIdentity,
                !Self.cacheIdentity(activeIdentity, matches: expectedRange) {
                 let explicitPreferredIdentityMatchesActive = preferredIdentity == activeIdentity
-                if explicitPreferredIdentityMatchesActive,
+                let explicitPreferredSourceMatchesActive = Self.cacheIdentitySourceMatches(
+                    preferredIdentity,
+                    activeIdentity
+                )
+                let explicitPreferredCanNameActiveCache = explicitPreferredIdentityMatchesActive || explicitPreferredSourceMatchesActive
+                if explicitPreferredCanNameActiveCache,
                    Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange) {
                     installExplicitRenderTimeMappingIfNeeded(
                         renderTime: renderTime,
@@ -1022,21 +1027,23 @@ final class StabilizerHostAnalysisStore {
                     return analysis
                 }
                 if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
-                    let canUseExplicitPreferredIdentity = explicitPreferredIdentityMatchesActive
+                    let canUseExplicitPreferredIdentity = explicitPreferredCanNameActiveCache
                         && Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange)
+                    let canUseExplicitPreferredSource = explicitPreferredSourceMatchesActive
                     let mappedRenderSeconds = CMTimeGetSeconds(analysisRenderTime(for: renderTime, preparedAnalysis: analysis))
-                    if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity),
+                    if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity || canUseExplicitPreferredSource),
                        Self.renderSeconds(mappedRenderSeconds, isInside: analysis.frames) {
                         if unvalidatedPreviewStatusIsAlreadyActive(isScaledProxy: validationIssue.isScaledProxy) {
                             return analysis
                         }
                         os_log(
-                            "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ reason=%{public}@.",
+                            "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ sourceMatch=%{public}@ reason=%{public}@.",
                             log: stabilizerHostAnalysisLog,
                             type: .default,
                             activeIdentity,
                             Self.expectedRangeDescription(expectedRange),
                             canUseExplicitPreferredIdentity ? "yes" : "no",
+                            canUseExplicitPreferredSource ? "yes" : "no",
                             validationIssue.reason
                         )
                         if validationIssue.isScaledProxy {
@@ -1052,18 +1059,20 @@ final class StabilizerHostAnalysisStore {
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                         if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
-                            let canUseExplicitPreferredIdentity = explicitPreferredIdentityMatchesActive
+                            let canUseExplicitPreferredIdentity = explicitPreferredCanNameActiveCache
                                 && Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange)
+                            let canUseExplicitPreferredSource = explicitPreferredSourceMatchesActive
                             let mappedRenderSeconds = CMTimeGetSeconds(analysisRenderTime(for: renderTime, preparedAnalysis: analysis))
-                            if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity),
+                            if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity || canUseExplicitPreferredSource),
                                Self.renderSeconds(mappedRenderSeconds, isInside: analysis.frames) {
                                 os_log(
-                                    "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                    "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ sourceMatch=%{public}@ reason=%{public}@ validation=%{public}@.",
                                     log: stabilizerHostAnalysisLog,
                                     type: .default,
                                     activeIdentity,
                                     Self.expectedRangeDescription(expectedRange),
                                     canUseExplicitPreferredIdentity ? "yes" : "no",
+                                    canUseExplicitPreferredSource ? "yes" : "no",
                                     validationIssue.reason,
                                     rejectionReason
                                 )
@@ -2540,6 +2549,35 @@ final class StabilizerHostAnalysisStore {
         }
         return rangeStartKey == timeKey(expectedRange.startSeconds)
             && rangeDurationKey == timeKey(expectedRange.durationSeconds)
+    }
+
+    private static func cacheIdentitySourceMatches(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs = lhs?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let rhs = rhs?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !lhs.isEmpty,
+              !rhs.isEmpty
+        else {
+            return false
+        }
+        func sourceFields(_ identity: String) -> [Substring]? {
+            let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
+            let startIndex = parts.count >= 10 ? 1 : 0
+            guard parts.count > startIndex + 8 else {
+                return nil
+            }
+            var fields = Array(parts[(startIndex + 3)...(startIndex + 8)])
+            if parts.count > startIndex + 10 {
+                fields.append(parts[startIndex + 10])
+            }
+            return fields
+        }
+        guard let lhsFields = sourceFields(lhs),
+              let rhsFields = sourceFields(rhs),
+              lhsFields.count == rhsFields.count
+        else {
+            return false
+        }
+        return zip(lhsFields, rhsFields).allSatisfy { $0 == $1 }
     }
 
     private static func cacheIdentityStartMatches(_ identity: String, expectedRange: HostAnalysisExpectedRange?) -> Bool {

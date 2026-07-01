@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.65"
+private let tokyoWalkingStabilizerVersion = "1.0.68"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -328,7 +328,7 @@ private enum AutoCropSamplingProfile: Int32 {
     var quantizationStepSeconds: Double {
         switch self {
         case .playback:
-            return 0.0
+            return stabilizerAutoCropPlaybackScalePlanStepSeconds
         case .full:
             return 0.0
         }
@@ -960,7 +960,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static let autoCropFramingCacheLock = NSLock()
     private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
     private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
-    private static let autoCropFramingCacheLimit = 160
+    private static let autoCropFramingCacheLimit = 2048
     private static let autoCropScaleDemandCacheLock = NSLock()
     private static var autoCropScaleDemandCache: [AutoCropScaleDemandCacheKey: AutoCropScaleDemand] = [:]
     private static var autoCropScaleDemandCacheOrder: [AutoCropScaleDemandCacheKey] = []
@@ -976,7 +976,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static let autoTransformCacheLock = NSLock()
     private static var autoTransformCache: [StabilizerAutoTransformCacheKey: StabilizerAutoTransform] = [:]
     private static var autoTransformCacheOrder: [StabilizerAutoTransformCacheKey] = []
-    private static let autoTransformCacheLimit = 512
+    private static let autoTransformCacheLimit = 4096
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -1891,12 +1891,33 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> AutoCropFraming {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        let framingSeconds = renderSeconds.isFinite
+            ? autoCropSampleTime(renderSeconds, samplingProfile: samplingProfile)
+            : renderSeconds
+        let framingRenderTime = (renderSeconds.isFinite && abs(framingSeconds - renderSeconds) > 1e-9)
+            ? CMTimeMakeWithSeconds(framingSeconds, preferredTimescale: 60000)
+            : renderTime
+        let framingTransform = (renderSeconds.isFinite && abs(framingSeconds - renderSeconds) > 1e-9)
+            ? autoCropActualSampleTransform(
+                preparedAnalysis: preparedAnalysis,
+                currentSeconds: renderSeconds,
+                sampleSeconds: framingSeconds,
+                currentTransform: currentTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+            : currentTransform
         let key = AutoCropFramingCacheKey(
             cacheIdentity: cacheIdentity,
             analysisRevision: analysisRevisionCacheKey(analysisRevision, cacheIdentity: cacheIdentity),
-            renderTimeValue: renderTime.value,
-            renderTimeScale: renderTime.timescale,
-            renderTimeEpoch: renderTime.epoch,
+            renderTimeValue: framingRenderTime.value,
+            renderTimeScale: framingRenderTime.timescale,
+            renderTimeEpoch: framingRenderTime.epoch,
             outputWidth: Int32(clamping: Int(outputSize.x.rounded())),
             outputHeight: Int32(clamping: Int(outputSize.y.rounded())),
             analysisFrameCount: preparedAnalysis.frames.count,
@@ -1917,7 +1938,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
-            currentTransform: AutoCropTransformSignature(currentTransform)
+            currentTransform: AutoCropTransformSignature(framingTransform)
         )
 
         autoCropFramingCacheLock.lock()
@@ -1929,8 +1950,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         let framing = autoCropFraming(
             preparedAnalysis: preparedAnalysis,
-            renderTime: renderTime,
-            currentTransform: currentTransform,
+            renderTime: framingRenderTime,
+            currentTransform: framingTransform,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,

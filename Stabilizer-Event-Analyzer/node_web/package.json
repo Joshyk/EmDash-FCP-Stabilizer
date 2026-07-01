@@ -1,6 +1,6 @@
 {
   "name": "stabilizer-event-analyzer-web",
-  "version": "1.0.65",
+  "version": "1.0.68",
   "private": true,
   "description": "Local web UI for Tokyo Walking Stabilizer Event FCPXMLD analysis.",
   "scripts": {

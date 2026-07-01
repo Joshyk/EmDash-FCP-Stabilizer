@@ -538,8 +538,9 @@ private let farFieldWarpEdgeQualityGateStart: Float = 0.55
 private let farFieldWarpEdgeQualityGateFull: Float = 0.86
 private let farFieldWarpConsensusGateStart: Float = 0.04
 private let farFieldWarpConsensusGateFull: Float = 0.28
+private let farFieldConsensusConfidenceFloor: Float = 0.04
 private let maximumFarFieldWarpStrength: Float = 12.0
-private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
@@ -1503,14 +1504,19 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         currentSearchRadiusHitCount: analysis.searchRadiusHitCounts[index],
         currentSearchRadiusTotalCount: analysis.searchRadiusTotalCounts[index]
     )
+    let stableWarpConfidence = stableFarFieldWarpConfidence(
+        analysis: analysis,
+        indices: warpGateIndices,
+        currentWarpConfidence: rawWarpConfidence
+    )
     let warpGateComponents = farFieldWarpGateComponents(
-        warpConfidence: rawWarpConfidence,
+        warpConfidence: stableWarpConfidence,
         trackingConfidence: warpTracking,
         edgeQuality: warpEdgeQuality
     )
     let warpGate = warpGateComponents.gate
     let warpTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFarFieldWarpSuppression), min: 0.0, max: 1.0)
-    let appliedWarpConfidence = clamp(rawWarpConfidence * warpGate * warpTurnGate, min: 0.0, max: 1.0)
+    let appliedWarpConfidence = clamp(stableWarpConfidence * warpGate * warpTurnGate, min: 0.0, max: 1.0)
     let warpDetected = context.warpMagnitudes[index] * min(maximumFarFieldWarpStrength, max(0.0, Float(options.strengths.warp)))
     let warpApplied = warpDetected * appliedWarpConfidence
 
@@ -1537,7 +1543,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             applied: warpApplied,
             remaining: max(0.0, warpDetected - warpApplied),
             confidence: appliedWarpConfidence,
-            note: String(format: "dimensionless warp band raw q %.2f gate %.2f trkGate %.2f edgeGate %.2f stableTrk %.2f", rawWarpConfidence, warpGate, warpGateComponents.trackingGate, warpGateComponents.edgeGate, warpTracking)
+            note: String(format: "dimensionless warp band raw q %.2f stable q %.2f gate %.2f trkGate %.2f edgeGate %.2f stableTrk %.2f", rawWarpConfidence, stableWarpConfidence, warpGate, warpGateComponents.trackingGate, warpGateComponents.edgeGate, warpTracking)
         ),
         BandAssessment(
             name: "TURN",
@@ -2330,6 +2336,37 @@ private func stableFarFieldWarpEdgeQuality(
         return currentEdgeQuality
     }
     return min(currentEdgeQuality, localMedianEdgeQuality)
+}
+
+private func stableFarFieldWarpConfidence(
+    analysis: Analysis,
+    indices: [Int],
+    currentWarpConfidence: Float
+) -> Float {
+    let localWarpValues = indices.compactMap { index -> Float? in
+        guard analysis.warpConfidence.indices.contains(index) else {
+            return nil
+        }
+        let confidence = analysis.warpConfidence[index]
+        guard confidence.isFinite else {
+            return nil
+        }
+        return clamp(confidence, min: 0.0, max: 1.0)
+    }
+    guard let localMedianWarpConfidence = median(localWarpValues) else {
+        return currentWarpConfidence
+    }
+    let medianSupport = confidenceRamp(
+        localMedianWarpConfidence,
+        start: farFieldConsensusConfidenceFloor,
+        full: farFieldWarpConsensusGateFull
+    )
+    let stabilizedMedian = localMedianWarpConfidence * (0.55 + (0.30 * medianSupport))
+    return clamp(
+        max(currentWarpConfidence, stabilizedMedian),
+        min: 0.0,
+        max: 1.0
+    )
 }
 
 private func searchRadiusEdgeQuality(hitCount: Int32, totalCount: Int32) -> Float {

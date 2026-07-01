@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 27
+private let cacheSchemaVersion = 28
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -38,6 +38,15 @@ private let farFieldConsensusConfidenceFloor: Float = 0.04
 private let farFieldConsensusMinimumWeight: Float = 3.0
 private let farFieldConsensusFullWeight: Float = 18.0
 private let farFieldConsensusCoherenceFrameFraction: Float = 0.010
+private let farFieldPlaneStrictThreshold: Float = 0.70
+private let farFieldPlaneBroadThreshold: Float = 0.55
+private let farFieldPlaneNearThreshold: Float = 0.45
+private let farFieldPlaneMinimumBlocks = 3
+private let farFieldPlaneParallaxStartPixels: Float = 0.65
+private let farFieldPlaneParallaxFullPixels: Float = 5.0
+private let farFieldPlaneAuthorityBase: Float = 0.25
+private let farFieldPlaneAuthorityParallaxScale: Float = 0.60
+private let farFieldPlaneMaximumAuthority: Float = 0.85
 private let coarseMotionSearchStep = 6
 private let fineMotionSearchRadius = 3
 private let fineMotionSearchStep = 1
@@ -951,6 +960,14 @@ private struct BlockShift {
     let searchRadiusHit: Bool
 }
 
+private struct FarFieldPlaneMotion {
+    let dx: Float
+    let dy: Float
+    let signedRoll: Float
+    let authority: Float
+    let parallaxPixels: Float
+}
+
 private struct MetalBlurResult {
     let total: UInt32
     let count: UInt32
@@ -1014,7 +1031,7 @@ private final class MetalMotionWorkspace {
         let fineScoreCount = fineScoreGridWidth * fineScoreGridHeight
         let maxScoreCount = max(coarseScoreCount, fineScoreCount)
         let coarseUniforms = blockSpecs.map { spec in
-            let sampleStep = Self.motionBlockSampleStep(
+            let sampleStep = Self.coarseMotionBlockSampleStep(
                 width: spec.width,
                 height: spec.height,
                 farFieldWeight: spec.farFieldWeight
@@ -1092,6 +1109,12 @@ private final class MetalMotionWorkspace {
             return baseSampleStep
         }
         return max(1, (baseSampleStep * 3) / 4)
+    }
+
+    private static func coarseMotionBlockSampleStep(width: Int, height: Int, farFieldWeight: Float) -> Int {
+        let fineStep = motionBlockSampleStep(width: width, height: height, farFieldWeight: farFieldWeight)
+        let multiplier = farFieldWeight >= denseSampleMotionBlockFarFieldThreshold ? 3 : 4
+        return max(fineStep, fineStep * multiplier)
     }
 
     private static func motionBlocks(width: Int, height: Int) -> [(centerX: Float, centerY: Float, width: Int, height: Int, farFieldWeight: Float)] {
@@ -1276,6 +1299,87 @@ private final class MetalMotionWorkspace {
         )
         let searchHeadroom: Float = shift.searchRadiusHit ? 0.55 : 1.0
         return baseWeight * scoreQuality * searchHeadroom
+    }
+
+    private static func farFieldPlaneMotion(
+        shifts: [BlockShift],
+        seedDx: Float,
+        seedDy: Float,
+        width: Int,
+        height: Int
+    ) -> FarFieldPlaneMotion? {
+        let finiteShifts = shifts.filter { shift in
+            shift.dx.isFinite && shift.dy.isFinite && shift.score.isFinite
+        }
+        guard finiteShifts.count >= farFieldPlaneMinimumBlocks else {
+            return nil
+        }
+        let strictFarField = finiteShifts.filter { $0.block.farFieldWeight >= farFieldPlaneStrictThreshold }
+        let broadFarField = finiteShifts.filter { $0.block.farFieldWeight >= farFieldPlaneBroadThreshold }
+        let farFieldShifts = strictFarField.count >= farFieldPlaneMinimumBlocks ? strictFarField : broadFarField
+        guard farFieldShifts.count >= farFieldPlaneMinimumBlocks else {
+            return nil
+        }
+        let scoreReference = median(farFieldShifts.map(\.score).filter(\.isFinite)) ?? 0.0
+        let weightedDx = weightedMedian(farFieldShifts.map {
+            ($0.dx, motionBlockWeight($0, scoreReference: scoreReference))
+        }) ?? seedDx
+        let weightedDy = weightedMedian(farFieldShifts.map {
+            ($0.dy, motionBlockWeight($0, scoreReference: scoreReference))
+        }) ?? seedDy
+        let halfWidth = Float(max(1, width)) * 0.5
+        let halfHeight = Float(max(1, height)) * 0.5
+        let rollCandidates = farFieldShifts.compactMap { shift -> (value: Float, weight: Float)? in
+            let x = shift.block.centerX - halfWidth
+            let y = shift.block.centerY - halfHeight
+            let denominator = (x * x) + (y * y)
+            guard denominator > 1.0 else {
+                return nil
+            }
+            let u = shift.dx - weightedDx
+            let v = shift.dy - weightedDy
+            let roll = ((x * v) - (y * u)) / denominator
+            return (roll, motionBlockWeight(shift, scoreReference: scoreReference))
+        }
+        let weightedRoll = weightedMedian(rollCandidates) ?? 0.0
+        let nearFieldShifts = finiteShifts.filter { $0.block.farFieldWeight <= farFieldPlaneNearThreshold }
+        let nearDx = nearFieldShifts.count >= farFieldPlaneMinimumBlocks
+            ? weightedMedian(nearFieldShifts.map { ($0.dx, max(Float(0.05), 1.0 - $0.block.farFieldWeight)) })
+            : nil
+        let nearDy = nearFieldShifts.count >= farFieldPlaneMinimumBlocks
+            ? weightedMedian(nearFieldShifts.map { ($0.dy, max(Float(0.05), 1.0 - $0.block.farFieldWeight)) })
+            : nil
+        let nearParallax = (nearDx != nil && nearDy != nil)
+            ? hypotf((nearDx ?? weightedDx) - weightedDx, (nearDy ?? weightedDy) - weightedDy)
+            : Float(0.0)
+        let seedParallax = hypotf(weightedDx - seedDx, weightedDy - seedDy)
+        let parallaxPixels = max(nearParallax, seedParallax)
+        let parallaxSupport = confidenceRamp(
+            parallaxPixels,
+            start: farFieldPlaneParallaxStartPixels,
+            full: farFieldPlaneParallaxFullPixels
+        )
+        let consensusConfidence = farFieldConsensusConfidence(
+            farFieldShifts: farFieldShifts,
+            allShiftCount: finiteShifts.count,
+            width: width,
+            height: height
+        )
+        let authority = clamp(
+            consensusConfidence * (farFieldPlaneAuthorityBase + (farFieldPlaneAuthorityParallaxScale * parallaxSupport)),
+            0.0,
+            farFieldPlaneMaximumAuthority
+        )
+        guard authority >= farFieldConsensusConfidenceFloor else {
+            return nil
+        }
+        return FarFieldPlaneMotion(
+            dx: weightedDx,
+            dy: weightedDy,
+            signedRoll: weightedRoll,
+            authority: authority,
+            parallaxPixels: parallaxPixels
+        )
     }
 
     private static func farFieldWarpMotion(
@@ -1468,6 +1572,20 @@ private final class MetalMotionWorkspace {
         }) ?? globalDy
         let halfWidth = Float(max(1, width)) * 0.5
         let halfHeight = Float(max(1, height)) * 0.5
+        let farFieldPlane = Self.farFieldPlaneMotion(
+            shifts: motionBlocksForModel,
+            seedDx: robustDx,
+            seedDy: robustDy,
+            width: width,
+            height: height
+        )
+        let farFieldAuthority = farFieldPlane?.authority ?? 0.0
+        let modelDx = farFieldPlane.map {
+            robustDx + (($0.dx - robustDx) * farFieldAuthority)
+        } ?? robustDx
+        let modelDy = farFieldPlane.map {
+            robustDy + (($0.dy - robustDy) * farFieldAuthority)
+        } ?? robustDy
         let rollCandidates = motionBlocksForModel.compactMap { shift -> Float? in
             let x = shift.block.centerX - halfWidth
             let y = shift.block.centerY - halfHeight
@@ -1475,11 +1593,14 @@ private final class MetalMotionWorkspace {
             guard denominator > 1.0 else {
                 return nil
             }
-            let u = shift.dx - robustDx
-            let v = shift.dy - robustDy
+            let u = shift.dx - modelDx
+            let v = shift.dy - modelDy
             return ((x * v) - (y * u)) / denominator
         }
-        let signedRoll = median(rollCandidates) ?? 0.0
+        let broadSignedRoll = median(rollCandidates) ?? 0.0
+        let signedRoll = farFieldPlane.map {
+            broadSignedRoll + (($0.signedRoll - broadSignedRoll) * farFieldAuthority)
+        } ?? broadSignedRoll
         let rollMotion = rollCandidates.map { abs($0) }.max() ?? 0.0
         let acceptedCount = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks.count : 0
         let farFieldAgreement = motionBlocksForModel.isEmpty ? 0.0 : Self.average(motionBlocksForModel.map(\.block.farFieldWeight))
@@ -1487,19 +1608,19 @@ private final class MetalMotionWorkspace {
             ? 0.0
             : (Float(acceptedCount) / Float(blockShifts.count)) * clamp(farFieldAgreement, 0.35, 1.0)
         let scoreConfidence = clamp(1.0 - (modelScoreReference / 48.0), 0.0, 1.0)
-        let analysisConfidence = clamp(blockAgreement * scoreConfidence, 0.0, 1.0)
+        let analysisConfidence = clamp(max(blockAgreement * scoreConfidence, farFieldAuthority * scoreConfidence), 0.0, 1.0)
         let warpMotion = Self.farFieldWarpMotion(
             shifts: motionBlocksForModel,
-            robustDx: robustDx,
-            robustDy: robustDy,
+            robustDx: modelDx,
+            robustDy: modelDy,
             signedRoll: signedRoll,
             width: width,
             height: height,
             analysisConfidence: analysisConfidence
         )
         return PairMotion(
-            dx: robustDx,
-            dy: robustDy,
+            dx: modelDx,
+            dy: modelDy,
             residual: modelScoreReference,
             signedRoll: signedRoll,
             rollMotion: rollMotion,

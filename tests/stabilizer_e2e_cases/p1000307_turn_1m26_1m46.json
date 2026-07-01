@@ -45,9 +45,12 @@
     "ignoreEndSeconds": 0.5,
     "rollingMedianWindowSeconds": 0.5,
     "blackThreshold": 8,
-    "maxScaleResidualPercent": 0.85,
+    "maxScaleResidualPercent": 1.0,
     "maxBlackEdgeResidualPixels": 18.0,
     "minTrackingInliers": 40,
+    "minScaleInlierRatio": 0.65,
+    "maxScaleDisplacementFraction": 0.035,
+    "minScaleQualityRatio": 0.5,
     "maxLowInlierRatio": 0.1
   }
 }

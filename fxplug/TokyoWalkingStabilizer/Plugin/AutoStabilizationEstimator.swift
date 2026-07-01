@@ -421,6 +421,14 @@ fileprivate struct StabilizerBlockShift {
     let searchRadiusHit: Bool
 }
 
+fileprivate struct StabilizerFarFieldPlaneMotion {
+    let dx: Float
+    let dy: Float
+    let signedRoll: Float
+    let authority: Float
+    let parallaxPixels: Float
+}
+
 fileprivate struct StabilizerMotionBlockBatch {
     let blocks: [StabilizerMotionBlock]
     let uniforms: [StabilizerShiftBatchUniforms]
@@ -653,6 +661,15 @@ enum AutoStabilizationEstimator {
     private static let farFieldConsensusMinimumWeight: Float = 3.0
     private static let farFieldConsensusFullWeight: Float = 18.0
     private static let farFieldConsensusCoherenceFrameFraction: Float = 0.010
+    private static let farFieldPlaneStrictThreshold: Float = 0.70
+    private static let farFieldPlaneBroadThreshold: Float = 0.55
+    private static let farFieldPlaneNearThreshold: Float = 0.45
+    private static let farFieldPlaneMinimumBlocks = 3
+    private static let farFieldPlaneParallaxStartPixels: Float = 0.65
+    private static let farFieldPlaneParallaxFullPixels: Float = 5.0
+    private static let farFieldPlaneAuthorityBase: Float = 0.25
+    private static let farFieldPlaneAuthorityParallaxScale: Float = 0.60
+    private static let farFieldPlaneMaximumAuthority: Float = 0.85
     private static let footstepImpulseInnerWindowSeconds = 0.10
     private static let footstepImpulseOuterWindowSeconds = 1.0
     private static let farFieldWarpInnerWindowSeconds = 0.10
@@ -1783,13 +1800,18 @@ enum AutoStabilizationEstimator {
                 currentSearchRadiusHitCount: searchRadiusHitCount,
                 currentSearchRadiusTotalCount: searchRadiusTotalCount
             )
+            let stableWarpConfidence = stableFarFieldWarpConfidence(
+                analysis: analysis,
+                indices: farFieldWarpGateActiveIndices,
+                currentWarpConfidence: warpConfidence
+            )
             let farFieldWarpGate = farFieldWarpRenderGate(
-                warpConfidence: warpConfidence,
+                warpConfidence: stableWarpConfidence,
                 trackingConfidence: farFieldWarpTrackingConfidence,
                 edgeQuality: farFieldWarpEdgeQuality
             )
             let farFieldWarpTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFarFieldWarpSuppression), min: 0.0, max: 1.0)
-            appliedWarpConfidence = clamp(warpConfidence * farFieldWarpGate * farFieldWarpTurnGate, min: 0.0, max: 1.0)
+            appliedWarpConfidence = clamp(stableWarpConfidence * farFieldWarpGate * farFieldWarpTurnGate, min: 0.0, max: 1.0)
             yawPitchProxy = vector_float2(
                 strengthScaledFarFieldWarpBandValue(
                     values: analysis.pathYaw,
@@ -2818,6 +2840,20 @@ enum AutoStabilizationEstimator {
         let robustDy = weightedMedian(motionBlocksForModel.map {
             ($0.dy, motionBlockWeight($0, scoreReference: modelScoreReference))
         }) ?? global.dy
+        let farFieldPlane = farFieldPlaneMotion(
+            shifts: motionBlocksForModel,
+            seedDx: robustDx,
+            seedDy: robustDy,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight
+        )
+        let farFieldAuthority = farFieldPlane?.authority ?? 0.0
+        let modelDx = farFieldPlane.map {
+            robustDx + (($0.dx - robustDx) * farFieldAuthority)
+        } ?? robustDx
+        let modelDy = farFieldPlane.map {
+            robustDy + (($0.dy - robustDy) * farFieldAuthority)
+        } ?? robustDy
         let rollCandidates = motionBlocksForModel.compactMap { shift -> Float? in
             let x = shift.block.centerX - (Float(sampleWidth) * 0.5)
             let y = shift.block.centerY - (Float(sampleHeight) * 0.5)
@@ -2825,23 +2861,26 @@ enum AutoStabilizationEstimator {
             guard denominator > 1.0 else {
                 return nil
             }
-            let u = shift.dx - robustDx
-            let v = shift.dy - robustDy
+            let u = shift.dx - modelDx
+            let v = shift.dy - modelDy
             return ((x * v) - (y * u)) / denominator
         }
-        let signedRoll = median(rollCandidates) ?? 0.0
+        let broadSignedRoll = median(rollCandidates) ?? 0.0
+        let signedRoll = farFieldPlane.map {
+            broadSignedRoll + (($0.signedRoll - broadSignedRoll) * farFieldAuthority)
+        } ?? broadSignedRoll
         let rollMotion = rollCandidates.map { abs($0) }.max() ?? 0.0
         let acceptedCount = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks.count : 0
         let farFieldAgreement = motionBlocksForModel.isEmpty ? 0.0 : average(motionBlocksForModel.map(\.block.farFieldWeight))
         let blockAgreement = blocks.isEmpty ? 0.0 : (Float(acceptedCount) / Float(blocks.count)) * clamp(farFieldAgreement, min: 0.35, max: 1.0)
         let scoreConfidence = clamp(1.0 - ((median(motionBlocksForModel.map(\.score)) ?? global.score) * 1.8), min: 0.0, max: 1.0)
-        let analysisConfidence = clamp(blockAgreement * scoreConfidence, min: 0.0, max: 1.0)
+        let analysisConfidence = clamp(max(blockAgreement * scoreConfidence, farFieldAuthority * scoreConfidence), min: 0.0, max: 1.0)
         let searchRadiusHitCount = (global.searchRadiusHit ? 1 : 0) + blockShifts.filter(\.searchRadiusHit).count
         let searchRadiusTotalCount = 1 + blockShifts.count
         let warpMotion = farFieldWarpMotion(
             shifts: motionBlocksForModel,
-            robustDx: robustDx,
-            robustDy: robustDy,
+            robustDx: modelDx,
+            robustDy: modelDy,
             signedRoll: signedRoll,
             sampleWidth: sampleWidth,
             sampleHeight: sampleHeight,
@@ -2850,8 +2889,8 @@ enum AutoStabilizationEstimator {
 
         return PairMotionResult(
             motion: PairMotion(
-                dx: robustDx,
-                dy: robustDy,
+                dx: modelDx,
+                dy: modelDy,
                 residual: median(motionBlocksForModel.map(\.score)) ?? global.score,
                 signedRoll: signedRoll,
                 rollMotion: rollMotion,
@@ -3186,6 +3225,87 @@ enum AutoStabilizationEstimator {
         )
         let searchHeadroom: Float = shift.searchRadiusHit ? 0.55 : 1.0
         return baseWeight * scoreQuality * searchHeadroom
+    }
+
+    private static func farFieldPlaneMotion(
+        shifts: [StabilizerBlockShift],
+        seedDx: Float,
+        seedDy: Float,
+        sampleWidth: Int,
+        sampleHeight: Int
+    ) -> StabilizerFarFieldPlaneMotion? {
+        let finiteShifts = shifts.filter { shift in
+            shift.dx.isFinite && shift.dy.isFinite && shift.score.isFinite
+        }
+        guard finiteShifts.count >= farFieldPlaneMinimumBlocks else {
+            return nil
+        }
+        let strictFarField = finiteShifts.filter { $0.block.farFieldWeight >= farFieldPlaneStrictThreshold }
+        let broadFarField = finiteShifts.filter { $0.block.farFieldWeight >= farFieldPlaneBroadThreshold }
+        let farFieldShifts = strictFarField.count >= farFieldPlaneMinimumBlocks ? strictFarField : broadFarField
+        guard farFieldShifts.count >= farFieldPlaneMinimumBlocks else {
+            return nil
+        }
+        let scoreReference = median(farFieldShifts.map(\.score).filter(\.isFinite)) ?? 0.0
+        let weightedDx = weightedMedian(farFieldShifts.map {
+            ($0.dx, motionBlockWeight($0, scoreReference: scoreReference))
+        }) ?? seedDx
+        let weightedDy = weightedMedian(farFieldShifts.map {
+            ($0.dy, motionBlockWeight($0, scoreReference: scoreReference))
+        }) ?? seedDy
+        let halfWidth = Float(max(1, sampleWidth)) * 0.5
+        let halfHeight = Float(max(1, sampleHeight)) * 0.5
+        let rollCandidates = farFieldShifts.compactMap { shift -> (value: Float, weight: Float)? in
+            let x = shift.block.centerX - halfWidth
+            let y = shift.block.centerY - halfHeight
+            let denominator = (x * x) + (y * y)
+            guard denominator > 1.0 else {
+                return nil
+            }
+            let u = shift.dx - weightedDx
+            let v = shift.dy - weightedDy
+            let roll = ((x * v) - (y * u)) / denominator
+            return (roll, motionBlockWeight(shift, scoreReference: scoreReference))
+        }
+        let weightedRoll = weightedMedian(rollCandidates) ?? 0.0
+        let nearFieldShifts = finiteShifts.filter { $0.block.farFieldWeight <= farFieldPlaneNearThreshold }
+        let nearDx = nearFieldShifts.count >= farFieldPlaneMinimumBlocks
+            ? weightedMedian(nearFieldShifts.map { ($0.dx, max(Float(0.05), 1.0 - $0.block.farFieldWeight)) })
+            : nil
+        let nearDy = nearFieldShifts.count >= farFieldPlaneMinimumBlocks
+            ? weightedMedian(nearFieldShifts.map { ($0.dy, max(Float(0.05), 1.0 - $0.block.farFieldWeight)) })
+            : nil
+        let nearParallax = (nearDx != nil && nearDy != nil)
+            ? hypotf((nearDx ?? weightedDx) - weightedDx, (nearDy ?? weightedDy) - weightedDy)
+            : Float(0.0)
+        let seedParallax = hypotf(weightedDx - seedDx, weightedDy - seedDy)
+        let parallaxPixels = max(nearParallax, seedParallax)
+        let parallaxSupport = confidenceRamp(
+            parallaxPixels,
+            start: farFieldPlaneParallaxStartPixels,
+            full: farFieldPlaneParallaxFullPixels
+        )
+        let consensusConfidence = farFieldConsensusConfidence(
+            farFieldShifts: farFieldShifts,
+            allShiftCount: finiteShifts.count,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight
+        )
+        let authority = clamp(
+            consensusConfidence * (farFieldPlaneAuthorityBase + (farFieldPlaneAuthorityParallaxScale * parallaxSupport)),
+            min: 0.0,
+            max: farFieldPlaneMaximumAuthority
+        )
+        guard authority >= farFieldConsensusConfidenceFloor else {
+            return nil
+        }
+        return StabilizerFarFieldPlaneMotion(
+            dx: weightedDx,
+            dy: weightedDy,
+            signedRoll: weightedRoll,
+            authority: authority,
+            parallaxPixels: parallaxPixels
+        )
     }
 
     private static func farFieldWarpMotion(
@@ -4767,6 +4887,39 @@ enum AutoStabilizationEstimator {
             return currentEdgeQuality
         }
         return min(currentEdgeQuality, localMedianEdgeQuality)
+    }
+
+    private static func stableFarFieldWarpConfidence(
+        analysis: StabilizerPreparedAnalysis,
+        indices: [Int],
+        currentWarpConfidence: Float
+    ) -> Float {
+        var localWarpValues: [Float] = []
+        localWarpValues.reserveCapacity(indices.count)
+        for index in indices {
+            guard analysis.warpConfidence.indices.contains(index) else {
+                continue
+            }
+            let confidence = analysis.warpConfidence[index]
+            guard confidence.isFinite else {
+                continue
+            }
+            localWarpValues.append(clamp(confidence, min: 0.0, max: 1.0))
+        }
+        guard let localMedianWarpConfidence = median(localWarpValues) else {
+            return currentWarpConfidence
+        }
+        let medianSupport = confidenceRamp(
+            localMedianWarpConfidence,
+            start: farFieldConsensusConfidenceFloor,
+            full: farFieldWarpConsensusGateFull
+        )
+        let stabilizedMedian = localMedianWarpConfidence * (0.55 + (0.30 * medianSupport))
+        return clamp(
+            max(currentWarpConfidence, stabilizedMedian),
+            min: 0.0,
+            max: 1.0
+        )
     }
 
     private static func searchRadiusEdgeQuality(hitCount: Int32, totalCount: Int32) -> Float {

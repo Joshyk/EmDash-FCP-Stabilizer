@@ -250,14 +250,21 @@ def summarize_failures(
     edge_rows: list[dict[str, Any]],
     quality: dict[str, Any],
 ) -> tuple[bool, list[str], dict[str, Any]]:
-    max_scale = max((abs(float(row.get("scaleResidualPercent", 0.0))) for row in scale_rows), default=0.0)
+    scale_quality_rows = [
+        row
+        for row in scale_rows
+        if bool(row.get("scaleQualityOk", row.get("trackingOk")))
+    ]
+    max_scale = max((abs(float(row.get("scaleResidualPercent", 0.0))) for row in scale_quality_rows), default=0.0)
     max_edge = max((float(row.get("edgeResidualPx", 0.0)) for row in edge_rows), default=0.0)
     low_inlier_rows = [row for row in scale_rows if not bool(row.get("trackingOk"))]
     low_inlier_ratio = (len(low_inlier_rows) / len(scale_rows)) if scale_rows else 1.0
+    scale_quality_ratio = (len(scale_quality_rows) / len(scale_rows)) if scale_rows else 0.0
 
     scale_limit = float(quality.get("maxScaleResidualPercent", 0.85))
     edge_limit = float(quality.get("maxBlackEdgeResidualPixels", 18.0))
     low_inlier_limit = float(quality.get("maxLowInlierRatio", 0.1))
+    scale_quality_limit = float(quality.get("minScaleQualityRatio", 0.5))
 
     failures: list[str] = []
     if max_scale > scale_limit:
@@ -266,17 +273,22 @@ def summarize_failures(
         failures.append(f"black-edge residual {max_edge:.1f}px exceeds {edge_limit:.1f}px")
     if low_inlier_ratio > low_inlier_limit:
         failures.append(f"low tracking ratio {low_inlier_ratio:.3f} exceeds {low_inlier_limit:.3f}")
+    if scale_quality_ratio < scale_quality_limit:
+        failures.append(f"scale quality ratio {scale_quality_ratio:.3f} below {scale_quality_limit:.3f}")
 
     summary = {
         "maxAbsScaleResidualPercent": max_scale,
         "maxBlackEdgeResidualPixels": max_edge,
         "lowTrackingRatio": low_inlier_ratio,
+        "scaleQualityRatio": scale_quality_ratio,
         "scaleFrameCount": len(scale_rows),
+        "scaleQualityFrameCount": len(scale_quality_rows),
         "edgeFrameCount": len(edge_rows),
         "thresholds": {
             "maxScaleResidualPercent": scale_limit,
             "maxBlackEdgeResidualPixels": edge_limit,
             "maxLowInlierRatio": low_inlier_limit,
+            "minScaleQualityRatio": scale_quality_limit,
         },
     }
     return not failures, failures, summary
@@ -306,6 +318,8 @@ def main() -> int:
     median_seconds = float(quality.get("rollingMedianWindowSeconds", 0.5))
     black_threshold = int(quality.get("blackThreshold", 8))
     min_inliers = int(quality.get("minTrackingInliers", 40))
+    min_scale_inlier_ratio = float(quality.get("minScaleInlierRatio", 0.65))
+    max_scale_displacement_fraction = float(quality.get("maxScaleDisplacementFraction", 0.05))
     min_duration = float(quality.get("minDurationSeconds", case.get("durationSeconds", 0.0)))
 
     output_dir = args.output_dir or Path("/tmp/stabilizer_e2e") / args.video.stem
@@ -409,6 +423,19 @@ def main() -> int:
     for row, median in zip(scale_rows, scale_medians):
         row["scaleMedianPercent"] = median
         row["scaleResidualPercent"] = float(row["scalePercent"]) - median
+        tracked_count = max(1, int(row.get("trackedCount", 0)))
+        inlier_ratio = int(row.get("inliers", 0)) / tracked_count
+        displacement_fraction = max(
+            abs(float(row.get("dx", 0.0))) / max(1, content_roi[2]),
+            abs(float(row.get("dy", 0.0))) / max(1, content_roi[3]),
+        )
+        row["inlierRatio"] = inlier_ratio
+        row["displacementFraction"] = displacement_fraction
+        row["scaleQualityOk"] = (
+            bool(row.get("trackingOk"))
+            and inlier_ratio >= min_scale_inlier_ratio
+            and displacement_fraction <= max_scale_displacement_fraction
+        )
 
     cutoff_end = max(0.0, duration - ignore_end) if duration > 0 else float("inf")
     filtered_edges = [row for row in edge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
@@ -431,6 +458,8 @@ def main() -> int:
             "contentRoi": {"x": content_roi[0], "y": content_roi[1], "w": content_roi[2], "h": content_roi[3]},
             "ignoreStartSeconds": ignore_start,
             "ignoreEndSeconds": ignore_end,
+            "minScaleInlierRatio": min_scale_inlier_ratio,
+            "maxScaleDisplacementFraction": max_scale_displacement_fraction,
             "minDurationSeconds": min_duration,
             "pass": passed,
             "failures": failures,
@@ -442,7 +471,7 @@ def main() -> int:
     (output_dir / "metrics.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
 
     scale_spikes = sorted(
-        filtered_scales,
+        [row for row in filtered_scales if bool(row.get("scaleQualityOk", row.get("trackingOk")))],
         key=lambda row: abs(float(row.get("scaleResidualPercent", 0.0))),
         reverse=True,
     )[:6]
