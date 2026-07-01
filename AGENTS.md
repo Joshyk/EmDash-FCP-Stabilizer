@@ -234,6 +234,13 @@ problem is motion/scale related, analyze the captured frames with `ffmpeg`/OpenC
 equivalent local tool to measure frame-to-frame apparent scale/translation changes. Treat
 that video evidence as part of the verification result before claiming the visible issue is
 fixed.
+Do not downsample or thin verification frames when the reported artifact is a single-frame
+or frame-local jump. Respect the source clip cadence, including 50fps, `60000/1001`
+(`59.94fps`), and other high-frame-rate clips, and evaluate screen captures, OpenCV motion
+metrics, and cache path diagnostics at frame cadence close to the source/captured cadence
+instead of reducing the analysis to about 30fps; otherwise x/y frame jumps can be missed. If
+the screen recording cannot preserve the source cadence exactly, still sample every captured
+frame and make the capture frame rate limitation explicit in the result.
 For development changes that affect stabilization smoothness, Auto Crop / Remove Black
 Edges, turn smoothing, playback zoom, or proxy playback behavior, run the repo E2E
 screen-capture case for `P1000307.mov` before claiming the issue is fixed. The canonical
