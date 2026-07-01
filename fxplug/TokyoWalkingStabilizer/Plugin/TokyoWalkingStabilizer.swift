@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.18"
+private let tokyoWalkingStabilizerVersion = "1.0.19"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -89,6 +89,7 @@ private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 0.125
 private let stabilizerAutoCropPlaybackScaleQuantization: Float = 0.0005
 private let stabilizerAutoCropPlaybackMinimumClipScaleDelta: Float = 0.03
 private let stabilizerAutoCropPlaybackEnvelopeRadiusSeconds = 1.25
+private let stabilizerAutoCropPlaybackPositionEnvelopeRadiusSeconds = 1.25
 private let stabilizerAutoCropPlaybackLookaheadMinimumDelta: Float = 0.22
 private let stabilizerAutoCropPlaybackLookaheadMaximumDelta: Float = 0.50
 private let stabilizerAutoCropPlaybackLookaheadScaleFraction: Float = 0.12
@@ -233,9 +234,15 @@ private struct AutoCropPlaybackScaleSample {
     let scale: Float
 }
 
+private struct AutoCropPlaybackPositionSample {
+    let seconds: Double
+    let positionPixels: vector_float2
+}
+
 private struct AutoCropPlaybackScalePlan {
     let samples: [AutoCropPlaybackScaleSample]
     let capSamples: [AutoCropPlaybackScaleSample]
+    let positionSamples: [AutoCropPlaybackPositionSample]
     let sampleCount: Int
     let peakSeconds: Double?
     let peakScale: Float
@@ -243,6 +250,7 @@ private struct AutoCropPlaybackScalePlan {
     static let identity = AutoCropPlaybackScalePlan(
         samples: [],
         capSamples: [],
+        positionSamples: [],
         sampleCount: 0,
         peakSeconds: nil,
         peakScale: 1.0
@@ -2022,8 +2030,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let finalScale = autoCropKeypointScale(
                 protectedScale: visualPlaybackScale
             )
+            let plannedPositionPixels = autoCropPlaybackPositionPlanSample(
+                playbackScalePlan,
+                at: renderSeconds,
+                fallback: scaleDemand.currentPositionPixels
+            )
             let finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
-                stablePositionPixels: scaleDemand.currentPositionPixels,
+                stablePositionPixels: plannedPositionPixels,
                 clampPositionPixels: scaleDemand.neutralPositionPixels,
                 context: context,
                 scale: finalScale,
@@ -2547,10 +2560,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         rawPlannedSamples.reserveCapacity(samples.count)
         var capSamples: [AutoCropPlaybackScaleSample] = []
         capSamples.reserveCapacity(samples.count)
+        var rawPositionSamples: [AutoCropPlaybackPositionSample] = []
+        rawPositionSamples.reserveCapacity(samples.count)
         var activeKeypointStartIndex = playbackKeypoints.startIndex
         var activeCapKeypointStartIndex = capKeypoints.startIndex
 
         for sample in samples {
+            rawPositionSamples.append(
+                AutoCropPlaybackPositionSample(
+                    seconds: sample.seconds,
+                    positionPixels: sample.positionPixels
+                )
+            )
+
             while activeKeypointStartIndex < playbackKeypoints.endIndex {
                 let keypoint = playbackKeypoints[activeKeypointStartIndex]
                 guard keypoint.endSeconds < sample.seconds - 1e-9 else {
@@ -2622,6 +2644,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         let plannedSamples = autoCropPlaybackEnvelopeSamples(rawPlannedSamples)
+        let positionSamples = autoCropPlaybackPositionEnvelopeSamples(rawPositionSamples)
         let scaleBounds = plannedSamples.reduce(
             (minimum: Float.greatestFiniteMagnitude, maximum: Float(1.0))
         ) { bounds, sample in
@@ -2656,6 +2679,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return AutoCropPlaybackScalePlan(
             samples: plannedSamples,
             capSamples: capSamples,
+            positionSamples: positionSamples,
             sampleCount: samples.count,
             peakSeconds: peakSeconds,
             peakScale: peakScale
@@ -2728,6 +2752,55 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
+    private static func autoCropPlaybackPositionEnvelopeSamples(
+        _ samples: [AutoCropPlaybackPositionSample]
+    ) -> [AutoCropPlaybackPositionSample] {
+        guard samples.count > 1 else {
+            return samples
+        }
+
+        let radiusSampleCount = max(
+            1,
+            Int(ceil(stabilizerAutoCropPlaybackPositionEnvelopeRadiusSeconds / stabilizerAutoCropPlaybackScalePlanStepSeconds))
+        )
+        let radiusSeconds = max(
+            stabilizerAutoCropPlaybackScalePlanStepSeconds,
+            stabilizerAutoCropPlaybackPositionEnvelopeRadiusSeconds
+        )
+
+        return samples.indices.map { index in
+            let lowerIndex = max(samples.startIndex, index - radiusSampleCount)
+            let upperIndex = min(samples.index(before: samples.endIndex), index + radiusSampleCount)
+            let centerSeconds = samples[index].seconds
+            var weightedPosition = vector_float2(0.0, 0.0)
+            var totalWeight = Float(0.0)
+            var sampleIndex = lowerIndex
+            while sampleIndex <= upperIndex {
+                let sample = samples[sampleIndex]
+                let distance = abs(sample.seconds - centerSeconds)
+                if distance <= radiusSeconds + 1e-9 {
+                    let progress = Float(1.0 - min(max(distance / radiusSeconds, 0.0), 1.0))
+                    let weight = easeInOutRamp(progress)
+                    if weight > 0.0001 {
+                        weightedPosition += sample.positionPixels * weight
+                        totalWeight += weight
+                    }
+                }
+                if sampleIndex == upperIndex {
+                    break
+                }
+                sampleIndex = samples.index(after: sampleIndex)
+            }
+            let positionPixels = totalWeight > 0.0001
+                ? weightedPosition / totalWeight
+                : samples[index].positionPixels
+            return AutoCropPlaybackPositionSample(
+                seconds: centerSeconds,
+                positionPixels: positionPixels
+            )
+        }
+    }
+
     private static func autoCropPlaybackScalePlanSample(
         _ plan: AutoCropPlaybackScalePlan,
         at seconds: Double
@@ -2784,6 +2857,50 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let fraction = Float((seconds - lowerSample.seconds) / spanSeconds)
         let interpolatedScale = lowerSample.scale + ((upperSample.scale - lowerSample.scale) * min(max(fraction, 0.0), 1.0))
         return max(Float(1.0), interpolatedScale)
+    }
+
+    private static func autoCropPlaybackPositionPlanSample(
+        _ plan: AutoCropPlaybackScalePlan,
+        at seconds: Double,
+        fallback: vector_float2
+    ) -> vector_float2 {
+        let samples = plan.positionSamples
+        guard seconds.isFinite,
+              let firstSample = samples.first
+        else {
+            return fallback
+        }
+        guard samples.count > 1,
+              let lastSample = samples.last
+        else {
+            return firstSample.positionPixels
+        }
+        if seconds <= firstSample.seconds {
+            return firstSample.positionPixels
+        }
+        if seconds >= lastSample.seconds {
+            return lastSample.positionPixels
+        }
+
+        var lowerIndex = 0
+        var upperIndex = samples.count - 1
+        while upperIndex - lowerIndex > 1 {
+            let middleIndex = (lowerIndex + upperIndex) / 2
+            if samples[middleIndex].seconds <= seconds {
+                lowerIndex = middleIndex
+            } else {
+                upperIndex = middleIndex
+            }
+        }
+
+        let lowerSample = samples[lowerIndex]
+        let upperSample = samples[upperIndex]
+        let spanSeconds = upperSample.seconds - lowerSample.seconds
+        guard spanSeconds > 1e-9 else {
+            return lowerSample.positionPixels
+        }
+        let fraction = Float((seconds - lowerSample.seconds) / spanSeconds)
+        return lowerSample.positionPixels + ((upperSample.positionPixels - lowerSample.positionPixels) * min(max(fraction, 0.0), 1.0))
     }
 
     private static func autoCropZoomPlan(
