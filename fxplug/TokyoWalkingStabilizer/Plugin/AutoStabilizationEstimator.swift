@@ -579,6 +579,8 @@ enum AutoStabilizationEstimator {
     private static let renderTurnTransitionSmoothingSampleCount = 29
     private static let renderTurnTransitionSmoothingWindowSeconds = 2.8
     private static let renderTurnTransitionMinimumMacroPixels: Float = 0.5
+    private static let renderTurnTransitionBridgeMinimumBlend: Float = 0.25
+    private static let renderTurnTransitionBridgeMaximumBlend: Float = 0.90
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.20
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -1951,7 +1953,11 @@ enum AutoStabilizationEstimator {
                 let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
                 bridgedMacroOffset.x = bridgedMacroX + ((centerMacroX - bridgedMacroX) * centerPreservation)
             }
-            smoothedTransform.macroPixelOffset = bridgedMacroOffset
+            let bridgeBlend = turnTransitionBridgeBlend(
+                centerTransform: rawCenterTransform,
+                bridgeTransform: smoothedTurnTransform
+            )
+            smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
         }
         let shortWarpSamples = farFieldWarpSmoothingSamples(
@@ -2105,6 +2111,32 @@ enum AutoStabilizationEstimator {
             return [(centerTransform, 1.0)]
         }
         return samples
+    }
+
+    private static func turnTransitionBridgeBlend(
+        centerTransform: StabilizerAutoTransform,
+        bridgeTransform: StabilizerAutoTransform
+    ) -> Float {
+        let centerTrackingSupport = confidenceRamp(
+            clamp(centerTransform.trackingConfidence, min: 0.0, max: 1.0),
+            start: 0.12,
+            full: 0.52
+        )
+        let centerWalkingSupport = confidenceRamp(
+            clamp(centerTransform.walkingTrackingConfidence, min: 0.0, max: 1.0),
+            start: 0.12,
+            full: 0.52
+        ) * 0.85
+        let trackingSupport = max(centerTrackingSupport, centerWalkingSupport)
+        let centerTurnSupport = turnCorrectionConfidenceResponse(centerTransform.turnConfidence)
+        let bridgeTurnSupport = turnCorrectionConfidenceResponse(bridgeTransform.turnConfidence) * max(0.30, trackingSupport)
+        let evidenceSupport = max(centerTurnSupport, bridgeTurnSupport)
+        return clamp(
+            renderTurnTransitionBridgeMinimumBlend
+                + ((renderTurnTransitionBridgeMaximumBlend - renderTurnTransitionBridgeMinimumBlend) * evidenceSupport),
+            min: renderTurnTransitionBridgeMinimumBlend,
+            max: renderTurnTransitionBridgeMaximumBlend
+        )
     }
 
     private static func farFieldWarpSmoothingSamples(

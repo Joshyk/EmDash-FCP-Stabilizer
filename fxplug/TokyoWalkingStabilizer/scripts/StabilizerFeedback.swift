@@ -506,6 +506,8 @@ private let turnOwnershipFarFieldWarpSuppression: Float = 0.55
 private let renderTurnTransitionSmoothingSampleCount = 29
 private let renderTurnTransitionSmoothingWindowSeconds = 2.8
 private let renderTurnTransitionMinimumMacroPixels: Float = 0.5
+private let renderTurnTransitionBridgeMinimumBlend: Float = 0.25
+private let renderTurnTransitionBridgeMaximumBlend: Float = 0.90
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -1134,8 +1136,15 @@ private func renderTurnBridgeAssessment(
     } else {
         bridgedMacro = averagedMacro
     }
-    let bridgedApplied = abs(bridgedMacro)
     let bridgedConfidence = clamp(weightedConfidence / totalWeight, min: 0.0, max: 1.0)
+    let bridgeBlend = turnTransitionBridgeBlend(
+        centerTurnConfidence: centerSample.confidence,
+        centerTrackingConfidence: centerSample.rawConfidence,
+        centerWalkingTrackingConfidence: centerSample.rawConfidence,
+        bridgeTurnConfidence: bridgedConfidence
+    )
+    let blendedMacro = centerMacro + ((bridgedMacro - centerMacro) * bridgeBlend)
+    let bridgedApplied = abs(blendedMacro)
     return RenderTurnBridgeAssessment(
         applied: bridgedApplied,
         remaining: max(0.0, centerSample.detected - bridgedApplied),
@@ -1143,7 +1152,35 @@ private func renderTurnBridgeAssessment(
         sampleCount: acceptedSamples,
         rawApplied: centerSample.applied,
         delta: bridgedApplied - centerSample.applied,
-        note: String(format: "29-sample %.2fs bridge support %.3f centerKeep %.3f", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, abs(bridgedMacro - averagedMacro))
+        note: String(format: "29-sample %.2fs bridge support %.3f blend %.2f centerKeep %.3f", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, bridgeBlend, abs(bridgedMacro - averagedMacro))
+    )
+}
+
+private func turnTransitionBridgeBlend(
+    centerTurnConfidence: Float,
+    centerTrackingConfidence: Float,
+    centerWalkingTrackingConfidence: Float,
+    bridgeTurnConfidence: Float
+) -> Float {
+    let centerTrackingSupport = confidenceRamp(
+        clamp(centerTrackingConfidence, min: 0.0, max: 1.0),
+        start: 0.12,
+        full: 0.52
+    )
+    let centerWalkingSupport = confidenceRamp(
+        clamp(centerWalkingTrackingConfidence, min: 0.0, max: 1.0),
+        start: 0.12,
+        full: 0.52
+    ) * 0.85
+    let trackingSupport = max(centerTrackingSupport, centerWalkingSupport)
+    let centerTurnSupport = turnCorrectionConfidenceResponse(centerTurnConfidence)
+    let bridgeTurnSupport = turnCorrectionConfidenceResponse(bridgeTurnConfidence) * max(0.30, trackingSupport)
+    let evidenceSupport = max(centerTurnSupport, bridgeTurnSupport)
+    return clamp(
+        renderTurnTransitionBridgeMinimumBlend
+            + ((renderTurnTransitionBridgeMaximumBlend - renderTurnTransitionBridgeMinimumBlend) * evidenceSupport),
+        min: renderTurnTransitionBridgeMinimumBlend,
+        max: renderTurnTransitionBridgeMaximumBlend
     )
 }
 
