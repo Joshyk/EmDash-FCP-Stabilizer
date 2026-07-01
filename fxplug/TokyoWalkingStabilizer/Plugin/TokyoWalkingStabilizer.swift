@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.68"
+private let tokyoWalkingStabilizerVersion = "1.0.69"
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -2724,7 +2724,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         let positionSamples = autoCropPlaybackPositionEnvelopeSamples(rawPositionSamples)
-        let plannedSamples = autoCropPlaybackEnvelopeSamples(rawPlannedSamples)
+        let envelopeSamples = autoCropPlaybackEnvelopeSamples(rawPlannedSamples)
+        let repairedPlan = autoCropPlaybackCoverageRepairedScaleSamples(
+            envelopeSamples,
+            demandSamples: samples,
+            preparedAnalysis: preparedAnalysis,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
+        let plannedSamples = autoCropPlaybackEnvelopeSamples(repairedPlan.samples)
         let scaleBounds = plannedSamples.reduce(
             (minimum: Float.greatestFiniteMagnitude, maximum: Float(1.0))
         ) { bounds, sample in
@@ -2742,7 +2755,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             samples.count,
             protectedDemandSamples.count,
             minimumClippedDemandSampleCount,
-            0,
+            repairedPlan.repairCount,
             stabilizerAutoCropPlaybackScalePlanStepSeconds,
             Float(1.0) + stabilizerAutoCropPlaybackMinimumClipScaleDelta,
             stabilizerAutoCropPlaybackEnvelopeRadiusSeconds,

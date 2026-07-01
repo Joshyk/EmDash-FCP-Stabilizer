@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 28
+private let cacheSchemaVersion = 29
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -964,8 +964,19 @@ private struct FarFieldPlaneMotion {
     let dx: Float
     let dy: Float
     let signedRoll: Float
+    let yawProxy: Float
+    let pitchProxy: Float
+    let shearX: Float
+    let shearY: Float
     let authority: Float
     let parallaxPixels: Float
+}
+
+private struct AffineAxisFit {
+    let offset: Float
+    let xSlope: Float
+    let ySlope: Float
+    let residual: Float
 }
 
 private struct MetalBlurResult {
@@ -1301,6 +1312,152 @@ private final class MetalMotionWorkspace {
         return baseWeight * scoreQuality * searchHeadroom
     }
 
+    private static func weightedAffineAxisFit(
+        _ samples: [(x: Float, y: Float, value: Float, weight: Float)]
+    ) -> AffineAxisFit? {
+        let finiteSamples = samples.filter {
+            $0.x.isFinite && $0.y.isFinite && $0.value.isFinite && $0.weight.isFinite && $0.weight > 0.0
+        }
+        guard finiteSamples.count >= 3 else {
+            return nil
+        }
+
+        var weightedSamples = finiteSamples
+        var fit = solveWeightedAffineAxis(weightedSamples)
+        for _ in 0..<2 {
+            guard let currentFit = fit else {
+                return nil
+            }
+            let residuals = finiteSamples.map {
+                abs($0.value - affineAxisValue(currentFit, x: $0.x, y: $0.y))
+            }
+            let residualScale = max(Float(0.75), (median(residuals) ?? 0.0) * 2.5)
+            weightedSamples = finiteSamples.map { sample in
+                let residual = abs(sample.value - affineAxisValue(currentFit, x: sample.x, y: sample.y))
+                let robustWeight = residual <= residualScale || residual <= Float.ulpOfOne
+                    ? Float(1.0)
+                    : residualScale / residual
+                return (
+                    x: sample.x,
+                    y: sample.y,
+                    value: sample.value,
+                    weight: sample.weight * clamp(robustWeight, 0.05, 1.0)
+                )
+            }
+            fit = solveWeightedAffineAxis(weightedSamples)
+        }
+
+        guard let finalFit = fit else {
+            return nil
+        }
+        let residuals = finiteSamples.map {
+            abs($0.value - affineAxisValue(finalFit, x: $0.x, y: $0.y))
+        }
+        return AffineAxisFit(
+            offset: finalFit.offset,
+            xSlope: finalFit.xSlope,
+            ySlope: finalFit.ySlope,
+            residual: median(residuals) ?? 0.0
+        )
+    }
+
+    private static func solveWeightedAffineAxis(
+        _ samples: [(x: Float, y: Float, value: Float, weight: Float)]
+    ) -> AffineAxisFit? {
+        var m00 = Double(0.0)
+        var m01 = Double(0.0)
+        var m02 = Double(0.0)
+        var m11 = Double(0.0)
+        var m12 = Double(0.0)
+        var m22 = Double(0.0)
+        var b0 = Double(0.0)
+        var b1 = Double(0.0)
+        var b2 = Double(0.0)
+        var totalWeight = Double(0.0)
+
+        for sample in samples {
+            let w = Double(sample.weight)
+            let x = Double(sample.x)
+            let y = Double(sample.y)
+            let value = Double(sample.value)
+            totalWeight += w
+            m00 += w
+            m01 += w * x
+            m02 += w * y
+            m11 += w * x * x
+            m12 += w * x * y
+            m22 += w * y * y
+            b0 += w * value
+            b1 += w * x * value
+            b2 += w * y * value
+        }
+        guard totalWeight > 0.0 else {
+            return nil
+        }
+        guard let solution = solve3x3(
+            [
+                [m00, m01, m02],
+                [m01, m11, m12],
+                [m02, m12, m22]
+            ],
+            [b0, b1, b2]
+        ) else {
+            return nil
+        }
+        return AffineAxisFit(
+            offset: Float(solution[0]),
+            xSlope: Float(solution[1]),
+            ySlope: Float(solution[2]),
+            residual: 0.0
+        )
+    }
+
+    private static func solve3x3(_ matrix: [[Double]], _ rhs: [Double]) -> [Double]? {
+        guard matrix.count == 3, matrix.allSatisfy({ $0.count == 3 }), rhs.count == 3 else {
+            return nil
+        }
+        var rows = [
+            [matrix[0][0], matrix[0][1], matrix[0][2], rhs[0]],
+            [matrix[1][0], matrix[1][1], matrix[1][2], rhs[1]],
+            [matrix[2][0], matrix[2][1], matrix[2][2], rhs[2]]
+        ]
+        for column in 0..<3 {
+            var pivotRow = column
+            var pivotValue = abs(rows[column][column])
+            for row in (column + 1)..<3 {
+                let value = abs(rows[row][column])
+                if value > pivotValue {
+                    pivotValue = value
+                    pivotRow = row
+                }
+            }
+            guard pivotValue > 1e-9 else {
+                return nil
+            }
+            if pivotRow != column {
+                rows.swapAt(pivotRow, column)
+            }
+            let pivot = rows[column][column]
+            for entry in column...3 {
+                rows[column][entry] /= pivot
+            }
+            for row in 0..<3 where row != column {
+                let factor = rows[row][column]
+                guard abs(factor) > 1e-12 else {
+                    continue
+                }
+                for entry in column...3 {
+                    rows[row][entry] -= factor * rows[column][entry]
+                }
+            }
+        }
+        return [rows[0][3], rows[1][3], rows[2][3]]
+    }
+
+    private static func affineAxisValue(_ fit: AffineAxisFit, x: Float, y: Float) -> Float {
+        fit.offset + (fit.xSlope * x) + (fit.ySlope * y)
+    }
+
     private static func farFieldPlaneMotion(
         shifts: [BlockShift],
         seedDx: Float,
@@ -1329,6 +1486,25 @@ private final class MetalMotionWorkspace {
         }) ?? seedDy
         let halfWidth = Float(max(1, width)) * 0.5
         let halfHeight = Float(max(1, height)) * 0.5
+        let affineSamples = farFieldShifts.map { shift -> (x: Float, y: Float, dx: Float, dy: Float, weight: Float) in
+            let x = (shift.block.centerX - halfWidth) / halfWidth
+            let y = (shift.block.centerY - halfHeight) / halfHeight
+            return (
+                x: x,
+                y: y,
+                dx: shift.dx,
+                dy: shift.dy,
+                weight: motionBlockWeight(shift, scoreReference: scoreReference)
+            )
+        }
+        let affineX = weightedAffineAxisFit(affineSamples.map {
+            (x: $0.x, y: $0.y, value: $0.dx, weight: $0.weight)
+        })
+        let affineY = weightedAffineAxisFit(affineSamples.map {
+            (x: $0.x, y: $0.y, value: $0.dy, weight: $0.weight)
+        })
+        let affineDx = affineX?.offset ?? weightedDx
+        let affineDy = affineY?.offset ?? weightedDy
         let rollCandidates = farFieldShifts.compactMap { shift -> (value: Float, weight: Float)? in
             let x = shift.block.centerX - halfWidth
             let y = shift.block.centerY - halfHeight
@@ -1336,12 +1512,22 @@ private final class MetalMotionWorkspace {
             guard denominator > 1.0 else {
                 return nil
             }
-            let u = shift.dx - weightedDx
-            let v = shift.dy - weightedDy
+            let u = shift.dx - affineDx
+            let v = shift.dy - affineDy
             let roll = ((x * v) - (y * u)) / denominator
             return (roll, motionBlockWeight(shift, scoreReference: scoreReference))
         }
-        let weightedRoll = weightedMedian(rollCandidates) ?? 0.0
+        let medianRoll = weightedMedian(rollCandidates) ?? 0.0
+        let affineRoll: Float
+        if let affineX, let affineY {
+            let xRoll = -affineX.ySlope / halfHeight
+            let yRoll = affineY.xSlope / halfWidth
+            affineRoll = (xRoll + yRoll) * 0.5
+        } else {
+            affineRoll = medianRoll
+        }
+        let affineSupport = (affineX != nil && affineY != nil) ? Float(1.0) : Float(0.0)
+        let weightedRoll = medianRoll + ((affineRoll - medianRoll) * affineSupport)
         let nearFieldShifts = finiteShifts.filter { $0.block.farFieldWeight <= farFieldPlaneNearThreshold }
         let nearDx = nearFieldShifts.count >= farFieldPlaneMinimumBlocks
             ? weightedMedian(nearFieldShifts.map { ($0.dx, max(Float(0.05), 1.0 - $0.block.farFieldWeight)) })
@@ -1373,10 +1559,26 @@ private final class MetalMotionWorkspace {
         guard authority >= farFieldConsensusConfidenceFloor else {
             return nil
         }
+        let yawProxy = affineX.map {
+            clamp(($0.xSlope / halfWidth) * consensusConfidence, -maxFarFieldYawPitchProxy, maxFarFieldYawPitchProxy)
+        } ?? 0.0
+        let pitchProxy = affineY.map {
+            clamp(($0.ySlope / halfHeight) * consensusConfidence, -maxFarFieldYawPitchProxy, maxFarFieldYawPitchProxy)
+        } ?? 0.0
+        let shearX = affineX.map {
+            clamp((($0.ySlope + (weightedRoll * halfHeight)) / halfHeight) * consensusConfidence, -maxFarFieldShear, maxFarFieldShear)
+        } ?? 0.0
+        let shearY = affineY.map {
+            clamp((($0.xSlope - (weightedRoll * halfWidth)) / halfWidth) * consensusConfidence, -maxFarFieldShear, maxFarFieldShear)
+        } ?? 0.0
         return FarFieldPlaneMotion(
-            dx: weightedDx,
-            dy: weightedDy,
+            dx: affineDx,
+            dy: affineDy,
             signedRoll: weightedRoll,
+            yawProxy: yawProxy,
+            pitchProxy: pitchProxy,
+            shearX: shearX,
+            shearY: shearY,
             authority: authority,
             parallaxPixels: parallaxPixels
         )
@@ -1618,16 +1820,28 @@ private final class MetalMotionWorkspace {
             height: height,
             analysisConfidence: analysisConfidence
         )
+        let modelYawProxy = farFieldPlane.map {
+            warpMotion.yawProxy + (($0.yawProxy - warpMotion.yawProxy) * farFieldAuthority)
+        } ?? warpMotion.yawProxy
+        let modelPitchProxy = farFieldPlane.map {
+            warpMotion.pitchProxy + (($0.pitchProxy - warpMotion.pitchProxy) * farFieldAuthority)
+        } ?? warpMotion.pitchProxy
+        let modelShearX = farFieldPlane.map {
+            warpMotion.shearX + (($0.shearX - warpMotion.shearX) * farFieldAuthority)
+        } ?? warpMotion.shearX
+        let modelShearY = farFieldPlane.map {
+            warpMotion.shearY + (($0.shearY - warpMotion.shearY) * farFieldAuthority)
+        } ?? warpMotion.shearY
         return PairMotion(
             dx: modelDx,
             dy: modelDy,
             residual: modelScoreReference,
             signedRoll: signedRoll,
             rollMotion: rollMotion,
-            yawProxy: warpMotion.yawProxy,
-            pitchProxy: warpMotion.pitchProxy,
-            shearX: warpMotion.shearX,
-            shearY: warpMotion.shearY,
+            yawProxy: modelYawProxy,
+            pitchProxy: modelPitchProxy,
+            shearX: modelShearX,
+            shearY: modelShearY,
             perspectiveX: warpMotion.perspectiveX,
             perspectiveY: warpMotion.perspectiveY,
             analysisConfidence: analysisConfidence,

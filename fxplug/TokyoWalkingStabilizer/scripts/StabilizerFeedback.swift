@@ -540,7 +540,7 @@ private let farFieldWarpConsensusGateStart: Float = 0.04
 private let farFieldWarpConsensusGateFull: Float = 0.28
 private let farFieldConsensusConfidenceFloor: Float = 0.04
 private let maximumFarFieldWarpStrength: Float = 12.0
-private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {

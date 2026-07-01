@@ -425,8 +425,19 @@ fileprivate struct StabilizerFarFieldPlaneMotion {
     let dx: Float
     let dy: Float
     let signedRoll: Float
+    let yawProxy: Float
+    let pitchProxy: Float
+    let shearX: Float
+    let shearY: Float
     let authority: Float
     let parallaxPixels: Float
+}
+
+fileprivate struct StabilizerAffineAxisFit {
+    let offset: Float
+    let xSlope: Float
+    let ySlope: Float
+    let residual: Float
 }
 
 fileprivate struct StabilizerMotionBlockBatch {
@@ -2046,13 +2057,15 @@ enum AutoStabilizationEstimator {
             ? rawCenterTransform
             : weightedAverageTransform(shortWarpSamples)
         let smoothedWarpConfidence = clamp(smoothedWarpTransform.warpConfidence, min: 0.0, max: 1.0)
-        let centerWarpConfidence = clamp(rawCenterTransform.warpConfidence, min: 0.0, max: 1.0)
-        let cappedWarpConfidence = min(smoothedWarpConfidence, centerWarpConfidence)
-        let centerWarpScale = smoothedWarpConfidence > 1e-6 ? cappedWarpConfidence / smoothedWarpConfidence : 0.0
-        smoothedTransform.warpConfidence = smoothedWarpConfidence
-        smoothedTransform.yawPitchProxy = smoothedWarpTransform.yawPitchProxy * centerWarpScale
-        smoothedTransform.shear = smoothedWarpTransform.shear * centerWarpScale
-        smoothedTransform.perspective = smoothedWarpTransform.perspective * centerWarpScale
+        let temporalWarpScale = farFieldWarpTemporalScale(
+            centerTransform: rawCenterTransform,
+            smoothedTransform: smoothedWarpTransform,
+            smoothedConfidence: smoothedWarpConfidence
+        )
+        smoothedTransform.warpConfidence = smoothedWarpConfidence * temporalWarpScale
+        smoothedTransform.yawPitchProxy = smoothedWarpTransform.yawPitchProxy * temporalWarpScale
+        smoothedTransform.shear = smoothedWarpTransform.shear * temporalWarpScale
+        smoothedTransform.perspective = smoothedWarpTransform.perspective * temporalWarpScale
         smoothedTransform.trackingConfidence = clamp(smoothedTransform.trackingConfidence, min: 0.0, max: 1.0)
         smoothedTransform.walkingTrackingConfidence = clamp(smoothedTransform.walkingTrackingConfidence, min: 0.0, max: 1.0)
         smoothedTransform.motionConfidence = clamp(smoothedTransform.motionConfidence, min: 0.0, max: 1.0)
@@ -2089,6 +2102,42 @@ enum AutoStabilizationEstimator {
         smoothedTransform.temporalSmoothingSampleCount = Int32(weightedSamples.count)
         smoothedTransform.temporalSmoothingWindowSeconds = Float(renderTemporalSmoothingWindowSeconds)
         return smoothedTransform
+    }
+
+    private static func farFieldWarpTemporalScale(
+        centerTransform: StabilizerAutoTransform,
+        smoothedTransform: StabilizerAutoTransform,
+        smoothedConfidence: Float
+    ) -> Float {
+        let boundedSmoothedConfidence = clamp(smoothedConfidence, min: 0.0, max: 1.0)
+        guard boundedSmoothedConfidence > Float.ulpOfOne else {
+            return 0.0
+        }
+        let centerConfidence = clamp(centerTransform.warpConfidence, min: 0.0, max: 1.0)
+        let centerSupport = confidenceRamp(centerConfidence, start: 0.02, full: 0.20)
+        let smoothedSupport = confidenceRamp(boundedSmoothedConfidence, start: 0.06, full: 0.28)
+        let centerVector = vector_float4(
+            centerTransform.yawPitchProxy.x + centerTransform.perspective.x,
+            centerTransform.yawPitchProxy.y + centerTransform.perspective.y,
+            centerTransform.shear.x,
+            centerTransform.shear.y
+        )
+        let smoothedVector = vector_float4(
+            smoothedTransform.yawPitchProxy.x + smoothedTransform.perspective.x,
+            smoothedTransform.yawPitchProxy.y + smoothedTransform.perspective.y,
+            smoothedTransform.shear.x,
+            smoothedTransform.shear.y
+        )
+        let centerMagnitude = simd_length(centerVector)
+        let smoothedMagnitude = simd_length(smoothedVector)
+        let directionSupport: Float
+        if centerMagnitude > 1e-7, smoothedMagnitude > 1e-7 {
+            let cosine = simd_dot(centerVector, smoothedVector) / max(centerMagnitude * smoothedMagnitude, 1e-7)
+            directionSupport = clamp((cosine + 1.0) * 0.5, min: 0.0, max: 1.0)
+        } else {
+            directionSupport = 0.65
+        }
+        return clamp(max(centerSupport, smoothedSupport * max(0.55, directionSupport)), min: 0.0, max: 1.0)
     }
 
     private static func turnTransitionSmoothingSamples(
@@ -2886,6 +2935,18 @@ enum AutoStabilizationEstimator {
             sampleHeight: sampleHeight,
             analysisConfidence: analysisConfidence
         )
+        let modelYawProxy = farFieldPlane.map {
+            warpMotion.yawProxy + (($0.yawProxy - warpMotion.yawProxy) * farFieldAuthority)
+        } ?? warpMotion.yawProxy
+        let modelPitchProxy = farFieldPlane.map {
+            warpMotion.pitchProxy + (($0.pitchProxy - warpMotion.pitchProxy) * farFieldAuthority)
+        } ?? warpMotion.pitchProxy
+        let modelShearX = farFieldPlane.map {
+            warpMotion.shearX + (($0.shearX - warpMotion.shearX) * farFieldAuthority)
+        } ?? warpMotion.shearX
+        let modelShearY = farFieldPlane.map {
+            warpMotion.shearY + (($0.shearY - warpMotion.shearY) * farFieldAuthority)
+        } ?? warpMotion.shearY
 
         return PairMotionResult(
             motion: PairMotion(
@@ -2894,10 +2955,10 @@ enum AutoStabilizationEstimator {
                 residual: median(motionBlocksForModel.map(\.score)) ?? global.score,
                 signedRoll: signedRoll,
                 rollMotion: rollMotion,
-                yawProxy: warpMotion.yawProxy,
-                pitchProxy: warpMotion.pitchProxy,
-                shearX: warpMotion.shearX,
-                shearY: warpMotion.shearY,
+                yawProxy: modelYawProxy,
+                pitchProxy: modelPitchProxy,
+                shearX: modelShearX,
+                shearY: modelShearY,
                 perspectiveX: warpMotion.perspectiveX,
                 perspectiveY: warpMotion.perspectiveY,
                 analysisConfidence: analysisConfidence,
@@ -3227,6 +3288,152 @@ enum AutoStabilizationEstimator {
         return baseWeight * scoreQuality * searchHeadroom
     }
 
+    private static func weightedAffineAxisFit(
+        _ samples: [(x: Float, y: Float, value: Float, weight: Float)]
+    ) -> StabilizerAffineAxisFit? {
+        let finiteSamples = samples.filter {
+            $0.x.isFinite && $0.y.isFinite && $0.value.isFinite && $0.weight.isFinite && $0.weight > 0.0
+        }
+        guard finiteSamples.count >= 3 else {
+            return nil
+        }
+
+        var weightedSamples = finiteSamples
+        var fit = solveWeightedAffineAxis(weightedSamples)
+        for _ in 0..<2 {
+            guard let currentFit = fit else {
+                return nil
+            }
+            let residuals = finiteSamples.map {
+                abs($0.value - affineAxisValue(currentFit, x: $0.x, y: $0.y))
+            }
+            let residualScale = max(Float(0.75), (median(residuals) ?? 0.0) * 2.5)
+            weightedSamples = finiteSamples.map { sample in
+                let residual = abs(sample.value - affineAxisValue(currentFit, x: sample.x, y: sample.y))
+                let robustWeight = residual <= residualScale || residual <= Float.ulpOfOne
+                    ? Float(1.0)
+                    : residualScale / residual
+                return (
+                    x: sample.x,
+                    y: sample.y,
+                    value: sample.value,
+                    weight: sample.weight * clamp(robustWeight, min: 0.05, max: 1.0)
+                )
+            }
+            fit = solveWeightedAffineAxis(weightedSamples)
+        }
+
+        guard let finalFit = fit else {
+            return nil
+        }
+        let residuals = finiteSamples.map {
+            abs($0.value - affineAxisValue(finalFit, x: $0.x, y: $0.y))
+        }
+        return StabilizerAffineAxisFit(
+            offset: finalFit.offset,
+            xSlope: finalFit.xSlope,
+            ySlope: finalFit.ySlope,
+            residual: median(residuals) ?? 0.0
+        )
+    }
+
+    private static func solveWeightedAffineAxis(
+        _ samples: [(x: Float, y: Float, value: Float, weight: Float)]
+    ) -> StabilizerAffineAxisFit? {
+        var m00 = Double(0.0)
+        var m01 = Double(0.0)
+        var m02 = Double(0.0)
+        var m11 = Double(0.0)
+        var m12 = Double(0.0)
+        var m22 = Double(0.0)
+        var b0 = Double(0.0)
+        var b1 = Double(0.0)
+        var b2 = Double(0.0)
+        var totalWeight = Double(0.0)
+
+        for sample in samples {
+            let w = Double(sample.weight)
+            let x = Double(sample.x)
+            let y = Double(sample.y)
+            let value = Double(sample.value)
+            totalWeight += w
+            m00 += w
+            m01 += w * x
+            m02 += w * y
+            m11 += w * x * x
+            m12 += w * x * y
+            m22 += w * y * y
+            b0 += w * value
+            b1 += w * x * value
+            b2 += w * y * value
+        }
+        guard totalWeight > 0.0 else {
+            return nil
+        }
+        guard let solution = solve3x3(
+            [
+                [m00, m01, m02],
+                [m01, m11, m12],
+                [m02, m12, m22]
+            ],
+            [b0, b1, b2]
+        ) else {
+            return nil
+        }
+        return StabilizerAffineAxisFit(
+            offset: Float(solution[0]),
+            xSlope: Float(solution[1]),
+            ySlope: Float(solution[2]),
+            residual: 0.0
+        )
+    }
+
+    private static func solve3x3(_ matrix: [[Double]], _ rhs: [Double]) -> [Double]? {
+        guard matrix.count == 3, matrix.allSatisfy({ $0.count == 3 }), rhs.count == 3 else {
+            return nil
+        }
+        var rows = [
+            [matrix[0][0], matrix[0][1], matrix[0][2], rhs[0]],
+            [matrix[1][0], matrix[1][1], matrix[1][2], rhs[1]],
+            [matrix[2][0], matrix[2][1], matrix[2][2], rhs[2]]
+        ]
+        for column in 0..<3 {
+            var pivotRow = column
+            var pivotValue = abs(rows[column][column])
+            for row in (column + 1)..<3 {
+                let value = abs(rows[row][column])
+                if value > pivotValue {
+                    pivotValue = value
+                    pivotRow = row
+                }
+            }
+            guard pivotValue > 1e-9 else {
+                return nil
+            }
+            if pivotRow != column {
+                rows.swapAt(pivotRow, column)
+            }
+            let pivot = rows[column][column]
+            for entry in column...3 {
+                rows[column][entry] /= pivot
+            }
+            for row in 0..<3 where row != column {
+                let factor = rows[row][column]
+                guard abs(factor) > 1e-12 else {
+                    continue
+                }
+                for entry in column...3 {
+                    rows[row][entry] -= factor * rows[column][entry]
+                }
+            }
+        }
+        return [rows[0][3], rows[1][3], rows[2][3]]
+    }
+
+    private static func affineAxisValue(_ fit: StabilizerAffineAxisFit, x: Float, y: Float) -> Float {
+        fit.offset + (fit.xSlope * x) + (fit.ySlope * y)
+    }
+
     private static func farFieldPlaneMotion(
         shifts: [StabilizerBlockShift],
         seedDx: Float,
@@ -3255,6 +3462,25 @@ enum AutoStabilizationEstimator {
         }) ?? seedDy
         let halfWidth = Float(max(1, sampleWidth)) * 0.5
         let halfHeight = Float(max(1, sampleHeight)) * 0.5
+        let affineSamples = farFieldShifts.map { shift -> (x: Float, y: Float, dx: Float, dy: Float, weight: Float) in
+            let x = (shift.block.centerX - halfWidth) / halfWidth
+            let y = (shift.block.centerY - halfHeight) / halfHeight
+            return (
+                x: x,
+                y: y,
+                dx: shift.dx,
+                dy: shift.dy,
+                weight: motionBlockWeight(shift, scoreReference: scoreReference)
+            )
+        }
+        let affineX = weightedAffineAxisFit(affineSamples.map {
+            (x: $0.x, y: $0.y, value: $0.dx, weight: $0.weight)
+        })
+        let affineY = weightedAffineAxisFit(affineSamples.map {
+            (x: $0.x, y: $0.y, value: $0.dy, weight: $0.weight)
+        })
+        let affineDx = affineX?.offset ?? weightedDx
+        let affineDy = affineY?.offset ?? weightedDy
         let rollCandidates = farFieldShifts.compactMap { shift -> (value: Float, weight: Float)? in
             let x = shift.block.centerX - halfWidth
             let y = shift.block.centerY - halfHeight
@@ -3262,12 +3488,22 @@ enum AutoStabilizationEstimator {
             guard denominator > 1.0 else {
                 return nil
             }
-            let u = shift.dx - weightedDx
-            let v = shift.dy - weightedDy
+            let u = shift.dx - affineDx
+            let v = shift.dy - affineDy
             let roll = ((x * v) - (y * u)) / denominator
             return (roll, motionBlockWeight(shift, scoreReference: scoreReference))
         }
-        let weightedRoll = weightedMedian(rollCandidates) ?? 0.0
+        let medianRoll = weightedMedian(rollCandidates) ?? 0.0
+        let affineRoll: Float
+        if let affineX, let affineY {
+            let xRoll = -affineX.ySlope / halfHeight
+            let yRoll = affineY.xSlope / halfWidth
+            affineRoll = (xRoll + yRoll) * 0.5
+        } else {
+            affineRoll = medianRoll
+        }
+        let affineSupport = (affineX != nil && affineY != nil) ? Float(1.0) : Float(0.0)
+        let weightedRoll = medianRoll + ((affineRoll - medianRoll) * affineSupport)
         let nearFieldShifts = finiteShifts.filter { $0.block.farFieldWeight <= farFieldPlaneNearThreshold }
         let nearDx = nearFieldShifts.count >= farFieldPlaneMinimumBlocks
             ? weightedMedian(nearFieldShifts.map { ($0.dx, max(Float(0.05), 1.0 - $0.block.farFieldWeight)) })
@@ -3299,10 +3535,26 @@ enum AutoStabilizationEstimator {
         guard authority >= farFieldConsensusConfidenceFloor else {
             return nil
         }
+        let yawProxy = affineX.map {
+            clamp(($0.xSlope / halfWidth) * consensusConfidence, min: -maxFarFieldYawPitchProxy, max: maxFarFieldYawPitchProxy)
+        } ?? 0.0
+        let pitchProxy = affineY.map {
+            clamp(($0.ySlope / halfHeight) * consensusConfidence, min: -maxFarFieldYawPitchProxy, max: maxFarFieldYawPitchProxy)
+        } ?? 0.0
+        let shearX = affineX.map {
+            clamp((($0.ySlope + (weightedRoll * halfHeight)) / halfHeight) * consensusConfidence, min: -maxFarFieldShear, max: maxFarFieldShear)
+        } ?? 0.0
+        let shearY = affineY.map {
+            clamp((($0.xSlope - (weightedRoll * halfWidth)) / halfWidth) * consensusConfidence, min: -maxFarFieldShear, max: maxFarFieldShear)
+        } ?? 0.0
         return StabilizerFarFieldPlaneMotion(
-            dx: weightedDx,
-            dy: weightedDy,
+            dx: affineDx,
+            dy: affineDy,
             signedRoll: weightedRoll,
+            yawProxy: yawProxy,
+            pitchProxy: pitchProxy,
+            shearX: shearX,
+            shearY: shearY,
             authority: authority,
             parallaxPixels: parallaxPixels
         )

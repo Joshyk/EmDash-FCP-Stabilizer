@@ -26,10 +26,10 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Uses schema 28 far-field plane-prioritized X/Y/roll motion, schema 27 wider far-field consensus motion search, schema 26 tighter fine-refined
+- Uses schema 29 robust far-field affine X/Y/roll/shear motion, schema 28 far-field plane-prioritized X/Y/roll motion, schema 27 wider far-field consensus motion search, schema 26 tighter fine-refined
   hierarchical block motion search, schema 24 chunked frame fingerprints, and higher
   precision far-field block motion evidence for persisted-cache validation, while keeping
-  compatible schema 17-27 caches
+  compatible schema 17-28 caches
   readable.
 - Reuses persisted analysis only after the current source frame validates against saved
   frame fingerprints.
@@ -61,20 +61,23 @@ estimators, or Transform-keyframe writers back into this target.
   frame-sampled smoothing window so ridge-line correction stays responsive.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
-- New schema 28 analysis keeps the schema 27 hierarchical block search and explicitly
-  estimates a coherent far-field motion plane from high-upper-frame blocks. When near-field
-  parallax diverges from that plane, prepared X/Y translation and roll are blended toward
-  the far-field plane so distant clouds, ridgelines, and mountains remain the stabilization
-  priority instead of being dragged by road, grass, or water foreground motion. The render
-  path also stabilizes Far-field Warp confidence from nearby frames so yaw/pitch/shear/
-  perspective correction does not flicker off on a single weak frame. Schema 27 widens the coarse
+- New schema 29 analysis keeps the schema 28 far-field plane priority and fits high-upper-frame
+  blocks with a robust affine motion model, so prepared X/Y translation, roll, yaw/pitch proxy,
+  and shear come from one coherent far-field estimate instead of separate per-axis medians.
+  This prioritizes distant clouds, ridgelines, and mountains when road, grass, water, or other
+  near-field parallax diverges from the background. The render path also uses a temporal
+  Far-field Warp gate so yaw/pitch/shear/perspective correction does not flicker off on a
+  single weak center frame, and Auto Crop playback scale plans repair current/neutral coverage
+  floors before the final envelope pass. Schema 28 analysis keeps the schema 27 hierarchical
+  block search and explicitly estimates a coherent far-field motion plane from high-upper-frame
+  blocks. Schema 27 widens the coarse
   motion radius for large turn frames, and lets coherent far-field blocks preserve
   yaw/pitch/shear/perspective confidence even when near-field parallax lowers whole-frame
   tracking confidence. Schema 26 retains the tighter fine one-pixel local refinement radius
   for higher throughput and the schema 24 higher precision prepared warp paths from extra
   upper-row far-field detail blocks, high far-field vertical detail blocks, central
   attitude-detail blocks for yaw/pitch/roll evidence, denser high far-field in-block
-  sampling, and sub-pixel block shift refinement. Older complete schema 17-27 caches remain
+  sampling, and sub-pixel block shift refinement. Older complete schema 17-28 caches remain
   readable.
 - `Remove Black Edges` is on by default and applies dynamic Auto Crop framing during
   render. Turning it off skips Auto Crop window sampling and framing entirely, so
