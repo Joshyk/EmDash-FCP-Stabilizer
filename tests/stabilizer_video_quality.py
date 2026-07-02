@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -97,6 +98,20 @@ def rolling_median(values: list[float], window: int) -> list[float]:
         start = max(0, index - half)
         end = min(len(values), index + half + 1)
         result.append(float(np.nanmedian(arr[start:end])))
+    return result
+
+
+def rolling_peak_to_peak(values: list[float], window: int) -> list[float]:
+    if not values:
+        return []
+    half = max(0, window // 2)
+    result: list[float] = []
+    arr = np.asarray(values, dtype=np.float64)
+    for index in range(len(values)):
+        start = max(0, index - half)
+        end = min(len(values), index + half + 1)
+        segment = arr[start:end]
+        result.append(float(np.nanmax(segment) - np.nanmin(segment)))
     return result
 
 
@@ -222,6 +237,75 @@ def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def probe_pts_interval_metrics(video_path: Path, tolerance_ratio: float) -> dict[str, Any]:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "frame=best_effort_timestamp_time",
+        "-of",
+        "csv=p=0",
+        str(video_path),
+    ]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+    except FileNotFoundError:
+        return {"available": False, "reason": "ffprobe_not_found"}
+
+    if result.returncode != 0:
+        return {
+            "available": False,
+            "reason": "ffprobe_failed",
+            "stderr": result.stderr.strip()[:500],
+        }
+
+    timestamps: list[float] = []
+    for line in result.stdout.splitlines():
+        value = line.strip().split(",", 1)[0]
+        if not value:
+            continue
+        try:
+            timestamps.append(float(value))
+        except ValueError:
+            continue
+
+    if len(timestamps) < 2:
+        return {
+            "available": False,
+            "reason": "insufficient_pts_frames",
+            "ptsFrameCount": len(timestamps),
+        }
+
+    intervals = [b - a for a, b in zip(timestamps, timestamps[1:]) if b >= a]
+    if not intervals:
+        return {
+            "available": False,
+            "reason": "no_positive_pts_intervals",
+            "ptsFrameCount": len(timestamps),
+        }
+
+    median_interval = float(np.median(np.asarray(intervals, dtype=np.float64)))
+    tolerance = max(0.0, median_interval * tolerance_ratio)
+    irregular_intervals = [
+        interval
+        for interval in intervals
+        if abs(float(interval) - median_interval) > tolerance
+    ]
+    return {
+        "available": True,
+        "ptsFrameCount": len(timestamps),
+        "ptsIntervalCount": len(intervals),
+        "medianPtsIntervalSeconds": median_interval,
+        "maxPtsIntervalSeconds": max(intervals),
+        "ptsIntervalToleranceRatio": tolerance_ratio,
+        "ptsIntervalIrregularCount": len(irregular_intervals),
+        "ptsIntervalIrregularRatio": len(irregular_intervals) / len(intervals),
+    }
+
+
 def write_contact_sheet(
     video_path: Path,
     output_path: Path,
@@ -301,15 +385,98 @@ def summarize_failures(
     max_jump_frame = None
     max_jump_time = None
     jump_pair_count = 0
+    jump_pair_skipped_for_cadence = 0
+    duplicate_like_rows = [
+        row
+        for row in scale_rows
+        if bool(row.get("nearDuplicateFrame"))
+    ]
+    duplicate_like_ratio = (len(duplicate_like_rows) / len(scale_rows)) if scale_rows else 0.0
+    max_duplicate_run = 0
+    duplicate_run = 0
+    cadence_hold_rows = [
+        row
+        for row in scale_rows
+        if bool(row.get("cadenceHoldFrame"))
+    ]
+    cadence_hold_ratio = (len(cadence_hold_rows) / len(scale_rows)) if scale_rows else 0.0
+    max_cadence_hold_run = 0
+    cadence_hold_run = 0
+    cumulative_zoom_rows = [
+        row
+        for row in scale_quality_rows
+        if bool(row.get("cumulativeScalePathOk"))
+    ]
+    cumulative_zoom_values = [float(row.get("cumulativeScalePercent", 0.0)) for row in cumulative_zoom_rows]
+    max_cumulative_zoom_in = max(cumulative_zoom_values, default=0.0)
+    max_cumulative_zoom_range = (
+        max(cumulative_zoom_values) - min(cumulative_zoom_values)
+        if cumulative_zoom_values
+        else 0.0
+    )
+    max_scale_pulse_peak_to_peak = max(
+        (float(row.get("scalePulsePeakToPeakPercent", 0.0)) for row in cumulative_zoom_rows),
+        default=0.0,
+    )
+    scale_pulse_derivatives = [
+        abs(float(row.get("scalePulseDerivativePercentPerFrame", 0.0)))
+        for row in cumulative_zoom_rows
+    ]
+    scale_pulse_derivative_p95 = (
+        float(np.percentile(np.asarray(scale_pulse_derivatives, dtype=np.float64), 95))
+        if scale_pulse_derivatives
+        else 0.0
+    )
+    max_scale_pulse_residual = max(
+        (abs(float(row.get("scalePulseResidualPercent", 0.0))) for row in cumulative_zoom_rows),
+        default=0.0,
+    )
+    scale_pulse_run_threshold = float(quality.get("scalePulseRunThresholdPercent", float("inf")))
+    scale_pulse_rows = [
+        row
+        for row in cumulative_zoom_rows
+        if abs(float(row.get("scalePulseResidualPercent", 0.0))) > scale_pulse_run_threshold
+    ]
+    scale_pulse_frame_ratio = (
+        len(scale_pulse_rows) / len(cumulative_zoom_rows)
+        if cumulative_zoom_rows
+        else 0.0
+    )
+    max_scale_pulse_run = 0
+    scale_pulse_run = 0
+    exclude_cadence_hold_from_jump = bool(quality.get("excludeCadenceHoldFromFrameJump", False))
     previous_row: dict[str, Any] | None = None
     for row in sorted(scale_rows, key=lambda item: int(item.get("frame", 0))):
-        row_quality_ok = bool(row.get("scaleQualityOk", row.get("trackingOk")))
-        if previous_row is not None and row_quality_ok and bool(previous_row.get("scaleQualityOk", previous_row.get("trackingOk"))):
+        is_adjacent_sample = False
+        if previous_row is not None:
             try:
                 is_adjacent_sample = int(row.get("previousFrame", -1)) == int(previous_row.get("frame", -2))
             except (TypeError, ValueError):
                 is_adjacent_sample = False
+        if bool(row.get("nearDuplicateFrame")):
+            duplicate_run = duplicate_run + 1 if previous_row is None or is_adjacent_sample else 1
+            max_duplicate_run = max(max_duplicate_run, duplicate_run)
+        else:
+            duplicate_run = 0
+        if bool(row.get("cadenceHoldFrame")):
+            cadence_hold_run = cadence_hold_run + 1 if previous_row is None or is_adjacent_sample else 1
+            max_cadence_hold_run = max(max_cadence_hold_run, cadence_hold_run)
+        else:
+            cadence_hold_run = 0
+        if abs(float(row.get("scalePulseResidualPercent", 0.0))) > scale_pulse_run_threshold:
+            scale_pulse_run = scale_pulse_run + 1 if previous_row is None or is_adjacent_sample else 1
+            max_scale_pulse_run = max(max_scale_pulse_run, scale_pulse_run)
+        else:
+            scale_pulse_run = 0
+        row_quality_ok = bool(row.get("scaleQualityOk", row.get("trackingOk")))
+        if previous_row is not None and row_quality_ok and bool(previous_row.get("scaleQualityOk", previous_row.get("trackingOk"))):
             if is_adjacent_sample:
+                cadence_pair = bool(row.get("cadenceHoldFrame")) or bool(previous_row.get("cadenceHoldFrame"))
+                if exclude_cadence_hold_from_jump and cadence_pair:
+                    row["frameJumpSkippedForCadence"] = True
+                    jump_pair_skipped_for_cadence += 1
+                    previous_row = row
+                    continue
                 jump_x = float(row.get("dx", 0.0)) - float(previous_row.get("dx", 0.0))
                 jump_y = float(row.get("dy", 0.0)) - float(previous_row.get("dy", 0.0))
                 jump_vector = math.hypot(jump_x, jump_y)
@@ -334,6 +501,16 @@ def summarize_failures(
     jump_vector_limit = float(quality.get("maxFrameTranslationJumpPixels", float("inf")))
     jump_x_limit = float(quality.get("maxFrameXJumpPixels", jump_vector_limit))
     jump_y_limit = float(quality.get("maxFrameYJumpPixels", jump_vector_limit))
+    duplicate_like_ratio_limit = float(quality.get("maxNearDuplicateFrameRatio", float("inf")))
+    duplicate_run_limit = int(quality.get("maxNearDuplicateRunFrames", 2**31 - 1))
+    cadence_hold_ratio_limit = float(quality.get("maxCadenceHoldFrameRatio", float("inf")))
+    cadence_hold_run_limit = int(quality.get("maxCadenceHoldRunFrames", 2**31 - 1))
+    cumulative_zoom_in_limit = float(quality.get("maxCumulativeZoomInPercent", float("inf")))
+    cumulative_zoom_range_limit = float(quality.get("maxCumulativeZoomRangePercent", float("inf")))
+    scale_pulse_peak_to_peak_limit = float(quality.get("maxScalePulsePeakToPeakPercent", float("inf")))
+    scale_pulse_derivative_p95_limit = float(quality.get("maxScalePulseDerivativeP95PercentPerFrame", float("inf")))
+    scale_pulse_run_limit = int(quality.get("maxScalePulseRunFrames", 2**31 - 1))
+    scale_pulse_frame_ratio_limit = float(quality.get("maxScalePulseFrameRatio", float("inf")))
 
     failures: list[str] = []
     if max_scale > scale_limit:
@@ -346,6 +523,41 @@ def summarize_failures(
         failures.append(f"frame x jump {max_jump_x:.3f}px exceeds {jump_x_limit:.3f}px")
     if max_jump_y > jump_y_limit:
         failures.append(f"frame y jump {max_jump_y:.3f}px exceeds {jump_y_limit:.3f}px")
+    if duplicate_like_ratio > duplicate_like_ratio_limit:
+        failures.append(f"near-duplicate frame ratio {duplicate_like_ratio:.3f} exceeds {duplicate_like_ratio_limit:.3f}")
+    if max_duplicate_run > duplicate_run_limit:
+        failures.append(f"near-duplicate frame run {max_duplicate_run} exceeds {duplicate_run_limit}")
+    if cadence_hold_ratio > cadence_hold_ratio_limit:
+        failures.append(f"cadence-hold frame ratio {cadence_hold_ratio:.3f} exceeds {cadence_hold_ratio_limit:.3f}")
+    if max_cadence_hold_run > cadence_hold_run_limit:
+        failures.append(f"cadence-hold frame run {max_cadence_hold_run} exceeds {cadence_hold_run_limit}")
+    if max_cumulative_zoom_in > cumulative_zoom_in_limit:
+        failures.append(
+            "cumulative zoom-in "
+            f"{max_cumulative_zoom_in:.3f}% exceeds {cumulative_zoom_in_limit:.3f}%"
+        )
+    if max_cumulative_zoom_range > cumulative_zoom_range_limit:
+        failures.append(
+            "cumulative zoom range "
+            f"{max_cumulative_zoom_range:.3f}% exceeds {cumulative_zoom_range_limit:.3f}%"
+        )
+    if max_scale_pulse_peak_to_peak > scale_pulse_peak_to_peak_limit:
+        failures.append(
+            "scale pulse peak-to-peak "
+            f"{max_scale_pulse_peak_to_peak:.3f}% exceeds {scale_pulse_peak_to_peak_limit:.3f}%"
+        )
+    if scale_pulse_derivative_p95 > scale_pulse_derivative_p95_limit:
+        failures.append(
+            "scale pulse derivative p95 "
+            f"{scale_pulse_derivative_p95:.3f}%/frame exceeds {scale_pulse_derivative_p95_limit:.3f}%/frame"
+        )
+    if max_scale_pulse_run > scale_pulse_run_limit:
+        failures.append(f"scale pulse run {max_scale_pulse_run} exceeds {scale_pulse_run_limit}")
+    if scale_pulse_frame_ratio > scale_pulse_frame_ratio_limit:
+        failures.append(
+            "scale pulse frame ratio "
+            f"{scale_pulse_frame_ratio:.3f} exceeds {scale_pulse_frame_ratio_limit:.3f}"
+        )
     if low_inlier_ratio > low_inlier_limit:
         failures.append(f"low tracking ratio {low_inlier_ratio:.3f} exceeds {low_inlier_limit:.3f}")
     if scale_quality_ratio < scale_quality_limit:
@@ -360,6 +572,22 @@ def summarize_failures(
         "maxFrameJumpFrame": max_jump_frame,
         "maxFrameJumpTimeSeconds": max_jump_time,
         "frameJumpPairCount": jump_pair_count,
+        "frameJumpPairSkippedForCadenceCount": jump_pair_skipped_for_cadence,
+        "nearDuplicateFrameCount": len(duplicate_like_rows),
+        "nearDuplicateFrameRatio": duplicate_like_ratio,
+        "maxNearDuplicateRunFrames": max_duplicate_run,
+        "cadenceHoldFrameCount": len(cadence_hold_rows),
+        "cadenceHoldFrameRatio": cadence_hold_ratio,
+        "maxCadenceHoldRunFrames": max_cadence_hold_run,
+        "maxCumulativeZoomInPercent": max_cumulative_zoom_in,
+        "maxCumulativeZoomRangePercent": max_cumulative_zoom_range,
+        "maxScalePulsePeakToPeakPercent": max_scale_pulse_peak_to_peak,
+        "maxScalePulseDerivativeP95PercentPerFrame": scale_pulse_derivative_p95,
+        "maxScalePulseResidualPercent": max_scale_pulse_residual,
+        "scalePulseFrameCount": len(scale_pulse_rows),
+        "scalePulseFrameRatio": scale_pulse_frame_ratio,
+        "maxScalePulseRunFrames": max_scale_pulse_run,
+        "cumulativeScalePathFrameCount": len(cumulative_zoom_rows),
         "lowTrackingRatio": low_inlier_ratio,
         "scaleQualityRatio": scale_quality_ratio,
         "scaleFrameCount": len(scale_rows),
@@ -371,6 +599,17 @@ def summarize_failures(
             "maxFrameTranslationJumpPixels": jump_vector_limit,
             "maxFrameXJumpPixels": jump_x_limit,
             "maxFrameYJumpPixels": jump_y_limit,
+            "maxNearDuplicateFrameRatio": duplicate_like_ratio_limit,
+            "maxNearDuplicateRunFrames": duplicate_run_limit,
+            "maxCadenceHoldFrameRatio": cadence_hold_ratio_limit,
+            "maxCadenceHoldRunFrames": cadence_hold_run_limit,
+            "maxCumulativeZoomInPercent": cumulative_zoom_in_limit,
+            "maxCumulativeZoomRangePercent": cumulative_zoom_range_limit,
+            "maxScalePulsePeakToPeakPercent": scale_pulse_peak_to_peak_limit,
+            "maxScalePulseDerivativeP95PercentPerFrame": scale_pulse_derivative_p95_limit,
+            "scalePulseRunThresholdPercent": scale_pulse_run_threshold,
+            "maxScalePulseRunFrames": scale_pulse_run_limit,
+            "maxScalePulseFrameRatio": scale_pulse_frame_ratio_limit,
             "maxLowInlierRatio": low_inlier_limit,
             "minScaleQualityRatio": scale_quality_limit,
         },
@@ -407,6 +646,14 @@ def main() -> int:
     min_scale_inlier_ratio = float(quality.get("minScaleInlierRatio", 0.65))
     max_scale_displacement_fraction = float(quality.get("maxScaleDisplacementFraction", 0.05))
     min_duration = float(quality.get("minDurationSeconds", case.get("durationSeconds", 0.0)))
+    duplicate_mean_threshold = float(quality.get("nearDuplicateMeanAbsDiffThreshold", -1.0))
+    duplicate_p95_threshold = float(quality.get("nearDuplicateP95AbsDiffThreshold", float("inf")))
+    cadence_hold_mean_threshold = float(quality.get("cadenceHoldMeanAbsDiffThreshold", -1.0))
+    cadence_hold_p95_threshold = float(quality.get("cadenceHoldP95AbsDiffThreshold", float("inf")))
+    cadence_hold_displacement_limit = float(quality.get("cadenceHoldMaxDisplacementFraction", float("inf")))
+    cadence_hold_scale_limit = float(quality.get("cadenceHoldMaxScalePercent", float("inf")))
+    pts_tolerance_ratio = float(quality.get("ptsIntervalToleranceRatio", 0.20))
+    min_captured_fps_ratio = float(quality.get("minCapturedFpsRatio", 0.0))
 
     output_dir = args.output_dir or Path("/tmp/stabilizer_e2e") / args.video.stem
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -464,7 +711,30 @@ def main() -> int:
         )
 
         if previous_gray is not None and previous_frame_index is not None:
+            diff = cv2.absdiff(previous_gray, content_gray)
+            frame_diff_mean = float(diff.mean())
+            frame_diff_p95 = float(np.percentile(diff, 95))
+            near_duplicate = (
+                duplicate_mean_threshold >= 0.0
+                and frame_diff_mean <= duplicate_mean_threshold
+                and frame_diff_p95 <= duplicate_p95_threshold
+            )
             transform = estimate_transform(previous_gray, content_gray, min_inliers)
+            dx = float(transform.get("dx", 0.0))
+            dy = float(transform.get("dy", 0.0))
+            scale_percent = float(transform.get("scalePercent", 0.0))
+            displacement_fraction = max(
+                abs(dx) / max(1, content_roi[2]),
+                abs(dy) / max(1, content_roi[3]),
+            )
+            cadence_hold = (
+                cadence_hold_mean_threshold >= 0.0
+                and frame_diff_mean <= cadence_hold_mean_threshold
+                and frame_diff_p95 <= cadence_hold_p95_threshold
+                and displacement_fraction <= cadence_hold_displacement_limit
+                and abs(scale_percent) <= cadence_hold_scale_limit
+                and (bool(transform.get("ok")) or near_duplicate)
+            )
             row = {
                 "frame": frame_index,
                 "previousFrame": previous_frame_index,
@@ -474,10 +744,15 @@ def main() -> int:
                 "featureCount": int(transform.get("featureCount", 0)),
                 "trackedCount": int(transform.get("trackedCount", 0)),
                 "inliers": int(transform.get("inliers", 0)),
-                "scalePercent": float(transform.get("scalePercent", 0.0)),
-                "dx": float(transform.get("dx", 0.0)),
-                "dy": float(transform.get("dy", 0.0)),
+                "scalePercent": scale_percent,
+                "dx": dx,
+                "dy": dy,
                 "rotationDegrees": float(transform.get("rotationDegrees", 0.0)),
+                "frameMeanAbsDiff": frame_diff_mean,
+                "frameP95AbsDiff": frame_diff_p95,
+                "nearDuplicateFrame": near_duplicate,
+                "cadenceHoldFrame": cadence_hold,
+                "cadenceHoldDisplacementFraction": displacement_fraction,
             }
             scale_rows.append(row)
 
@@ -524,11 +799,146 @@ def main() -> int:
             and displacement_fraction <= max_scale_displacement_fraction
         )
 
+    cumulative_scale_log = 0.0
+    cumulative_scale_segment = 0
+    previous_zoom_row: dict[str, Any] | None = None
+    for row in scale_rows:
+        row_quality_ok = bool(row.get("scaleQualityOk", row.get("trackingOk")))
+        if not row_quality_ok:
+            row["cumulativeScalePathOk"] = False
+            row["scalePulseDerivativePercentPerFrame"] = 0.0
+            continue
+        is_adjacent_sample = (
+            previous_zoom_row is not None
+            and int(row.get("previousFrame", -1)) == int(previous_zoom_row.get("frame", -2))
+        )
+        if previous_zoom_row is None or not is_adjacent_sample:
+            cumulative_scale_log = 0.0
+            cumulative_scale_segment += 1
+            row["scalePulseDerivativePercentPerFrame"] = 0.0
+        else:
+            frame_scale = max(0.001, 1.0 + float(row.get("scalePercent", 0.0)) / 100.0)
+            cumulative_scale_log += math.log(frame_scale)
+            row["scalePulseDerivativePercentPerFrame"] = 0.0
+        row["cumulativeScalePathOk"] = True
+        row["cumulativeScalePathSegment"] = cumulative_scale_segment
+        row["cumulativeScaleLog"] = cumulative_scale_log
+        row["cumulativeScalePercentRaw"] = (math.exp(cumulative_scale_log) - 1.0) * 100.0
+        previous_zoom_row = row
+
+    baseline_seconds = float(quality.get("cumulativeScaleBaselineSeconds", 0.5))
+    pulse_median_seconds = float(quality.get("scalePulseMedianWindowSeconds", 1.25))
+    pulse_peak_seconds = float(quality.get("scalePulsePeakWindowSeconds", 1.0))
+    pulse_median_window = max(3, int(round(pulse_median_seconds * effective_sample_fps)))
+    if pulse_median_window % 2 == 0:
+        pulse_median_window += 1
+    pulse_peak_window = max(3, int(round(pulse_peak_seconds * effective_sample_fps)))
+    if pulse_peak_window % 2 == 0:
+        pulse_peak_window += 1
+
+    zoom_path_rows = [row for row in scale_rows if bool(row.get("cumulativeScalePathOk"))]
+    rows_by_segment: dict[int, list[dict[str, Any]]] = {}
+    for row in zoom_path_rows:
+        rows_by_segment.setdefault(int(row.get("cumulativeScalePathSegment", 0)), []).append(row)
+    for segment_rows in rows_by_segment.values():
+        segment_start_time = float(segment_rows[0].get("time", 0.0))
+        baseline_logs = [
+            float(row.get("cumulativeScaleLog", 0.0))
+            for row in segment_rows
+            if float(row.get("time", 0.0)) <= segment_start_time + baseline_seconds
+        ]
+        baseline_log = float(np.median(np.asarray(baseline_logs, dtype=np.float64))) if baseline_logs else 0.0
+        previous_residual_row: dict[str, Any] | None = None
+        for row in segment_rows:
+            adjusted_log = float(row.get("cumulativeScaleLog", 0.0)) - baseline_log
+            row["cumulativeScaleBaselineLog"] = baseline_log
+            row["cumulativeScalePercent"] = (math.exp(adjusted_log) - 1.0) * 100.0
+            if previous_residual_row is not None and int(row.get("previousFrame", -1)) == int(previous_residual_row.get("frame", -2)):
+                row["scalePulseDerivativePercentPerFrame"] = (
+                    float(row.get("cumulativeScalePercent", 0.0))
+                    - float(previous_residual_row.get("cumulativeScalePercent", 0.0))
+                )
+            else:
+                row["scalePulseDerivativePercentPerFrame"] = 0.0
+            previous_residual_row = row
+
+    zoom_values = [float(row.get("cumulativeScalePercent", 0.0)) for row in zoom_path_rows]
+    zoom_medians = rolling_median(zoom_values, pulse_median_window)
+    for row, median in zip(zoom_path_rows, zoom_medians):
+        row["cumulativeScaleMedianPercent"] = median
+        row["cumulativeScaleResidualPercent"] = float(row.get("cumulativeScalePercent", 0.0)) - median
+
+    pulse_rows = [row for row in scale_rows if bool(row.get("scaleQualityOk", row.get("trackingOk")))]
+    pulse_values = [float(row.get("scaleResidualPercent", 0.0)) for row in pulse_rows]
+    pulse_medians = rolling_median(pulse_values, pulse_median_window)
+    for row, median in zip(pulse_rows, pulse_medians):
+        row["scalePulseMedianPercent"] = median
+        row["scalePulseResidualPercent"] = float(row.get("scaleResidualPercent", 0.0)) - median
+
+    rows_by_pulse_segment: dict[int, list[dict[str, Any]]] = {}
+    for row in pulse_rows:
+        rows_by_pulse_segment.setdefault(int(row.get("cumulativeScalePathSegment", 0)), []).append(row)
+    for segment_rows in rows_by_segment.values():
+        previous_residual_row: dict[str, Any] | None = None
+        for row in segment_rows:
+            if previous_residual_row is not None and int(row.get("previousFrame", -1)) == int(previous_residual_row.get("frame", -2)):
+                row["scalePulseDerivativePercentPerFrame"] = (
+                    float(row.get("scalePulseResidualPercent", 0.0))
+                    - float(previous_residual_row.get("scalePulseResidualPercent", 0.0))
+                )
+            else:
+                row["scalePulseDerivativePercentPerFrame"] = 0.0
+            previous_residual_row = row
+
+    for segment_rows in rows_by_pulse_segment.values():
+        previous_residual_row = None
+        for row in segment_rows:
+            if previous_residual_row is not None and int(row.get("previousFrame", -1)) == int(previous_residual_row.get("frame", -2)):
+                row["scalePulseDerivativePercentPerFrame"] = (
+                    float(row.get("scalePulseResidualPercent", 0.0))
+                    - float(previous_residual_row.get("scalePulseResidualPercent", 0.0))
+                )
+            else:
+                row["scalePulseDerivativePercentPerFrame"] = 0.0
+            previous_residual_row = row
+
+    pulse_residuals = [float(row.get("scalePulseResidualPercent", 0.0)) for row in pulse_rows]
+    pulse_peak_to_peak = rolling_peak_to_peak(pulse_residuals, pulse_peak_window)
+    for row, peak_to_peak in zip(pulse_rows, pulse_peak_to_peak):
+        row["scalePulsePeakToPeakPercent"] = peak_to_peak
+
     cutoff_end = max(0.0, duration - ignore_end) if duration > 0 else float("inf")
     filtered_edges = [row for row in edge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     filtered_scales = [row for row in scale_rows if ignore_start <= float(row["time"]) <= cutoff_end]
 
     passed, failures, summary = summarize_failures(filtered_scales, filtered_edges, quality)
+    captured_fps_ratio = fps / source_frame_rate if source_frame_rate > 0.0 else 1.0
+    pts_metrics = probe_pts_interval_metrics(args.video, pts_tolerance_ratio)
+    max_pts_irregular_ratio = float(quality.get("maxPtsIntervalIrregularRatio", float("inf")))
+    max_pts_interval_seconds = float(quality.get("maxPtsIntervalSeconds", float("inf")))
+    if math.isfinite(max_pts_irregular_ratio):
+        if not bool(pts_metrics.get("available")):
+            failures.append(f"PTS interval metrics unavailable: {pts_metrics.get('reason', 'unknown')}")
+            passed = False
+        elif float(pts_metrics.get("ptsIntervalIrregularRatio", 0.0)) > max_pts_irregular_ratio:
+            failures.append(
+                "PTS interval irregular ratio "
+                f"{float(pts_metrics.get('ptsIntervalIrregularRatio', 0.0)):.3f} exceeds {max_pts_irregular_ratio:.3f}"
+            )
+            passed = False
+    if math.isfinite(max_pts_interval_seconds):
+        if not bool(pts_metrics.get("available")):
+            failures.append(f"PTS interval metrics unavailable: {pts_metrics.get('reason', 'unknown')}")
+            passed = False
+        elif float(pts_metrics.get("maxPtsIntervalSeconds", 0.0)) > max_pts_interval_seconds:
+            failures.append(
+                "max PTS interval "
+                f"{float(pts_metrics.get('maxPtsIntervalSeconds', 0.0)):.6f}s exceeds {max_pts_interval_seconds:.6f}s"
+            )
+            passed = False
+    if captured_fps_ratio + 1e-9 < min_captured_fps_ratio:
+        failures.append(f"captured fps ratio {captured_fps_ratio:.3f} below {min_captured_fps_ratio:.3f}")
+        passed = False
     if min_duration > 0.0 and duration + 1e-6 < min_duration:
         failures.append(f"recording duration {duration:.3f}s is shorter than required {min_duration:.3f}s")
         passed = False
@@ -543,6 +953,8 @@ def main() -> int:
             "sampleFps": effective_sample_fps,
             "targetSampleFps": sample_fps,
             "sourceFrameRate": source_frame_rate,
+            "capturedFpsRatio": captured_fps_ratio,
+            "minCapturedFpsRatio": min_captured_fps_ratio,
             "sampleEveryCapturedFrame": sample_every_captured_frame,
             "viewerRoi": {"x": viewer_roi[0], "y": viewer_roi[1], "w": viewer_roi[2], "h": viewer_roi[3]},
             "contentRoi": {"x": content_roi[0], "y": content_roi[1], "w": content_roi[2], "h": content_roi[3]},
@@ -551,6 +963,18 @@ def main() -> int:
             "minScaleInlierRatio": min_scale_inlier_ratio,
             "maxScaleDisplacementFraction": max_scale_displacement_fraction,
             "minDurationSeconds": min_duration,
+            "nearDuplicateMeanAbsDiffThreshold": duplicate_mean_threshold,
+            "nearDuplicateP95AbsDiffThreshold": duplicate_p95_threshold,
+            "cadenceHoldMeanAbsDiffThreshold": cadence_hold_mean_threshold,
+            "cadenceHoldP95AbsDiffThreshold": cadence_hold_p95_threshold,
+            "cadenceHoldMaxDisplacementFraction": cadence_hold_displacement_limit,
+            "cadenceHoldMaxScalePercent": cadence_hold_scale_limit,
+            "cumulativeScaleBaselineSeconds": baseline_seconds,
+            "scalePulseMedianWindowSeconds": pulse_median_seconds,
+            "scalePulsePeakWindowSeconds": pulse_peak_seconds,
+            "pts": pts_metrics,
+            "maxPtsIntervalIrregularRatio": max_pts_irregular_ratio,
+            "maxPtsIntervalSeconds": max_pts_interval_seconds,
             "pass": passed,
             "failures": failures,
         }
@@ -570,6 +994,19 @@ def main() -> int:
         key=lambda row: float(row.get("frameJumpPixels", 0.0)),
         reverse=True,
     )[:6]
+    duplicate_spikes = sorted(
+        [row for row in filtered_scales if bool(row.get("nearDuplicateFrame"))],
+        key=lambda row: float(row.get("frameMeanAbsDiff", 0.0)),
+    )[:6]
+    cadence_hold_spikes = sorted(
+        [row for row in filtered_scales if bool(row.get("cadenceHoldFrame"))],
+        key=lambda row: float(row.get("frameMeanAbsDiff", 0.0)),
+    )[:6]
+    pulse_spikes = sorted(
+        [row for row in filtered_scales if bool(row.get("cumulativeScalePathOk"))],
+        key=lambda row: float(row.get("scalePulsePeakToPeakPercent", 0.0)),
+        reverse=True,
+    )[:6]
     edge_spikes = sorted(
         filtered_edges,
         key=lambda row: float(row.get("edgeResidualPx", 0.0)),
@@ -580,6 +1017,17 @@ def main() -> int:
         spike_frames.append((int(row["frame"]), f"scale {float(row['scaleResidualPercent']):+.2f}% t={float(row['time']):.2f}s"))
     for row in jump_spikes:
         spike_frames.append((int(row["frame"]), f"jump {float(row['frameJumpX']):+.1f},{float(row['frameJumpY']):+.1f} t={float(row['time']):.2f}s"))
+    for row in duplicate_spikes:
+        spike_frames.append((int(row["frame"]), f"dup diff {float(row['frameMeanAbsDiff']):.2f} t={float(row['time']):.2f}s"))
+    for row in cadence_hold_spikes:
+        spike_frames.append((int(row["frame"]), f"hold diff {float(row['frameMeanAbsDiff']):.2f} t={float(row['time']):.2f}s"))
+    for row in pulse_spikes:
+        spike_frames.append(
+            (
+                int(row["frame"]),
+                f"pulse {float(row['scalePulsePeakToPeakPercent']):.2f}% t={float(row['time']):.2f}s",
+            )
+        )
     for row in edge_spikes:
         spike_frames.append((int(row["frame"]), f"edge {float(row['edgeResidualPx']):.1f}px t={float(row['time']):.2f}s"))
     write_contact_sheet(args.video, output_dir / "spikes_contact_sheet.png", viewer_roi, spike_frames)
@@ -606,6 +1054,45 @@ def main() -> int:
         f"{summary['lowTrackingRatio']:.3f} "
         f"(limit {summary['thresholds']['maxLowInlierRatio']:.3f})"
     )
+    print(
+        "  captured fps: "
+        f"{summary['fps']:.2f} "
+        f"(ratio {summary['capturedFpsRatio']:.3f}, min {summary['minCapturedFpsRatio']:.3f})"
+    )
+    print(
+        "  near-duplicate frames: "
+        f"{summary['nearDuplicateFrameRatio']:.3f} "
+        f"(run {summary['maxNearDuplicateRunFrames']}, limit {summary['thresholds']['maxNearDuplicateFrameRatio']:.3f})"
+    )
+    print(
+        "  cadence-hold frames: "
+        f"{summary['cadenceHoldFrameRatio']:.3f} "
+        f"(run {summary['maxCadenceHoldRunFrames']}, skipped jump pairs {summary['frameJumpPairSkippedForCadenceCount']})"
+    )
+    print(
+        "  cumulative zoom: "
+        f"in {summary['maxCumulativeZoomInPercent']:.3f}% "
+        f"(limit {summary['thresholds']['maxCumulativeZoomInPercent']:.3f}%), "
+        f"range {summary['maxCumulativeZoomRangePercent']:.3f}% "
+        f"(limit {summary['thresholds']['maxCumulativeZoomRangePercent']:.3f}%)"
+    )
+    print(
+        "  scale pulse: "
+        f"p2p {summary['maxScalePulsePeakToPeakPercent']:.3f}% "
+        f"(limit {summary['thresholds']['maxScalePulsePeakToPeakPercent']:.3f}%), "
+        f"deriv p95 {summary['maxScalePulseDerivativeP95PercentPerFrame']:.3f}%/frame "
+        f"(limit {summary['thresholds']['maxScalePulseDerivativeP95PercentPerFrame']:.3f}), "
+        f"run {summary['maxScalePulseRunFrames']}"
+    )
+    if bool(summary["pts"].get("available")):
+        print(
+            "  PTS intervals: "
+            f"median {float(summary['pts']['medianPtsIntervalSeconds']):.6f}s, "
+            f"max {float(summary['pts']['maxPtsIntervalSeconds']):.6f}s, "
+            f"irregular {float(summary['pts']['ptsIntervalIrregularRatio']):.3f}"
+        )
+    else:
+        print(f"  PTS intervals: unavailable ({summary['pts'].get('reason', 'unknown')})")
     print(f"  diagnostics: {output_dir}")
     for item in failures:
         print(f"  failure: {item}")

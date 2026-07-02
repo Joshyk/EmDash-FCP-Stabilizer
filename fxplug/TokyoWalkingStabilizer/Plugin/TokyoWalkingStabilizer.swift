@@ -47,7 +47,8 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.70"
+private let tokyoWalkingStabilizerVersion = "1.0.100"
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_095_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
@@ -215,6 +216,9 @@ private struct AutoCropZoomDemandSample {
     let seconds: Double
     let scale: Float
     let positionPixels: vector_float2
+    let neutralScale: Float
+    let neutralPositionPixels: vector_float2
+    let transform: StabilizerAutoTransform
 }
 
 private struct AutoCropZoomKeypoint {
@@ -585,6 +589,7 @@ private struct AutoCropPlaybackScalePlanCacheKey: Hashable {
 private struct StabilizerAutoTransformCacheKey: Hashable {
     let cacheIdentity: String?
     let analysisRevision: UInt64
+    let playbackMode: Bool
     let renderTimeValue: Int64
     let renderTimeScale: Int32
     let renderTimeEpoch: Int64
@@ -605,6 +610,31 @@ private struct StabilizerAutoTransformCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+}
+
+private struct PlaybackContinuitySignature: Equatable {
+    let cacheIdentity: String?
+    let analysisRevision: UInt64
+    let outputWidth: Int32
+    let outputHeight: Int32
+    let analysisFrameCount: Int
+    let analysisFirstTime: UInt64
+    let analysisLastTime: UInt64
+    let panSmoothSeconds: UInt64
+    let microJitterX: UInt64
+    let microJitterY: UInt64
+    let microJitterRotation: UInt64
+    let strideWobbleX: UInt64
+    let strideWobbleY: UInt64
+    let strideWobbleRotation: UInt64
+    let panStabilizationStrength: UInt64
+    let farFieldWarp: UInt64
+}
+
+private struct PlaybackContinuityState {
+    let signature: PlaybackContinuitySignature
+    let renderSeconds: Double
+    let transform: StabilizerAutoTransform
 }
 
 private struct RenderAnalysisDecisionSignature: Equatable {
@@ -962,11 +992,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static let autoCropFramingCacheLock = NSLock()
     private static var autoCropFramingCache: [AutoCropFramingCacheKey: AutoCropFraming] = [:]
     private static var autoCropFramingCacheOrder: [AutoCropFramingCacheKey] = []
-    private static let autoCropFramingCacheLimit = 2048
+    private static let autoCropFramingCacheLimit = 16384
     private static let autoCropScaleDemandCacheLock = NSLock()
     private static var autoCropScaleDemandCache: [AutoCropScaleDemandCacheKey: AutoCropScaleDemand] = [:]
     private static var autoCropScaleDemandCacheOrder: [AutoCropScaleDemandCacheKey] = []
-    private static let autoCropScaleDemandCacheLimit = 1024
+    private static let autoCropScaleDemandCacheLimit = 16384
     private static let autoCropZoomPlanCacheLock = NSLock()
     private static var autoCropZoomPlanCache: [AutoCropZoomPlanCacheKey: AutoCropZoomPlan] = [:]
     private static var autoCropZoomPlanCacheOrder: [AutoCropZoomPlanCacheKey] = []
@@ -978,7 +1008,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static let autoTransformCacheLock = NSLock()
     private static var autoTransformCache: [StabilizerAutoTransformCacheKey: StabilizerAutoTransform] = [:]
     private static var autoTransformCacheOrder: [StabilizerAutoTransformCacheKey] = []
-    private static let autoTransformCacheLimit = 4096
+    private static let autoTransformCacheLimit = 32768
+    private static let playbackContinuityMaximumStepSeconds = 0.50
+    private static let playbackContinuityPixelRate: Float = 52.0
+    private static let playbackContinuityMaximumPixelStep: Float = 1.05
+    private static let playbackContinuityMinimumPixelStep: Float = 0.32
+    private static let playbackContinuityRotationRate: Float = 2.4
+    private static let playbackContinuityMaximumRotationStep: Float = 0.040
+    private static let playbackContinuityMinimumRotationStep: Float = 0.012
+    private static let playbackContinuityWarpRate: Float = 0.040
+    private static let playbackContinuityMaximumWarpStep: Float = 0.00070
+    private static let playbackContinuityMinimumWarpStep: Float = 0.00010
 
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
@@ -1001,6 +1041,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
     private var persistentCacheMonitor: DispatchSourceTimer?
+    private let playbackContinuityLock = NSLock()
+    private var playbackContinuityState: PlaybackContinuityState?
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
     }
@@ -1806,6 +1848,42 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return 0
     }
 
+    private static func normalizedAutoTransformRenderTime(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime
+    ) -> CMTime {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        let frames = preparedAnalysis.frames
+        guard renderSeconds.isFinite,
+              frames.count > 1
+        else {
+            return renderTime
+        }
+        if renderSeconds <= frames[0].time {
+            return CMTimeMakeWithSeconds(frames[0].time, preferredTimescale: 60000)
+        }
+        let lastIndex = frames.count - 1
+        if renderSeconds >= frames[lastIndex].time {
+            return CMTimeMakeWithSeconds(frames[lastIndex].time, preferredTimescale: 60000)
+        }
+
+        var low = 0
+        var high = lastIndex
+        while high - low > 1 {
+            let mid = (low + high) / 2
+            if frames[mid].time <= renderSeconds {
+                low = mid
+            } else {
+                high = mid
+            }
+        }
+
+        let lowerDistance = abs(renderSeconds - frames[low].time)
+        let upperDistance = abs(frames[high].time - renderSeconds)
+        let frameSeconds = lowerDistance <= upperDistance ? frames[low].time : frames[high].time
+        return CMTimeMakeWithSeconds(frameSeconds, preferredTimescale: 60000)
+    }
+
     private static func cachedAutoTransform(
         preparedAnalysis: StabilizerPreparedAnalysis,
         renderTime: CMTime,
@@ -1813,7 +1891,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
         analysisRevision: UInt64,
-        cacheIdentity: String?
+        cacheIdentity: String?,
+        playbackMode: Bool = false
     ) -> StabilizerAutoTransform {
         let firstFrame = preparedAnalysis.frames.first
         let qualityModelKey: Int
@@ -1823,12 +1902,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         case .eventAnalyzerCache:
             qualityModelKey = 1
         }
+        let cacheRenderTime = normalizedAutoTransformRenderTime(
+            preparedAnalysis: preparedAnalysis,
+            renderTime: renderTime
+        )
         let key = StabilizerAutoTransformCacheKey(
             cacheIdentity: cacheIdentity,
             analysisRevision: analysisRevisionCacheKey(analysisRevision, cacheIdentity: cacheIdentity),
-            renderTimeValue: renderTime.value,
-            renderTimeScale: renderTime.timescale,
-            renderTimeEpoch: renderTime.epoch,
+            playbackMode: playbackMode,
+            renderTimeValue: cacheRenderTime.value,
+            renderTimeScale: cacheRenderTime.timescale,
+            renderTimeEpoch: cacheRenderTime.epoch,
             outputWidth: Int32(clamping: Int(outputSize.x.rounded())),
             outputHeight: Int32(clamping: Int(outputSize.y.rounded())),
             analysisFrameCount: preparedAnalysis.frames.count,
@@ -1855,13 +1939,21 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         autoTransformCacheLock.unlock()
 
-        let transform = AutoStabilizationEstimator.estimate(
-            preparedAnalysis: preparedAnalysis,
-            renderTime: renderTime,
-            outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths
-        )
+        let transform = playbackMode
+            ? AutoStabilizationEstimator.playbackEstimate(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: cacheRenderTime,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths
+            )
+            : AutoStabilizationEstimator.estimate(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: cacheRenderTime,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths
+            )
 
         autoTransformCacheLock.lock()
         defer { autoTransformCacheLock.unlock() }
@@ -1875,6 +1967,212 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransformCache.removeValue(forKey: oldestKey)
         }
         return transform
+    }
+
+    private static func playbackContinuitySignature(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> PlaybackContinuitySignature {
+        PlaybackContinuitySignature(
+            cacheIdentity: cacheIdentity,
+            analysisRevision: analysisRevisionCacheKey(analysisRevision, cacheIdentity: cacheIdentity),
+            outputWidth: Int32(clamping: Int(outputSize.x.rounded())),
+            outputHeight: Int32(clamping: Int(outputSize.y.rounded())),
+            analysisFrameCount: preparedAnalysis.frames.count,
+            analysisFirstTime: preparedAnalysis.frames.first?.time.bitPattern ?? 0,
+            analysisLastTime: preparedAnalysis.frames.last?.time.bitPattern ?? 0,
+            panSmoothSeconds: panSmoothSeconds.bitPattern,
+            microJitterX: strengths.microJitterX.bitPattern,
+            microJitterY: strengths.microJitterY.bitPattern,
+            microJitterRotation: strengths.microJitterRotation.bitPattern,
+            strideWobbleX: strengths.strideWobbleX.bitPattern,
+            strideWobbleY: strengths.strideWobbleY.bitPattern,
+            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+            farFieldWarp: strengths.farFieldWarp.bitPattern
+        )
+    }
+
+    private static func playbackContinuityStepLimit(
+        deltaSeconds: Double,
+        rate: Float,
+        minimum: Float,
+        maximum: Float
+    ) -> Float {
+        guard deltaSeconds.isFinite, deltaSeconds > 0.0 else {
+            return minimum
+        }
+        return max(minimum, min(maximum, Float(deltaSeconds) * rate))
+    }
+
+    private static func continuityLimitedScalar(_ current: Float, previous: Float, limit: Float) -> Float {
+        guard current.isFinite, previous.isFinite, limit.isFinite, limit >= 0.0 else {
+            return current
+        }
+        let delta = current - previous
+        return previous + max(-limit, min(limit, delta))
+    }
+
+    private static func continuityLimitedVector(_ current: vector_float2, previous: vector_float2, limit: Float) -> vector_float2 {
+        vector_float2(
+            continuityLimitedScalar(current.x, previous: previous.x, limit: limit),
+            continuityLimitedScalar(current.y, previous: previous.y, limit: limit)
+        )
+    }
+
+    private func continuityLimitedPlaybackTransform(
+        _ rawTransform: StabilizerAutoTransform,
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> StabilizerAutoTransform {
+        let signature = Self.playbackContinuitySignature(
+            preparedAnalysis: preparedAnalysis,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
+
+        playbackContinuityLock.lock()
+        defer { playbackContinuityLock.unlock() }
+
+        guard let previousState = playbackContinuityState,
+              previousState.signature == signature
+        else {
+            playbackContinuityState = PlaybackContinuityState(
+                signature: signature,
+                renderSeconds: renderSeconds,
+                transform: rawTransform
+            )
+            return rawTransform
+        }
+
+        let deltaSeconds = renderSeconds - previousState.renderSeconds
+        if deltaSeconds <= 1e-6 {
+            if abs(deltaSeconds) <= Self.playbackContinuityMaximumStepSeconds {
+                return previousState.transform
+            }
+            playbackContinuityState = PlaybackContinuityState(
+                signature: signature,
+                renderSeconds: renderSeconds,
+                transform: rawTransform
+            )
+            return rawTransform
+        }
+        guard deltaSeconds <= Self.playbackContinuityMaximumStepSeconds else {
+            playbackContinuityState = PlaybackContinuityState(
+                signature: signature,
+                renderSeconds: renderSeconds,
+                transform: rawTransform
+            )
+            return rawTransform
+        }
+
+        let pixelLimit = Self.playbackContinuityStepLimit(
+            deltaSeconds: deltaSeconds,
+            rate: Self.playbackContinuityPixelRate,
+            minimum: Self.playbackContinuityMinimumPixelStep,
+            maximum: Self.playbackContinuityMaximumPixelStep
+        )
+        let rotationLimit = Self.playbackContinuityStepLimit(
+            deltaSeconds: deltaSeconds,
+            rate: Self.playbackContinuityRotationRate,
+            minimum: Self.playbackContinuityMinimumRotationStep,
+            maximum: Self.playbackContinuityMaximumRotationStep
+        )
+        let warpLimit = Self.playbackContinuityStepLimit(
+            deltaSeconds: deltaSeconds,
+            rate: Self.playbackContinuityWarpRate,
+            minimum: Self.playbackContinuityMinimumWarpStep,
+            maximum: Self.playbackContinuityMaximumWarpStep
+        )
+        let previous = previousState.transform
+        var limited = rawTransform
+
+        limited.macroPixelOffset = Self.continuityLimitedVector(
+            rawTransform.macroPixelOffset,
+            previous: previous.macroPixelOffset,
+            limit: pixelLimit * 0.85
+        )
+        limited.microPixelOffset = Self.continuityLimitedVector(
+            rawTransform.microPixelOffset,
+            previous: previous.microPixelOffset,
+            limit: pixelLimit * 0.55
+        )
+        limited.strideWobblePixelOffset = Self.continuityLimitedVector(
+            rawTransform.strideWobblePixelOffset,
+            previous: previous.strideWobblePixelOffset,
+            limit: pixelLimit * 0.65
+        )
+        let componentPixelOffset = limited.macroPixelOffset
+            + limited.microPixelOffset
+            + limited.strideWobblePixelOffset
+        let finalPixelOffset = Self.continuityLimitedVector(
+            componentPixelOffset,
+            previous: previous.pixelOffset,
+            limit: pixelLimit
+        )
+        limited.macroPixelOffset += finalPixelOffset - componentPixelOffset
+        limited.pixelOffset = finalPixelOffset
+
+        limited.footstepJitterRotationDegrees = Self.continuityLimitedScalar(
+            rawTransform.footstepJitterRotationDegrees,
+            previous: previous.footstepJitterRotationDegrees,
+            limit: rotationLimit * 0.60
+        )
+        limited.strideWobbleRotationDegrees = Self.continuityLimitedScalar(
+            rawTransform.strideWobbleRotationDegrees,
+            previous: previous.strideWobbleRotationDegrees,
+            limit: rotationLimit * 0.80
+        )
+        let componentRotation = limited.footstepJitterRotationDegrees + limited.strideWobbleRotationDegrees
+        let finalRotation = Self.continuityLimitedScalar(
+            componentRotation,
+            previous: previous.rotationDegrees,
+            limit: rotationLimit
+        )
+        limited.strideWobbleRotationDegrees += finalRotation - componentRotation
+        limited.rotationDegrees = finalRotation
+
+        limited.yawPitchProxy = Self.continuityLimitedVector(
+            rawTransform.yawPitchProxy,
+            previous: previous.yawPitchProxy,
+            limit: warpLimit
+        )
+        limited.shear = Self.continuityLimitedVector(
+            rawTransform.shear,
+            previous: previous.shear,
+            limit: warpLimit
+        )
+        limited.perspective = Self.continuityLimitedVector(
+            rawTransform.perspective,
+            previous: previous.perspective,
+            limit: warpLimit
+        )
+        limited.rawPixelOffset = rawTransform.pixelOffset
+        limited.rawRotationDegrees = rawTransform.rotationDegrees
+        limited.temporalSmoothingPixelDelta = limited.pixelOffset - rawTransform.pixelOffset
+        limited.temporalSmoothingRotationDelta = limited.rotationDegrees - rawTransform.rotationDegrees
+        limited.temporalSmoothingSampleCount = max(rawTransform.temporalSmoothingSampleCount, 2)
+        limited.temporalSmoothingWindowSeconds = max(rawTransform.temporalSmoothingWindowSeconds, Float(deltaSeconds))
+        limited.limitedFootstepCorrection = limited.microPixelOffset
+
+        playbackContinuityState = PlaybackContinuityState(
+            signature: signature,
+            renderSeconds: renderSeconds,
+            transform: limited
+        )
+        return limited
     }
 
     private static func cachedAutoCropFraming(
@@ -1894,6 +2192,28 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         cacheIdentity: String?
     ) -> AutoCropFraming {
         let renderSeconds = CMTimeGetSeconds(renderTime)
+        if samplingProfile == .playback {
+            let playbackRenderTime = normalizedAutoTransformRenderTime(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: renderTime
+            )
+            let playbackSeconds = CMTimeGetSeconds(playbackRenderTime)
+            return autoCropPlaybackFraming(
+                preparedAnalysis: preparedAnalysis,
+                renderSeconds: playbackSeconds,
+                currentTransform: currentTransform,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                masterStrength: masterStrength,
+                transitionDuration: transitionDuration,
+                leadTime: leadTime,
+                holdTime: holdTime,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            )
+        }
         let framingSeconds = renderSeconds.isFinite
             ? autoCropSampleTime(renderSeconds, samplingProfile: samplingProfile)
             : renderSeconds
@@ -2038,101 +2358,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             var finalScale = autoCropKeypointScale(
                 protectedScale: visualPlaybackScale
             )
-            let plannedPositionPixels = autoCropPlaybackPositionPlanSample(
-                playbackScalePlan,
-                at: renderSeconds,
-                fallback: vector_float2(0.0, 0.0)
-            )
-            var finalPositionPixels = plannedPositionPixels
+            let finalPositionPixels = vector_float2(0.0, 0.0)
             if !autoCropPosition(
                 finalPositionPixels,
                 fitsWithinScale: finalScale,
                 context: context,
                 samplingProfile: samplingProfile
             ) {
-                let scaleDemand = cachedAutoCropScaleDemand(
-                    preparedAnalysis: preparedAnalysis,
-                    centerSeconds: renderSeconds,
-                    centerTransform: currentTransform,
-                    outputSize: outputSize,
-                    panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths,
-                    masterStrength: masterStrength,
-                    transitionDurationSeconds: transitionDurationSeconds,
-                    leadTimeSeconds: leadTimeSeconds,
-                    holdTimeSeconds: holdTimeSeconds,
-                    samplingProfile: samplingProfile,
-                    analysisRevision: analysisRevision,
-                    cacheIdentity: cacheIdentity
-                )
-                finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
-                    stablePositionPixels: plannedPositionPixels,
-                    clampPositionPixels: scaleDemand.currentPositionPixels,
+                let centeredFrameScale = requiredAutoCropScale(
                     context: context,
-                    scale: finalScale,
-                    samplingProfile: samplingProfile
-                )
-            }
-            if !autoCropPosition(
-                finalPositionPixels,
-                fitsWithinScale: finalScale,
-                context: context,
-                samplingProfile: samplingProfile
-            ) {
-                let scaleDemand = cachedAutoCropScaleDemand(
-                    preparedAnalysis: preparedAnalysis,
-                    centerSeconds: renderSeconds,
-                    centerTransform: currentTransform,
-                    outputSize: outputSize,
-                    panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths,
-                    masterStrength: masterStrength,
-                    transitionDurationSeconds: transitionDurationSeconds,
-                    leadTimeSeconds: leadTimeSeconds,
-                    holdTimeSeconds: holdTimeSeconds,
-                    samplingProfile: samplingProfile,
-                    analysisRevision: analysisRevision,
-                    cacheIdentity: cacheIdentity
-                )
-                let neutralFrameScale = requiredAutoCropScale(
-                    context: context,
-                    cropPositionPixels: scaleDemand.neutralPositionPixels,
+                    cropPositionPixels: finalPositionPixels,
                     sampleSteps: samplingProfile.scaleSearchSampleSteps,
                     iterations: samplingProfile.scaleSearchIterations
                 )
-                let neutralFloorScale = autoCropPlaybackMinimumClippedScale(neutralFrameScale)
-                let currentFrameScale = requiredAutoCropScale(
-                    context: context,
-                    cropPositionPixels: scaleDemand.currentPositionPixels,
-                    sampleSteps: samplingProfile.scaleSearchSampleSteps,
-                    iterations: samplingProfile.scaleSearchIterations
-                )
-                let currentFloorScale = autoCropPlaybackMinimumClippedScale(currentFrameScale)
-                let useCurrentClamp = currentFloorScale <= neutralFloorScale + stabilizerAutoCropKeypointCoverageToleranceDelta
-                let repairClampPositionPixels = useCurrentClamp
-                    ? scaleDemand.currentPositionPixels
-                    : scaleDemand.neutralPositionPixels
-                let repairScale = max(
-                    finalScale,
-                    useCurrentClamp ? currentFloorScale : neutralFloorScale
-                )
-                let repairedPositionPixels = autoCropStableScaleBudgetedPositionPixels(
-                    stablePositionPixels: plannedPositionPixels,
-                    clampPositionPixels: repairClampPositionPixels,
-                    context: context,
-                    scale: repairScale,
-                    samplingProfile: samplingProfile
-                )
-                let repairPositionFits = autoCropPosition(
-                    repairedPositionPixels,
-                    fitsWithinScale: repairScale,
-                    context: context,
-                    samplingProfile: samplingProfile
-                )
-                if repairPositionFits {
-                    finalScale = repairScale
-                    finalPositionPixels = repairedPositionPixels
-                }
+                let centeredFloorScale = autoCropPlaybackMinimumClippedScale(centeredFrameScale)
+                let repairScale = max(finalScale, centeredFloorScale)
+                finalScale = repairScale
                 let coverageRepaired = autoCropPosition(
                     finalPositionPixels,
                     fitsWithinScale: finalScale,
@@ -2140,7 +2381,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     samplingProfile: samplingProfile
                 )
                 os_log(
-                    "Auto Crop playback coverage repair | render %.3f scale %.4f repairedScale %.4f planScale %.4f visualScale %.4f neutral %.4f neutralFloor %.4f current %.4f currentFloor %.4f clamp %{public}@ repaired %{public}@ planSamples %d peak %.3f peakScale %.4f",
+                    "Auto Crop playback centered coverage repair | render %.3f scale %.4f repairedScale %.4f planScale %.4f visualScale %.4f centered %.4f centeredFloor %.4f repaired %{public}@ planSamples %d peak %.3f peakScale %.4f",
                     log: stabilizerHostAnalysisLog,
                     type: coverageRepaired ? .default : .error,
                     renderSeconds,
@@ -2148,11 +2389,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     repairScale,
                     playbackScale,
                     visualPlaybackScale,
-                    neutralFrameScale,
-                    neutralFloorScale,
-                    currentFrameScale,
-                    currentFloorScale,
-                    useCurrentClamp ? "current" : "neutral",
+                    centeredFrameScale,
+                    centeredFloorScale,
                     coverageRepaired ? "yes" : "no",
                     playbackScalePlan.sampleCount,
                     playbackScalePlan.peakSeconds ?? -1.0,
@@ -2557,11 +2795,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return .identity
         }
 
+        let playbackSampleSeconds = autoCropPlaybackScalePlanSampleSeconds(
+            preparedAnalysis: preparedAnalysis,
+            firstTime: firstTime,
+            lastTime: lastTime
+        )
+        let planStepSeconds = autoCropPlaybackScalePlanStepSeconds(samples: playbackSampleSeconds)
         let samples = autoCropZoomDemandSamples(
             preparedAnalysis: preparedAnalysis,
-            startSeconds: firstTime,
-            endSeconds: lastTime,
-            stepSeconds: stabilizerAutoCropPlaybackScalePlanStepSeconds,
+            sampleSeconds: playbackSampleSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
@@ -2625,7 +2867,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         let capLeadSeconds = min(leadSeconds, stabilizerAutoCropPlaybackCapLeadSeconds)
-        let capHoldSeconds = min(max(holdSeconds, stabilizerAutoCropPlaybackScalePlanStepSeconds), stabilizerAutoCropPlaybackCapHoldSeconds)
+        let capHoldSeconds = min(max(holdSeconds, planStepSeconds), stabilizerAutoCropPlaybackCapHoldSeconds)
         let capReleaseSeconds = min(releaseSeconds, stabilizerAutoCropPlaybackCapReleaseSeconds)
         let capKeypoints = protectedDemandSamples.map { demandSample in
             AutoCropZoomKeypoint(
@@ -2730,14 +2972,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let repairedPlan = autoCropPlaybackCoverageRepairedScaleSamples(
             envelopeSamples,
             demandSamples: samples,
-            preparedAnalysis: preparedAnalysis,
+            positionSamples: positionSamples,
             outputSize: outputSize,
-            panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths,
             masterStrength: masterStrength,
-            samplingProfile: samplingProfile,
-            analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity
+            samplingProfile: samplingProfile
         )
         let plannedSamples = autoCropPlaybackEnvelopeSamples(repairedPlan.samples)
         let scaleBounds = plannedSamples.reduce(
@@ -2758,7 +2996,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             protectedDemandSamples.count,
             minimumClippedDemandSampleCount,
             repairedPlan.repairCount,
-            stabilizerAutoCropPlaybackScalePlanStepSeconds,
+            planStepSeconds,
             Float(1.0) + stabilizerAutoCropPlaybackMinimumClipScaleDelta,
             stabilizerAutoCropPlaybackEnvelopeRadiusSeconds,
             peakSeconds ?? -1.0,
@@ -2821,6 +3059,69 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return max(minimumClipScale, safeScale)
     }
 
+    private static func autoCropPlaybackScalePlanSampleSeconds(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        firstTime: Double,
+        lastTime: Double
+    ) -> [Double] {
+        var sampleSeconds: [Double] = []
+        sampleSeconds.reserveCapacity(preparedAnalysis.frames.count)
+        var lastSample: Double?
+        for frame in preparedAnalysis.frames {
+            let seconds = frame.time
+            guard seconds.isFinite,
+                  seconds >= firstTime - 1e-9,
+                  seconds <= lastTime + 1e-9
+            else {
+                continue
+            }
+            if let previous = lastSample,
+               abs(seconds - previous) <= 1e-9
+            {
+                continue
+            }
+            sampleSeconds.append(seconds)
+            lastSample = seconds
+        }
+        if sampleSeconds.isEmpty {
+            return [firstTime, lastTime].filter { $0.isFinite }
+        }
+        if let firstSample = sampleSeconds.first,
+           abs(firstSample - firstTime) > 1e-6,
+           firstTime.isFinite
+        {
+            sampleSeconds.insert(firstTime, at: 0)
+        }
+        if let lastSample = sampleSeconds.last,
+           abs(lastSample - lastTime) > 1e-6,
+           lastTime.isFinite
+        {
+            sampleSeconds.append(lastTime)
+        }
+        return sampleSeconds
+    }
+
+    private static func autoCropPlaybackScalePlanStepSeconds(samples: [Double]) -> Double {
+        guard samples.count > 1 else {
+            return stabilizerAutoCropPlaybackScalePlanStepSeconds
+        }
+        var deltas: [Double] = []
+        deltas.reserveCapacity(samples.count - 1)
+        var previous = samples[0]
+        for seconds in samples.dropFirst() {
+            let delta = seconds - previous
+            if delta.isFinite, delta > 1e-6 {
+                deltas.append(delta)
+            }
+            previous = seconds
+        }
+        guard !deltas.isEmpty else {
+            return stabilizerAutoCropPlaybackScalePlanStepSeconds
+        }
+        deltas.sort()
+        return max(1e-6, deltas[deltas.count / 2])
+    }
+
     private static func autoCropPlaybackEnvelopeSamples(
         _ samples: [AutoCropPlaybackScaleSample]
     ) -> [AutoCropPlaybackScaleSample] {
@@ -2828,45 +3129,57 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return samples
         }
 
-        let radiusSampleCount = max(
-            1,
-            Int(ceil(stabilizerAutoCropPlaybackEnvelopeRadiusSeconds / stabilizerAutoCropPlaybackScalePlanStepSeconds))
-        )
-
-        return samples.indices.map { index in
-            let lowerIndex = max(samples.startIndex, index - radiusSampleCount)
-            let upperIndex = min(samples.index(before: samples.endIndex), index + radiusSampleCount)
-            var envelopeScale = Float(1.0)
-            var sampleIndex = lowerIndex
-            while sampleIndex <= upperIndex {
-                let candidateScale = samples[sampleIndex].scale
-                envelopeScale = max(
-                    envelopeScale,
-                    candidateScale.isFinite ? candidateScale : Float(1.0)
-                )
-                if sampleIndex == upperIndex {
-                    break
+        let radiusSeconds = max(0.0, stabilizerAutoCropPlaybackEnvelopeRadiusSeconds)
+        var result: [AutoCropPlaybackScaleSample] = []
+        result.reserveCapacity(samples.count)
+        var deque: [Int] = []
+        deque.reserveCapacity(samples.count)
+        var upperIndex = samples.startIndex
+        for index in samples.indices {
+            let centerSeconds = samples[index].seconds
+            let upperSeconds = centerSeconds + radiusSeconds
+            while upperIndex < samples.endIndex,
+                  samples[upperIndex].seconds <= upperSeconds + 1e-9
+            {
+                let candidateScale = max(Float(1.0), samples[upperIndex].scale.isFinite ? samples[upperIndex].scale : Float(1.0))
+                while let last = deque.last {
+                    let lastScale = max(Float(1.0), samples[last].scale.isFinite ? samples[last].scale : Float(1.0))
+                    guard lastScale <= candidateScale else {
+                        break
+                    }
+                    _ = deque.popLast()
                 }
-                sampleIndex = samples.index(after: sampleIndex)
+                deque.append(upperIndex)
+                upperIndex = samples.index(after: upperIndex)
             }
-            return AutoCropPlaybackScaleSample(
-                seconds: samples[index].seconds,
-                scale: autoCropPlaybackQuantizedScale(envelopeScale)
+
+            let lowerSeconds = centerSeconds - radiusSeconds
+            while let first = deque.first,
+                  samples[first].seconds < lowerSeconds - 1e-9
+            {
+                deque.removeFirst()
+            }
+
+            let envelopeScale = deque.first.map {
+                max(Float(1.0), samples[$0].scale.isFinite ? samples[$0].scale : Float(1.0))
+            } ?? max(Float(1.0), samples[index].scale)
+            result.append(
+                AutoCropPlaybackScaleSample(
+                    seconds: centerSeconds,
+                    scale: autoCropPlaybackQuantizedScale(envelopeScale)
+                )
             )
         }
+        return result
     }
 
     private static func autoCropPlaybackCoverageRepairedScaleSamples(
         _ plannedSamples: [AutoCropPlaybackScaleSample],
         demandSamples: [AutoCropZoomDemandSample],
-        preparedAnalysis: StabilizerPreparedAnalysis,
+        positionSamples: [AutoCropPlaybackPositionSample],
         outputSize: vector_float2,
-        panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths,
         masterStrength: Float,
-        samplingProfile: AutoCropSamplingProfile,
-        analysisRevision: UInt64,
-        cacheIdentity: String?
+        samplingProfile: AutoCropSamplingProfile
     ) -> (samples: [AutoCropPlaybackScaleSample], repairCount: Int) {
         guard plannedSamples.count == demandSamples.count else {
             return (plannedSamples, 0)
@@ -2879,43 +3192,34 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         for index in plannedSamples.indices {
             let plannedSample = plannedSamples[index]
             let demandSample = demandSamples[index]
-            let transform = autoCropTimelineTransform(
-                preparedAnalysis: preparedAnalysis,
-                seconds: plannedSample.seconds,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                samplingProfile: samplingProfile,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
-            )
+            let plannedPositionPixels = positionSamples.indices.contains(index)
+                ? positionSamples[index].positionPixels
+                : demandSample.positionPixels
             let context = AutoCropTransformContext(
-                transform: transform,
+                transform: demandSample.transform,
                 outputSize: outputSize,
                 masterStrength: masterStrength
             )
-            let currentScale = requiredAutoCropScale(
-                context: context,
-                cropPositionPixels: demandSample.positionPixels,
-                sampleSteps: samplingProfile.scaleSearchSampleSteps,
-                iterations: samplingProfile.scaleSearchIterations
-            )
-            let neutralPositionPixels = blackSafeAutoCropPosition(
-                preferredPositionPixels: vector_float2(0.0, 0.0),
+            let safePositionPixels = blackSafeAutoCropPosition(
+                preferredPositionPixels: plannedPositionPixels,
                 context: context,
                 samplingProfile: samplingProfile
             )
-            let neutralScale = requiredAutoCropScale(
+            let plannedPositionScale = requiredAutoCropScale(
                 context: context,
-                cropPositionPixels: neutralPositionPixels,
+                cropPositionPixels: safePositionPixels,
                 sampleSteps: samplingProfile.scaleSearchSampleSteps,
                 iterations: samplingProfile.scaleSearchIterations
             )
+            let currentScale = demandSample.scale
+            let neutralScale = demandSample.neutralScale
             let currentFloorScale = autoCropPlaybackMinimumClippedScale(currentScale)
             let neutralFloorScale = autoCropPlaybackMinimumClippedScale(neutralScale)
-            let coverageFloorScale = currentFloorScale <= neutralFloorScale + stabilizerAutoCropKeypointCoverageToleranceDelta
+            let plannedPositionFloorScale = autoCropPlaybackMinimumClippedScale(plannedPositionScale)
+            let conservativeFloorScale = currentFloorScale <= neutralFloorScale + stabilizerAutoCropKeypointCoverageToleranceDelta
                 ? currentFloorScale
                 : neutralFloorScale
+            let coverageFloorScale = max(conservativeFloorScale, plannedPositionFloorScale)
             let repairedScale = autoCropPlaybackQuantizedScale(max(plannedSample.scale, coverageFloorScale))
             if repairedScale > plannedSample.scale + 0.00001 {
                 repairCount += 1
@@ -2938,23 +3242,31 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return samples
         }
 
-        let radiusSampleCount = max(
-            1,
-            Int(ceil(stabilizerAutoCropPlaybackPositionEnvelopeRadiusSeconds / stabilizerAutoCropPlaybackScalePlanStepSeconds))
-        )
         let radiusSeconds = max(
-            stabilizerAutoCropPlaybackScalePlanStepSeconds,
+            autoCropPlaybackScalePlanStepSeconds(samples: samples.map(\.seconds)),
             stabilizerAutoCropPlaybackPositionEnvelopeRadiusSeconds
         )
 
-        return samples.indices.map { index in
-            let lowerIndex = max(samples.startIndex, index - radiusSampleCount)
-            let upperIndex = min(samples.index(before: samples.endIndex), index + radiusSampleCount)
+        var result: [AutoCropPlaybackPositionSample] = []
+        result.reserveCapacity(samples.count)
+        var lowerIndex = samples.startIndex
+        var upperIndex = samples.startIndex
+        for index in samples.indices {
             let centerSeconds = samples[index].seconds
+            while lowerIndex < samples.endIndex,
+                  samples[lowerIndex].seconds < centerSeconds - radiusSeconds - 1e-9
+            {
+                lowerIndex = samples.index(after: lowerIndex)
+            }
+            while upperIndex < samples.endIndex,
+                  samples[upperIndex].seconds <= centerSeconds + radiusSeconds + 1e-9
+            {
+                upperIndex = samples.index(after: upperIndex)
+            }
             var weightedPosition = vector_float2(0.0, 0.0)
             var totalWeight = Float(0.0)
             var sampleIndex = lowerIndex
-            while sampleIndex <= upperIndex {
+            while sampleIndex < upperIndex {
                 let sample = samples[sampleIndex]
                 let distance = abs(sample.seconds - centerSeconds)
                 if distance <= radiusSeconds + 1e-9 {
@@ -2965,19 +3277,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         totalWeight += weight
                     }
                 }
-                if sampleIndex == upperIndex {
-                    break
-                }
                 sampleIndex = samples.index(after: sampleIndex)
             }
             let positionPixels = totalWeight > 0.0001
                 ? weightedPosition / totalWeight
                 : samples[index].positionPixels
-            return AutoCropPlaybackPositionSample(
-                seconds: centerSeconds,
-                positionPixels: positionPixels
+            result.append(
+                AutoCropPlaybackPositionSample(
+                    seconds: centerSeconds,
+                    positionPixels: positionPixels
+                )
             )
         }
+        return result
     }
 
     private static func autoCropPlaybackScalePlanSample(
@@ -3567,7 +3879,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return AutoCropZoomDemandSample(
                 seconds: firstTime,
                 scale: 1.0,
-                positionPixels: vector_float2(0.0, 0.0)
+                positionPixels: vector_float2(0.0, 0.0),
+                neutralScale: 1.0,
+                neutralPositionPixels: vector_float2(0.0, 0.0),
+                transform: .identity
             )
         }
         var firstPeak = strongest.seconds
@@ -3583,7 +3898,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return AutoCropZoomDemandSample(
             seconds: centerSeconds,
             scale: strongest.scale,
-            positionPixels: strongest.positionPixels
+            positionPixels: strongest.positionPixels,
+            neutralScale: strongest.neutralScale,
+            neutralPositionPixels: strongest.neutralPositionPixels,
+            transform: strongest.transform
         )
     }
 
@@ -3714,6 +4032,37 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return samples
     }
 
+    private static func autoCropZoomDemandSamples(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        sampleSeconds: [Double],
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> [AutoCropZoomDemandSample] {
+        var samples: [AutoCropZoomDemandSample] = []
+        samples.reserveCapacity(sampleSeconds.count)
+        for seconds in sampleSeconds {
+            if let sample = autoCropZoomDemandSample(
+                preparedAnalysis: preparedAnalysis,
+                seconds: seconds,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                masterStrength: masterStrength,
+                samplingProfile: samplingProfile,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity
+            ) {
+                samples.append(sample)
+            }
+        }
+        return samples
+    }
+
     private static func autoCropZoomLocalMaxima(
         _ samples: [AutoCropZoomDemandSample],
         thresholdDelta: Float
@@ -3815,10 +4164,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sampleSteps: samplingProfile.scaleSearchSampleSteps,
             iterations: samplingProfile.scaleSearchIterations
         )
+        let neutralPositionPixels = blackSafeAutoCropPosition(
+            preferredPositionPixels: vector_float2(0.0, 0.0),
+            context: context,
+            samplingProfile: samplingProfile
+        )
+        let neutralScale = requiredAutoCropScale(
+            context: context,
+            cropPositionPixels: neutralPositionPixels,
+            sampleSteps: samplingProfile.scaleSearchSampleSteps,
+            iterations: samplingProfile.scaleSearchIterations
+        )
         return AutoCropZoomDemandSample(
             seconds: seconds,
             scale: scale,
-            positionPixels: positionPixels
+            positionPixels: positionPixels,
+            neutralScale: neutralScale,
+            neutralPositionPixels: neutralPositionPixels,
+            transform: transform
         )
     }
 
@@ -3832,6 +4195,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> StabilizerAutoTransform {
+        if samplingProfile == .playback {
+            let sampleTime = CMTimeMakeWithSeconds(seconds, preferredTimescale: 60000)
+            return cachedAutoTransform(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: sampleTime,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                analysisRevision: analysisRevision,
+                cacheIdentity: cacheIdentity,
+                playbackMode: true
+            )
+        }
         if !samplingProfile.usesStabilizedSampleTransforms {
             if let preparedTransform = autoCropPreparedAbsoluteTransform(
                 preparedAnalysis: preparedAnalysis,
@@ -3855,7 +4231,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity
+            cacheIdentity: cacheIdentity,
+            playbackMode: samplingProfile == .playback
         )
     }
 
@@ -4241,6 +4618,116 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         .playback
     }
 
+    private static func autoCropPlaybackFraming(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        masterStrength: Float,
+        transitionDuration: Double,
+        leadTime: Double,
+        holdTime: Double,
+        samplingProfile: AutoCropSamplingProfile,
+        analysisRevision: UInt64,
+        cacheIdentity: String?
+    ) -> AutoCropFraming {
+        guard masterStrength > 0.0001,
+              renderSeconds.isFinite,
+              outputSize.x > 1.0,
+              outputSize.y > 1.0
+        else {
+            return .identity
+        }
+
+        let playbackScalePlan = cachedAutoCropPlaybackScalePlan(
+            preparedAnalysis: preparedAnalysis,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            transitionDurationSeconds: autoCropTransitionDurationSeconds(transitionDuration),
+            leadTimeSeconds: autoCropLeadTimeSeconds(leadTime),
+            holdTimeSeconds: autoCropHoldTimeSeconds(holdTime),
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
+        )
+        let playbackScale = autoCropPlaybackScalePlanSample(playbackScalePlan, at: renderSeconds)
+        let visualPlaybackScale = autoCropPlaybackMinimumClippedScale(
+            autoCropPlaybackVisualScaleCap(playbackScale)
+        )
+        let context = AutoCropTransformContext(
+            transform: currentTransform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        )
+        var finalScale = autoCropKeypointScale(protectedScale: visualPlaybackScale)
+        let plannedPositionPixels = autoCropPlaybackPositionPlanSample(
+            playbackScalePlan,
+            at: renderSeconds,
+            fallback: currentTransform.macroPixelOffset * masterStrength
+        )
+        let clampPositionPixels = blackSafeAutoCropPosition(
+            preferredPositionPixels: currentTransform.macroPixelOffset * masterStrength,
+            context: context,
+            samplingProfile: samplingProfile
+        )
+        var finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
+            stablePositionPixels: plannedPositionPixels,
+            clampPositionPixels: clampPositionPixels,
+            context: context,
+            scale: finalScale,
+            samplingProfile: samplingProfile
+        )
+        if !autoCropPosition(
+            finalPositionPixels,
+            fitsWithinScale: finalScale,
+            context: context,
+            samplingProfile: samplingProfile
+        ) {
+            let requiredScale = requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: finalPositionPixels,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            )
+            let repairedScale = autoCropPlaybackMinimumClippedScale(requiredScale)
+            finalScale = max(finalScale, repairedScale)
+            finalPositionPixels = autoCropStableScaleBudgetedPositionPixels(
+                stablePositionPixels: plannedPositionPixels,
+                clampPositionPixels: clampPositionPixels,
+                context: context,
+                scale: finalScale,
+                samplingProfile: samplingProfile
+            )
+            os_log(
+                "Auto Crop playback trajectory coverage repair | render %.3f scale %.4f repairedScale %.4f planScale %.4f visualScale %.4f required %.4f planX %.2f planY %.2f finalX %.2f finalY %.2f planSamples %d peak %.3f peakScale %.4f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                renderSeconds,
+                finalScale,
+                repairedScale,
+                playbackScale,
+                visualPlaybackScale,
+                requiredScale,
+                plannedPositionPixels.x,
+                plannedPositionPixels.y,
+                finalPositionPixels.x,
+                finalPositionPixels.y,
+                playbackScalePlan.sampleCount,
+                playbackScalePlan.peakSeconds ?? -1.0,
+                playbackScalePlan.peakScale
+            )
+        }
+        return AutoCropFraming(
+            scale: finalScale,
+            positionPixels: finalPositionPixels,
+            telemetry: .empty
+        )
+    }
+
     private static func autoCropSampleTime(_ seconds: Double, samplingProfile: AutoCropSamplingProfile) -> Double {
         let step = samplingProfile.quantizationStepSeconds
         guard step > 1e-9 else {
@@ -4257,7 +4744,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         outputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
-        samplingProfile _: AutoCropSamplingProfile,
+        samplingProfile: AutoCropSamplingProfile,
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> StabilizerAutoTransform {
@@ -4272,7 +4759,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             analysisRevision: analysisRevision,
-            cacheIdentity: cacheIdentity
+            cacheIdentity: cacheIdentity,
+            playbackMode: samplingProfile == .playback
         )
     }
 
@@ -4299,6 +4787,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         let sampleTime = CMTimeMakeWithSeconds(sampleSeconds, preferredTimescale: 60000)
+        if samplingProfile == .playback {
+            return AutoStabilizationEstimator.playbackEstimate(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: sampleTime,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths
+            )
+        }
         return AutoStabilizationEstimator.autoCropWindowEstimate(
             preparedAnalysis: preparedAnalysis,
             renderTime: sampleTime,
@@ -4812,24 +5309,25 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func publishRenderRevision(_ revision: Double, currentParameterValue: Double? = nil, force: Bool = false) {
-        guard revision > 0.0 else {
+        let publishedRevision = Self.runtimeRenderRevisionToken(revision)
+        guard publishedRevision > 0.0 else {
             return
         }
-        let parameterNeedsUpdate = currentParameterValue.map { abs($0 - revision) >= 0.5 } ?? false
+        let parameterNeedsUpdate = currentParameterValue.map { abs($0 - publishedRevision) >= 0.5 } ?? false
         if currentParameterValue != nil,
            !parameterNeedsUpdate {
             statusLock.lock()
-            lastPublishedRenderRevision = revision
+            lastPublishedRenderRevision = publishedRevision
             statusLock.unlock()
             return
         }
         let now = Date().timeIntervalSinceReferenceDate
         statusLock.lock()
-        let recentlyAttempted = lastRenderRevisionPublishAttemptRevision == revision
+        let recentlyAttempted = lastRenderRevisionPublishAttemptRevision == publishedRevision
             && (now - lastRenderRevisionPublishAttemptWallTime) < stabilizerRenderRevisionRetryIntervalSeconds
-        let shouldPublish = force || ((parameterNeedsUpdate || lastPublishedRenderRevision != revision) && !recentlyAttempted)
+        let shouldPublish = force || ((parameterNeedsUpdate || lastPublishedRenderRevision != publishedRevision) && !recentlyAttempted)
         if shouldPublish {
-            lastRenderRevisionPublishAttemptRevision = revision
+            lastRenderRevisionPublishAttemptRevision = publishedRevision
             lastRenderRevisionPublishAttemptWallTime = now
         }
         statusLock.unlock()
@@ -4838,9 +5336,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return
         }
-        if settingAPI.setFloatValue(revision, toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
+        if settingAPI.setFloatValue(publishedRevision, toParameter: ParameterID.renderRevision.rawValue, at: .zero) {
             statusLock.lock()
-            lastPublishedRenderRevision = revision
+            lastPublishedRenderRevision = publishedRevision
             statusLock.unlock()
         } else {
             NSLog("TokyoWalkingStabilizer: failed to update Render Revision parameter.")
@@ -4848,19 +5346,29 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private func shouldRetryRenderRevisionPublish(_ revision: Double) -> Bool {
-        guard revision > 0.0 else {
+        let publishedRevision = Self.runtimeRenderRevisionToken(revision)
+        guard publishedRevision > 0.0 else {
             return false
         }
         let now = Date().timeIntervalSinceReferenceDate
         statusLock.lock()
         defer { statusLock.unlock() }
-        if lastRenderRevisionPublishAttemptRevision == revision,
+        if lastRenderRevisionPublishAttemptRevision == publishedRevision,
            (now - lastRenderRevisionPublishAttemptWallTime) < stabilizerRenderRevisionRetryIntervalSeconds {
             return false
         }
-        lastRenderRevisionPublishAttemptRevision = revision
+        lastRenderRevisionPublishAttemptRevision = publishedRevision
         lastRenderRevisionPublishAttemptWallTime = now
         return true
+    }
+
+    private static func runtimeRenderRevisionToken(_ revision: Double) -> Double {
+        guard revision > 0.0,
+              revision.isFinite
+        else {
+            return 0.0
+        }
+        return tokyoWalkingStabilizerRenderRevisionSeed + revision
     }
 
     @discardableResult
@@ -7166,7 +7674,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         var viewportSize = simd_uint2(UInt32(outputWidth), UInt32(outputHeight))
         let masterStrength = Float(max(0.0, state.strength))
         let transformEnabled = masterStrength > 0.0001
-        let autoTransform: StabilizerAutoTransform
+        var autoTransform: StabilizerAutoTransform
         var activePreparedAnalysis: StabilizerPreparedAnalysis?
         var activeAnalysisRenderTime: CMTime?
         var renderSourceIsProxy = false
@@ -7220,7 +7728,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 panSmoothSeconds: state.panSmoothSeconds,
                 strengths: correctionStrengths,
                 analysisRevision: renderStoreRevision,
-                cacheIdentity: renderCacheIdentity
+                cacheIdentity: renderCacheIdentity,
+                playbackMode: renderSourceIsProxy
             )
         } else {
             autoTransform = .identity
@@ -7281,9 +7790,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         storeSnapshot = hostAnalysisStore.renderSnapshot
         let renderInvalidationToken = storeSnapshot.renderInvalidationToken
+        let publishedRenderInvalidationToken = Self.runtimeRenderRevisionToken(renderInvalidationToken)
         renderStoreRevision = storeSnapshot.revision
         let renderStoreChangedStatus = renderStoreRevision != state.hostAnalysisRevision
-        let renderRevisionNeedsRetry = abs(renderInvalidationToken - state.renderRevision) >= 0.5
+        let renderRevisionNeedsRetry = abs(publishedRenderInvalidationToken - state.renderRevision) >= 0.5
             && shouldRetryRenderRevisionPublish(renderInvalidationToken)
         if renderStoreChangedStatus || renderRevisionNeedsRetry {
             publishPreviewInvalidationOnMain(

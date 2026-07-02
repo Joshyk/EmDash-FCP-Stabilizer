@@ -83,6 +83,7 @@ struct StabilizerAutoTransform {
         searchRadiusHitCount: 0,
         searchRadiusTotalCount: 0
     )
+
 }
 
 struct StabilizerCorrectionStrengths {
@@ -595,9 +596,14 @@ enum AutoStabilizationEstimator {
     private static let rotationGain: Float = 1.0
     private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
+    private static let baseTurnSmoothingOffsetLimitY: Float = 0.055
+    private static let extraTurnSmoothingOffsetLimitY: Float = 0.040
+    private static let turnSmoothingFullScaleDegrees: Float = 0.16
+    private static let baseTurnSmoothingRotationLimitDegrees: Float = 0.80
+    private static let extraTurnSmoothingRotationLimitDegrees: Float = 0.55
     private static let renderTemporalSmoothingSampleCount = 25
     private static let renderTemporalSmoothingWindowSeconds = 2.20
-    private static let renderFrameLocalSmoothingRadiusFrames = 2
+    private static let renderFrameLocalSmoothingRadiusFrames = 0
     private static let renderFrameLocalSmoothingBaseWeight: Float = 1.25
     private static let renderFrameLocalSmoothingMinimumStepSeconds = 1.0 / 120.0
     private static let renderFrameLocalSmoothingMaximumStepSeconds = 1.0 / 24.0
@@ -708,7 +714,19 @@ enum AutoStabilizationEstimator {
     private static let sharedRenderEstimateCacheLock = NSLock()
     private static var sharedRenderEstimateCaches: [RenderEstimateCacheStoreKey: RenderEstimateCache] = [:]
     private static var sharedRenderEstimateCacheOrder: [RenderEstimateCacheStoreKey] = []
-
+    private static let sharedPlaybackTrajectoryCacheLimit = 3
+    private static let sharedPlaybackTrajectoryCacheLock = NSLock()
+    private static var sharedPlaybackTrajectoryCaches: [PlaybackTrajectoryCacheKey: PlaybackTransformTrajectory] = [:]
+    private static var sharedPlaybackTrajectoryCacheOrder: [PlaybackTrajectoryCacheKey] = []
+    private static let playbackTrajectoryPixelRate: Float = 52.0
+    private static let playbackTrajectoryMaximumPixelStep: Float = 0.86
+    private static let playbackTrajectoryMinimumPixelStep: Float = 0.32
+    private static let playbackTrajectoryRotationRate: Float = 2.4
+    private static let playbackTrajectoryMaximumRotationStep: Float = 0.040
+    private static let playbackTrajectoryMinimumRotationStep: Float = 0.012
+    private static let playbackTrajectoryWarpRate: Float = 0.040
+    private static let playbackTrajectoryMaximumWarpStep: Float = 0.00070
+    private static let playbackTrajectoryMinimumWarpStep: Float = 0.00010
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -793,6 +811,80 @@ enum AutoStabilizationEstimator {
         let lastPathRoll: UInt32
     }
 
+    private struct PlaybackTrajectoryCacheKey: Hashable {
+        let frameCount: Int
+        let firstTime: UInt64
+        let middleTime: UInt64
+        let lastTime: UInt64
+        let sampleWidth: Int
+        let sampleHeight: Int
+        let firstFingerprint: String
+        let middleFingerprint: String
+        let lastFingerprint: String
+        let firstPathX: UInt32
+        let middlePathX: UInt32
+        let lastPathX: UInt32
+        let firstPathY: UInt32
+        let middlePathY: UInt32
+        let lastPathY: UInt32
+        let firstPathRoll: UInt32
+        let middlePathRoll: UInt32
+        let lastPathRoll: UInt32
+        let outputWidth: UInt32
+        let outputHeight: UInt32
+        let panSmoothSeconds: UInt64
+        let microJitterX: UInt64
+        let microJitterY: UInt64
+        let microJitterRotation: UInt64
+        let strideWobbleX: UInt64
+        let strideWobbleY: UInt64
+        let strideWobbleRotation: UInt64
+        let panStabilizationStrength: UInt64
+        let farFieldWarp: UInt64
+    }
+
+    private struct PlaybackTransformTrajectory {
+        let times: [Double]
+        let transforms: [StabilizerAutoTransform]
+
+        func transform(at seconds: Double) -> StabilizerAutoTransform {
+            guard !times.isEmpty,
+                  times.count == transforms.count,
+                  seconds.isFinite
+            else {
+                return .identity
+            }
+            if seconds <= times[0] {
+                return transforms[0]
+            }
+            let lastIndex = times.count - 1
+            if seconds >= times[lastIndex] {
+                return transforms[lastIndex]
+            }
+            var lowerBound = 0
+            var upperBound = lastIndex
+            while lowerBound + 1 < upperBound {
+                let middle = (lowerBound + upperBound) / 2
+                if times[middle] <= seconds {
+                    lowerBound = middle
+                } else {
+                    upperBound = middle
+                }
+            }
+            let lowerTime = times[lowerBound]
+            let upperTime = times[upperBound]
+            let duration = upperTime - lowerTime
+            guard duration.isFinite, duration > Double.ulpOfOne else {
+                return transforms[lowerBound]
+            }
+            let fraction = Float(min(1.0, max(0.0, (seconds - lowerTime) / duration)))
+            return weightedAverageTransform([
+                (transform: transforms[lowerBound], weight: 1.0 - fraction),
+                (transform: transforms[upperBound], weight: fraction)
+            ])
+        }
+    }
+
     private struct EstimatedPath {
         let values: [Float]
         let overrides: [Int: Float]
@@ -815,10 +907,13 @@ enum AutoStabilizationEstimator {
             if valueProvider == nil && overrides.isEmpty {
                 return values[index]
             }
+            if let override = overrides[index] {
+                return override
+            }
             if let providedValue = valueProvider?(index) {
                 return providedValue
             }
-            return overrides[index] ?? values[index]
+            return values[index]
         }
     }
 
@@ -830,7 +925,7 @@ enum AutoStabilizationEstimator {
         private var rawTransformOrder: [RawTransformCacheKey] = []
         private var residualPercentiles: [ResidualPercentileCacheKey: Float] = [:]
         private var footstepConfidences: [FootstepConfidenceCacheKey: Float] = [:]
-        private let rawTransformLimit = 4096
+        private let rawTransformLimit = 32768
 
         func rawTransform(
             analysis: StabilizerPreparedAnalysis,
@@ -987,21 +1082,30 @@ enum AutoStabilizationEstimator {
             innerWindowSeconds: Double,
             outerWindowSeconds: Double
         ) -> EstimatedPath {
-            var values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+            let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
             guard !values.isEmpty else {
                 return EstimatedPath(values: values)
             }
             let targetIndexSet = Set(indices)
-            for index in targetIndexSet where values.indices.contains(index) && analysis.frames.indices.contains(index) {
-                values[index] = outerLinearPrediction(
-                    kind,
-                    analysis: analysis,
-                    index: index,
-                    innerWindowSeconds: innerWindowSeconds,
-                    outerWindowSeconds: outerWindowSeconds
-                )
-            }
-            return EstimatedPath(values: values)
+            return EstimatedPath(
+                values: values,
+                valueProvider: { [weak self] index in
+                    guard targetIndexSet.contains(index),
+                          values.indices.contains(index),
+                          analysis.frames.indices.contains(index),
+                          let self
+                    else {
+                        return nil
+                    }
+                    return self.outerLinearPrediction(
+                        kind,
+                        analysis: analysis,
+                        index: index,
+                        innerWindowSeconds: innerWindowSeconds,
+                        outerWindowSeconds: outerWindowSeconds
+                    )
+                }
+            )
         }
 
         func locallyTimeWeightedAveragePath(
@@ -1017,12 +1121,9 @@ enum AutoStabilizationEstimator {
                 return source
             }
             let targetIndexSet = Set(targetIndices)
-            var values = source.values
-            for (index, value) in source.overrides where values.indices.contains(index) {
-                values[index] = value
-            }
+            var overrides = source.overrides
             for index in targetIndexSet where source.values.indices.contains(index) && analysis.frames.indices.contains(index) {
-                values[index] = localTimeWeightedAverage(
+                overrides[index] = localTimeWeightedAverage(
                     kind,
                     sourceRole: sourceRole,
                     sourceVariant: sourceVariant,
@@ -1032,7 +1133,7 @@ enum AutoStabilizationEstimator {
                     windowSeconds: windowSeconds
                 )
             }
-            return EstimatedPath(values: values)
+            return EstimatedPath(values: source.values, overrides: overrides, valueProvider: source.valueProvider)
         }
 
         private func outerLinearPrediction(
@@ -1333,6 +1434,1152 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    static func playbackEstimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths = .defaultStrengths
+    ) -> StabilizerAutoTransform {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite else {
+            return .identity
+        }
+
+        return playbackTrajectory(
+            for: analysis,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        ).transform(at: renderSeconds)
+    }
+
+    private static func playbackLocalContinuityEstimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> StabilizerAutoTransform {
+        let frames = analysis.frames
+        guard frames.count >= 3 else {
+            return .identity
+        }
+        let interpolation = frameLookup(at: renderSeconds, in: frames).interpolation
+        let centerIndex = interpolation.fraction > 0.5 ? interpolation.upperIndex : interpolation.lowerIndex
+        let lowerIndex = max(0, centerIndex - 3)
+        let upperIndex = min(frames.count - 1, centerIndex + 3)
+        let cache = renderEstimateCache(for: analysis)
+        let centerTransform = cache.rawTransform(
+            analysis: analysis,
+            index: centerIndex,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            limitFootstepContinuity: true,
+            includeFarFieldWarp: true
+        )
+        var rawSamples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+        rawSamples.reserveCapacity(upperIndex - lowerIndex + 1)
+
+        for index in lowerIndex...upperIndex {
+            let transform = cache.rawTransform(
+                analysis: analysis,
+                index: index,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                limitFootstepContinuity: true,
+                includeFarFieldWarp: true
+            )
+            let offset = frames[index].time - renderSeconds
+            let sigma = max(1.0 / 600.0, 2.2 / 60.0)
+            let weight = Float(Darwin.exp(-0.5 * (offset / sigma) * (offset / sigma)))
+            guard weight > 0.0001 else {
+                continue
+            }
+            rawSamples.append((transform: transform, weight: index == centerIndex ? weight * 1.15 : weight))
+        }
+
+        guard !rawSamples.isEmpty else {
+            return centerTransform
+        }
+        guard rawSamples.count >= 3 else {
+            return centerTransform
+        }
+
+        guard let medianX = median(rawSamples.map { $0.transform.pixelOffset.x }),
+              let medianY = median(rawSamples.map { $0.transform.pixelOffset.y }),
+              let medianRotation = median(rawSamples.map { $0.transform.rotationDegrees }),
+              let madX = median(rawSamples.map { abs($0.transform.pixelOffset.x - medianX) }),
+              let madY = median(rawSamples.map { abs($0.transform.pixelOffset.y - medianY) }),
+              let madRotation = median(rawSamples.map { abs($0.transform.rotationDegrees - medianRotation) })
+        else {
+            return centerTransform
+        }
+        let xLimit = max(0.75, madX * 3.5)
+        let yLimit = max(0.75, madY * 3.5)
+        let rotationLimit = max(0.040, madRotation * 3.5)
+        let filteredSamples = rawSamples.filter { sample in
+            abs(sample.transform.pixelOffset.x - medianX) <= xLimit
+                && abs(sample.transform.pixelOffset.y - medianY) <= yLimit
+                && abs(sample.transform.rotationDegrees - medianRotation) <= rotationLimit
+        }
+        let samples = filteredSamples.count >= 3 ? filteredSamples : rawSamples
+        var smoothedTransform = weightedAverageTransform(samples)
+        smoothedTransform.rawPixelOffset = centerTransform.pixelOffset
+        smoothedTransform.rawRotationDegrees = centerTransform.rotationDegrees
+        smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - centerTransform.pixelOffset
+        smoothedTransform.temporalSmoothingRotationDelta = smoothedTransform.rotationDegrees - centerTransform.rotationDegrees
+        smoothedTransform.temporalSmoothingSampleCount = Int32(samples.count)
+        smoothedTransform.temporalSmoothingWindowSeconds = Float(max(0.0, frames[upperIndex].time - frames[lowerIndex].time))
+        smoothedTransform.effectiveMicroJitterStrength = centerTransform.effectiveMicroJitterStrength
+        smoothedTransform.effectiveStrideWobbleStrength = centerTransform.effectiveStrideWobbleStrength
+        smoothedTransform.warpConfidence = centerTransform.warpConfidence
+        smoothedTransform.microConfidence = centerTransform.microConfidence
+        smoothedTransform.strideConfidence = centerTransform.strideConfidence
+        smoothedTransform.turnConfidence = centerTransform.turnConfidence
+        smoothedTransform.acceptedBlockCount = centerTransform.acceptedBlockCount
+        smoothedTransform.totalBlockCount = centerTransform.totalBlockCount
+        smoothedTransform.blurAmount = centerTransform.blurAmount
+        smoothedTransform.trackingConfidence = centerTransform.trackingConfidence
+        smoothedTransform.walkingTrackingConfidence = centerTransform.walkingTrackingConfidence
+        smoothedTransform.motionConfidence = centerTransform.motionConfidence
+        smoothedTransform.residual = centerTransform.residual
+        smoothedTransform.footstepImpulse = centerTransform.footstepImpulse
+        smoothedTransform.rawFootstepCorrection = centerTransform.rawFootstepCorrection
+        smoothedTransform.limitedFootstepCorrection = smoothedTransform.microPixelOffset
+        smoothedTransform.footstepPulseLimited = centerTransform.footstepPulseLimited
+        smoothedTransform.searchRadiusHitCount = centerTransform.searchRadiusHitCount
+        smoothedTransform.searchRadiusTotalCount = centerTransform.searchRadiusTotalCount
+        return smoothedTransform
+    }
+
+    private static func playbackFrameCadenceEstimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> StabilizerAutoTransform {
+        let frames = analysis.frames
+        guard frames.count >= 3 else {
+            return .identity
+        }
+        let renderEstimateCache = renderEstimateCache(for: analysis)
+
+        struct LocalRawTransformKey: Hashable {
+            let index: Int
+            let limitFootstepContinuity: Bool
+            let includeFarFieldWarp: Bool
+        }
+
+        var localRawTransforms: [LocalRawTransformKey: StabilizerAutoTransform] = [:]
+
+        func rawTransform(
+            at index: Int,
+            limitFootstepContinuity: Bool,
+            includeFarFieldWarp: Bool
+        ) -> StabilizerAutoTransform {
+            guard frames.indices.contains(index) else {
+                return .identity
+            }
+            let key = LocalRawTransformKey(
+                index: index,
+                limitFootstepContinuity: limitFootstepContinuity,
+                includeFarFieldWarp: includeFarFieldWarp
+            )
+            if let cached = localRawTransforms[key] {
+                return cached
+            }
+            let transform = renderEstimateCache.rawTransform(
+                analysis: analysis,
+                index: index,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                limitFootstepContinuity: limitFootstepContinuity,
+                includeFarFieldWarp: includeFarFieldWarp
+            )
+            localRawTransforms[key] = transform
+            return transform
+        }
+
+        func interpolatedRawTransform(
+            at seconds: Double,
+            limitFootstepContinuity: Bool,
+            includeFarFieldWarp: Bool
+        ) -> StabilizerAutoTransform {
+            let interpolation = frameLookup(at: seconds, in: frames).interpolation
+            let lowerTransform = rawTransform(
+                at: interpolation.lowerIndex,
+                limitFootstepContinuity: limitFootstepContinuity,
+                includeFarFieldWarp: includeFarFieldWarp
+            )
+            guard interpolation.upperIndex != interpolation.lowerIndex,
+                  interpolation.fraction > 0.0001
+            else {
+                return lowerTransform
+            }
+            let upperWeight = clamp(interpolation.fraction, min: 0.0, max: 1.0)
+            let lowerWeight = 1.0 - upperWeight
+            return weightedAverageTransform([
+                (transform: lowerTransform, weight: lowerWeight),
+                (transform: rawTransform(
+                    at: interpolation.upperIndex,
+                    limitFootstepContinuity: limitFootstepContinuity,
+                    includeFarFieldWarp: includeFarFieldWarp
+                ), weight: upperWeight)
+            ])
+        }
+
+        func weightedSamples(
+            centerTransform: StabilizerAutoTransform,
+            halfWindow: Double,
+            sigma: Double,
+            limitFootstepContinuity: Bool,
+            includeFarFieldWarp: Bool
+        ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+            let candidateIndices = indicesWithinTimeRadius(
+                frames,
+                centerTime: renderSeconds,
+                radiusSeconds: halfWindow
+            )
+            var samples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+            samples.reserveCapacity(candidateIndices.count + 1)
+            samples.append((transform: centerTransform, weight: 1.0))
+            for index in candidateIndices {
+                let offset = frames[index].time - renderSeconds
+                if abs(offset) <= timeWindowSelectionEpsilon {
+                    continue
+                }
+                let normalizedDistance = offset / sigma
+                let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+                guard weight > 0.0001 else {
+                    continue
+                }
+                samples.append((
+                    transform: rawTransform(
+                        at: index,
+                        limitFootstepContinuity: limitFootstepContinuity,
+                        includeFarFieldWarp: includeFarFieldWarp
+                    ),
+                    weight: weight
+                ))
+            }
+            return samples
+        }
+
+        func turnTransitionSamples(centerTransform: StabilizerAutoTransform) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+            guard let firstTime = frames.first?.time,
+                  let lastTime = frames.last?.time
+            else {
+                return [(centerTransform, 1.0)]
+            }
+            let sampleCount = max(3, renderTurnTransitionSmoothingSampleCount)
+            let centerSample = sampleCount / 2
+            let halfWindow = renderTurnTransitionSmoothingWindowSeconds * 0.5
+            let denominator = Double(max(1, sampleCount - 1))
+            let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
+            let sigma = max(1e-6, halfWindow * 0.55)
+            var rawSamples: [(transform: StabilizerAutoTransform, timeWeight: Float, isCenter: Bool)] = [(centerTransform, 1.0, true)]
+            rawSamples.reserveCapacity(sampleCount)
+            for sampleIndex in 0..<sampleCount where sampleIndex != centerSample {
+                let offset = Double(sampleIndex - centerSample) * sampleStep
+                let sampleSeconds = renderSeconds + offset
+                guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                    continue
+                }
+                let normalizedDistance = offset / sigma
+                let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+                guard weight > 0.0001 else {
+                    continue
+                }
+                rawSamples.append((transform: interpolatedRawTransform(
+                    at: sampleSeconds,
+                    limitFootstepContinuity: false,
+                    includeFarFieldWarp: false
+                ), timeWeight: weight, isCenter: false))
+            }
+
+            var supportMagnitude: Float = 0.0
+            var signedSupport: Float = 0.0
+            var signedSupportWeight: Float = 0.0
+            for sample in rawSamples {
+                let turnResponse = turnCorrectionConfidenceResponse(sample.transform.turnConfidence)
+                let qualitySupport = turnTransitionBridgeQualitySupport(sample.transform)
+                let evidenceWeight = sample.timeWeight * turnResponse * qualitySupport
+                guard evidenceWeight > 0.0001 else {
+                    continue
+                }
+                let macroX = sample.transform.macroPixelOffset.x
+                supportMagnitude = max(supportMagnitude, abs(macroX))
+                signedSupport += macroX * evidenceWeight
+                signedSupportWeight += evidenceWeight
+            }
+            guard supportMagnitude >= renderTurnTransitionMinimumMacroPixels,
+                  signedSupportWeight > 0.0001
+            else {
+                return [(centerTransform, 1.0)]
+            }
+            let dominantSign: Float = signedSupport >= 0.0 ? 1.0 : -1.0
+            let samples = rawSamples.compactMap { sample -> (transform: StabilizerAutoTransform, weight: Float)? in
+                let macroX = sample.transform.macroPixelOffset.x
+                let macroMagnitude = abs(macroX)
+                let turnResponse = turnCorrectionConfidenceResponse(sample.transform.turnConfidence)
+                let qualitySupport = turnTransitionBridgeQualitySupport(sample.transform)
+                let evidenceWeight = turnResponse * qualitySupport
+                let magnitudeSupport = confidenceRamp(
+                    macroMagnitude,
+                    start: supportMagnitude * 0.10,
+                    full: max(supportMagnitude * 0.45, renderTurnTransitionMinimumMacroPixels)
+                )
+                let directionSupport: Float
+                if macroMagnitude < renderTurnTransitionMinimumMacroPixels {
+                    directionSupport = sample.isCenter ? 0.25 : 0.10
+                } else {
+                    directionSupport = (macroX * dominantSign) >= 0.0 ? 1.0 : 0.15
+                }
+                let centerScale: Float = sample.isCenter
+                    ? 0.25 + (turnCorrectionConfidenceResponse(sample.transform.turnConfidence) * 0.75)
+                    : 1.0
+                let weight = sample.timeWeight
+                    * evidenceWeight
+                    * max(0.15, magnitudeSupport)
+                    * directionSupport
+                    * centerScale
+                guard weight > 0.0001 else {
+                    return nil
+                }
+                return (transform: sample.transform, weight: weight)
+            }
+            return samples.isEmpty ? [(transform: centerTransform, weight: Float(1.0))] : samples
+        }
+
+        func smoothedFootstepJitter(centerTransform: StabilizerAutoTransform) -> (microPixelOffset: vector_float2, rotationDegrees: Float) {
+            let halfWindow = renderFootstepJitterSmoothingWindowSeconds * 0.5
+            let sigma = max(1e-6, halfWindow * 0.55)
+            let candidateIndices = indicesWithinTimeRadius(
+                frames,
+                centerTime: renderSeconds,
+                radiusSeconds: halfWindow
+            )
+            var xSamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+            var ySamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+            var rollSamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+            xSamples.reserveCapacity(candidateIndices.count)
+            ySamples.reserveCapacity(candidateIndices.count)
+            rollSamples.reserveCapacity(candidateIndices.count)
+            for index in candidateIndices {
+                let offset = frames[index].time - renderSeconds
+                if abs(offset) <= timeWindowSelectionEpsilon {
+                    continue
+                }
+                let normalizedDistance = offset / sigma
+                let timeWeight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+                guard timeWeight > 0.0001 else {
+                    continue
+                }
+                let transform = rawTransform(
+                    at: index,
+                    limitFootstepContinuity: true,
+                    includeFarFieldWarp: false
+                )
+                xSamples.append((transform.microPixelOffset.x, transform.effectiveMicroJitterStrength.x, timeWeight))
+                ySamples.append((transform.microPixelOffset.y, transform.effectiveMicroJitterStrength.y, timeWeight))
+                rollSamples.append((transform.footstepJitterRotationDegrees, transform.effectiveMicroJitterStrength.z, timeWeight))
+            }
+            return (
+                microPixelOffset: vector_float2(
+                    smoothedFootstepScalar(
+                        centerValue: centerTransform.microPixelOffset.x,
+                        centerConfidence: centerTransform.effectiveMicroJitterStrength.x,
+                        samples: xSamples,
+                        similarityScale: renderFootstepJitterSmoothingPixelSimilarity
+                    ),
+                    smoothedFootstepScalar(
+                        centerValue: centerTransform.microPixelOffset.y,
+                        centerConfidence: centerTransform.effectiveMicroJitterStrength.y,
+                        samples: ySamples,
+                        similarityScale: renderFootstepJitterSmoothingPixelSimilarity
+                    )
+                ),
+                rotationDegrees: smoothedFootstepScalar(
+                    centerValue: centerTransform.footstepJitterRotationDegrees,
+                    centerConfidence: centerTransform.effectiveMicroJitterStrength.z,
+                    samples: rollSamples,
+                    similarityScale: renderFootstepJitterSmoothingRotationSimilarity
+                )
+            )
+        }
+
+        let rawCenterTransform = interpolatedRawTransform(
+            at: renderSeconds,
+            limitFootstepContinuity: true,
+            includeFarFieldWarp: true
+        )
+        let broadHalfWindow = renderTemporalSmoothingWindowSeconds * 0.5
+        let broadSamples = weightedSamples(
+            centerTransform: rawCenterTransform,
+            halfWindow: broadHalfWindow,
+            sigma: max(1e-6, broadHalfWindow * 0.5),
+            limitFootstepContinuity: false,
+            includeFarFieldWarp: false
+        )
+        var smoothedTransform = broadSamples.isEmpty
+            ? rawCenterTransform
+            : weightedAverageTransform(broadSamples)
+        let turnSamples = turnTransitionSamples(centerTransform: rawCenterTransform)
+        if !turnSamples.isEmpty {
+            let smoothedTurnTransform = weightedAverageTransform(turnSamples)
+            var bridgedMacroOffset = smoothedTurnTransform.macroPixelOffset
+            let centerMacroX = rawCenterTransform.macroPixelOffset.x
+            let bridgedMacroX = bridgedMacroOffset.x
+            if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
+               abs(centerMacroX) > abs(bridgedMacroX),
+               (centerMacroX * bridgedMacroX) > 0.0
+            {
+                let centerResponse = turnCorrectionConfidenceResponse(rawCenterTransform.turnConfidence)
+                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
+                bridgedMacroOffset.x = bridgedMacroX + ((centerMacroX - bridgedMacroX) * centerPreservation)
+            }
+            bridgedMacroOffset.x = turnTransitionCenterAnchoredBridgeMacroX(
+                centerTransform: rawCenterTransform,
+                bridgeMacroX: bridgedMacroOffset.x
+            )
+            let bridgeBlend = turnTransitionBridgeBlend(
+                centerTransform: rawCenterTransform,
+                bridgeTransform: smoothedTurnTransform
+            )
+            smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
+            smoothedTransform.macroPixelOffset.x = turnTransitionDetectedCappedMacroX(
+                centerTransform: rawCenterTransform,
+                proposedMacroX: smoothedTransform.macroPixelOffset.x
+            )
+            smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
+        }
+
+        let warpHalfWindow = renderFarFieldWarpSmoothingWindowSeconds * 0.5
+        let warpSamples = weightedSamples(
+            centerTransform: rawCenterTransform,
+            halfWindow: warpHalfWindow,
+            sigma: max(1e-6, warpHalfWindow * 0.55),
+            limitFootstepContinuity: false,
+            includeFarFieldWarp: true
+        )
+        let smoothedWarpTransform = warpSamples.isEmpty
+            ? rawCenterTransform
+            : weightedAverageTransform(warpSamples)
+        let smoothedWarpConfidence = clamp(smoothedWarpTransform.warpConfidence, min: 0.0, max: 1.0)
+        let temporalWarpScale = farFieldWarpTemporalScale(
+            centerTransform: rawCenterTransform,
+            smoothedTransform: smoothedWarpTransform,
+            smoothedConfidence: smoothedWarpConfidence
+        )
+        smoothedTransform.warpConfidence = smoothedWarpConfidence * temporalWarpScale
+        smoothedTransform.yawPitchProxy = smoothedWarpTransform.yawPitchProxy * temporalWarpScale
+        smoothedTransform.shear = smoothedWarpTransform.shear * temporalWarpScale
+        smoothedTransform.perspective = smoothedWarpTransform.perspective * temporalWarpScale
+
+        let footstep = smoothedFootstepJitter(centerTransform: rawCenterTransform)
+        smoothedTransform.microPixelOffset = footstep.microPixelOffset
+        smoothedTransform.footstepJitterRotationDegrees = footstep.rotationDegrees
+        smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
+        smoothedTransform.microConfidence = rawCenterTransform.microConfidence
+        smoothedTransform.footstepImpulse = rawCenterTransform.footstepImpulse
+        smoothedTransform.rawFootstepCorrection = rawCenterTransform.rawFootstepCorrection
+        smoothedTransform.limitedFootstepCorrection = footstep.microPixelOffset
+        smoothedTransform.footstepPulseLimited = rawCenterTransform.footstepPulseLimited
+        smoothedTransform.trackingConfidence = clamp(smoothedTransform.trackingConfidence, min: 0.0, max: 1.0)
+        smoothedTransform.walkingTrackingConfidence = clamp(smoothedTransform.walkingTrackingConfidence, min: 0.0, max: 1.0)
+        smoothedTransform.motionConfidence = clamp(smoothedTransform.motionConfidence, min: 0.0, max: 1.0)
+        smoothedTransform.residual = rawCenterTransform.residual
+        smoothedTransform.searchRadiusHitCount = rawCenterTransform.searchRadiusHitCount
+        smoothedTransform.searchRadiusTotalCount = rawCenterTransform.searchRadiusTotalCount
+        smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
+            + smoothedTransform.microPixelOffset
+            + smoothedTransform.strideWobblePixelOffset
+        smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
+            + smoothedTransform.strideWobbleRotationDegrees
+        smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
+        smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
+        smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - rawCenterTransform.pixelOffset
+        smoothedTransform.temporalSmoothingRotationDelta = smoothedTransform.rotationDegrees - rawCenterTransform.rotationDegrees
+        smoothedTransform.temporalSmoothingSampleCount = Int32(broadSamples.count)
+        smoothedTransform.temporalSmoothingWindowSeconds = Float(renderTemporalSmoothingWindowSeconds)
+        return smoothedTransform
+    }
+
+    private static func playbackTrajectory(
+        for analysis: StabilizerPreparedAnalysis,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> PlaybackTransformTrajectory {
+        guard let key = playbackTrajectoryCacheKey(
+            analysis: analysis,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        ) else {
+            return PlaybackTransformTrajectory(times: [], transforms: [])
+        }
+
+        sharedPlaybackTrajectoryCacheLock.lock()
+        if let cached = sharedPlaybackTrajectoryCaches[key] {
+            sharedPlaybackTrajectoryCacheLock.unlock()
+            return cached
+        }
+        sharedPlaybackTrajectoryCacheLock.unlock()
+
+        let built = buildPlaybackTrajectory(
+            analysis: analysis,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        )
+
+        sharedPlaybackTrajectoryCacheLock.lock()
+        defer { sharedPlaybackTrajectoryCacheLock.unlock() }
+        if let cached = sharedPlaybackTrajectoryCaches[key] {
+            return cached
+        }
+        sharedPlaybackTrajectoryCaches[key] = built
+        sharedPlaybackTrajectoryCacheOrder.append(key)
+        while sharedPlaybackTrajectoryCacheOrder.count > sharedPlaybackTrajectoryCacheLimit {
+            let oldestKey = sharedPlaybackTrajectoryCacheOrder.removeFirst()
+            sharedPlaybackTrajectoryCaches.removeValue(forKey: oldestKey)
+        }
+        return built
+    }
+
+    private static func playbackTrajectoryCacheKey(
+        analysis: StabilizerPreparedAnalysis,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> PlaybackTrajectoryCacheKey? {
+        let frames = analysis.frames
+        guard let firstFrame = frames.first,
+              let lastFrame = frames.last
+        else {
+            return nil
+        }
+        let middleIndex = frames.count / 2
+        let middleFrame = frames[middleIndex]
+        let firstPathX = analysis.pathX.first ?? 0.0
+        let middlePathX = analysis.pathX.indices.contains(middleIndex) ? analysis.pathX[middleIndex] : firstPathX
+        let lastPathX = analysis.pathX.last ?? firstPathX
+        let firstPathY = analysis.pathY.first ?? 0.0
+        let middlePathY = analysis.pathY.indices.contains(middleIndex) ? analysis.pathY[middleIndex] : firstPathY
+        let lastPathY = analysis.pathY.last ?? firstPathY
+        let firstPathRoll = analysis.pathRoll.first ?? 0.0
+        let middlePathRoll = analysis.pathRoll.indices.contains(middleIndex) ? analysis.pathRoll[middleIndex] : firstPathRoll
+        let lastPathRoll = analysis.pathRoll.last ?? firstPathRoll
+        return PlaybackTrajectoryCacheKey(
+            frameCount: frames.count,
+            firstTime: firstFrame.time.bitPattern,
+            middleTime: middleFrame.time.bitPattern,
+            lastTime: lastFrame.time.bitPattern,
+            sampleWidth: firstFrame.sampleWidth,
+            sampleHeight: firstFrame.sampleHeight,
+            firstFingerprint: firstFrame.fingerprint,
+            middleFingerprint: middleFrame.fingerprint,
+            lastFingerprint: lastFrame.fingerprint,
+            firstPathX: firstPathX.bitPattern,
+            middlePathX: middlePathX.bitPattern,
+            lastPathX: lastPathX.bitPattern,
+            firstPathY: firstPathY.bitPattern,
+            middlePathY: middlePathY.bitPattern,
+            lastPathY: lastPathY.bitPattern,
+            firstPathRoll: firstPathRoll.bitPattern,
+            middlePathRoll: middlePathRoll.bitPattern,
+            lastPathRoll: lastPathRoll.bitPattern,
+            outputWidth: outputSize.x.bitPattern,
+            outputHeight: outputSize.y.bitPattern,
+            panSmoothSeconds: panSmoothSeconds.bitPattern,
+            microJitterX: strengths.microJitterX.bitPattern,
+            microJitterY: strengths.microJitterY.bitPattern,
+            microJitterRotation: strengths.microJitterRotation.bitPattern,
+            strideWobbleX: strengths.strideWobbleX.bitPattern,
+            strideWobbleY: strengths.strideWobbleY.bitPattern,
+            strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
+            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
+            farFieldWarp: strengths.farFieldWarp.bitPattern
+        )
+    }
+
+    private static func buildPlaybackTrajectory(
+        analysis: StabilizerPreparedAnalysis,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> PlaybackTransformTrajectory {
+        let frames = analysis.frames
+        guard frames.count >= 3 else {
+            return PlaybackTransformTrajectory(times: frames.map(\.time), transforms: Array(repeating: .identity, count: frames.count))
+        }
+        let cache = renderEstimateCache(for: analysis)
+        let rawTransforms = frames.indices.map { index in
+            cache.rawTransform(
+                analysis: analysis,
+                index: index,
+                outputSize: outputSize,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths,
+                limitFootstepContinuity: true,
+                includeFarFieldWarp: true
+            )
+        }
+        let limitedTransforms = playbackTrajectoryZeroPhaseLimitedTransforms(
+            frames: frames,
+            rawTransforms: rawTransforms
+        )
+        return PlaybackTransformTrajectory(times: frames.map(\.time), transforms: limitedTransforms)
+    }
+
+    private static func playbackTrajectoryZeroPhaseLimitedTransforms(
+        frames: [StabilizerAnalysisFrame],
+        rawTransforms: [StabilizerAutoTransform],
+        diagnosticTransforms: [StabilizerAutoTransform]? = nil
+    ) -> [StabilizerAutoTransform] {
+        guard frames.count == rawTransforms.count,
+              !frames.isEmpty
+        else {
+            return rawTransforms
+        }
+        guard rawTransforms.count >= 3 else {
+            return rawTransforms
+        }
+
+        var forward = rawTransforms
+        for index in 1..<rawTransforms.count {
+            let deltaSeconds = max(0.0, frames[index].time - frames[index - 1].time)
+            forward[index] = playbackTrajectoryLimitedTransform(
+                rawTransforms[index],
+                previous: forward[index - 1],
+                deltaSeconds: deltaSeconds
+            )
+        }
+
+        var backward = rawTransforms
+        if rawTransforms.count > 1 {
+            for index in stride(from: rawTransforms.count - 2, through: 0, by: -1) {
+                let deltaSeconds = max(0.0, frames[index + 1].time - frames[index].time)
+                backward[index] = playbackTrajectoryLimitedTransform(
+                    rawTransforms[index],
+                    previous: backward[index + 1],
+                    deltaSeconds: deltaSeconds
+                )
+            }
+        }
+
+        let diagnostics = (diagnosticTransforms?.count == rawTransforms.count) ? diagnosticTransforms! : rawTransforms
+        return rawTransforms.indices.map { index in
+            let blended = weightedAverageTransform([
+                (transform: forward[index], weight: 0.5),
+                (transform: backward[index], weight: 0.5)
+            ])
+            return playbackTrajectoryTransformWithCurrentDiagnostics(
+                blended,
+                rawTransform: diagnostics[index]
+            )
+        }
+    }
+
+    private static func playbackTrajectoryStepLimit(
+        deltaSeconds: Double,
+        rate: Float,
+        minimum: Float,
+        maximum: Float
+    ) -> Float {
+        guard deltaSeconds.isFinite, deltaSeconds > 0.0 else {
+            return minimum
+        }
+        return max(minimum, min(maximum, Float(deltaSeconds) * rate))
+    }
+
+    private static func playbackTrajectoryLimitedScalar(_ current: Float, previous: Float, limit: Float) -> Float {
+        guard current.isFinite, previous.isFinite, limit.isFinite, limit >= 0.0 else {
+            return current
+        }
+        let delta = current - previous
+        return previous + max(-limit, min(limit, delta))
+    }
+
+    private static func playbackTrajectoryLimitedVector(
+        _ current: vector_float2,
+        previous: vector_float2,
+        limit: Float
+    ) -> vector_float2 {
+        vector_float2(
+            playbackTrajectoryLimitedScalar(current.x, previous: previous.x, limit: limit),
+            playbackTrajectoryLimitedScalar(current.y, previous: previous.y, limit: limit)
+        )
+    }
+
+    private static func playbackTrajectoryLimitedTransform(
+        _ current: StabilizerAutoTransform,
+        previous: StabilizerAutoTransform,
+        deltaSeconds: Double
+    ) -> StabilizerAutoTransform {
+        let pixelLimit = playbackTrajectoryStepLimit(
+            deltaSeconds: deltaSeconds,
+            rate: playbackTrajectoryPixelRate,
+            minimum: playbackTrajectoryMinimumPixelStep,
+            maximum: playbackTrajectoryMaximumPixelStep
+        )
+        let rotationLimit = playbackTrajectoryStepLimit(
+            deltaSeconds: deltaSeconds,
+            rate: playbackTrajectoryRotationRate,
+            minimum: playbackTrajectoryMinimumRotationStep,
+            maximum: playbackTrajectoryMaximumRotationStep
+        )
+        let warpLimit = playbackTrajectoryStepLimit(
+            deltaSeconds: deltaSeconds,
+            rate: playbackTrajectoryWarpRate,
+            minimum: playbackTrajectoryMinimumWarpStep,
+            maximum: playbackTrajectoryMaximumWarpStep
+        )
+        var limited = current
+
+        limited.macroPixelOffset = playbackTrajectoryLimitedVector(
+            current.macroPixelOffset,
+            previous: previous.macroPixelOffset,
+            limit: pixelLimit * 0.85
+        )
+        limited.microPixelOffset = playbackTrajectoryLimitedVector(
+            current.microPixelOffset,
+            previous: previous.microPixelOffset,
+            limit: pixelLimit * 0.55
+        )
+        limited.strideWobblePixelOffset = playbackTrajectoryLimitedVector(
+            current.strideWobblePixelOffset,
+            previous: previous.strideWobblePixelOffset,
+            limit: pixelLimit * 0.65
+        )
+        let componentPixelOffset = limited.macroPixelOffset
+            + limited.microPixelOffset
+            + limited.strideWobblePixelOffset
+        let finalPixelOffset = playbackTrajectoryLimitedVector(
+            componentPixelOffset,
+            previous: previous.pixelOffset,
+            limit: pixelLimit
+        )
+        limited.macroPixelOffset += finalPixelOffset - componentPixelOffset
+        limited.pixelOffset = finalPixelOffset
+
+        limited.footstepJitterRotationDegrees = playbackTrajectoryLimitedScalar(
+            current.footstepJitterRotationDegrees,
+            previous: previous.footstepJitterRotationDegrees,
+            limit: rotationLimit * 0.60
+        )
+        limited.strideWobbleRotationDegrees = playbackTrajectoryLimitedScalar(
+            current.strideWobbleRotationDegrees,
+            previous: previous.strideWobbleRotationDegrees,
+            limit: rotationLimit * 0.80
+        )
+        let componentRotation = limited.footstepJitterRotationDegrees + limited.strideWobbleRotationDegrees
+        let finalRotation = playbackTrajectoryLimitedScalar(
+            componentRotation,
+            previous: previous.rotationDegrees,
+            limit: rotationLimit
+        )
+        limited.strideWobbleRotationDegrees += finalRotation - componentRotation
+        limited.rotationDegrees = finalRotation
+
+        limited.yawPitchProxy = playbackTrajectoryLimitedVector(
+            current.yawPitchProxy,
+            previous: previous.yawPitchProxy,
+            limit: warpLimit
+        )
+        limited.shear = playbackTrajectoryLimitedVector(
+            current.shear,
+            previous: previous.shear,
+            limit: warpLimit
+        )
+        limited.perspective = playbackTrajectoryLimitedVector(
+            current.perspective,
+            previous: previous.perspective,
+            limit: warpLimit
+        )
+        return playbackTrajectoryTransformWithCurrentDiagnostics(limited, rawTransform: current)
+    }
+
+    private static func playbackTrajectoryTransformWithCurrentDiagnostics(
+        _ limitedTransform: StabilizerAutoTransform,
+        rawTransform: StabilizerAutoTransform
+    ) -> StabilizerAutoTransform {
+        var transform = limitedTransform
+        transform.turnDetectedPixelOffset = rawTransform.turnDetectedPixelOffset
+        transform.rawPixelOffset = rawTransform.pixelOffset
+        transform.rawRotationDegrees = rawTransform.rotationDegrees
+        transform.temporalSmoothingPixelDelta = transform.pixelOffset - rawTransform.pixelOffset
+        transform.temporalSmoothingRotationDelta = transform.rotationDegrees - rawTransform.rotationDegrees
+        transform.temporalSmoothingSampleCount = 2
+        transform.temporalSmoothingWindowSeconds = Float(renderFrameLocalSmoothingMinimumStepSeconds)
+        transform.effectiveMicroJitterStrength = rawTransform.effectiveMicroJitterStrength
+        transform.effectiveStrideWobbleStrength = rawTransform.effectiveStrideWobbleStrength
+        transform.warpConfidence = rawTransform.warpConfidence
+        transform.microConfidence = rawTransform.microConfidence
+        transform.strideConfidence = rawTransform.strideConfidence
+        transform.turnConfidence = rawTransform.turnConfidence
+        transform.acceptedBlockCount = rawTransform.acceptedBlockCount
+        transform.totalBlockCount = rawTransform.totalBlockCount
+        transform.blurAmount = rawTransform.blurAmount
+        transform.trackingConfidence = rawTransform.trackingConfidence
+        transform.walkingTrackingConfidence = rawTransform.walkingTrackingConfidence
+        transform.motionConfidence = rawTransform.motionConfidence
+        transform.residual = rawTransform.residual
+        transform.footstepImpulse = rawTransform.footstepImpulse
+        transform.rawFootstepCorrection = rawTransform.rawFootstepCorrection
+        transform.limitedFootstepCorrection = transform.microPixelOffset
+        transform.footstepPulseLimited = rawTransform.footstepPulseLimited
+        transform.searchRadiusHitCount = rawTransform.searchRadiusHitCount
+        transform.searchRadiusTotalCount = rawTransform.searchRadiusTotalCount
+        return transform
+    }
+
+    private static func playbackTrajectorySmoothedTransform(
+        index: Int,
+        frames: [StabilizerAnalysisFrame],
+        rawTransforms: [StabilizerAutoTransform]
+    ) -> StabilizerAutoTransform {
+        guard frames.indices.contains(index),
+              rawTransforms.indices.contains(index)
+        else {
+            return .identity
+        }
+        let centerTime = frames[index].time
+        let centerTransform = rawTransforms[index]
+        let broadHalfWindow = renderTemporalSmoothingWindowSeconds * 0.5
+        let broadSigma = max(1e-6, broadHalfWindow * 0.5)
+        let broadSamples = playbackTrajectoryWeightedSamples(
+            frames: frames,
+            transforms: rawTransforms,
+            centerTime: centerTime,
+            halfWindow: broadHalfWindow,
+            sigma: broadSigma
+        )
+        var smoothedTransform = broadSamples.isEmpty
+            ? centerTransform
+            : weightedAverageTransform(broadSamples)
+
+        let turnSamples = playbackTrajectoryTurnTransitionSamples(
+            centerTransform: centerTransform,
+            centerTime: centerTime,
+            frames: frames,
+            transforms: rawTransforms
+        )
+        if !turnSamples.isEmpty {
+            let smoothedTurnTransform = weightedAverageTransform(turnSamples)
+            var bridgedMacroOffset = smoothedTurnTransform.macroPixelOffset
+            let centerMacroX = centerTransform.macroPixelOffset.x
+            let bridgedMacroX = bridgedMacroOffset.x
+            if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
+               abs(centerMacroX) > abs(bridgedMacroX),
+               (centerMacroX * bridgedMacroX) > 0.0
+            {
+                let centerResponse = turnCorrectionConfidenceResponse(centerTransform.turnConfidence)
+                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
+                bridgedMacroOffset.x = bridgedMacroX + ((centerMacroX - bridgedMacroX) * centerPreservation)
+            }
+            bridgedMacroOffset.x = turnTransitionCenterAnchoredBridgeMacroX(
+                centerTransform: centerTransform,
+                bridgeMacroX: bridgedMacroOffset.x
+            )
+            let bridgeBlend = turnTransitionBridgeBlend(
+                centerTransform: centerTransform,
+                bridgeTransform: smoothedTurnTransform
+            )
+            smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
+            smoothedTransform.macroPixelOffset.x = turnTransitionDetectedCappedMacroX(
+                centerTransform: centerTransform,
+                proposedMacroX: smoothedTransform.macroPixelOffset.x
+            )
+            smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
+        }
+
+        let warpHalfWindow = renderFarFieldWarpSmoothingWindowSeconds * 0.5
+        let warpSamples = playbackTrajectoryWeightedSamples(
+            frames: frames,
+            transforms: rawTransforms,
+            centerTime: centerTime,
+            halfWindow: warpHalfWindow,
+            sigma: max(1e-6, warpHalfWindow * 0.55)
+        )
+        let smoothedWarpTransform = warpSamples.isEmpty
+            ? centerTransform
+            : weightedAverageTransform(warpSamples)
+        let smoothedWarpConfidence = clamp(smoothedWarpTransform.warpConfidence, min: 0.0, max: 1.0)
+        let temporalWarpScale = farFieldWarpTemporalScale(
+            centerTransform: centerTransform,
+            smoothedTransform: smoothedWarpTransform,
+            smoothedConfidence: smoothedWarpConfidence
+        )
+        smoothedTransform.warpConfidence = smoothedWarpConfidence * temporalWarpScale
+        smoothedTransform.yawPitchProxy = smoothedWarpTransform.yawPitchProxy * temporalWarpScale
+        smoothedTransform.shear = smoothedWarpTransform.shear * temporalWarpScale
+        smoothedTransform.perspective = smoothedWarpTransform.perspective * temporalWarpScale
+
+        let footstep = playbackTrajectorySmoothedFootstepJitter(
+            centerTransform: centerTransform,
+            centerTime: centerTime,
+            frames: frames,
+            transforms: rawTransforms
+        )
+        smoothedTransform.microPixelOffset = footstep.microPixelOffset
+        smoothedTransform.footstepJitterRotationDegrees = footstep.rotationDegrees
+        smoothedTransform.effectiveMicroJitterStrength = centerTransform.effectiveMicroJitterStrength
+        smoothedTransform.microConfidence = centerTransform.microConfidence
+        smoothedTransform.footstepImpulse = centerTransform.footstepImpulse
+        smoothedTransform.rawFootstepCorrection = centerTransform.rawFootstepCorrection
+        smoothedTransform.limitedFootstepCorrection = footstep.microPixelOffset
+        smoothedTransform.footstepPulseLimited = centerTransform.footstepPulseLimited
+        smoothedTransform.trackingConfidence = clamp(smoothedTransform.trackingConfidence, min: 0.0, max: 1.0)
+        smoothedTransform.walkingTrackingConfidence = clamp(smoothedTransform.walkingTrackingConfidence, min: 0.0, max: 1.0)
+        smoothedTransform.motionConfidence = clamp(smoothedTransform.motionConfidence, min: 0.0, max: 1.0)
+        smoothedTransform.residual = centerTransform.residual
+        smoothedTransform.searchRadiusHitCount = centerTransform.searchRadiusHitCount
+        smoothedTransform.searchRadiusTotalCount = centerTransform.searchRadiusTotalCount
+        smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
+            + smoothedTransform.microPixelOffset
+            + smoothedTransform.strideWobblePixelOffset
+        smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
+            + smoothedTransform.strideWobbleRotationDegrees
+        smoothedTransform.rawPixelOffset = centerTransform.pixelOffset
+        smoothedTransform.rawRotationDegrees = centerTransform.rotationDegrees
+        smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - centerTransform.pixelOffset
+        smoothedTransform.temporalSmoothingRotationDelta = smoothedTransform.rotationDegrees - centerTransform.rotationDegrees
+        smoothedTransform.temporalSmoothingSampleCount = Int32(broadSamples.count)
+        smoothedTransform.temporalSmoothingWindowSeconds = Float(renderTemporalSmoothingWindowSeconds)
+        return smoothedTransform
+    }
+
+    private static func playbackTrajectoryWeightedSamples(
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform],
+        centerTime: Double,
+        halfWindow: Double,
+        sigma: Double
+    ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+        guard halfWindow.isFinite,
+              halfWindow >= 0.0,
+              sigma.isFinite,
+              sigma > Double.ulpOfOne
+        else {
+            return []
+        }
+        let candidateIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: centerTime,
+            radiusSeconds: halfWindow
+        )
+        var samples: [(transform: StabilizerAutoTransform, weight: Float)] = []
+        samples.reserveCapacity(candidateIndices.count)
+        for index in candidateIndices where transforms.indices.contains(index) {
+            let time = frames[index].time
+            let offset = time - centerTime
+            let normalizedDistance = offset / sigma
+            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard weight > 0.0001 else {
+                continue
+            }
+            samples.append((transform: transforms[index], weight: weight))
+        }
+        return samples
+    }
+
+    private static func playbackTrajectoryTurnTransitionSamples(
+        centerTransform: StabilizerAutoTransform,
+        centerTime: Double,
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform]
+    ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
+        guard let firstTime = frames.first?.time,
+              let lastTime = frames.last?.time
+        else {
+            return [(centerTransform, 1.0)]
+        }
+        let sampleCount = max(3, renderTurnTransitionSmoothingSampleCount)
+        let centerSample = sampleCount / 2
+        let halfWindow = renderTurnTransitionSmoothingWindowSeconds * 0.5
+        let denominator = Double(max(1, sampleCount - 1))
+        let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
+        let sigma = max(1e-6, halfWindow * 0.55)
+        var rawSamples: [(transform: StabilizerAutoTransform, timeWeight: Float, isCenter: Bool)] = [(centerTransform, 1.0, true)]
+        rawSamples.reserveCapacity(sampleCount)
+        for sampleIndex in 0..<sampleCount where sampleIndex != centerSample {
+            let offset = Double(sampleIndex - centerSample) * sampleStep
+            let sampleSeconds = centerTime + offset
+            guard sampleSeconds >= firstTime, sampleSeconds <= lastTime else {
+                continue
+            }
+            let normalizedDistance = offset / sigma
+            let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard weight > 0.0001 else {
+                continue
+            }
+            let transform = playbackTrajectoryInterpolatedRawTransform(
+                frames: frames,
+                transforms: transforms,
+                seconds: sampleSeconds
+            )
+            rawSamples.append((transform: transform, timeWeight: weight, isCenter: false))
+        }
+
+        var supportMagnitude: Float = 0.0
+        var signedSupport: Float = 0.0
+        var signedSupportWeight: Float = 0.0
+        for sample in rawSamples {
+            let turnResponse = turnCorrectionConfidenceResponse(sample.transform.turnConfidence)
+            let qualitySupport = turnTransitionBridgeQualitySupport(sample.transform)
+            let evidenceWeight = sample.timeWeight * turnResponse * qualitySupport
+            guard evidenceWeight > 0.0001 else {
+                continue
+            }
+            let macroX = sample.transform.macroPixelOffset.x
+            supportMagnitude = max(supportMagnitude, abs(macroX))
+            signedSupport += macroX * evidenceWeight
+            signedSupportWeight += evidenceWeight
+        }
+        guard supportMagnitude >= renderTurnTransitionMinimumMacroPixels,
+              signedSupportWeight > 0.0001
+        else {
+            return [(centerTransform, 1.0)]
+        }
+        let dominantSign: Float = signedSupport >= 0.0 ? 1.0 : -1.0
+        let samples = rawSamples.compactMap { sample -> (transform: StabilizerAutoTransform, weight: Float)? in
+            let macroX = sample.transform.macroPixelOffset.x
+            let macroMagnitude = abs(macroX)
+            let turnResponse = turnCorrectionConfidenceResponse(sample.transform.turnConfidence)
+            let qualitySupport = turnTransitionBridgeQualitySupport(sample.transform)
+            let evidenceWeight = turnResponse * qualitySupport
+            let magnitudeSupport = confidenceRamp(
+                macroMagnitude,
+                start: supportMagnitude * 0.10,
+                full: max(supportMagnitude * 0.45, renderTurnTransitionMinimumMacroPixels)
+            )
+            let directionSupport: Float
+            if macroMagnitude < renderTurnTransitionMinimumMacroPixels {
+                directionSupport = sample.isCenter ? 0.25 : 0.10
+            } else {
+                directionSupport = (macroX * dominantSign) >= 0.0 ? 1.0 : 0.15
+            }
+            let centerScale: Float = sample.isCenter
+                ? 0.25 + (turnCorrectionConfidenceResponse(sample.transform.turnConfidence) * 0.75)
+                : 1.0
+            let weight = sample.timeWeight
+                * evidenceWeight
+                * max(0.15, magnitudeSupport)
+                * directionSupport
+                * centerScale
+            guard weight > 0.0001 else {
+                return nil
+            }
+            return (transform: sample.transform, weight: weight)
+        }
+        return samples.isEmpty ? [(transform: centerTransform, weight: Float(1.0))] : samples
+    }
+
+    private static func playbackTrajectoryInterpolatedRawTransform(
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform],
+        seconds: Double
+    ) -> StabilizerAutoTransform {
+        guard !frames.isEmpty,
+              frames.count == transforms.count,
+              seconds.isFinite
+        else {
+            return .identity
+        }
+        if seconds <= frames[0].time {
+            return transforms[0]
+        }
+        let lastIndex = frames.count - 1
+        if seconds >= frames[lastIndex].time {
+            return transforms[lastIndex]
+        }
+        let interpolation = frameLookup(at: seconds, in: frames).interpolation
+        guard transforms.indices.contains(interpolation.lowerIndex) else {
+            return .identity
+        }
+        let lowerTransform = transforms[interpolation.lowerIndex]
+        guard interpolation.upperIndex != interpolation.lowerIndex,
+              interpolation.fraction > 0.0001,
+              transforms.indices.contains(interpolation.upperIndex)
+        else {
+            return lowerTransform
+        }
+        let upperWeight = clamp(interpolation.fraction, min: 0.0, max: 1.0)
+        let lowerWeight = 1.0 - upperWeight
+        return weightedAverageTransform([
+            (transform: lowerTransform, weight: lowerWeight),
+            (transform: transforms[interpolation.upperIndex], weight: upperWeight)
+        ])
+    }
+
+    private static func playbackTrajectorySmoothedFootstepJitter(
+        centerTransform: StabilizerAutoTransform,
+        centerTime: Double,
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform]
+    ) -> (microPixelOffset: vector_float2, rotationDegrees: Float) {
+        let halfWindow = renderFootstepJitterSmoothingWindowSeconds * 0.5
+        let sigma = max(1e-6, halfWindow * 0.55)
+        let candidateIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: centerTime,
+            radiusSeconds: halfWindow
+        )
+        var xSamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+        var ySamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+        var rollSamples: [(value: Float, confidence: Float, timeWeight: Float)] = []
+        xSamples.reserveCapacity(candidateIndices.count)
+        ySamples.reserveCapacity(candidateIndices.count)
+        rollSamples.reserveCapacity(candidateIndices.count)
+
+        for index in candidateIndices where transforms.indices.contains(index) {
+            let time = frames[index].time
+            let offset = time - centerTime
+            if abs(offset) <= timeWindowSelectionEpsilon {
+                continue
+            }
+            let normalizedDistance = offset / sigma
+            let timeWeight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+            guard timeWeight > 0.0001 else {
+                continue
+            }
+            let transform = transforms[index]
+            xSamples.append((transform.microPixelOffset.x, transform.effectiveMicroJitterStrength.x, timeWeight))
+            ySamples.append((transform.microPixelOffset.y, transform.effectiveMicroJitterStrength.y, timeWeight))
+            rollSamples.append((transform.footstepJitterRotationDegrees, transform.effectiveMicroJitterStrength.z, timeWeight))
+        }
+
+        return (
+            microPixelOffset: vector_float2(
+                smoothedFootstepScalar(
+                    centerValue: centerTransform.microPixelOffset.x,
+                    centerConfidence: centerTransform.effectiveMicroJitterStrength.x,
+                    samples: xSamples,
+                    similarityScale: renderFootstepJitterSmoothingPixelSimilarity
+                ),
+                smoothedFootstepScalar(
+                    centerValue: centerTransform.microPixelOffset.y,
+                    centerConfidence: centerTransform.effectiveMicroJitterStrength.y,
+                    samples: ySamples,
+                    similarityScale: renderFootstepJitterSmoothingPixelSimilarity
+                )
+            ),
+            rotationDegrees: smoothedFootstepScalar(
+                centerValue: centerTransform.footstepJitterRotationDegrees,
+                centerConfidence: centerTransform.effectiveMicroJitterStrength.z,
+                samples: rollSamples,
+                similarityScale: renderFootstepJitterSmoothingRotationSimilarity
+            )
+        )
+    }
+
     static func autoCropWindowEstimate(
         preparedAnalysis analysis: StabilizerPreparedAnalysis,
         renderTime: CMTime,
@@ -1352,6 +2599,559 @@ enum AutoStabilizationEstimator {
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
             cache: renderEstimateCache(for: analysis)
+        )
+    }
+
+    private static func playbackRawEstimate(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
+    ) -> StabilizerAutoTransform {
+        let frames = analysis.frames
+        guard frames.count >= 3 else {
+            return .identity
+        }
+
+        let frameLookup = frameLookup(at: renderSeconds, in: frames)
+        let centerIndex = frameLookup.centerIndex
+        let frameInterpolation = frameLookup.interpolation
+        guard frames.indices.contains(centerIndex) else {
+            return .identity
+        }
+
+        let sampleWidth = frames[centerIndex].sampleWidth
+        let sampleHeight = frames[centerIndex].sampleHeight
+        let xScale = outputSize.x / Float(max(1, sampleWidth))
+        let yScale = outputSize.y / Float(max(1, sampleHeight))
+        let effectiveStrideWobbleWindowSeconds = strideWobbleWindowSeconds
+        let smoothWindowSeconds = max(effectiveStrideWobbleWindowSeconds, panSmoothSeconds)
+        let activeIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: smoothWindowSeconds * 0.5
+        )
+        let turnActiveIndices = activeIndices.isEmpty ? [centerIndex] : activeIndices
+        let strideIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: effectiveStrideWobbleWindowSeconds * 0.5
+        )
+        let strideActiveIndices = strideIndices.isEmpty ? [centerIndex] : strideIndices
+        let cache = renderEstimateCache(for: analysis)
+
+        func outerPredictionPath(_ kind: MotionPathKind) -> EstimatedPath {
+            let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+            return EstimatedPath(values: values, valueProvider: { index in
+                guard values.indices.contains(index),
+                      frames.indices.contains(index)
+                else {
+                    return nil
+                }
+                return outerLinearPrediction(
+                    values,
+                    frames: frames,
+                    centerIndex: index,
+                    innerWindowSeconds: footstepImpulseInnerWindowSeconds,
+                    outerWindowSeconds: footstepImpulseOuterWindowSeconds
+                ) ?? values[index]
+            })
+        }
+
+        let footstepBaselineXPath = outerPredictionPath(.footstepX)
+        let footstepBaselineYPath = outerPredictionPath(.footstepY)
+        let footstepBaselineRollPath = outerPredictionPath(.footstepRoll)
+        let centerResidual = interpolatedValue(analysis.residuals, using: frameInterpolation)
+        let centerBlurAmount = interpolatedValue(analysis.blurAmounts, using: frameInterpolation)
+        let motionConfidence = interpolatedValue(analysis.analysisConfidence, using: frameInterpolation)
+        let acceptedBlockCount = analysis.acceptedBlockCounts.indices.contains(centerIndex) ? analysis.acceptedBlockCounts[centerIndex] : 0
+        let totalBlockCount = analysis.totalBlockCounts.indices.contains(centerIndex) ? analysis.totalBlockCounts[centerIndex] : 0
+        let searchRadiusHitCount = analysis.searchRadiusHitCounts.indices.contains(centerIndex) ? analysis.searchRadiusHitCounts[centerIndex] : 0
+        let searchRadiusTotalCount = analysis.searchRadiusTotalCounts.indices.contains(centerIndex) ? analysis.searchRadiusTotalCounts[centerIndex] : 0
+        let warpConfidence = analysis.warpConfidence.indices.contains(centerIndex) ? analysis.warpConfidence[centerIndex] : 0.0
+        let trackingConfidence = frameTrackingConfidence(
+            motionConfidence: motionConfidence,
+            residual: centerResidual,
+            blurAmount: centerBlurAmount,
+            acceptedBlockCount: acceptedBlockCount,
+            totalBlockCount: totalBlockCount,
+            qualityModel: analysis.qualityModel
+        )
+        let walkingTrackingConfidence = walkingBandTrackingConfidence(
+            motionConfidence: motionConfidence,
+            residual: centerResidual,
+            blurAmount: centerBlurAmount,
+            acceptedBlockCount: acceptedBlockCount,
+            totalBlockCount: totalBlockCount,
+            qualityModel: analysis.qualityModel
+        )
+        let pathX = EstimatedPath(values: analysis.pathX)
+        let pathY = EstimatedPath(values: analysis.pathY)
+        let pathRoll = EstimatedPath(values: analysis.pathRoll)
+        let footstepPathX = EstimatedPath(values: analysis.footstepPathX)
+        let footstepPathY = EstimatedPath(values: analysis.footstepPathY)
+        let footstepPathRoll = EstimatedPath(values: analysis.footstepPathRoll)
+        let footstepPathXAtRender = interpolatedValue(analysis.footstepPathX, using: frameInterpolation)
+        let footstepPathYAtRender = interpolatedValue(analysis.footstepPathY, using: frameInterpolation)
+        let footstepPathRollAtRender = interpolatedValue(analysis.footstepPathRoll, using: frameInterpolation)
+        let microImpulseBaselineX = interpolatedValue(footstepBaselineXPath, using: frameInterpolation)
+        let microImpulseBaselineY = interpolatedValue(footstepBaselineYPath, using: frameInterpolation)
+        let microImpulseBaselineRoll = interpolatedValue(footstepBaselineRollPath, using: frameInterpolation)
+        let footstepImpulseX = footstepPathXAtRender - microImpulseBaselineX
+        let footstepImpulseY = footstepPathYAtRender - microImpulseBaselineY
+        let footstepImpulseRoll = footstepPathRollAtRender - microImpulseBaselineRoll
+        let rawFootstepXConfidence = footstepFrameConfidence(
+            .footstepX,
+            values: analysis.footstepPathX,
+            baselineValues: footstepBaselineXPath,
+            frames: frames,
+            interpolation: frameInterpolation,
+            trackingConfidence: walkingTrackingConfidence,
+            fullImpulseScale: footstepImpulseFullScalePixels,
+            cache: cache
+        )
+        let rawFootstepYConfidence = footstepFrameConfidence(
+            .footstepY,
+            values: analysis.footstepPathY,
+            baselineValues: footstepBaselineYPath,
+            frames: frames,
+            interpolation: frameInterpolation,
+            trackingConfidence: walkingTrackingConfidence,
+            fullImpulseScale: footstepImpulseFullScalePixels,
+            cache: cache
+        )
+        let rawFootstepRollConfidence = footstepFrameConfidence(
+            .footstepRoll,
+            values: analysis.footstepPathRoll,
+            baselineValues: footstepBaselineRollPath,
+            frames: frames,
+            interpolation: frameInterpolation,
+            trackingConfidence: walkingTrackingConfidence,
+            fullImpulseScale: footstepImpulseFullScaleDegrees,
+            cache: cache
+        )
+        let cleanedFootstepXAtRender = footstepPathXAtRender - (footstepImpulseX * rawFootstepXConfidence)
+        let cleanedFootstepYAtRender = footstepPathYAtRender - (footstepImpulseY * rawFootstepYConfidence)
+        let cleanedFootstepRollAtRender = footstepPathRollAtRender - (footstepImpulseRoll * rawFootstepRollConfidence)
+        let strideSmoothX = timeWeightedLinearPrediction(
+            footstepPathX,
+            frames: frames,
+            indices: strideActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        ) ??
+            timeWeightedAverage(
+                footstepPathX,
+                frames: frames,
+                indices: strideActiveIndices,
+                centerTime: renderSeconds,
+                windowSeconds: effectiveStrideWobbleWindowSeconds
+            )
+        let strideSmoothY = timeWeightedLinearPrediction(
+            footstepPathY,
+            frames: frames,
+            indices: strideActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        ) ??
+            timeWeightedAverage(
+                footstepPathY,
+                frames: frames,
+                indices: strideActiveIndices,
+                centerTime: renderSeconds,
+                windowSeconds: effectiveStrideWobbleWindowSeconds
+            )
+        let strideSmoothRoll = timeWeightedLinearPrediction(
+            footstepPathRoll,
+            frames: frames,
+            indices: strideActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        ) ??
+            timeWeightedAverage(
+                footstepPathRoll,
+                frames: frames,
+                indices: strideActiveIndices,
+                centerTime: renderSeconds,
+                windowSeconds: effectiveStrideWobbleWindowSeconds
+            )
+        let turnSmoothX = timeWeightedLinearPrediction(
+            pathX,
+            frames: frames,
+            indices: turnActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothWindowSeconds
+        ) ??
+            timeWeightedAverage(
+                pathX,
+                frames: frames,
+                indices: turnActiveIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            )
+        let turnSmoothY = timeWeightedLinearPrediction(
+            pathY,
+            frames: frames,
+            indices: turnActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothWindowSeconds
+        ) ??
+            timeWeightedAverage(
+                pathY,
+                frames: frames,
+                indices: turnActiveIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            )
+        let turnSmoothRoll = timeWeightedLinearPrediction(
+            pathRoll,
+            frames: frames,
+            indices: turnActiveIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothWindowSeconds
+        ) ??
+            timeWeightedAverage(
+                pathRoll,
+                frames: frames,
+                indices: turnActiveIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            )
+        let pathXAtRender = interpolatedValue(analysis.pathX, using: frameInterpolation)
+        let pathYAtRender = interpolatedValue(analysis.pathY, using: frameInterpolation)
+        let pathRollAtRender = interpolatedValue(analysis.pathRoll, using: frameInterpolation)
+        let strideBandX = cleanedFootstepXAtRender - strideSmoothX
+        let strideBandY = cleanedFootstepYAtRender - strideSmoothY
+        let strideBandRoll = cleanedFootstepRollAtRender - strideSmoothRoll
+        let panBandX = pathXAtRender - turnSmoothX
+        let panBandY = pathYAtRender - turnSmoothY
+        let panBandRoll = pathRollAtRender - turnSmoothRoll
+        let strideTrackingConfidence = residualAdjustedTrackingConfidence(
+            walkingTrackingConfidence,
+            residual: centerResidual,
+            multiplier: 0.6,
+            qualityModel: analysis.qualityModel
+        )
+        let rawStrideXConfidence = strideWobbleConfidence(
+            bandValue: strideBandX,
+            trackingConfidence: strideTrackingConfidence,
+            fullScale: strideWobbleFullScalePixels
+        )
+        let rawStrideYConfidence = strideWobbleConfidence(
+            bandValue: strideBandY,
+            trackingConfidence: strideTrackingConfidence,
+            fullScale: strideWobbleFullScalePixels
+        )
+        let rawStrideRollConfidence = strideWobbleConfidence(
+            bandValue: strideBandRoll,
+            trackingConfidence: strideTrackingConfidence,
+            fullScale: strideWobbleFullScaleDegrees
+        )
+        let turnTrackingConfidence = residualAdjustedTrackingConfidence(
+            trackingConfidence,
+            residual: centerResidual,
+            multiplier: 0.9,
+            qualityModel: analysis.qualityModel
+        )
+        let turnBandConfidenceX = turnSmoothingConfidence(
+            bandValue: panBandX,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let turnBandConfidenceY = turnSmoothingConfidence(
+            bandValue: panBandY,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let turnBandConfidenceRoll = turnSmoothingRotationConfidence(
+            bandValue: panBandRoll,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let turnOwnershipX = turnOwnershipConfidence(
+            values: pathX,
+            frames: frames,
+            indices: turnActiveIndices,
+            turnBandValue: panBandX,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let turnOwnershipY = turnOwnershipConfidence(
+            values: pathY,
+            frames: frames,
+            indices: turnActiveIndices,
+            turnBandValue: panBandY,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let turnOwnership = max(turnOwnershipX, turnOwnershipY)
+        let coupledTurnOwnershipY = max(turnOwnershipY, turnOwnershipX * 0.70)
+        let coupledTurnOwnershipRoll = max(turnOwnership, turnOwnershipX * 0.70)
+        let confidenceX = turnBandConfidenceX * turnOwnershipX
+        let confidenceY = turnBandConfidenceY * coupledTurnOwnershipY
+        let confidenceRoll = turnBandConfidenceRoll * coupledTurnOwnershipRoll
+        let confidence = max(confidenceX, confidenceY, confidenceRoll)
+        let combinedTurnCorrectionConfidence = turnCorrectionConfidence(
+            confidence: confidence,
+            turnOwnership: turnOwnership
+        )
+        let turnCorrectionConfidenceX = turnCorrectionConfidence(
+            confidence: confidenceX,
+            turnOwnership: turnOwnershipX
+        )
+        let turnCorrectionConfidenceY = turnCorrectionConfidence(
+            confidence: confidenceY,
+            turnOwnership: coupledTurnOwnershipY
+        )
+        let turnCorrectionConfidenceRoll = turnCorrectionConfidence(
+            confidence: confidenceRoll,
+            turnOwnership: coupledTurnOwnershipRoll
+        )
+        let turnShakeSuppression = turnStabilizerShakeSuppression(
+            turnOwnership: turnOwnership,
+            turnConfidence: confidence
+        )
+        let footstepXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
+        let footstepYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepYSuppression), min: 0.0, max: 1.0)
+        let footstepRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepRollSuppression), min: 0.0, max: 1.0)
+        let strideXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
+        let strideYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideYSuppression), min: 0.0, max: 1.0)
+        let strideRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideRollSuppression), min: 0.0, max: 1.0)
+        let footstepXConfidence = rawFootstepXConfidence * footstepXTurnGate
+        let footstepYConfidence = rawFootstepYConfidence * footstepYTurnGate
+        let footstepRollConfidence = rawFootstepRollConfidence * footstepRollTurnGate
+        let strideXConfidence = rawStrideXConfidence * strideXTurnGate
+        let strideYConfidence = rawStrideYConfidence * strideYTurnGate
+        let strideRollConfidence = rawStrideRollConfidence * strideRollTurnGate
+        let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
+        let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
+        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceX)
+        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceY)
+        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceRoll)
+        let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
+        let microYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
+        let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
+        let strideXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleX, confidence: strideXConfidence, maxStrength: 10.0)
+        let strideYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence, maxStrength: 10.0)
+        let strideRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleRotation, confidence: strideRollConfidence)
+        let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrengthX
+        let rawMacroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrengthY
+        let rawMacroCompensationRotation = -panBandRoll * rotationGain * panCorrectionStrengthRoll
+        let macroCompensationX = softLimit(
+            rawMacroCompensationX,
+            limit: turnSmoothingOffsetLimit(
+                outputPixels: outputSize.x,
+                baseFraction: baseTurnSmoothingOffsetLimitX,
+                extraFraction: extraTurnSmoothingOffsetLimitX,
+                strength: strengths.panStabilizationStrength
+            )
+        )
+        let macroCompensationY = softLimit(
+            rawMacroCompensationY,
+            limit: turnSmoothingOffsetLimit(
+                outputPixels: outputSize.y,
+                baseFraction: baseTurnSmoothingOffsetLimitY,
+                extraFraction: extraTurnSmoothingOffsetLimitY,
+                strength: strengths.panStabilizationStrength
+            )
+        )
+        let macroCompensationRotation = softLimit(
+            rawMacroCompensationRotation,
+            limit: turnSmoothingRotationLimit(strength: strengths.panStabilizationStrength)
+        )
+        let rawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
+        let rawMicroCompensationY = -footstepImpulseY * yScale * microYCorrectionStrength
+        let limitedMicroCompensationX = strengths.microJitterX > 0.0
+            ? footstepContinuityLimitedCorrection(
+                .footstepX,
+                values: analysis.footstepPathX,
+                baselineValues: footstepBaselineXPath,
+                analysis: analysis,
+                centerTime: renderSeconds,
+                rawCorrection: rawMicroCompensationX,
+                outputScale: xScale,
+                requestedStrength: strengths.microJitterX,
+                fullImpulseScale: footstepImpulseFullScalePixels,
+                confidenceScale: footstepXTurnGate,
+                cache: cache
+            )
+            : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationX, limitedAmount: 0.0)
+        let limitedMicroCompensationY = strengths.microJitterY > 0.0
+            ? footstepContinuityLimitedCorrection(
+                .footstepY,
+                values: analysis.footstepPathY,
+                baselineValues: footstepBaselineYPath,
+                analysis: analysis,
+                centerTime: renderSeconds,
+                rawCorrection: rawMicroCompensationY,
+                outputScale: yScale,
+                requestedStrength: strengths.microJitterY,
+                fullImpulseScale: footstepImpulseFullScalePixels,
+                confidenceScale: footstepYTurnGate,
+                cache: cache
+            )
+            : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationY, limitedAmount: 0.0)
+        let microCompensationX = limitedMicroCompensationX.limitedCorrection
+        let microCompensationY = limitedMicroCompensationY.limitedCorrection
+        let microCompensationRotation = -footstepImpulseRoll * microRotationCorrectionStrength
+        let strideCompensationX = -strideBandX * xScale * strideXCorrectionStrength
+        let strideCompensationY = -strideBandY * yScale * strideYCorrectionStrength
+        let strideCompensationRotation = -strideBandRoll * strideRotationCorrectionStrength
+        let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
+        let microPixelOffset = vector_float2(microCompensationX, microCompensationY)
+        let strideWobblePixelOffset = vector_float2(strideCompensationX, strideCompensationY)
+        let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x
+        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y
+        let compensationRotation = macroCompensationRotation + microCompensationRotation + strideCompensationRotation
+        let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: maximumFarFieldWarpStrength)
+        let shouldEstimateFarFieldWarp = farFieldWarpStrength > 0.0
+        let appliedWarpConfidence: Float
+        let yawPitchProxy: vector_float2
+        let shear: vector_float2
+        let perspective: vector_float2
+        if shouldEstimateFarFieldWarp {
+            let farFieldWarpGateIndices = indicesWithinTimeRadius(
+                frames,
+                centerTime: renderSeconds,
+                radiusSeconds: farFieldWarpOuterWindowSeconds * 0.5
+            )
+            let farFieldWarpActiveIndices = farFieldWarpGateIndices.isEmpty ? [centerIndex] : farFieldWarpGateIndices
+            let farFieldWarpTrackingConfidence = stableFarFieldWarpTrackingConfidence(
+                analysis: analysis,
+                indices: farFieldWarpActiveIndices,
+                currentTrackingConfidence: trackingConfidence
+            )
+            let farFieldWarpEdgeQuality = stableFarFieldWarpEdgeQuality(
+                analysis: analysis,
+                indices: farFieldWarpActiveIndices,
+                currentSearchRadiusHitCount: searchRadiusHitCount,
+                currentSearchRadiusTotalCount: searchRadiusTotalCount
+            )
+            let stableWarpConfidence = stableFarFieldWarpConfidence(
+                analysis: analysis,
+                indices: farFieldWarpActiveIndices,
+                currentWarpConfidence: warpConfidence
+            )
+            let farFieldWarpGate = farFieldWarpRenderGate(
+                warpConfidence: stableWarpConfidence,
+                trackingConfidence: farFieldWarpTrackingConfidence,
+                edgeQuality: farFieldWarpEdgeQuality
+            )
+            let farFieldWarpTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFarFieldWarpSuppression), min: 0.0, max: 1.0)
+            appliedWarpConfidence = clamp(stableWarpConfidence * farFieldWarpGate * farFieldWarpTurnGate, min: 0.0, max: 1.0)
+
+            func farFieldBaseline(_ values: [Float], index: Int) -> Float {
+                guard values.indices.contains(index),
+                      frames.indices.contains(index)
+                else {
+                    return 0.0
+                }
+                return outerLinearPrediction(
+                    values,
+                    frames: frames,
+                    centerIndex: index,
+                    innerWindowSeconds: farFieldWarpInnerWindowSeconds,
+                    outerWindowSeconds: farFieldWarpOuterWindowSeconds
+                ) ?? values[index]
+            }
+
+            func farFieldBand(_ values: [Float], deadband: Float, limit: Float) -> Float {
+                let current = interpolatedValue(values, using: frameInterpolation)
+                let lowerBaseline = farFieldBaseline(values, index: frameInterpolation.lowerIndex)
+                let upperBaseline = frameInterpolation.upperIndex == frameInterpolation.lowerIndex
+                    ? lowerBaseline
+                    : farFieldBaseline(values, index: frameInterpolation.upperIndex)
+                let baseline = lowerBaseline + ((upperBaseline - lowerBaseline) * frameInterpolation.fraction)
+                let scaled = softDeadband(current - baseline, threshold: deadband)
+                    * appliedWarpConfidence
+                    * farFieldWarpStrength
+                return clamp(scaled, min: -limit * farFieldWarpStrength, max: limit * farFieldWarpStrength)
+            }
+
+            yawPitchProxy = vector_float2(
+                farFieldBand(
+                    analysis.pathYaw,
+                    deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
+                    limit: maxRenderedFarFieldYawPitchProxy
+                ),
+                farFieldBand(
+                    analysis.pathPitch,
+                    deadband: maxRenderedFarFieldYawPitchProxy * 0.08,
+                    limit: maxRenderedFarFieldYawPitchProxy
+                )
+            )
+            shear = vector_float2(
+                farFieldBand(
+                    analysis.pathShearX,
+                    deadband: maxRenderedFarFieldShear * 0.08,
+                    limit: maxRenderedFarFieldShear
+                ),
+                farFieldBand(
+                    analysis.pathShearY,
+                    deadband: maxRenderedFarFieldShear * 0.08,
+                    limit: maxRenderedFarFieldShear
+                )
+            )
+            perspective = vector_float2(
+                farFieldBand(
+                    analysis.pathPerspectiveX,
+                    deadband: maxRenderedFarFieldPerspective * 0.08,
+                    limit: maxRenderedFarFieldPerspective
+                ),
+                farFieldBand(
+                    analysis.pathPerspectiveY,
+                    deadband: maxRenderedFarFieldPerspective * 0.08,
+                    limit: maxRenderedFarFieldPerspective
+                )
+            )
+        } else {
+            appliedWarpConfidence = 0.0
+            yawPitchProxy = vector_float2(0.0, 0.0)
+            shear = vector_float2(0.0, 0.0)
+            perspective = vector_float2(0.0, 0.0)
+        }
+
+        return StabilizerAutoTransform(
+            pixelOffset: vector_float2(compensationX, compensationY),
+            macroPixelOffset: macroPixelOffset,
+            microPixelOffset: microPixelOffset,
+            strideWobblePixelOffset: strideWobblePixelOffset,
+            footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
+            strideWobbleRotationDegrees: strideCompensationRotation,
+            rotationDegrees: compensationRotation,
+            turnDetectedPixelOffset: vector_float2(-panBandX * xScale, -panBandY * yScale),
+            rawPixelOffset: vector_float2(compensationX, compensationY),
+            rawRotationDegrees: compensationRotation,
+            temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
+            temporalSmoothingRotationDelta: 0.0,
+            temporalSmoothingSampleCount: 1,
+            temporalSmoothingWindowSeconds: 0.0,
+            effectiveMicroJitterStrength: vector_float3(
+                microXCorrectionStrength,
+                microYCorrectionStrength,
+                microRotationCorrectionStrength
+            ),
+            effectiveStrideWobbleStrength: vector_float3(
+                strideXCorrectionStrength,
+                strideYCorrectionStrength,
+                strideRotationCorrectionStrength
+            ),
+            warpConfidence: appliedWarpConfidence,
+            microConfidence: jitterConfidence,
+            strideConfidence: strideConfidence,
+            turnConfidence: combinedTurnCorrectionConfidence,
+            acceptedBlockCount: acceptedBlockCount,
+            totalBlockCount: totalBlockCount,
+            yawPitchProxy: yawPitchProxy,
+            shear: shear,
+            perspective: perspective,
+            blurAmount: centerBlurAmount,
+            trackingConfidence: trackingConfidence,
+            walkingTrackingConfidence: walkingTrackingConfidence,
+            motionConfidence: motionConfidence,
+            residual: centerResidual,
+            footstepImpulse: vector_float3(footstepImpulseX, footstepImpulseY, footstepImpulseRoll),
+            rawFootstepCorrection: vector_float2(rawMicroCompensationX, rawMicroCompensationY),
+            limitedFootstepCorrection: vector_float2(microCompensationX, microCompensationY),
+            footstepPulseLimited: vector_float2(limitedMicroCompensationX.limitedAmount, limitedMicroCompensationY.limitedAmount),
+            searchRadiusHitCount: searchRadiusHitCount,
+            searchRadiusTotalCount: searchRadiusTotalCount
         )
     }
 
@@ -1473,6 +3273,22 @@ enum AutoStabilizationEstimator {
             targetIndices: sampledIndices,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
+        let turnStrideSmoothedYPath = cache.locallyTimeWeightedAveragePath(
+            .footstepY,
+            sourceRole: .footstepTurnBaseline,
+            source: footstepBaselineYPath,
+            analysis: analysis,
+            targetIndices: sampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
+        let turnStrideSmoothedRollPath = cache.locallyTimeWeightedAveragePath(
+            .footstepRoll,
+            sourceRole: .footstepTurnBaseline,
+            source: footstepBaselineRollPath,
+            analysis: analysis,
+            targetIndices: sampledIndices,
+            windowSeconds: effectiveStrideWobbleWindowSeconds
+        )
         let footstepXTurnGateScales = turnOwnershipGateScales(
             values: turnStrideSmoothedXPath,
             analysis: analysis,
@@ -1533,14 +3349,69 @@ enum AutoStabilizationEstimator {
             targetIndices: strideSampledIndices,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
-        let turnSmoothX = timeWeightedMonotonicSCurveValue(
+        let turnSmoothX = timeWeightedLinearPrediction(
             turnStrideSmoothedXPath,
             frames: frames,
             indices: activeIndices,
             centerTime: renderSeconds,
             windowSeconds: smoothWindowSeconds
         ) ??
-            timeWeightedAverage(turnStrideSmoothedXPath, frames: frames, indices: activeIndices, centerTime: renderSeconds, windowSeconds: smoothWindowSeconds)
+            timeWeightedMonotonicSCurveValue(
+                turnStrideSmoothedXPath,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            ) ??
+            timeWeightedAverage(
+                turnStrideSmoothedXPath,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            )
+        let turnSmoothY = timeWeightedLinearPrediction(
+            turnStrideSmoothedYPath,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothWindowSeconds
+        ) ??
+            timeWeightedMonotonicSCurveValue(
+                turnStrideSmoothedYPath,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            ) ??
+            timeWeightedAverage(
+                turnStrideSmoothedYPath,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            )
+        let turnSmoothRoll = timeWeightedLinearPrediction(
+            turnStrideSmoothedRollPath,
+            frames: frames,
+            indices: activeIndices,
+            centerTime: renderSeconds,
+            windowSeconds: smoothWindowSeconds
+        ) ??
+            timeWeightedMonotonicSCurveValue(
+                turnStrideSmoothedRollPath,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            ) ??
+            timeWeightedAverage(
+                turnStrideSmoothedRollPath,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: renderSeconds,
+                windowSeconds: smoothWindowSeconds
+            )
         let footstepCleanXAtRender = interpolatedValue(footstepCleanXPath, using: frameInterpolation)
         let footstepCleanYAtRender = interpolatedValue(footstepCleanYPath, using: frameInterpolation)
         let footstepCleanRollAtRender = interpolatedValue(footstepCleanRollPath, using: frameInterpolation)
@@ -1554,6 +3425,8 @@ enum AutoStabilizationEstimator {
         let strideSmoothY = interpolatedValue(strideSmoothedYPath, using: frameInterpolation)
         let strideSmoothRoll = interpolatedValue(strideSmoothedRollPath, using: frameInterpolation)
         let turnStrideSmoothX = interpolatedValue(turnStrideSmoothedXPath, using: frameInterpolation)
+        let turnStrideSmoothY = interpolatedValue(turnStrideSmoothedYPath, using: frameInterpolation)
+        let turnStrideSmoothRoll = interpolatedValue(turnStrideSmoothedRollPath, using: frameInterpolation)
         let rawFootstepXConfidence = footstepFrameConfidence(
             .footstepX,
             values: analysis.footstepPathX,
@@ -1588,6 +3461,8 @@ enum AutoStabilizationEstimator {
         let strideBandY = footstepCleanYAtRender - strideSmoothY
         let strideBandRoll = footstepCleanRollAtRender - strideSmoothRoll
         let panBandX = turnStrideSmoothX - turnSmoothX
+        let panBandY = turnStrideSmoothY - turnSmoothY
+        let panBandRoll = turnStrideSmoothRoll - turnSmoothRoll
         let strideTrackingConfidence = residualAdjustedTrackingConfidence(
             walkingTrackingConfidence,
             residual: strideResidual,
@@ -1615,8 +3490,16 @@ enum AutoStabilizationEstimator {
             multiplier: 0.9,
             qualityModel: analysis.qualityModel
         )
-        let turnBandConfidence = turnSmoothingConfidence(
+        let turnBandConfidenceX = turnSmoothingConfidence(
             bandValue: panBandX,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let turnBandConfidenceY = turnSmoothingConfidence(
+            bandValue: panBandY,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let turnBandConfidenceRoll = turnSmoothingRotationConfidence(
+            bandValue: panBandRoll,
             trackingConfidence: turnTrackingConfidence
         )
         let turnOwnershipX = turnOwnershipConfidence(
@@ -1626,13 +3509,38 @@ enum AutoStabilizationEstimator {
             turnBandValue: panBandX,
             trackingConfidence: turnTrackingConfidence
         )
-        let confidence = turnBandConfidence * turnOwnershipX
-        let turnCorrectionConfidence = turnCorrectionConfidence(
+        let turnOwnershipY = turnOwnershipConfidence(
+            values: turnStrideSmoothedYPath,
+            frames: frames,
+            indices: activeIndices,
+            turnBandValue: panBandY,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let turnOwnership = max(turnOwnershipX, turnOwnershipY)
+        let coupledTurnOwnershipY = max(turnOwnershipY, turnOwnershipX * 0.70)
+        let coupledTurnOwnershipRoll = max(turnOwnership, turnOwnershipX * 0.70)
+        let confidenceX = turnBandConfidenceX * turnOwnershipX
+        let confidenceY = turnBandConfidenceY * coupledTurnOwnershipY
+        let confidenceRoll = turnBandConfidenceRoll * coupledTurnOwnershipRoll
+        let confidence = max(confidenceX, confidenceY, confidenceRoll)
+        let combinedTurnCorrectionConfidence = turnCorrectionConfidence(
             confidence: confidence,
+            turnOwnership: turnOwnership
+        )
+        let turnCorrectionConfidenceX = turnCorrectionConfidence(
+            confidence: confidenceX,
             turnOwnership: turnOwnershipX
         )
+        let turnCorrectionConfidenceY = turnCorrectionConfidence(
+            confidence: confidenceY,
+            turnOwnership: coupledTurnOwnershipY
+        )
+        let turnCorrectionConfidenceRoll = turnCorrectionConfidence(
+            confidence: confidenceRoll,
+            turnOwnership: coupledTurnOwnershipRoll
+        )
         let rawTurnShakeSuppression = turnStabilizerShakeSuppression(
-            turnOwnership: turnOwnershipX,
+            turnOwnership: turnOwnership,
             turnConfidence: confidence
         )
         let turnShakeSuppression = smoothedTurnShakeSuppression(
@@ -1670,15 +3578,19 @@ enum AutoStabilizationEstimator {
         let strideRollConfidence = rawStrideRollConfidence * strideRollTurnGate
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-        let panCorrectionStrength = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidence)
+        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceX)
+        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceY)
+        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceRoll)
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
         let strideXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleX, confidence: strideXConfidence, maxStrength: 10.0)
         let strideYCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence, maxStrength: 10.0)
         let strideRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleRotation, confidence: strideRollConfidence)
-        let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrength
-        let detectedTurnPixelOffset = vector_float2(-panBandX * xScale, 0.0)
+        let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrengthX
+        let rawMacroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrengthY
+        let rawMacroCompensationRotation = -panBandRoll * rotationGain * panCorrectionStrengthRoll
+        let detectedTurnPixelOffset = vector_float2(-panBandX * xScale, -panBandY * yScale)
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
             limit: turnSmoothingOffsetLimit(
@@ -1688,8 +3600,19 @@ enum AutoStabilizationEstimator {
                 strength: strengths.panStabilizationStrength
             )
         )
-        let macroCompensationY: Float = 0.0
-        let macroCompensationRotation: Float = 0.0
+        let macroCompensationY = softLimit(
+            rawMacroCompensationY,
+            limit: turnSmoothingOffsetLimit(
+                outputPixels: outputSize.y,
+                baseFraction: baseTurnSmoothingOffsetLimitY,
+                extraFraction: extraTurnSmoothingOffsetLimitY,
+                strength: strengths.panStabilizationStrength
+            )
+        )
+        let macroCompensationRotation = softLimit(
+            rawMacroCompensationRotation,
+            limit: turnSmoothingRotationLimit(strength: strengths.panStabilizationStrength)
+        )
         let rawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let rawMicroCompensationY = -(footstepPathYAtRender - footstepBaselineY) * yScale * microYCorrectionStrength
         let limitedMicroCompensationX = limitFootstepContinuity && strengths.microJitterX > 0.0
@@ -1738,7 +3661,7 @@ enum AutoStabilizationEstimator {
         let strideWobblePixelOffset = vector_float2(strideCompensationX, strideCompensationY)
         let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x
         let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y
-        let compensationRotation = (macroCompensationRotation * confidence) + microCompensationRotation + strideCompensationRotation
+        let compensationRotation = macroCompensationRotation + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrength = clamp(Float(strengths.farFieldWarp), min: 0.0, max: maximumFarFieldWarpStrength)
         let shouldEstimateFarFieldWarp = includeFarFieldWarp && farFieldWarpStrength > 0.0
         let appliedWarpConfidence: Float
@@ -1898,7 +3821,7 @@ enum AutoStabilizationEstimator {
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
-            footstepJitterRotationDegrees: microCompensationRotation,
+            footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation,
             turnDetectedPixelOffset: detectedTurnPixelOffset,
@@ -1921,7 +3844,7 @@ enum AutoStabilizationEstimator {
             warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             strideConfidence: strideConfidence,
-            turnConfidence: turnCorrectionConfidence,
+            turnConfidence: combinedTurnCorrectionConfidence,
             acceptedBlockCount: acceptedBlockCount,
             totalBlockCount: totalBlockCount,
             yawPitchProxy: yawPitchProxy,
@@ -1956,13 +3879,15 @@ enum AutoStabilizationEstimator {
         let firstTime = frames[0].time
         let lastTime = frames[frames.count - 1].time
         let renderEstimateCache = renderEstimateCache(for: analysis)
-        let rawCenterTransform = rawEstimate(
-            preparedAnalysis: analysis,
+        let rawCenterTransform = interpolatedRawTransform(
+            analysis: analysis,
             renderSeconds: renderSeconds,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
-            cache: renderEstimateCache
+            cache: renderEstimateCache,
+            limitFootstepContinuity: true,
+            includeFarFieldWarp: true
         )
         let sampleCount = max(3, renderTemporalSmoothingSampleCount)
         let centerSample = sampleCount / 2
@@ -1990,14 +3915,14 @@ enum AutoStabilizationEstimator {
             if sampleIndex == centerSample {
                 transform = rawCenterTransform
             } else {
-                let sampleFrameIndex = frameLookup(at: sampleSeconds, in: frames).centerIndex
                 let includeFarFieldWarp = abs(offset) <= farFieldWarpHalfWindow + 1e-9
-                transform = renderEstimateCache.rawTransform(
+                transform = interpolatedRawTransform(
                     analysis: analysis,
-                    index: sampleFrameIndex,
+                    renderSeconds: sampleSeconds,
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
                     strengths: strengths,
+                    cache: renderEstimateCache,
                     limitFootstepContinuity: false,
                     includeFarFieldWarp: includeFarFieldWarp
                 )
@@ -2021,12 +3946,13 @@ enum AutoStabilizationEstimator {
                     continue
                 }
                 let includeFarFieldWarp = abs(offset) <= farFieldWarpHalfWindow + 1e-9
-                let transform = renderEstimateCache.rawTransform(
+                let transform = interpolatedRawTransform(
                     analysis: analysis,
-                    index: sampleFrameIndex,
+                    renderSeconds: sampleSeconds,
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
                     strengths: strengths,
+                    cache: renderEstimateCache,
                     limitFootstepContinuity: false,
                     includeFarFieldWarp: includeFarFieldWarp
                 )
@@ -2140,6 +4066,56 @@ enum AutoStabilizationEstimator {
         return smoothedTransform
     }
 
+    private static func interpolatedRawTransform(
+        analysis: StabilizerPreparedAnalysis,
+        renderSeconds: Double,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        cache: RenderEstimateCache,
+        limitFootstepContinuity: Bool,
+        includeFarFieldWarp: Bool
+    ) -> StabilizerAutoTransform {
+        let frames = analysis.frames
+        guard frames.count >= 3 else {
+            return .identity
+        }
+        let interpolation = frameLookup(at: renderSeconds, in: frames).interpolation
+        guard frames.indices.contains(interpolation.lowerIndex) else {
+            return .identity
+        }
+        let lowerTransform = cache.rawTransform(
+            analysis: analysis,
+            index: interpolation.lowerIndex,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            limitFootstepContinuity: limitFootstepContinuity,
+            includeFarFieldWarp: includeFarFieldWarp
+        )
+        guard interpolation.upperIndex != interpolation.lowerIndex,
+              interpolation.fraction > 0.0001,
+              frames.indices.contains(interpolation.upperIndex)
+        else {
+            return lowerTransform
+        }
+        let upperTransform = cache.rawTransform(
+            analysis: analysis,
+            index: interpolation.upperIndex,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths,
+            limitFootstepContinuity: limitFootstepContinuity,
+            includeFarFieldWarp: includeFarFieldWarp
+        )
+        let upperWeight = clamp(interpolation.fraction, min: 0.0, max: 1.0)
+        let lowerWeight = 1.0 - upperWeight
+        return weightedAverageTransform([
+            (transform: lowerTransform, weight: lowerWeight),
+            (transform: upperTransform, weight: upperWeight)
+        ])
+    }
+
     private static func farFieldWarpTemporalScale(
         centerTransform: StabilizerAutoTransform,
         smoothedTransform: StabilizerAutoTransform,
@@ -2213,13 +4189,13 @@ enum AutoStabilizationEstimator {
             guard weight > 0.0001 else {
                 continue
             }
-            let sampleFrameIndex = frameLookup(at: sampleSeconds, in: frames).centerIndex
-            let transform = cache.rawTransform(
+            let transform = interpolatedRawTransform(
                 analysis: analysis,
-                index: sampleFrameIndex,
+                renderSeconds: sampleSeconds,
                 outputSize: outputSize,
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths,
+                cache: cache,
                 limitFootstepContinuity: false,
                 includeFarFieldWarp: false
             )
@@ -2409,12 +4385,13 @@ enum AutoStabilizationEstimator {
             if weight <= 0.0001 {
                 continue
             }
-            let transform = cache.rawTransform(
+            let transform = interpolatedRawTransform(
                 analysis: analysis,
-                index: index,
+                renderSeconds: frames[index].time,
                 outputSize: outputSize,
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths,
+                cache: cache,
                 limitFootstepContinuity: false,
                 includeFarFieldWarp: true
             )
@@ -2457,12 +4434,13 @@ enum AutoStabilizationEstimator {
             if timeWeight <= 0.0001 {
                 continue
             }
-            let transform = cache.rawTransform(
+            let transform = interpolatedRawTransform(
                 analysis: analysis,
-                index: index,
+                renderSeconds: frames[index].time,
                 outputSize: outputSize,
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths,
+                cache: cache,
                 limitFootstepContinuity: true,
                 includeFarFieldWarp: false
             )
@@ -4455,6 +6433,11 @@ enum AutoStabilizationEstimator {
         return max(8.0, outputPixels * fraction)
     }
 
+    private static func turnSmoothingRotationLimit(strength: Double) -> Float {
+        let extraStrength = clamp(Float(strength - 1.0), min: 0.0, max: 3.0)
+        return baseTurnSmoothingRotationLimitDegrees + (extraTurnSmoothingRotationLimitDegrees * extraStrength)
+    }
+
     private static func softLimit(_ value: Float, limit: Float) -> Float {
         guard value.isFinite, limit.isFinite, limit > 0.0 else {
             return value
@@ -4844,6 +6827,86 @@ enum AutoStabilizationEstimator {
             return average(values, indices: indices)
         }
         return weightedTotal / Float(totalWeight)
+    }
+
+    private static func timeWeightedLinearPrediction(
+        _ values: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        centerTime: Double,
+        windowSeconds: Double
+    ) -> Float? {
+        guard indices.count >= 3,
+              centerTime.isFinite,
+              windowSeconds.isFinite,
+              windowSeconds > 0.0
+        else {
+            return nil
+        }
+
+        let sortedIndices = indicesAreStrictlyAscending(indices) ? indices : indices.sorted()
+        let windowStart = centerTime - (windowSeconds * 0.5)
+        let windowEnd = centerTime + (windowSeconds * 0.5)
+        var s00 = Double(0.0)
+        var s01 = Double(0.0)
+        var s11 = Double(0.0)
+        var b0 = Double(0.0)
+        var b1 = Double(0.0)
+        var acceptedCount = 0
+
+        for (position, index) in sortedIndices.enumerated() where frames.indices.contains(index) {
+            let currentTime = frames[index].time
+            guard currentTime.isFinite else {
+                continue
+            }
+
+            let leftBoundary: Double
+            if position > 0 {
+                leftBoundary = max(windowStart, (frames[sortedIndices[position - 1]].time + currentTime) * 0.5)
+            } else {
+                leftBoundary = windowStart
+            }
+
+            let rightBoundary: Double
+            if position + 1 < sortedIndices.count {
+                rightBoundary = min(windowEnd, (currentTime + frames[sortedIndices[position + 1]].time) * 0.5)
+            } else {
+                rightBoundary = windowEnd
+            }
+
+            let weight = max(0.0, rightBoundary - leftBoundary)
+            guard weight > 1e-9 else {
+                continue
+            }
+
+            let t = currentTime - centerTime
+            let value = Double(values[index])
+            guard value.isFinite, t.isFinite else {
+                continue
+            }
+
+            s00 += weight
+            s01 += weight * t
+            s11 += weight * t * t
+            b0 += weight * value
+            b1 += weight * t * value
+            acceptedCount += 1
+        }
+
+        guard acceptedCount >= 3, s00 > 1e-9 else {
+            return nil
+        }
+
+        let determinant = (s00 * s11) - (s01 * s01)
+        guard abs(determinant) > 1e-9 else {
+            return Float(b0 / s00)
+        }
+
+        let intercept = ((b0 * s11) - (b1 * s01)) / determinant
+        guard intercept.isFinite else {
+            return nil
+        }
+        return Float(intercept)
     }
 
     private static func indicesAreStrictlyAscending(_ indices: [Int]) -> Bool {
@@ -5289,6 +7352,20 @@ enum AutoStabilizationEstimator {
         return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
     }
 
+    private static func turnSmoothingRotationConfidence(
+        bandValue: Float,
+        trackingConfidence: Float
+    ) -> Float {
+        let magnitude = abs(bandValue)
+        let noiseFloor = turnSmoothingFullScaleDegrees * 0.08
+        let bandQuality = confidenceRamp(
+            magnitude,
+            start: noiseFloor,
+            full: max(noiseFloor + Float.ulpOfOne, turnSmoothingFullScaleDegrees)
+        )
+        return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
+    }
+
     private static func turnOwnershipConfidence(
         values: EstimatedPath,
         frames: [StabilizerAnalysisFrame],
@@ -5623,7 +7700,8 @@ enum AutoStabilizationEstimator {
         guard !values.isEmpty else {
             return EstimatedPath(values: values)
         }
-        var cleanedValues = values
+        var overrides: [Int: Float] = [:]
+        overrides.reserveCapacity(indices.count)
         for index in indices {
             guard values.indices.contains(index),
                   baselineValues.values.indices.contains(index),
@@ -5657,9 +7735,9 @@ enum AutoStabilizationEstimator {
             )
             let confidenceScale = clamp(confidenceScales[index] ?? 1.0, min: 0.0, max: 1.0)
             let effectiveConfidence = confidence * confidenceScale
-            cleanedValues[index] = rawValue - ((rawValue - baselineValue) * effectiveConfidence)
+            overrides[index] = rawValue - ((rawValue - baselineValue) * effectiveConfidence)
         }
-        return EstimatedPath(values: cleanedValues)
+        return EstimatedPath(values: values, overrides: overrides)
     }
 
     private struct FootstepContinuityLimitResult {
