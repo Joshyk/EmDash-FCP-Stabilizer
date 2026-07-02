@@ -1,14 +1,14 @@
 {
-  "caseId": "p1000307_turn_1m26_1m46",
-  "description": "Final Cut Pro Viewer screen-capture E2E for P1000307.mov turn smoothness and Auto Crop stability.",
+  "caseId": "p1000304_ridge_4m18_4m38",
+  "description": "Final Cut Pro Viewer screen-capture E2E for P1000304.mov far-field ridge-line fine shake around 00:04:28;32.",
   "library": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle",
-  "project": "P1000307 Stabilized Review",
-  "sourceClip": "P1000307.mov",
-  "originalMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/🖼️稲尾真夏🫨🎨/Original Media/P1000307.mov",
-  "proxyMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/🖼️稲尾真夏🫨🎨/Transcoded Media/Proxy Media/P1000307.mov",
-  "startTimecode": "00:01:26;00",
-  "startTimecodeEntry": "00012600",
-  "endTimecode": "00:01:46;00",
+  "project": "P1000304 Stabilized Review",
+  "sourceClip": "P1000304.mov",
+  "originalMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/🖼️稲尾真夏🫨🎨/Original Media/P1000304.mov",
+  "proxyMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/🖼️稲尾真夏🫨🎨/Transcoded Media/Proxy Media/P1000304.mov",
+  "startTimecode": "00:04:18;32",
+  "startTimecodeEntry": "00041832",
+  "endTimecode": "00:04:38;32",
   "durationSeconds": 20.0,
   "playbackMode": "Proxy Preferred",
   "removeBlackEdges": true,
@@ -17,15 +17,15 @@
     "width": 5728,
     "height": 3024,
     "frameRate": "60000/1001",
-    "durationSeconds": 175.175,
-    "frameCount": 10500
+    "durationSeconds": 1063.062,
+    "frameCount": 63720
   },
   "proxy": {
     "width": 960,
     "height": 507,
     "frameRate": "60000/1001",
-    "durationSeconds": 175.175,
-    "frameCount": 10500
+    "durationSeconds": 1063.062,
+    "frameCount": 63720
   },
   "viewerRoi": {
     "x": 1458,
@@ -38,6 +38,12 @@
     "y": 30,
     "w": 820,
     "h": 470
+  },
+  "ridgeRoi": {
+    "x": 180,
+    "y": 80,
+    "w": 820,
+    "h": 230
   },
   "quality": {
     "targetSampleFps": "source",
@@ -79,6 +85,14 @@
     "maxScaleDisplacementFraction": 0.035,
     "minScaleQualityRatio": 0.5,
     "maxLowInlierRatio": 0.1,
+    "minRidgeTrackingInliers": 25,
+    "minRidgeTrackingRatio": 0.65,
+    "ridgeRollingMedianWindowSeconds": 0.5,
+    "maxRidgeHighFrequencyResidualPixels": 0.9,
+    "maxRidgeHighFrequencyResidualP95Pixels": 0.35,
+    "maxRidgeVerticalResidualP95Pixels": 0.28,
+    "ridgeResidualRunThresholdPixels": 0.45,
+    "maxRidgeResidualRunFrames": 10,
     "diagnosticSpikeFramesPerKind": 24,
     "diagnosticContactSheetMaxFrames": 96,
     "writeDiagnosticOverlayVideo": true

@@ -38,6 +38,24 @@ turn section in proxy with Remove Black Edges / crop enabled. The script records
 Final Cut Pro Viewer, then `tests/stabilizer_video_quality.py` evaluates apparent zoom
 pulse, black-edge breathing, and tracking confidence from the captured frames.
 
+For far-field mountain ridge-line fine shake, use the P1000304 case around the reported
+`00:04:28;32` section:
+
+```sh
+scripts/stabilizer_fcp_screen_capture_e2e.sh run \
+  --case tests/stabilizer_e2e_cases/p1000304_ridge_4m18_4m38.json
+```
+
+This case adds a `ridgeRoi` band over the distant mountain area and fails on high-frequency
+ridge motion after subtracting the local rolling pan baseline.
+
+The evaluator samples every captured frame when `sampleEveryCapturedFrame` is set. Do not
+judge motion regressions from the compact contact sheet alone: each run writes full-frame
+CSV diagnostics, a per-frame `diagnostic_overlay.mp4`, and separate contact sheets for
+scale, jump, cadence/hold, pulse, edge, and ridge spikes. The contact sheets are visual
+indexes into the failure regions; the overlay video is the primary visual artifact for
+checking continuous pulsing or ridge-line shake.
+
 To evaluate an existing recording without driving Final Cut Pro:
 
 ```sh

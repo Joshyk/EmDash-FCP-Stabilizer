@@ -221,6 +221,113 @@ def estimate_transform(
     }
 
 
+def summarize_ridge_motion(
+    ridge_rows: list[dict[str, Any]],
+    quality: dict[str, Any],
+    effective_sample_fps: float,
+) -> tuple[bool, list[str], dict[str, Any]]:
+    tracking_rows = [row for row in ridge_rows if bool(row.get("trackingOk"))]
+    tracking_ratio = (len(tracking_rows) / len(ridge_rows)) if ridge_rows else 0.0
+    median_seconds = float(quality.get("ridgeRollingMedianWindowSeconds", 0.5))
+    median_window = max(3, int(round(median_seconds * effective_sample_fps)))
+    if median_window % 2 == 0:
+        median_window += 1
+
+    for component in ("dx", "dy"):
+        medians = rolling_median([float(row.get(component, 0.0)) for row in tracking_rows], median_window)
+        for row, median in zip(tracking_rows, medians):
+            row[f"{component}Median"] = median
+            row[f"{component}Residual"] = float(row.get(component, 0.0)) - median
+
+    residual_vectors: list[float] = []
+    vertical_residuals: list[float] = []
+    horizontal_residuals: list[float] = []
+    for row in tracking_rows:
+        x_residual = float(row.get("dxResidual", 0.0))
+        y_residual = float(row.get("dyResidual", 0.0))
+        vector_residual = math.hypot(x_residual, y_residual)
+        row["ridgeHighFrequencyResidualPixels"] = vector_residual
+        row["ridgeVerticalResidualPixels"] = abs(y_residual)
+        row["ridgeHorizontalResidualPixels"] = abs(x_residual)
+        residual_vectors.append(vector_residual)
+        vertical_residuals.append(abs(y_residual))
+        horizontal_residuals.append(abs(x_residual))
+
+    max_vector = max(residual_vectors, default=0.0)
+    p95_vector = (
+        float(np.percentile(np.asarray(residual_vectors, dtype=np.float64), 95))
+        if residual_vectors
+        else 0.0
+    )
+    p95_vertical = (
+        float(np.percentile(np.asarray(vertical_residuals, dtype=np.float64), 95))
+        if vertical_residuals
+        else 0.0
+    )
+    p95_horizontal = (
+        float(np.percentile(np.asarray(horizontal_residuals, dtype=np.float64), 95))
+        if horizontal_residuals
+        else 0.0
+    )
+    residual_threshold = float(quality.get("ridgeResidualRunThresholdPixels", float("inf")))
+    max_run = 0
+    current_run = 0
+    previous_row: dict[str, Any] | None = None
+    for row in sorted(tracking_rows, key=lambda item: int(item.get("frame", 0))):
+        is_adjacent_sample = False
+        if previous_row is not None:
+            try:
+                is_adjacent_sample = int(row.get("previousFrame", -1)) == int(previous_row.get("frame", -2))
+            except (TypeError, ValueError):
+                is_adjacent_sample = False
+        if float(row.get("ridgeHighFrequencyResidualPixels", 0.0)) > residual_threshold:
+            current_run = current_run + 1 if is_adjacent_sample else 1
+            max_run = max(max_run, current_run)
+        else:
+            current_run = 0
+        previous_row = row
+
+    tracking_ratio_limit = float(quality.get("minRidgeTrackingRatio", 0.0))
+    max_vector_limit = float(quality.get("maxRidgeHighFrequencyResidualPixels", float("inf")))
+    p95_vector_limit = float(quality.get("maxRidgeHighFrequencyResidualP95Pixels", float("inf")))
+    p95_vertical_limit = float(quality.get("maxRidgeVerticalResidualP95Pixels", float("inf")))
+    max_run_limit = int(quality.get("maxRidgeResidualRunFrames", 2**31 - 1))
+
+    failures: list[str] = []
+    if tracking_ratio < tracking_ratio_limit:
+        failures.append(f"ridge tracking ratio {tracking_ratio:.3f} below {tracking_ratio_limit:.3f}")
+    if max_vector > max_vector_limit:
+        failures.append(f"ridge high-frequency residual {max_vector:.3f}px exceeds {max_vector_limit:.3f}px")
+    if p95_vector > p95_vector_limit:
+        failures.append(f"ridge high-frequency residual p95 {p95_vector:.3f}px exceeds {p95_vector_limit:.3f}px")
+    if p95_vertical > p95_vertical_limit:
+        failures.append(f"ridge vertical residual p95 {p95_vertical:.3f}px exceeds {p95_vertical_limit:.3f}px")
+    if max_run > max_run_limit:
+        failures.append(f"ridge residual run {max_run} exceeds {max_run_limit}")
+
+    summary = {
+        "enabled": bool(ridge_rows),
+        "rowCount": len(ridge_rows),
+        "trackingFrameCount": len(tracking_rows),
+        "trackingRatio": tracking_ratio,
+        "rollingMedianWindowSeconds": median_seconds,
+        "maxHighFrequencyResidualPixels": max_vector,
+        "highFrequencyResidualP95Pixels": p95_vector,
+        "verticalResidualP95Pixels": p95_vertical,
+        "horizontalResidualP95Pixels": p95_horizontal,
+        "maxResidualRunFrames": max_run,
+        "thresholds": {
+            "minRidgeTrackingRatio": tracking_ratio_limit,
+            "maxRidgeHighFrequencyResidualPixels": max_vector_limit,
+            "maxRidgeHighFrequencyResidualP95Pixels": p95_vector_limit,
+            "maxRidgeVerticalResidualP95Pixels": p95_vertical_limit,
+            "ridgeResidualRunThresholdPixels": residual_threshold,
+            "maxRidgeResidualRunFrames": max_run_limit,
+        },
+    }
+    return not failures, failures, summary
+
+
 def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     rows = list(rows)
     if not rows:
@@ -306,31 +413,27 @@ def probe_pts_interval_metrics(video_path: Path, tolerance_ratio: float) -> dict
     }
 
 
-def write_contact_sheet(
-    video_path: Path,
-    output_path: Path,
-    viewer_roi: Roi,
-    spike_frames: list[tuple[int, str]],
-) -> None:
-    if not spike_frames:
+def put_label_lines(frame: np.ndarray, lines: list[str], x: int = 10, y: int = 24) -> None:
+    if not lines:
         return
-
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        return
-
-    tiles: list[np.ndarray] = []
-    for frame_index, label in spike_frames[:12]:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ok, frame = cap.read()
-        if not ok:
-            continue
-        tile = crop(frame, viewer_roi)
-        tile = cv2.resize(tile, (360, 193), interpolation=cv2.INTER_AREA)
+    line_height = 22
+    max_lines = min(len(lines), 8)
+    clean_lines = [line[:96] for line in lines[:max_lines]]
+    text_width = 0
+    for line in clean_lines:
+        size, _baseline = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+        text_width = max(text_width, size[0])
+    box_width = min(frame.shape[1], x + text_width + 18)
+    box_height = min(frame.shape[0], y + (line_height * max_lines) + 8)
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, 0), (box_width, box_height), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.58, frame, 0.42, 0, frame)
+    for line_index, line in enumerate(clean_lines):
+        baseline_y = y + (line_index * line_height)
         cv2.putText(
-            tile,
-            label,
-            (10, 24),
+            frame,
+            line,
+            (x, baseline_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
             (255, 255, 255),
@@ -338,21 +441,60 @@ def write_contact_sheet(
             cv2.LINE_AA,
         )
         cv2.putText(
-            tile,
-            label,
-            (10, 24),
+            frame,
+            line,
+            (x, baseline_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
             (0, 0, 0),
             1,
             cv2.LINE_AA,
         )
+
+
+def merged_spike_frames(spike_frames: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    labels_by_frame: dict[int, list[str]] = {}
+    order: list[int] = []
+    for frame_index, label in spike_frames:
+        if frame_index not in labels_by_frame:
+            labels_by_frame[frame_index] = []
+            order.append(frame_index)
+        if label not in labels_by_frame[frame_index]:
+            labels_by_frame[frame_index].append(label)
+    return [
+        (frame_index, " | ".join(labels_by_frame[frame_index][:3]))
+        for frame_index in order
+    ]
+
+
+def write_contact_sheet(
+    video_path: Path,
+    output_path: Path,
+    viewer_roi: Roi,
+    spike_frames: list[tuple[int, str]],
+) -> bool:
+    if not spike_frames:
+        return False
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return False
+
+    tiles: list[np.ndarray] = []
+    for frame_index, label in spike_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        tile = crop(frame, viewer_roi)
+        tile = cv2.resize(tile, (360, 193), interpolation=cv2.INTER_AREA)
+        put_label_lines(tile, label.split(" | "))
         tiles.append(tile)
     cap.release()
 
     if not tiles:
-        return
-    cols = 3
+        return False
+    cols = 4
     rows = math.ceil(len(tiles) / cols)
     blank = np.zeros_like(tiles[0])
     while len(tiles) < rows * cols:
@@ -362,6 +504,92 @@ def write_contact_sheet(
         start = row_index * cols
         sheet_rows.append(np.hstack(tiles[start : start + cols]))
     cv2.imwrite(str(output_path), np.vstack(sheet_rows))
+    return True
+
+
+def row_by_frame(rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        try:
+            result[int(row.get("frame", -1))] = row
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def write_diagnostic_overlay_video(
+    video_path: Path,
+    output_path: Path,
+    viewer_roi: Roi,
+    scale_rows: list[dict[str, Any]],
+    edge_rows: list[dict[str, Any]],
+    ridge_rows: list[dict[str, Any]],
+    fps: float,
+) -> bool:
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return False
+    writer_fps = fps if fps > 1.0 and math.isfinite(fps) else 30.0
+    writer = cv2.VideoWriter(
+        str(output_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        writer_fps,
+        (viewer_roi[2], viewer_roi[3]),
+    )
+    if not writer.isOpened():
+        cap.release()
+        return False
+
+    scale_by_frame = row_by_frame(scale_rows)
+    edge_by_frame = row_by_frame(edge_rows)
+    ridge_by_frame = row_by_frame(ridge_rows)
+    frame_index = -1
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        frame_index += 1
+        viewer = crop(frame, viewer_roi).copy()
+        timestamp = frame_index / writer_fps
+        lines = [f"f={frame_index} t={timestamp:.2f}s"]
+        scale_row = scale_by_frame.get(frame_index)
+        if scale_row is not None:
+            lines.append(
+                "scale "
+                f"res={float(scale_row.get('scaleResidualPercent', 0.0)):+.3f}% "
+                f"pulse={float(scale_row.get('scalePulseResidualPercent', 0.0)):+.3f}%"
+            )
+            if "frameJumpPixels" in scale_row:
+                lines.append(
+                    "jump "
+                    f"x={float(scale_row.get('frameJumpX', 0.0)):+.2f}px "
+                    f"y={float(scale_row.get('frameJumpY', 0.0)):+.2f}px"
+                )
+            flags: list[str] = []
+            if bool(scale_row.get("nearDuplicateFrame")):
+                flags.append("dup")
+            if bool(scale_row.get("cadenceHoldFrame")):
+                flags.append("hold")
+            if bool(scale_row.get("frameJumpSkippedForCadence")):
+                flags.append("jump-skip")
+            if flags:
+                lines.append("flags " + ",".join(flags))
+        ridge_row = ridge_by_frame.get(frame_index)
+        if ridge_row is not None and bool(ridge_row.get("trackingOk")):
+            lines.append(
+                "ridge "
+                f"hf={float(ridge_row.get('ridgeHighFrequencyResidualPixels', 0.0)):.3f}px "
+                f"v={float(ridge_row.get('ridgeVerticalResidualPixels', 0.0)):.3f}px"
+            )
+        edge_row = edge_by_frame.get(frame_index)
+        if edge_row is not None:
+            lines.append(f"edge={float(edge_row.get('edgeResidualPx', 0.0)):.1f}px")
+        put_label_lines(viewer, lines)
+        writer.write(viewer)
+
+    writer.release()
+    cap.release()
+    return True
 
 
 def summarize_failures(
@@ -635,6 +863,7 @@ def main() -> int:
     quality = dict(case.get("quality", {}))
     viewer_roi = parse_roi(args.viewer_roi) if args.viewer_roi else roi_from_case(case["viewerRoi"], "viewerRoi")
     content_roi = roi_from_case(case["contentRoi"], "contentRoi")
+    ridge_roi = roi_from_case(case["ridgeRoi"], "ridgeRoi") if "ridgeRoi" in case else None
     source_frame_rate = parse_frame_rate(case.get("source", {}).get("frameRate", 30.0), 30.0)
     sample_fps = parse_frame_rate(args.sample_fps or quality.get("targetSampleFps", "source"), source_frame_rate)
     sample_every_captured_frame = bool(quality.get("sampleEveryCapturedFrame", False))
@@ -654,6 +883,9 @@ def main() -> int:
     cadence_hold_scale_limit = float(quality.get("cadenceHoldMaxScalePercent", float("inf")))
     pts_tolerance_ratio = float(quality.get("ptsIntervalToleranceRatio", 0.20))
     min_captured_fps_ratio = float(quality.get("minCapturedFpsRatio", 0.0))
+    diagnostic_spikes_per_kind = max(1, int(quality.get("diagnosticSpikeFramesPerKind", 24)))
+    diagnostic_contact_sheet_max_frames = max(1, int(quality.get("diagnosticContactSheetMaxFrames", 96)))
+    write_overlay_video = bool(quality.get("writeDiagnosticOverlayVideo", True))
 
     output_dir = args.output_dir or Path("/tmp/stabilizer_e2e") / args.video.stem
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -676,11 +908,15 @@ def main() -> int:
     frame_height, frame_width = first_frame.shape[:2]
     clamp_roi(viewer_roi, frame_width, frame_height, "viewer")
     clamp_roi(content_roi, viewer_roi[2], viewer_roi[3], "content")
+    if ridge_roi is not None:
+        clamp_roi(ridge_roi, viewer_roi[2], viewer_roi[3], "ridge")
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     edge_rows: list[dict[str, Any]] = []
     scale_rows: list[dict[str, Any]] = []
+    ridge_rows: list[dict[str, Any]] = []
     previous_gray: np.ndarray | None = None
+    previous_ridge_gray: np.ndarray | None = None
     previous_frame_index: int | None = None
     frame_index = -1
 
@@ -697,6 +933,10 @@ def main() -> int:
         viewer_gray = cv2.cvtColor(viewer, cv2.COLOR_BGR2GRAY)
         content = crop(viewer, content_roi)
         content_gray = cv2.cvtColor(content, cv2.COLOR_BGR2GRAY)
+        ridge_gray = None
+        if ridge_roi is not None:
+            ridge = crop(viewer, ridge_roi)
+            ridge_gray = cv2.cvtColor(ridge, cv2.COLOR_BGR2GRAY)
 
         margins = black_margins(viewer_gray, black_threshold)
         edge_rows.append(
@@ -756,7 +996,31 @@ def main() -> int:
             }
             scale_rows.append(row)
 
+            if previous_ridge_gray is not None and ridge_gray is not None:
+                ridge_transform = estimate_transform(
+                    previous_ridge_gray,
+                    ridge_gray,
+                    int(quality.get("minRidgeTrackingInliers", min_inliers)),
+                )
+                ridge_rows.append(
+                    {
+                        "frame": frame_index,
+                        "previousFrame": previous_frame_index,
+                        "time": timestamp,
+                        "trackingOk": bool(ridge_transform.get("ok")),
+                        "reason": ridge_transform.get("reason") or "",
+                        "featureCount": int(ridge_transform.get("featureCount", 0)),
+                        "trackedCount": int(ridge_transform.get("trackedCount", 0)),
+                        "inliers": int(ridge_transform.get("inliers", 0)),
+                        "scalePercent": float(ridge_transform.get("scalePercent", 0.0)),
+                        "dx": float(ridge_transform.get("dx", 0.0)),
+                        "dy": float(ridge_transform.get("dy", 0.0)),
+                        "rotationDegrees": float(ridge_transform.get("rotationDegrees", 0.0)),
+                    }
+                )
+
         previous_gray = content_gray
+        previous_ridge_gray = ridge_gray
         previous_frame_index = frame_index
 
     cap.release()
@@ -910,8 +1174,17 @@ def main() -> int:
     cutoff_end = max(0.0, duration - ignore_end) if duration > 0 else float("inf")
     filtered_edges = [row for row in edge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     filtered_scales = [row for row in scale_rows if ignore_start <= float(row["time"]) <= cutoff_end]
+    filtered_ridge_rows = [row for row in ridge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
 
     passed, failures, summary = summarize_failures(filtered_scales, filtered_edges, quality)
+    ridge_passed, ridge_failures, ridge_summary = summarize_ridge_motion(
+        filtered_ridge_rows,
+        quality,
+        effective_sample_fps,
+    )
+    if ridge_roi is not None and not ridge_passed:
+        failures.extend(ridge_failures)
+        passed = False
     captured_fps_ratio = fps / source_frame_rate if source_frame_rate > 0.0 else 1.0
     pts_metrics = probe_pts_interval_metrics(args.video, pts_tolerance_ratio)
     max_pts_irregular_ratio = float(quality.get("maxPtsIntervalIrregularRatio", float("inf")))
@@ -958,6 +1231,12 @@ def main() -> int:
             "sampleEveryCapturedFrame": sample_every_captured_frame,
             "viewerRoi": {"x": viewer_roi[0], "y": viewer_roi[1], "w": viewer_roi[2], "h": viewer_roi[3]},
             "contentRoi": {"x": content_roi[0], "y": content_roi[1], "w": content_roi[2], "h": content_roi[3]},
+            "ridgeRoi": (
+                {"x": ridge_roi[0], "y": ridge_roi[1], "w": ridge_roi[2], "h": ridge_roi[3]}
+                if ridge_roi is not None
+                else None
+            ),
+            "ridge": ridge_summary,
             "ignoreStartSeconds": ignore_start,
             "ignoreEndSeconds": ignore_end,
             "minScaleInlierRatio": min_scale_inlier_ratio,
@@ -982,55 +1261,115 @@ def main() -> int:
 
     write_csv(output_dir / "edge_stats.csv", edge_rows)
     write_csv(output_dir / "scale_stats.csv", scale_rows)
-    (output_dir / "metrics.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    write_csv(output_dir / "ridge_stats.csv", ridge_rows)
 
     scale_spikes = sorted(
         [row for row in filtered_scales if bool(row.get("scaleQualityOk", row.get("trackingOk")))],
         key=lambda row: abs(float(row.get("scaleResidualPercent", 0.0))),
         reverse=True,
-    )[:6]
+    )[:diagnostic_spikes_per_kind]
     jump_spikes = sorted(
         [row for row in filtered_scales if "frameJumpPixels" in row],
         key=lambda row: float(row.get("frameJumpPixels", 0.0)),
         reverse=True,
-    )[:6]
+    )[:diagnostic_spikes_per_kind]
     duplicate_spikes = sorted(
         [row for row in filtered_scales if bool(row.get("nearDuplicateFrame"))],
         key=lambda row: float(row.get("frameMeanAbsDiff", 0.0)),
-    )[:6]
+    )[:diagnostic_spikes_per_kind]
     cadence_hold_spikes = sorted(
         [row for row in filtered_scales if bool(row.get("cadenceHoldFrame"))],
         key=lambda row: float(row.get("frameMeanAbsDiff", 0.0)),
-    )[:6]
+    )[:diagnostic_spikes_per_kind]
     pulse_spikes = sorted(
         [row for row in filtered_scales if bool(row.get("cumulativeScalePathOk"))],
         key=lambda row: float(row.get("scalePulsePeakToPeakPercent", 0.0)),
         reverse=True,
-    )[:6]
+    )[:diagnostic_spikes_per_kind]
     edge_spikes = sorted(
         filtered_edges,
         key=lambda row: float(row.get("edgeResidualPx", 0.0)),
         reverse=True,
-    )[:6]
-    spike_frames: list[tuple[int, str]] = []
+    )[:diagnostic_spikes_per_kind]
+    ridge_spikes = sorted(
+        [row for row in filtered_ridge_rows if bool(row.get("trackingOk"))],
+        key=lambda row: float(row.get("ridgeHighFrequencyResidualPixels", 0.0)),
+        reverse=True,
+    )[:diagnostic_spikes_per_kind]
+
+    scale_frames: list[tuple[int, str]] = []
+    jump_frames: list[tuple[int, str]] = []
+    cadence_frames: list[tuple[int, str]] = []
+    pulse_frames: list[tuple[int, str]] = []
+    edge_frames: list[tuple[int, str]] = []
+    ridge_frames: list[tuple[int, str]] = []
     for row in scale_spikes:
-        spike_frames.append((int(row["frame"]), f"scale {float(row['scaleResidualPercent']):+.2f}% t={float(row['time']):.2f}s"))
+        scale_frames.append((int(row["frame"]), f"scale {float(row['scaleResidualPercent']):+.2f}% t={float(row['time']):.2f}s"))
     for row in jump_spikes:
-        spike_frames.append((int(row["frame"]), f"jump {float(row['frameJumpX']):+.1f},{float(row['frameJumpY']):+.1f} t={float(row['time']):.2f}s"))
+        jump_frames.append((int(row["frame"]), f"jump {float(row['frameJumpX']):+.1f},{float(row['frameJumpY']):+.1f} t={float(row['time']):.2f}s"))
     for row in duplicate_spikes:
-        spike_frames.append((int(row["frame"]), f"dup diff {float(row['frameMeanAbsDiff']):.2f} t={float(row['time']):.2f}s"))
+        cadence_frames.append((int(row["frame"]), f"dup diff {float(row['frameMeanAbsDiff']):.2f} t={float(row['time']):.2f}s"))
     for row in cadence_hold_spikes:
-        spike_frames.append((int(row["frame"]), f"hold diff {float(row['frameMeanAbsDiff']):.2f} t={float(row['time']):.2f}s"))
+        cadence_frames.append((int(row["frame"]), f"hold diff {float(row['frameMeanAbsDiff']):.2f} t={float(row['time']):.2f}s"))
     for row in pulse_spikes:
-        spike_frames.append(
+        pulse_frames.append(
             (
                 int(row["frame"]),
                 f"pulse {float(row['scalePulsePeakToPeakPercent']):.2f}% t={float(row['time']):.2f}s",
             )
         )
     for row in edge_spikes:
-        spike_frames.append((int(row["frame"]), f"edge {float(row['edgeResidualPx']):.1f}px t={float(row['time']):.2f}s"))
-    write_contact_sheet(args.video, output_dir / "spikes_contact_sheet.png", viewer_roi, spike_frames)
+        edge_frames.append((int(row["frame"]), f"edge {float(row['edgeResidualPx']):.1f}px t={float(row['time']):.2f}s"))
+    for row in ridge_spikes:
+        ridge_frames.append(
+            (
+                int(row["frame"]),
+                f"ridge {float(row.get('ridgeHighFrequencyResidualPixels', 0.0)):.2f}px t={float(row['time']):.2f}s",
+            )
+        )
+
+    diagnostic_artifacts: dict[str, str] = {}
+    sheet_specs = [
+        ("scaleContactSheet", output_dir / "scale_spikes_contact_sheet.png", scale_frames),
+        ("jumpContactSheet", output_dir / "jump_spikes_contact_sheet.png", jump_frames),
+        ("cadenceContactSheet", output_dir / "cadence_spikes_contact_sheet.png", cadence_frames),
+        ("pulseContactSheet", output_dir / "pulse_spikes_contact_sheet.png", pulse_frames),
+        ("edgeContactSheet", output_dir / "edge_spikes_contact_sheet.png", edge_frames),
+        ("ridgeContactSheet", output_dir / "ridge_spikes_contact_sheet.png", ridge_frames),
+    ]
+    for key, path, frames in sheet_specs:
+        frames = merged_spike_frames(frames)[:diagnostic_contact_sheet_max_frames]
+        if write_contact_sheet(args.video, path, viewer_roi, frames):
+            diagnostic_artifacts[key] = str(path)
+
+    combined_frames = merged_spike_frames(
+        scale_frames
+        + jump_frames
+        + cadence_frames
+        + pulse_frames
+        + edge_frames
+        + ridge_frames
+    )[:diagnostic_contact_sheet_max_frames]
+    combined_sheet_path = output_dir / "spikes_contact_sheet.png"
+    if write_contact_sheet(args.video, combined_sheet_path, viewer_roi, combined_frames):
+        diagnostic_artifacts["combinedContactSheet"] = str(combined_sheet_path)
+
+    overlay_path = output_dir / "diagnostic_overlay.mp4"
+    if write_overlay_video and write_diagnostic_overlay_video(
+        args.video,
+        overlay_path,
+        viewer_roi,
+        scale_rows,
+        edge_rows,
+        ridge_rows,
+        fps,
+    ):
+        diagnostic_artifacts["diagnosticOverlayVideo"] = str(overlay_path)
+
+    summary["diagnosticArtifacts"] = diagnostic_artifacts
+    summary["diagnosticSpikeFramesPerKind"] = diagnostic_spikes_per_kind
+    summary["diagnosticContactSheetMaxFrames"] = diagnostic_contact_sheet_max_frames
+    (output_dir / "metrics.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
 
     status = "PASS" if passed else "FAIL"
     print(f"{status} {summary['caseId']} video={args.video}")
@@ -1084,6 +1423,14 @@ def main() -> int:
         f"(limit {summary['thresholds']['maxScalePulseDerivativeP95PercentPerFrame']:.3f}), "
         f"run {summary['maxScalePulseRunFrames']}"
     )
+    if ridge_roi is not None:
+        print(
+            "  ridge high-frequency residual: "
+            f"max {summary['ridge']['maxHighFrequencyResidualPixels']:.3f}px, "
+            f"p95 {summary['ridge']['highFrequencyResidualP95Pixels']:.3f}px, "
+            f"vertical p95 {summary['ridge']['verticalResidualP95Pixels']:.3f}px, "
+            f"tracking {summary['ridge']['trackingRatio']:.3f}"
+        )
     if bool(summary["pts"].get("available")):
         print(
             "  PTS intervals: "
