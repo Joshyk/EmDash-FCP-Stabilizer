@@ -47,7 +47,9 @@ scripts/stabilizer_fcp_screen_capture_e2e.sh run \
 ```
 
 This case adds a `ridgeRoi` band over the distant mountain area and fails on high-frequency
-ridge motion after subtracting the local rolling pan baseline.
+ridge motion after subtracting the local rolling pan baseline. It also records per-frame
+ridge-line vertical residuals, ridge-line jerk, and lower-content reference deltas so a
+ridge-only shimmer can be separated from whole-frame playback/cadence jumps.
 
 The evaluator samples every captured frame when `sampleEveryCapturedFrame` is set. Do not
 judge motion regressions from the compact contact sheet alone: each run writes full-frame

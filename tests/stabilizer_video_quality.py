@@ -88,6 +88,17 @@ def clamp_roi(roi: Roi, width: int, height: int, label: str) -> Roi:
     return roi
 
 
+def derive_ridge_reference_roi(content_roi: Roi, ridge_roi: Roi) -> Roi | None:
+    content_x, content_y, content_w, content_h = content_roi
+    _ridge_x, ridge_y, _ridge_w, ridge_h = ridge_roi
+    content_bottom = content_y + content_h
+    reference_y = max(content_y, ridge_y + ridge_h)
+    reference_h = content_bottom - reference_y
+    if reference_h < 24:
+        return None
+    return (content_x, reference_y, content_w, reference_h)
+
+
 def rolling_median(values: list[float], window: int) -> list[float]:
     if not values:
         return []
@@ -221,6 +232,60 @@ def estimate_transform(
     }
 
 
+def estimate_ridge_line(gray: np.ndarray, quality: dict[str, Any]) -> dict[str, Any]:
+    height, width = gray.shape[:2]
+    if height < 8 or width < 8:
+        return {"ok": False, "reason": "ridge_line_roi_too_small"}
+
+    top_fraction = float(quality.get("ridgeLineSearchTopFraction", 0.0))
+    bottom_fraction = float(quality.get("ridgeLineSearchBottomFraction", 1.0))
+    top = max(1, min(height - 2, int(round(height * top_fraction))))
+    bottom = max(top + 3, min(height - 1, int(round(height * bottom_fraction))))
+    if bottom <= top:
+        return {"ok": False, "reason": "ridge_line_search_empty"}
+
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    gradient_y = np.abs(cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3))
+    search = gradient_y[top:bottom, :]
+    if search.size == 0:
+        return {"ok": False, "reason": "ridge_line_search_empty"}
+
+    column_strength = np.max(search, axis=0)
+    column_y = np.argmax(search, axis=0).astype(np.float64) + float(top)
+    percentile = float(quality.get("ridgeLineEdgeColumnPercentile", 70.0))
+    strength_floor = float(quality.get("ridgeLineEdgeStrengthFloor", 4.0))
+    strength_threshold = max(strength_floor, float(np.percentile(column_strength, percentile)))
+    selected = column_strength >= strength_threshold
+    support_ratio = float(np.count_nonzero(selected)) / float(max(1, width))
+    min_support_ratio = float(quality.get("minRidgeLineSupportRatio", 0.0))
+    if support_ratio < min_support_ratio or not np.any(selected):
+        return {
+            "ok": False,
+            "reason": "ridge_line_low_support",
+            "ridgeLineSupportRatio": support_ratio,
+            "ridgeLineStrengthThreshold": strength_threshold,
+        }
+
+    selected_y = column_y[selected]
+    selected_strength = column_strength[selected].astype(np.float64)
+    weight_sum = float(np.sum(selected_strength))
+    weighted_y = (
+        float(np.sum(selected_y * selected_strength) / weight_sum)
+        if weight_sum > 0.0
+        else float(np.median(selected_y))
+    )
+    return {
+        "ok": True,
+        "reason": "",
+        "ridgeLineY": float(np.median(selected_y)),
+        "ridgeLineWeightedY": weighted_y,
+        "ridgeLineSupportRatio": support_ratio,
+        "ridgeLineStrengthMean": float(np.mean(selected_strength)),
+        "ridgeLineStrengthThreshold": strength_threshold,
+        "ridgeLineYSpreadP90": float(np.percentile(selected_y, 95) - np.percentile(selected_y, 5)),
+    }
+
+
 def summarize_ridge_motion(
     ridge_rows: list[dict[str, Any]],
     quality: dict[str, Any],
@@ -242,6 +307,13 @@ def summarize_ridge_motion(
     residual_vectors: list[float] = []
     vertical_residuals: list[float] = []
     horizontal_residuals: list[float] = []
+    ridge_line_vertical_residuals: list[float] = []
+    ridge_line_jerks: list[float] = []
+    ridge_reference_vertical_deltas: list[float] = []
+    ridge_reference_horizontal_deltas: list[float] = []
+    ridge_line_rows = [row for row in tracking_rows if bool(row.get("ridgeLineOk"))]
+    ridge_reference_rows = [row for row in tracking_rows if bool(row.get("ridgeReferenceTrackingOk"))]
+    previous_line_row: dict[str, Any] | None = None
     for row in tracking_rows:
         x_residual = float(row.get("dxResidual", 0.0))
         y_residual = float(row.get("dyResidual", 0.0))
@@ -252,6 +324,24 @@ def summarize_ridge_motion(
         residual_vectors.append(vector_residual)
         vertical_residuals.append(abs(y_residual))
         horizontal_residuals.append(abs(x_residual))
+        if "ridgeLineDyMinusAffineDy" in row:
+            line_residual = float(row.get("ridgeLineDyMinusAffineDy", 0.0))
+            row["ridgeLineVerticalResidualPixels"] = abs(line_residual)
+            ridge_line_vertical_residuals.append(abs(line_residual))
+            if (
+                previous_line_row is not None
+                and int(row.get("previousFrame", -1)) == int(previous_line_row.get("frame", -2))
+                and "ridgeLineDyMinusAffineDy" in previous_line_row
+            ):
+                line_jerk = line_residual - float(previous_line_row.get("ridgeLineDyMinusAffineDy", 0.0))
+                row["ridgeLineVerticalJerkPixelsPerFrame"] = line_jerk
+                ridge_line_jerks.append(abs(line_jerk))
+            else:
+                row["ridgeLineVerticalJerkPixelsPerFrame"] = 0.0
+            previous_line_row = row
+        if bool(row.get("ridgeReferenceTrackingOk")):
+            ridge_reference_vertical_deltas.append(abs(float(row.get("ridgeMinusReferenceDy", 0.0))))
+            ridge_reference_horizontal_deltas.append(abs(float(row.get("ridgeMinusReferenceDx", 0.0))))
 
     max_vector = max(residual_vectors, default=0.0)
     p95_vector = (
@@ -267,6 +357,26 @@ def summarize_ridge_motion(
     p95_horizontal = (
         float(np.percentile(np.asarray(horizontal_residuals, dtype=np.float64), 95))
         if horizontal_residuals
+        else 0.0
+    )
+    p95_ridge_line_vertical = (
+        float(np.percentile(np.asarray(ridge_line_vertical_residuals, dtype=np.float64), 95))
+        if ridge_line_vertical_residuals
+        else 0.0
+    )
+    p95_ridge_line_jerk = (
+        float(np.percentile(np.asarray(ridge_line_jerks, dtype=np.float64), 95))
+        if ridge_line_jerks
+        else 0.0
+    )
+    p95_reference_vertical_delta = (
+        float(np.percentile(np.asarray(ridge_reference_vertical_deltas, dtype=np.float64), 95))
+        if ridge_reference_vertical_deltas
+        else 0.0
+    )
+    p95_reference_horizontal_delta = (
+        float(np.percentile(np.asarray(ridge_reference_horizontal_deltas, dtype=np.float64), 95))
+        if ridge_reference_horizontal_deltas
         else 0.0
     )
     residual_threshold = float(quality.get("ridgeResidualRunThresholdPixels", float("inf")))
@@ -291,6 +401,10 @@ def summarize_ridge_motion(
     max_vector_limit = float(quality.get("maxRidgeHighFrequencyResidualPixels", float("inf")))
     p95_vector_limit = float(quality.get("maxRidgeHighFrequencyResidualP95Pixels", float("inf")))
     p95_vertical_limit = float(quality.get("maxRidgeVerticalResidualP95Pixels", float("inf")))
+    p95_line_vertical_limit = float(quality.get("maxRidgeLineVerticalResidualP95Pixels", float("inf")))
+    p95_line_jerk_limit = float(quality.get("maxRidgeLineVerticalJerkP95PixelsPerFrame", float("inf")))
+    p95_reference_vertical_delta_limit = float(quality.get("maxRidgeMinusReferenceVerticalP95Pixels", float("inf")))
+    p95_reference_horizontal_delta_limit = float(quality.get("maxRidgeMinusReferenceHorizontalP95Pixels", float("inf")))
     max_run_limit = int(quality.get("maxRidgeResidualRunFrames", 2**31 - 1))
 
     failures: list[str] = []
@@ -302,6 +416,22 @@ def summarize_ridge_motion(
         failures.append(f"ridge high-frequency residual p95 {p95_vector:.3f}px exceeds {p95_vector_limit:.3f}px")
     if p95_vertical > p95_vertical_limit:
         failures.append(f"ridge vertical residual p95 {p95_vertical:.3f}px exceeds {p95_vertical_limit:.3f}px")
+    if p95_ridge_line_vertical > p95_line_vertical_limit:
+        failures.append(
+            f"ridge line vertical residual p95 {p95_ridge_line_vertical:.3f}px exceeds {p95_line_vertical_limit:.3f}px"
+        )
+    if p95_ridge_line_jerk > p95_line_jerk_limit:
+        failures.append(
+            f"ridge line vertical jerk p95 {p95_ridge_line_jerk:.3f}px/frame exceeds {p95_line_jerk_limit:.3f}px/frame"
+        )
+    if p95_reference_vertical_delta > p95_reference_vertical_delta_limit:
+        failures.append(
+            f"ridge minus reference vertical p95 {p95_reference_vertical_delta:.3f}px exceeds {p95_reference_vertical_delta_limit:.3f}px"
+        )
+    if p95_reference_horizontal_delta > p95_reference_horizontal_delta_limit:
+        failures.append(
+            f"ridge minus reference horizontal p95 {p95_reference_horizontal_delta:.3f}px exceeds {p95_reference_horizontal_delta_limit:.3f}px"
+        )
     if max_run > max_run_limit:
         failures.append(f"ridge residual run {max_run} exceeds {max_run_limit}")
 
@@ -315,12 +445,24 @@ def summarize_ridge_motion(
         "highFrequencyResidualP95Pixels": p95_vector,
         "verticalResidualP95Pixels": p95_vertical,
         "horizontalResidualP95Pixels": p95_horizontal,
+        "lineTrackingFrameCount": len(ridge_line_rows),
+        "lineTrackingRatio": (len(ridge_line_rows) / len(tracking_rows)) if tracking_rows else 0.0,
+        "lineVerticalResidualP95Pixels": p95_ridge_line_vertical,
+        "lineVerticalJerkP95PixelsPerFrame": p95_ridge_line_jerk,
+        "referenceTrackingFrameCount": len(ridge_reference_rows),
+        "referenceTrackingRatio": (len(ridge_reference_rows) / len(tracking_rows)) if tracking_rows else 0.0,
+        "minusReferenceVerticalP95Pixels": p95_reference_vertical_delta,
+        "minusReferenceHorizontalP95Pixels": p95_reference_horizontal_delta,
         "maxResidualRunFrames": max_run,
         "thresholds": {
             "minRidgeTrackingRatio": tracking_ratio_limit,
             "maxRidgeHighFrequencyResidualPixels": max_vector_limit,
             "maxRidgeHighFrequencyResidualP95Pixels": p95_vector_limit,
             "maxRidgeVerticalResidualP95Pixels": p95_vertical_limit,
+            "maxRidgeLineVerticalResidualP95Pixels": p95_line_vertical_limit,
+            "maxRidgeLineVerticalJerkP95PixelsPerFrame": p95_line_jerk_limit,
+            "maxRidgeMinusReferenceVerticalP95Pixels": p95_reference_vertical_delta_limit,
+            "maxRidgeMinusReferenceHorizontalP95Pixels": p95_reference_horizontal_delta_limit,
             "ridgeResidualRunThresholdPixels": residual_threshold,
             "maxRidgeResidualRunFrames": max_run_limit,
         },
@@ -581,6 +723,18 @@ def write_diagnostic_overlay_video(
                 f"hf={float(ridge_row.get('ridgeHighFrequencyResidualPixels', 0.0)):.3f}px "
                 f"v={float(ridge_row.get('ridgeVerticalResidualPixels', 0.0)):.3f}px"
             )
+            if "ridgeLineVerticalResidualPixels" in ridge_row:
+                lines.append(
+                    "ridge-line "
+                    f"v={float(ridge_row.get('ridgeLineVerticalResidualPixels', 0.0)):.3f}px "
+                    f"jerk={float(ridge_row.get('ridgeLineVerticalJerkPixelsPerFrame', 0.0)):+.3f}px/f"
+                )
+            if bool(ridge_row.get("ridgeReferenceTrackingOk")):
+                lines.append(
+                    "ridge-ref "
+                    f"dx={float(ridge_row.get('ridgeMinusReferenceDx', 0.0)):+.2f}px "
+                    f"dy={float(ridge_row.get('ridgeMinusReferenceDy', 0.0)):+.2f}px"
+                )
         edge_row = edge_by_frame.get(frame_index)
         if edge_row is not None:
             lines.append(f"edge={float(edge_row.get('edgeResidualPx', 0.0)):.1f}px")
@@ -864,6 +1018,11 @@ def main() -> int:
     viewer_roi = parse_roi(args.viewer_roi) if args.viewer_roi else roi_from_case(case["viewerRoi"], "viewerRoi")
     content_roi = roi_from_case(case["contentRoi"], "contentRoi")
     ridge_roi = roi_from_case(case["ridgeRoi"], "ridgeRoi") if "ridgeRoi" in case else None
+    ridge_reference_roi = (
+        roi_from_case(case["ridgeReferenceRoi"], "ridgeReferenceRoi")
+        if "ridgeReferenceRoi" in case
+        else derive_ridge_reference_roi(content_roi, ridge_roi) if ridge_roi is not None else None
+    )
     source_frame_rate = parse_frame_rate(case.get("source", {}).get("frameRate", 30.0), 30.0)
     sample_fps = parse_frame_rate(args.sample_fps or quality.get("targetSampleFps", "source"), source_frame_rate)
     sample_every_captured_frame = bool(quality.get("sampleEveryCapturedFrame", False))
@@ -910,6 +1069,8 @@ def main() -> int:
     clamp_roi(content_roi, viewer_roi[2], viewer_roi[3], "content")
     if ridge_roi is not None:
         clamp_roi(ridge_roi, viewer_roi[2], viewer_roi[3], "ridge")
+    if ridge_reference_roi is not None:
+        clamp_roi(ridge_reference_roi, viewer_roi[2], viewer_roi[3], "ridgeReference")
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     edge_rows: list[dict[str, Any]] = []
@@ -917,6 +1078,8 @@ def main() -> int:
     ridge_rows: list[dict[str, Any]] = []
     previous_gray: np.ndarray | None = None
     previous_ridge_gray: np.ndarray | None = None
+    previous_ridge_reference_gray: np.ndarray | None = None
+    previous_ridge_line: dict[str, Any] | None = None
     previous_frame_index: int | None = None
     frame_index = -1
 
@@ -934,9 +1097,15 @@ def main() -> int:
         content = crop(viewer, content_roi)
         content_gray = cv2.cvtColor(content, cv2.COLOR_BGR2GRAY)
         ridge_gray = None
+        ridge_reference_gray = None
+        ridge_line = None
         if ridge_roi is not None:
             ridge = crop(viewer, ridge_roi)
             ridge_gray = cv2.cvtColor(ridge, cv2.COLOR_BGR2GRAY)
+            ridge_line = estimate_ridge_line(ridge_gray, quality)
+        if ridge_reference_roi is not None:
+            ridge_reference = crop(viewer, ridge_reference_roi)
+            ridge_reference_gray = cv2.cvtColor(ridge_reference, cv2.COLOR_BGR2GRAY)
 
         margins = black_margins(viewer_gray, black_threshold)
         edge_rows.append(
@@ -1002,25 +1171,68 @@ def main() -> int:
                     ridge_gray,
                     int(quality.get("minRidgeTrackingInliers", min_inliers)),
                 )
-                ridge_rows.append(
-                    {
-                        "frame": frame_index,
-                        "previousFrame": previous_frame_index,
-                        "time": timestamp,
-                        "trackingOk": bool(ridge_transform.get("ok")),
-                        "reason": ridge_transform.get("reason") or "",
-                        "featureCount": int(ridge_transform.get("featureCount", 0)),
-                        "trackedCount": int(ridge_transform.get("trackedCount", 0)),
-                        "inliers": int(ridge_transform.get("inliers", 0)),
-                        "scalePercent": float(ridge_transform.get("scalePercent", 0.0)),
-                        "dx": float(ridge_transform.get("dx", 0.0)),
-                        "dy": float(ridge_transform.get("dy", 0.0)),
-                        "rotationDegrees": float(ridge_transform.get("rotationDegrees", 0.0)),
-                    }
-                )
+                ridge_dx = float(ridge_transform.get("dx", 0.0))
+                ridge_dy = float(ridge_transform.get("dy", 0.0))
+                ridge_row = {
+                    "frame": frame_index,
+                    "previousFrame": previous_frame_index,
+                    "time": timestamp,
+                    "trackingOk": bool(ridge_transform.get("ok")),
+                    "reason": ridge_transform.get("reason") or "",
+                    "featureCount": int(ridge_transform.get("featureCount", 0)),
+                    "trackedCount": int(ridge_transform.get("trackedCount", 0)),
+                    "inliers": int(ridge_transform.get("inliers", 0)),
+                    "scalePercent": float(ridge_transform.get("scalePercent", 0.0)),
+                    "dx": ridge_dx,
+                    "dy": ridge_dy,
+                    "rotationDegrees": float(ridge_transform.get("rotationDegrees", 0.0)),
+                }
+                if ridge_line is not None:
+                    ridge_row.update(
+                        {
+                            "ridgeLineOk": bool(ridge_line.get("ok")),
+                            "ridgeLineReason": ridge_line.get("reason") or "",
+                            "ridgeLineY": ridge_line.get("ridgeLineY", ""),
+                            "ridgeLineWeightedY": ridge_line.get("ridgeLineWeightedY", ""),
+                            "ridgeLineSupportRatio": ridge_line.get("ridgeLineSupportRatio", ""),
+                            "ridgeLineStrengthMean": ridge_line.get("ridgeLineStrengthMean", ""),
+                            "ridgeLineYSpreadP90": ridge_line.get("ridgeLineYSpreadP90", ""),
+                        }
+                    )
+                if (
+                    previous_ridge_line is not None
+                    and ridge_line is not None
+                    and bool(previous_ridge_line.get("ok"))
+                    and bool(ridge_line.get("ok"))
+                ):
+                    line_dy = float(ridge_line["ridgeLineWeightedY"]) - float(previous_ridge_line["ridgeLineWeightedY"])
+                    ridge_row["ridgeLineDy"] = line_dy
+                    ridge_row["ridgeLineDyMinusAffineDy"] = line_dy - ridge_dy
+                if previous_ridge_reference_gray is not None and ridge_reference_gray is not None:
+                    reference_transform = estimate_transform(
+                        previous_ridge_reference_gray,
+                        ridge_reference_gray,
+                        int(quality.get("minRidgeReferenceTrackingInliers", min_inliers)),
+                    )
+                    reference_dx = float(reference_transform.get("dx", 0.0))
+                    reference_dy = float(reference_transform.get("dy", 0.0))
+                    ridge_row.update(
+                        {
+                            "ridgeReferenceTrackingOk": bool(reference_transform.get("ok")),
+                            "ridgeReferenceReason": reference_transform.get("reason") or "",
+                            "ridgeReferenceInliers": int(reference_transform.get("inliers", 0)),
+                            "ridgeReferenceDx": reference_dx,
+                            "ridgeReferenceDy": reference_dy,
+                            "ridgeMinusReferenceDx": ridge_dx - reference_dx,
+                            "ridgeMinusReferenceDy": ridge_dy - reference_dy,
+                        }
+                    )
+                ridge_rows.append(ridge_row)
 
         previous_gray = content_gray
         previous_ridge_gray = ridge_gray
+        previous_ridge_reference_gray = ridge_reference_gray
+        previous_ridge_line = ridge_line
         previous_frame_index = frame_index
 
     cap.release()
@@ -1236,6 +1448,16 @@ def main() -> int:
                 if ridge_roi is not None
                 else None
             ),
+            "ridgeReferenceRoi": (
+                {
+                    "x": ridge_reference_roi[0],
+                    "y": ridge_reference_roi[1],
+                    "w": ridge_reference_roi[2],
+                    "h": ridge_reference_roi[3],
+                }
+                if ridge_reference_roi is not None
+                else None
+            ),
             "ridge": ridge_summary,
             "ignoreStartSeconds": ignore_start,
             "ignoreEndSeconds": ignore_end,
@@ -1430,6 +1652,13 @@ def main() -> int:
             f"p95 {summary['ridge']['highFrequencyResidualP95Pixels']:.3f}px, "
             f"vertical p95 {summary['ridge']['verticalResidualP95Pixels']:.3f}px, "
             f"tracking {summary['ridge']['trackingRatio']:.3f}"
+        )
+        print(
+            "  ridge line/reference: "
+            f"line v p95 {summary['ridge']['lineVerticalResidualP95Pixels']:.3f}px, "
+            f"line jerk p95 {summary['ridge']['lineVerticalJerkP95PixelsPerFrame']:.3f}px/frame, "
+            f"minus-ref dx p95 {summary['ridge']['minusReferenceHorizontalP95Pixels']:.3f}px, "
+            f"dy p95 {summary['ridge']['minusReferenceVerticalP95Pixels']:.3f}px"
         )
     if bool(summary["pts"].get("available")):
         print(
