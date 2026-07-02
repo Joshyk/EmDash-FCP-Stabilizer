@@ -19,6 +19,19 @@ scripts/stabilizer_fcp_screen_capture_e2e.sh run \
   --case tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json
 ```
 
+To normalize the Final Cut Pro UI without recording, run:
+
+```sh
+scripts/stabilizer_fcp_screen_capture_e2e.sh prepare \
+  --case tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json
+```
+
+`prepare` opens the case library, opens the target project when the Browser exposes it,
+selects the playhead clip, verifies the project metadata contains the Stabilizer effect and
+Remove Black Edges parameter, seeks to the case start, and checks that the configured Viewer
+ROI is recordable. Use `assert-prepared` to re-check the current FCP state, or
+`--assume-prepared-fcp` when capturing from a state that was already prepared.
+
 The case uses `/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle`,
 `P1000307 Stabilized Review`, and the `P1000307.mov` `00:01:26` to `00:01:46`
 turn section in proxy with Remove Black Edges / crop enabled. The script records the
