@@ -241,6 +241,10 @@ metrics, and cache path diagnostics at frame cadence close to the source/capture
 instead of reducing the analysis to about 30fps; otherwise x/y frame jumps can be missed. If
 the screen recording cannot preserve the source cadence exactly, still sample every captured
 frame and make the capture frame rate limitation explicit in the result.
+Do not use a small fixed screenshot set, such as 12 frames, as the basis for accepting
+motion-quality fixes. For screen-capture diagnostics, treat every captured frame, the
+per-frame CSV metrics, and the full diagnostic overlay video as the primary evidence.
+Contact sheets are only navigation aids for locating suspect frames.
 For development changes that affect stabilization smoothness, Auto Crop / Remove Black
 Edges, turn smoothing, playback zoom, or proxy playback behavior, run the repo E2E
 screen-capture case for `P1000307.mov` before claiming the issue is fixed. The canonical
