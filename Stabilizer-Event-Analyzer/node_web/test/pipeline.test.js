@@ -458,6 +458,15 @@ test("build_stabilizer_fcpxml_import adds matching external proxy media refs", (
   const proxyPath = path.join(proxyDir, "P1000307.mov");
   fs.writeFileSync(originalPath, "");
   fs.writeFileSync(proxyPath, "");
+  const targetEventRoot = path.join(tmp, "Target Library.fcpbundle", "P1000307 Stabilized Review");
+  const targetOriginalDir = path.join(targetEventRoot, "Original Media");
+  const targetProxyDir = path.join(targetEventRoot, "Transcoded Media", "Proxy Media");
+  fs.mkdirSync(targetOriginalDir, { recursive: true });
+  fs.mkdirSync(targetProxyDir, { recursive: true });
+  const targetOriginalPath = path.join(targetOriginalDir, "P1000307.mov");
+  const targetProxyPath = path.join(targetProxyDir, "P1000307.mov");
+  fs.writeFileSync(targetOriginalPath, "");
+  fs.writeFileSync(targetProxyPath, "");
   const pkg = path.join(tmp, "Source.fcpxmld");
   writeFcpxmld(
     pkg,
@@ -481,13 +490,17 @@ test("build_stabilizer_fcpxml_import adds matching external proxy media refs", (
     "--only-analyzed-assets",
     "--target-event-name",
     "P1000307 Stabilized Review",
+    "--target-event-root",
+    targetEventRoot,
   ]);
 
   const info = fs.readFileSync(payload.infoPath, "utf8");
+  const expectedTargetOriginal = fs.realpathSync(targetOriginalPath);
+  const expectedTargetProxy = fs.realpathSync(targetProxyPath);
   assert.doesNotMatch(info, /uid="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"/);
   assert.match(info, /<event name="P1000307 Stabilized Review">/);
-  assert.match(info, /<media-rep kind="original-media"[^>]+P1000307\.mov/);
-  assert.match(info, /<media-rep kind="proxy-media"[^>]+Final%20Cut%20Proxy%20Media[^>]+P1000307\.mov/);
+  assert.match(info, new RegExp(`<media-rep kind="original-media"[^>]+${pathToFileURL(expectedTargetOriginal).href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(info, new RegExp(`<media-rep kind="proxy-media"[^>]+${pathToFileURL(expectedTargetProxy).href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
 test("build_stabilizer_fcpxml_import attaches video refs to parent clips", () => {
