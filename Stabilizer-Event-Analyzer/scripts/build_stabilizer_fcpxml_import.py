@@ -22,6 +22,7 @@ from fcpxml_common import (
     file_url_to_path,
     local_name,
     parse_time,
+    path_to_file_url,
     resolve_info_path,
     resources,
     safe_file_component,
@@ -463,6 +464,47 @@ def asset_uid_seed(asset: ET.Element) -> str:
     return "|".join(parts)
 
 
+def inferred_proxy_media_path(original_path: Path) -> Path | None:
+    sibling = original_path.parent.parent / "Transcoded Media" / "Proxy Media" / original_path.name
+    if sibling.is_file() or sibling.is_symlink():
+        return sibling
+    parts = list(original_path.parts)
+    for index, part in enumerate(parts):
+        if part != "Final Cut Original Media":
+            continue
+        candidate = Path(*parts[:index], "Final Cut Proxy Media", *parts[index + 1 :])
+        if candidate.is_file() or candidate.is_symlink():
+            return candidate
+    return None
+
+
+def ensure_proxy_media_rep(asset: ET.Element, uid: str) -> None:
+    existing_srcs = {
+        child.attrib.get("src")
+        for child in asset
+        if local_name(child.tag) == "media-rep" and child.attrib.get("src")
+    }
+    original_reps = [
+        child
+        for child in asset
+        if local_name(child.tag) == "media-rep"
+        and child.attrib.get("kind") == "original-media"
+        and child.attrib.get("src")
+    ]
+    for rep in original_reps:
+        try:
+            proxy_path = inferred_proxy_media_path(file_url_to_path(rep.attrib["src"]))
+        except ValueError:
+            continue
+        if proxy_path is None:
+            continue
+        proxy_src = path_to_file_url(proxy_path)
+        if proxy_src in existing_srcs:
+            continue
+        ET.SubElement(asset, "media-rep", {"kind": "proxy-media", "sig": uid, "src": proxy_src})
+        existing_srcs.add(proxy_src)
+
+
 def normalized_resource_copy(resource: ET.Element) -> ET.Element:
     copied = copy.deepcopy(resource)
     if local_name(copied.tag) != "asset":
@@ -474,6 +516,7 @@ def normalized_resource_copy(resource: ET.Element) -> ET.Element:
     for child in copied:
         if local_name(child.tag) == "media-rep" and child.attrib.get("src") and not child.attrib.get("sig"):
             child.attrib["sig"] = uid
+    ensure_proxy_media_rep(copied, uid)
     return copied
 
 
@@ -715,7 +758,7 @@ def source_effect_stack_unavailable_reason(source_path: Path, inherited_filter_c
         return None
     source = source_path.expanduser()
     if source.suffix == ".fcpbundle":
-        return "direct .fcpbundle sources expose Original Media only; export FCPXMLD from Final Cut Pro to inherit timeline effects"
+        return "direct .fcpbundle sources synthesize Original/Proxy media refs only; export FCPXMLD from Final Cut Pro to inherit timeline effects"
     return None
 
 
