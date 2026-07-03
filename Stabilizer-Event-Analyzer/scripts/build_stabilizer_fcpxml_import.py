@@ -35,6 +35,25 @@ EFFECT_UID = "~/Effects.localized/Emdash Studios/Tokyo Walking Stabilizer/Tokyo 
 PARAM_PREFIX = "9999/10013/10016/3/10036"
 FILTER_NAMES = {EFFECT_NAME, "Tokyo Walking Stabilizer copy"}
 LEGACY_FILTER_NAMES = {"Stabilizer Transform"}
+STABILIZER_VISIBLE_DEFAULT_PARAMS = [
+    ("Footstep Jitter X Strength", 7, "1"),
+    ("Footstep Jitter Y Strength", 18, "1"),
+    ("Footstep Jitter Rotation Strength", 8, "0.5"),
+    ("Stride Wobble X Strength", 29, "1"),
+    ("Stride Wobble Y Strength", 30, "1"),
+    ("Stride Wobble Rotation Strength", 31, "0.5"),
+    ("Overall Strength", 1, "1"),
+    ("Far-field Warp Strength", 45, "0.5"),
+    ("Turn Smoothing Strength", 23, "2"),
+    ("Turn Detection Window", 9, "6"),
+    ("Remove Black Edges", 41, "1"),
+    ("Auto Crop Zoom-Out Time", 42, "10"),
+    ("Auto Crop Zoom-In Time", 43, "10"),
+    ("Auto Crop Hold Time", 44, "2"),
+    ("Sample Size", 19, "0"),
+    ("Edge Display Mode", 27, "1"),
+    ("Debug Overlay", 10, "0"),
+]
 PRE_EFFECT_CHILD_TAGS = {
     "note",
     "conform-rate",
@@ -163,6 +182,8 @@ def stabilizer_filter(ref: str, result: dict) -> ET.Element:
     schema = result.get("cacheSchemaVersion", 16)
     revision = str(zlib.adler32(identity.encode("utf-8")) % 999_983)
     node = ET.Element("filter-video", {"ref": ref, "name": EFFECT_NAME})
+    for name, parameter_id, value in STABILIZER_VISIBLE_DEFAULT_PARAMS:
+        add_param(node, name, parameter_id, value)
     add_param(node, "Host Analysis Status", 15, f"Persisted Analysis Loaded | Schema: {schema}")
     add_param(
         node,
@@ -520,6 +541,18 @@ def normalized_resource_copy(resource: ET.Element) -> ET.Element:
     return copied
 
 
+def analyzed_asset_resource_copy(asset: ET.Element, result: dict) -> ET.Element:
+    copied = normalized_resource_copy(asset)
+    cache_identity = (result.get("cacheIdentity") or "").strip()
+    if cache_identity:
+        uid = stable_fcp_asset_uid(f"stabilizer-analyzed-import|{asset_uid_seed(copied)}|{cache_identity}")
+        copied.attrib["uid"] = uid
+        for child in copied:
+            if local_name(child.tag) == "media-rep" and child.attrib.get("src"):
+                child.attrib["sig"] = uid
+    return copied
+
+
 def source_library_attrs(source_root: ET.Element) -> dict[str, str]:
     for element in source_root:
         if local_name(element.tag) != "library":
@@ -554,7 +587,12 @@ def review_project_name(source_root: ET.Element, event_name: str, asset_id: str 
     return f"{event_name} Stabilized Review"
 
 
-def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) -> ET.Element:
+def build_analyzed_only_tree(
+    source_root: ET.Element,
+    results: dict[str, dict],
+    *,
+    target_event_name: str | None = None,
+) -> ET.Element:
     root = ET.Element("fcpxml", dict(source_root.attrib))
     target_resources = ET.SubElement(root, "resources")
     copied_resource_ids: set[str] = set()
@@ -581,7 +619,10 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         for resource in (fmt, asset):
             resource_id = resource.attrib.get("id")
             if resource_id and resource_id not in copied_resource_ids:
-                target_resources.append(normalized_resource_copy(resource))
+                if resource is asset:
+                    target_resources.append(analyzed_asset_resource_copy(asset, results[asset_id]))
+                else:
+                    target_resources.append(normalized_resource_copy(resource))
                 copied_resource_ids.add(resource_id)
     for resource_id in sorted(extra_resource_ids):
         if resource_id in copied_resource_ids:
@@ -602,7 +643,7 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         asset = resource_by_id(source_root, asset_id)
         source_clip = first_event_asset_clip(source_root, asset_id) or first_asset_clip(source_root, asset_id)
         effect_source_clip = effect_source_clips.get(asset_id)
-        event_name = source_event_names.get(asset_id) or fallback_event_name
+        event_name = target_event_name or source_event_names.get(asset_id) or fallback_event_name
         event = event_nodes.get(event_name)
         if event is None:
             event = ET.SubElement(library, "event", {"name": event_name})
@@ -647,8 +688,14 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     return root
 
 
-def build_single_asset_tree(source_root: ET.Element, asset_id: str, result: dict) -> ET.Element:
-    return build_analyzed_only_tree(source_root, {asset_id: result})
+def build_single_asset_tree(
+    source_root: ET.Element,
+    asset_id: str,
+    result: dict,
+    *,
+    target_event_name: str | None = None,
+) -> ET.Element:
+    return build_analyzed_only_tree(source_root, {asset_id: result}, target_event_name=target_event_name)
 
 
 def output_package_path(output_dir: Path, source_path: Path) -> Path:
@@ -827,6 +874,7 @@ def analysis_manifest(
         "cacheIdentityShort": short_identity(result.get("cacheIdentity")),
         "cacheFileName": result.get("cacheFileName"),
         "cacheRoot": cache_root,
+        "analysisTimings": result.get("analysisTimings"),
         "cachePayloadDirectory": (cache_payload or {}).get("cachePayloadDirectory"),
         "cachePayloadFiles": (cache_payload or {}).get("cachePayloadFiles") or [],
         "cachePayloadCacheFile": (cache_payload or {}).get("cachePayloadCacheFile"),
@@ -852,7 +900,15 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict], source_path: Path, output_dir: Path, cache_root: str | None) -> list[dict]:
+def build_per_footage_packages(
+    source_root: ET.Element,
+    results: dict[str, dict],
+    source_path: Path,
+    output_dir: Path,
+    cache_root: str | None,
+    *,
+    target_event_name: str | None = None,
+) -> list[dict]:
     packages = []
     output_dir.mkdir(parents=True, exist_ok=True)
     for asset_id, result in results.items():
@@ -864,7 +920,7 @@ def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict]
         fcpxmld_path = package_dir / f"{footage}.fcpxmld"
         fcpxmld_path.mkdir()
         info_path = fcpxmld_path / "Info.fcpxml"
-        tree = ET.ElementTree(build_single_asset_tree(source_root, asset_id, result))
+        tree = ET.ElementTree(build_single_asset_tree(source_root, asset_id, result, target_event_name=target_event_name))
         tree.write(info_path, encoding="utf-8", xml_declaration=True)
         manifest_path = package_dir / f"{footage}.analysis-manifest.json"
         cache_payload = copy_cache_payload(package_dir, footage, result, cache_root)
@@ -887,6 +943,7 @@ def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict]
             "sampleWidth": result.get("sampleWidth"),
             "sampleHeight": result.get("sampleHeight"),
             "frameCount": result.get("frameCount"),
+            "analysisTimings": result.get("analysisTimings"),
             "preparedMotionPath": manifest["preparedMotionPath"],
             "sourceEffectStack": manifest["sourceEffectStack"],
         })
@@ -921,6 +978,10 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         action="store_true",
         help="Build one import package directory per analyzed footage with a manifest next to the FCPXMLD.",
     )
+    parser.add_argument(
+        "--target-event-name",
+        help="Override the output Event name when importing into an existing Final Cut Pro Event.",
+    )
     parser.add_argument("--cache-root", type=Path)
     return parser.parse_args(argv)
 
@@ -944,6 +1005,7 @@ def main(argv: Iterable[str]) -> int:
                     args.source_fcpxml,
                     args.output_dir,
                     str(args.cache_root or analysis.get("cacheRoot") or ""),
+                    target_event_name=args.target_event_name,
                 )
                 return emit(
                     {
@@ -973,7 +1035,7 @@ def main(argv: Iterable[str]) -> int:
         if not all("requestedAssetId" in result for result in results.values()):
             results = resolve_analysis_results(root, results)
         if args.only_analyzed_assets:
-            root = build_analyzed_only_tree(root, results)
+            root = build_analyzed_only_tree(root, results, target_event_name=args.target_event_name)
             tree = ET.ElementTree(root)
             tree.write(target_info, encoding="utf-8", xml_declaration=True)
             return emit(

@@ -461,7 +461,7 @@ test("build_stabilizer_fcpxml_import adds matching external proxy media refs", (
   const pkg = path.join(tmp, "Source.fcpxmld");
   writeFcpxmld(
     pkg,
-    `<asset id="r2" name="P1000307" start="0s" duration="30030/30000s" hasVideo="1" format="r1">
+    `<asset id="r2" name="P1000307" uid="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" start="0s" duration="30030/30000s" hasVideo="1" format="r1">
       <media-rep kind="original-media" src="${pathToFileURL(originalPath).href}"/>
     </asset>`
   );
@@ -479,9 +479,13 @@ test("build_stabilizer_fcpxml_import adds matching external proxy media refs", (
     "--output-dir",
     tmp,
     "--only-analyzed-assets",
+    "--target-event-name",
+    "P1000307 Stabilized Review",
   ]);
 
   const info = fs.readFileSync(payload.infoPath, "utf8");
+  assert.doesNotMatch(info, /uid="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"/);
+  assert.match(info, /<event name="P1000307 Stabilized Review">/);
   assert.match(info, /<media-rep kind="original-media"[^>]+P1000307\.mov/);
   assert.match(info, /<media-rep kind="proxy-media"[^>]+Final%20Cut%20Proxy%20Media[^>]+P1000307\.mov/);
 });

@@ -88,6 +88,27 @@ def clamp_roi(roi: Roi, width: int, height: int, label: str) -> Roi:
     return roi
 
 
+def scale_roi_to_viewer(roi: Roi, source_viewer: Roi, target_viewer: Roi, label: str) -> Roi:
+    source_w = max(1, source_viewer[2])
+    source_h = max(1, source_viewer[3])
+    target_w = max(1, target_viewer[2])
+    target_h = max(1, target_viewer[3])
+    if source_w == target_w and source_h == target_h:
+        return roi
+
+    scale_x = target_w / float(source_w)
+    scale_y = target_h / float(source_h)
+    x = int(round(roi[0] * scale_x))
+    y = int(round(roi[1] * scale_y))
+    w = max(1, int(round(roi[2] * scale_x)))
+    h = max(1, int(round(roi[3] * scale_y)))
+    if x >= target_w or y >= target_h:
+        fail(f"{label} ROI {roi} scales outside viewer {target_w}x{target_h}")
+    w = min(w, target_w - x)
+    h = min(h, target_h - y)
+    return x, y, w, h
+
+
 def derive_ridge_reference_roi(content_roi: Roi, ridge_roi: Roi) -> Roi | None:
     content_x, content_y, content_w, content_h = content_roi
     _ridge_x, ridge_y, _ridge_w, ridge_h = ridge_roi
@@ -157,6 +178,26 @@ def black_margins(gray: np.ndarray, threshold: int) -> dict[str, int]:
 def crop(frame: np.ndarray, roi: Roi) -> np.ndarray:
     x, y, w, h = roi
     return frame[y : y + h, x : x + w]
+
+
+def missing_proxy_placeholder_metrics(frame: np.ndarray) -> dict[str, float | bool]:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    b, g, r = cv2.split(frame)
+    red_dominance = r.astype(np.int16) - np.maximum(g, b).astype(np.int16)
+    mask = (red_dominance > 18) & (r > 35) & (g < 75) & (b < 75)
+    ratio = float(np.count_nonzero(mask)) / float(max(1, gray.size))
+    height, width = gray.shape[:2]
+    center_mask = mask[height // 4 : (3 * height) // 4, width // 4 : (3 * width) // 4]
+    center_ratio = float(np.count_nonzero(center_mask)) / float(max(1, center_mask.size))
+    mean_value = float(gray.mean())
+    std_value = float(gray.std())
+    return {
+        "placeholderFrame": bool(mean_value < 80.0 and ratio > 0.55 and center_ratio > 0.40),
+        "placeholderRatio": ratio,
+        "centerPlaceholderRatio": center_ratio,
+        "placeholderMean": mean_value,
+        "placeholderStd": std_value,
+    }
 
 
 def estimate_transform(
@@ -290,6 +331,7 @@ def summarize_ridge_motion(
     ridge_rows: list[dict[str, Any]],
     quality: dict[str, Any],
     effective_sample_fps: float,
+    source_baseline: dict[str, Any] | None = None,
 ) -> tuple[bool, list[str], dict[str, Any]]:
     tracking_rows = [row for row in ridge_rows if bool(row.get("trackingOk"))]
     tracking_ratio = (len(tracking_rows) / len(ridge_rows)) if ridge_rows else 0.0
@@ -408,6 +450,31 @@ def summarize_ridge_motion(
     max_run_limit = int(quality.get("maxRidgeResidualRunFrames", 2**31 - 1))
 
     failures: list[str] = []
+    source_ridge_baseline = source_baseline.get("ridge", {}) if source_baseline else {}
+
+    def add_source_ratio_failure(
+        label: str,
+        value: float,
+        baseline_key: str,
+        ratio_key: str,
+        unit: str = "px",
+    ) -> None:
+        if ratio_key not in quality:
+            return
+        baseline_value = source_ridge_baseline.get(baseline_key)
+        if not isinstance(baseline_value, (int, float)) or not math.isfinite(float(baseline_value)):
+            return
+        baseline_float = float(baseline_value)
+        if baseline_float <= 0.0:
+            return
+        ratio_limit = float(quality[ratio_key])
+        source_limit = baseline_float * ratio_limit
+        if value > source_limit:
+            failures.append(
+                f"{label} {value:.3f}{unit} exceeds source baseline "
+                f"{baseline_float:.3f}{unit} * {ratio_limit:.3f} = {source_limit:.3f}{unit}"
+            )
+
     if tracking_ratio < tracking_ratio_limit:
         failures.append(f"ridge tracking ratio {tracking_ratio:.3f} below {tracking_ratio_limit:.3f}")
     if max_vector > max_vector_limit:
@@ -434,6 +501,31 @@ def summarize_ridge_motion(
         )
     if max_run > max_run_limit:
         failures.append(f"ridge residual run {max_run} exceeds {max_run_limit}")
+    add_source_ratio_failure(
+        "ridge high-frequency residual",
+        max_vector,
+        "maxHighFrequencyResidualPixels",
+        "maxRidgeHighFrequencyResidualSourceRatio",
+    )
+    add_source_ratio_failure(
+        "ridge high-frequency residual p95",
+        p95_vector,
+        "highFrequencyResidualP95Pixels",
+        "maxRidgeHighFrequencyResidualP95SourceRatio",
+    )
+    add_source_ratio_failure(
+        "ridge vertical residual p95",
+        p95_vertical,
+        "verticalResidualP95Pixels",
+        "maxRidgeVerticalResidualP95SourceRatio",
+    )
+    add_source_ratio_failure(
+        "ridge line vertical jerk p95",
+        p95_ridge_line_jerk,
+        "lineVerticalJerkP95PixelsPerFrame",
+        "maxRidgeLineVerticalJerkSourceRatio",
+        unit="px/frame",
+    )
 
     summary = {
         "enabled": bool(ridge_rows),
@@ -465,7 +557,12 @@ def summarize_ridge_motion(
             "maxRidgeMinusReferenceHorizontalP95Pixels": p95_reference_horizontal_delta_limit,
             "ridgeResidualRunThresholdPixels": residual_threshold,
             "maxRidgeResidualRunFrames": max_run_limit,
+            "maxRidgeHighFrequencyResidualSourceRatio": quality.get("maxRidgeHighFrequencyResidualSourceRatio"),
+            "maxRidgeHighFrequencyResidualP95SourceRatio": quality.get("maxRidgeHighFrequencyResidualP95SourceRatio"),
+            "maxRidgeVerticalResidualP95SourceRatio": quality.get("maxRidgeVerticalResidualP95SourceRatio"),
+            "maxRidgeLineVerticalJerkSourceRatio": quality.get("maxRidgeLineVerticalJerkSourceRatio"),
         },
+        "sourceBaseline": source_ridge_baseline,
     }
     return not failures, failures, summary
 
@@ -737,7 +834,10 @@ def write_diagnostic_overlay_video(
                 )
         edge_row = edge_by_frame.get(frame_index)
         if edge_row is not None:
-            lines.append(f"edge={float(edge_row.get('edgeResidualPx', 0.0)):.1f}px")
+            lines.append(
+                f"edge={float(edge_row.get('edgeResidualPx', 0.0)):.1f}px "
+                f"margin={float(edge_row.get('edgeMarginPx', 0.0)):.1f}px"
+            )
         put_label_lines(viewer, lines)
         writer.write(viewer)
 
@@ -750,6 +850,7 @@ def summarize_failures(
     scale_rows: list[dict[str, Any]],
     edge_rows: list[dict[str, Any]],
     quality: dict[str, Any],
+    source_baseline: dict[str, Any] | None = None,
 ) -> tuple[bool, list[str], dict[str, Any]]:
     scale_quality_rows = [
         row
@@ -758,6 +859,7 @@ def summarize_failures(
     ]
     max_scale = max((abs(float(row.get("scaleResidualPercent", 0.0))) for row in scale_quality_rows), default=0.0)
     max_edge = max((float(row.get("edgeResidualPx", 0.0)) for row in edge_rows), default=0.0)
+    max_edge_margin = max((float(row.get("edgeMarginPx", 0.0)) for row in edge_rows), default=0.0)
     low_inlier_rows = [row for row in scale_rows if not bool(row.get("trackingOk"))]
     low_inlier_ratio = (len(low_inlier_rows) / len(scale_rows)) if scale_rows else 1.0
     scale_quality_ratio = (len(scale_quality_rows) / len(scale_rows)) if scale_rows else 0.0
@@ -878,6 +980,7 @@ def summarize_failures(
 
     scale_limit = float(quality.get("maxScaleResidualPercent", 0.85))
     edge_limit = float(quality.get("maxBlackEdgeResidualPixels", 18.0))
+    edge_margin_limit = float(quality.get("maxBlackEdgeMarginPixels", float("inf")))
     low_inlier_limit = float(quality.get("maxLowInlierRatio", 0.1))
     scale_quality_limit = float(quality.get("minScaleQualityRatio", 0.5))
     jump_vector_limit = float(quality.get("maxFrameTranslationJumpPixels", float("inf")))
@@ -887,6 +990,8 @@ def summarize_failures(
     duplicate_run_limit = int(quality.get("maxNearDuplicateRunFrames", 2**31 - 1))
     cadence_hold_ratio_limit = float(quality.get("maxCadenceHoldFrameRatio", float("inf")))
     cadence_hold_run_limit = int(quality.get("maxCadenceHoldRunFrames", 2**31 - 1))
+    operation_duplicate_like_ratio_limit = float(quality.get("maxOperationNearDuplicateFrameRatio", 0.90))
+    operation_cadence_hold_ratio_limit = float(quality.get("maxOperationCadenceHoldFrameRatio", 0.90))
     cumulative_zoom_in_limit = float(quality.get("maxCumulativeZoomInPercent", float("inf")))
     cumulative_zoom_range_limit = float(quality.get("maxCumulativeZoomRangePercent", float("inf")))
     scale_pulse_peak_to_peak_limit = float(quality.get("maxScalePulsePeakToPeakPercent", float("inf")))
@@ -895,10 +1000,52 @@ def summarize_failures(
     scale_pulse_frame_ratio_limit = float(quality.get("maxScalePulseFrameRatio", float("inf")))
 
     failures: list[str] = []
+    operation_failures: list[str] = []
+    source_baseline = source_baseline or {}
+
+    def add_source_ratio_failure(
+        label: str,
+        value: float,
+        baseline_key: str,
+        ratio_key: str,
+        unit: str = "",
+    ) -> None:
+        if ratio_key not in quality:
+            return
+        baseline_value = source_baseline.get(baseline_key)
+        if not isinstance(baseline_value, (int, float)) or not math.isfinite(float(baseline_value)):
+            return
+        baseline_float = float(baseline_value)
+        if baseline_float <= 0.0:
+            return
+        ratio_limit = float(quality[ratio_key])
+        source_limit = baseline_float * ratio_limit
+        if value > source_limit:
+            failures.append(
+                f"{label} {value:.3f}{unit} exceeds source baseline "
+                f"{baseline_float:.3f}{unit} * {ratio_limit:.3f} = {source_limit:.3f}{unit}"
+            )
+
+    if not scale_rows:
+        operation_failures.append("no scale-analysis frames were produced from the recording")
+    elif duplicate_like_ratio >= operation_duplicate_like_ratio_limit:
+        operation_failures.append(
+            "recording appears static or unloaded: "
+            f"near-duplicate frame ratio {duplicate_like_ratio:.3f} >= {operation_duplicate_like_ratio_limit:.3f}"
+        )
+    if scale_rows and cadence_hold_ratio >= operation_cadence_hold_ratio_limit:
+        operation_failures.append(
+            "recording cadence appears held/static: "
+            f"cadence-hold frame ratio {cadence_hold_ratio:.3f} >= {operation_cadence_hold_ratio_limit:.3f}"
+        )
+    failures.extend(f"operation failure: {item}" for item in operation_failures)
+
     if max_scale > scale_limit:
         failures.append(f"scale residual {max_scale:.3f}% exceeds {scale_limit:.3f}%")
     if max_edge > edge_limit:
         failures.append(f"black-edge residual {max_edge:.1f}px exceeds {edge_limit:.1f}px")
+    if max_edge_margin > edge_margin_limit:
+        failures.append(f"black-edge margin {max_edge_margin:.1f}px exceeds {edge_margin_limit:.1f}px")
     if max_jump_vector > jump_vector_limit:
         failures.append(f"frame translation jump {max_jump_vector:.3f}px exceeds {jump_vector_limit:.3f}px")
     if max_jump_x > jump_x_limit:
@@ -944,10 +1091,60 @@ def summarize_failures(
         failures.append(f"low tracking ratio {low_inlier_ratio:.3f} exceeds {low_inlier_limit:.3f}")
     if scale_quality_ratio < scale_quality_limit:
         failures.append(f"scale quality ratio {scale_quality_ratio:.3f} below {scale_quality_limit:.3f}")
+    add_source_ratio_failure(
+        "frame translation jump",
+        max_jump_vector,
+        "maxFrameTranslationJumpPixels",
+        "maxFrameTranslationJumpSourceRatio",
+        unit="px",
+    )
+    add_source_ratio_failure(
+        "frame x jump",
+        max_jump_x,
+        "maxFrameXJumpPixels",
+        "maxFrameXJumpSourceRatio",
+        unit="px",
+    )
+    add_source_ratio_failure(
+        "frame y jump",
+        max_jump_y,
+        "maxFrameYJumpPixels",
+        "maxFrameYJumpSourceRatio",
+        unit="px",
+    )
+    add_source_ratio_failure(
+        "cumulative zoom-in",
+        max_cumulative_zoom_in,
+        "maxCumulativeZoomInPercent",
+        "maxCumulativeZoomInSourceRatio",
+        unit="%",
+    )
+    add_source_ratio_failure(
+        "cumulative zoom range",
+        max_cumulative_zoom_range,
+        "maxCumulativeZoomRangePercent",
+        "maxCumulativeZoomRangeSourceRatio",
+        unit="%",
+    )
+    add_source_ratio_failure(
+        "scale pulse peak-to-peak",
+        max_scale_pulse_peak_to_peak,
+        "maxScalePulsePeakToPeakPercent",
+        "maxScalePulsePeakToPeakSourceRatio",
+        unit="%",
+    )
+    add_source_ratio_failure(
+        "scale pulse derivative p95",
+        scale_pulse_derivative_p95,
+        "maxScalePulseDerivativeP95PercentPerFrame",
+        "maxScalePulseDerivativeP95SourceRatio",
+        unit="%/frame",
+    )
 
     summary = {
         "maxAbsScaleResidualPercent": max_scale,
         "maxBlackEdgeResidualPixels": max_edge,
+        "maxBlackEdgeMarginPixels": max_edge_margin,
         "maxFrameTranslationJumpPixels": max_jump_vector,
         "maxFrameXJumpPixels": max_jump_x,
         "maxFrameYJumpPixels": max_jump_y,
@@ -975,9 +1172,12 @@ def summarize_failures(
         "scaleFrameCount": len(scale_rows),
         "scaleQualityFrameCount": len(scale_quality_rows),
         "edgeFrameCount": len(edge_rows),
+        "operationFailure": bool(operation_failures),
+        "operationFailures": operation_failures,
         "thresholds": {
             "maxScaleResidualPercent": scale_limit,
             "maxBlackEdgeResidualPixels": edge_limit,
+            "maxBlackEdgeMarginPixels": edge_margin_limit,
             "maxFrameTranslationJumpPixels": jump_vector_limit,
             "maxFrameXJumpPixels": jump_x_limit,
             "maxFrameYJumpPixels": jump_y_limit,
@@ -985,6 +1185,8 @@ def summarize_failures(
             "maxNearDuplicateRunFrames": duplicate_run_limit,
             "maxCadenceHoldFrameRatio": cadence_hold_ratio_limit,
             "maxCadenceHoldRunFrames": cadence_hold_run_limit,
+            "maxOperationNearDuplicateFrameRatio": operation_duplicate_like_ratio_limit,
+            "maxOperationCadenceHoldFrameRatio": operation_cadence_hold_ratio_limit,
             "maxCumulativeZoomInPercent": cumulative_zoom_in_limit,
             "maxCumulativeZoomRangePercent": cumulative_zoom_range_limit,
             "maxScalePulsePeakToPeakPercent": scale_pulse_peak_to_peak_limit,
@@ -994,7 +1196,15 @@ def summarize_failures(
             "maxScalePulseFrameRatio": scale_pulse_frame_ratio_limit,
             "maxLowInlierRatio": low_inlier_limit,
             "minScaleQualityRatio": scale_quality_limit,
+            "maxFrameTranslationJumpSourceRatio": quality.get("maxFrameTranslationJumpSourceRatio"),
+            "maxFrameXJumpSourceRatio": quality.get("maxFrameXJumpSourceRatio"),
+            "maxFrameYJumpSourceRatio": quality.get("maxFrameYJumpSourceRatio"),
+            "maxCumulativeZoomInSourceRatio": quality.get("maxCumulativeZoomInSourceRatio"),
+            "maxCumulativeZoomRangeSourceRatio": quality.get("maxCumulativeZoomRangeSourceRatio"),
+            "maxScalePulsePeakToPeakSourceRatio": quality.get("maxScalePulsePeakToPeakSourceRatio"),
+            "maxScalePulseDerivativeP95SourceRatio": quality.get("maxScalePulseDerivativeP95SourceRatio"),
         },
+        "sourceBaseline": source_baseline,
     }
     return not failures, failures, summary
 
@@ -1015,11 +1225,27 @@ def main() -> int:
 
     case = json.loads(args.case.read_text(encoding="utf-8"))
     quality = dict(case.get("quality", {}))
-    viewer_roi = parse_roi(args.viewer_roi) if args.viewer_roi else roi_from_case(case["viewerRoi"], "viewerRoi")
-    content_roi = roi_from_case(case["contentRoi"], "contentRoi")
-    ridge_roi = roi_from_case(case["ridgeRoi"], "ridgeRoi") if "ridgeRoi" in case else None
+    source_baseline = case.get("sourceBaseline", {})
+    case_viewer_roi = roi_from_case(case["viewerRoi"], "viewerRoi")
+    viewer_roi = parse_roi(args.viewer_roi) if args.viewer_roi else case_viewer_roi
+    content_roi = scale_roi_to_viewer(
+        roi_from_case(case["contentRoi"], "contentRoi"),
+        case_viewer_roi,
+        viewer_roi,
+        "content",
+    )
+    ridge_roi = (
+        scale_roi_to_viewer(roi_from_case(case["ridgeRoi"], "ridgeRoi"), case_viewer_roi, viewer_roi, "ridge")
+        if "ridgeRoi" in case
+        else None
+    )
     ridge_reference_roi = (
-        roi_from_case(case["ridgeReferenceRoi"], "ridgeReferenceRoi")
+        scale_roi_to_viewer(
+            roi_from_case(case["ridgeReferenceRoi"], "ridgeReferenceRoi"),
+            case_viewer_roi,
+            viewer_roi,
+            "ridgeReference",
+        )
         if "ridgeReferenceRoi" in case
         else derive_ridge_reference_roi(content_roi, ridge_roi) if ridge_roi is not None else None
     )
@@ -1076,6 +1302,7 @@ def main() -> int:
     edge_rows: list[dict[str, Any]] = []
     scale_rows: list[dict[str, Any]] = []
     ridge_rows: list[dict[str, Any]] = []
+    placeholder_rows: list[dict[str, Any]] = []
     previous_gray: np.ndarray | None = None
     previous_ridge_gray: np.ndarray | None = None
     previous_ridge_reference_gray: np.ndarray | None = None
@@ -1093,6 +1320,8 @@ def main() -> int:
 
         timestamp = frame_index / fps
         viewer = crop(frame, viewer_roi)
+        placeholder_metrics = missing_proxy_placeholder_metrics(viewer)
+        placeholder_rows.append({"frame": frame_index, "time": timestamp, **placeholder_metrics})
         viewer_gray = cv2.cvtColor(viewer, cv2.COLOR_BGR2GRAY)
         content = crop(viewer, content_roi)
         content_gray = cv2.cvtColor(content, cv2.COLOR_BGR2GRAY)
@@ -1250,6 +1479,12 @@ def main() -> int:
             row[f"{key}Median"] = median
             row[f"{key}Residual"] = abs(float(row[key]) - median)
     for row in edge_rows:
+        row["edgeMarginPx"] = max(
+            float(row["left"]),
+            float(row["right"]),
+            float(row["top"]),
+            float(row["bottom"]),
+        )
         row["edgeResidualPx"] = max(
             float(row["leftResidual"]),
             float(row["rightResidual"]),
@@ -1387,12 +1622,42 @@ def main() -> int:
     filtered_edges = [row for row in edge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     filtered_scales = [row for row in scale_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     filtered_ridge_rows = [row for row in ridge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
+    filtered_placeholders = [row for row in placeholder_rows if ignore_start <= float(row["time"]) <= cutoff_end]
+    placeholder_frame_rows = [row for row in filtered_placeholders if bool(row.get("placeholderFrame"))]
+    placeholder_ratio = (len(placeholder_frame_rows) / len(filtered_placeholders)) if filtered_placeholders else 0.0
+    max_placeholder_run = 0
+    placeholder_run = 0
+    previous_placeholder_row: dict[str, Any] | None = None
+    for row in filtered_placeholders:
+        is_adjacent_sample = (
+            previous_placeholder_row is None
+            or int(row["frame"]) - int(previous_placeholder_row["frame"]) == sample_step
+        )
+        if bool(row.get("placeholderFrame")):
+            placeholder_run = placeholder_run + 1 if is_adjacent_sample else 1
+            max_placeholder_run = max(max_placeholder_run, placeholder_run)
+        else:
+            placeholder_run = 0
+        previous_placeholder_row = row
+    max_placeholder_ratio = float(quality.get("maxOperationMissingProxyPlaceholderFrameRatio", 0.02))
+    max_placeholder_run_limit = int(quality.get("maxOperationMissingProxyPlaceholderRunFrames", 2))
 
-    passed, failures, summary = summarize_failures(filtered_scales, filtered_edges, quality)
+    passed, failures, summary = summarize_failures(filtered_scales, filtered_edges, quality, source_baseline)
+    if placeholder_ratio > max_placeholder_ratio or max_placeholder_run > max_placeholder_run_limit:
+        operation_failure = (
+            "recording shows Final Cut Pro Missing Proxy/source-media placeholder: "
+            f"frame ratio {placeholder_ratio:.3f} (limit {max_placeholder_ratio:.3f}), "
+            f"run {max_placeholder_run} (limit {max_placeholder_run_limit})"
+        )
+        summary.setdefault("operationFailures", []).append(operation_failure)
+        summary["operationFailure"] = True
+        failures.append(f"operation failure: {operation_failure}")
+        passed = False
     ridge_passed, ridge_failures, ridge_summary = summarize_ridge_motion(
         filtered_ridge_rows,
         quality,
         effective_sample_fps,
+        source_baseline,
     )
     if ridge_roi is not None and not ridge_passed:
         failures.extend(ridge_failures)
@@ -1473,6 +1738,11 @@ def main() -> int:
             "cumulativeScaleBaselineSeconds": baseline_seconds,
             "scalePulseMedianWindowSeconds": pulse_median_seconds,
             "scalePulsePeakWindowSeconds": pulse_peak_seconds,
+            "missingProxyPlaceholderFrameCount": len(placeholder_frame_rows),
+            "missingProxyPlaceholderFrameRatio": placeholder_ratio,
+            "maxMissingProxyPlaceholderRunFrames": max_placeholder_run,
+            "maxOperationMissingProxyPlaceholderFrameRatio": max_placeholder_ratio,
+            "maxOperationMissingProxyPlaceholderRunFrames": max_placeholder_run_limit,
             "pts": pts_metrics,
             "maxPtsIntervalIrregularRatio": max_pts_irregular_ratio,
             "maxPtsIntervalSeconds": max_pts_interval_seconds,
@@ -1484,6 +1754,7 @@ def main() -> int:
     write_csv(output_dir / "edge_stats.csv", edge_rows)
     write_csv(output_dir / "scale_stats.csv", scale_rows)
     write_csv(output_dir / "ridge_stats.csv", ridge_rows)
+    write_csv(output_dir / "placeholder_stats.csv", placeholder_rows)
 
     scale_spikes = sorted(
         [row for row in filtered_scales if bool(row.get("scaleQualityOk", row.get("trackingOk")))],
@@ -1595,6 +1866,10 @@ def main() -> int:
 
     status = "PASS" if passed else "FAIL"
     print(f"{status} {summary['caseId']} video={args.video}")
+    if bool(summary["operationFailure"]):
+        print("  operation failure: recording did not show a valid moving FCP Viewer playback")
+        for item in summary["operationFailures"]:
+            print(f"    {item}")
     print(
         "  max scale residual: "
         f"{summary['maxAbsScaleResidualPercent']:.3f}% "
@@ -1604,6 +1879,11 @@ def main() -> int:
         "  max black-edge residual: "
         f"{summary['maxBlackEdgeResidualPixels']:.1f}px "
         f"(limit {summary['thresholds']['maxBlackEdgeResidualPixels']:.1f}px)"
+    )
+    print(
+        "  max black-edge margin: "
+        f"{summary['maxBlackEdgeMarginPixels']:.1f}px "
+        f"(limit {summary['thresholds']['maxBlackEdgeMarginPixels']:.1f}px)"
     )
     print(
         "  max frame jump: "
