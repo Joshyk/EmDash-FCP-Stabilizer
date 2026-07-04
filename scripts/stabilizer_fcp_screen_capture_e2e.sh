@@ -2312,9 +2312,9 @@ PY
 		screencapture)
 			/usr/sbin/screencapture -v -V "$record_seconds" "$video_path" &
 			;;
-			avfoundation-roi)
-				[[ -n "$viewer_roi" ]] || fail "--capture-backend avfoundation-roi requires --viewer-roi"
-				local ffmpeg_bin
+		avfoundation-roi)
+			[[ -n "$viewer_roi" ]] || fail "--capture-backend avfoundation-roi requires --viewer-roi"
+			local ffmpeg_bin
 			ffmpeg_bin="$(command -v ffmpeg || true)"
 			[[ -n "$ffmpeg_bin" ]] || fail "ffmpeg is required for --capture-backend avfoundation-roi"
 			local crop_x
@@ -2343,35 +2343,35 @@ PY
 				-c:v h264_videotoolbox \
 				-b:v 8M \
 				-allow_sw 0 \
-					"$video_path" &
-				;;
-			screencapturekit-roi)
-				[[ -n "$viewer_roi" ]] || fail "--capture-backend screencapturekit-roi requires --viewer-roi"
-				local crop_x
-				local crop_y
-				local crop_w
-				local crop_h
-				crop_x="$(viewer_roi_field "$viewer_roi" 0)"
-				crop_y="$(viewer_roi_field "$viewer_roi" 1)"
-				crop_w="$(viewer_roi_field "$viewer_roi" 2)"
-				crop_h="$(viewer_roi_field "$viewer_roi" 3)"
-				if (( crop_w % 2 == 1 )); then
-					crop_w=$((crop_w - 1))
-				fi
-				if (( crop_h % 2 == 1 )); then
-					crop_h=$((crop_h - 1))
-				fi
-				local sck_capture_bin="${ARTIFACT_ROOT}/screen_capturekit_roi"
-				mkdir -p "$ARTIFACT_ROOT"
-				xcrun swiftc -parse-as-library "${ROOT_DIR}/scripts/screen_capturekit_roi.swift" -o "$sck_capture_bin" \
-					|| fail "could not compile ScreenCaptureKit ROI recorder"
-				"$sck_capture_bin" \
-					--output "$video_path" \
-					--roi "${crop_x},${crop_y},${crop_w},${crop_h}" \
-					--duration "$record_seconds" \
-					--fps "${STABILIZER_E2E_CAPTURE_FPS:-60}" \
-					--bit-rate "${STABILIZER_E2E_CAPTURE_BITRATE:-8000000}" &
-				;;
+				"$video_path" &
+			;;
+		screencapturekit-roi)
+			[[ -n "$viewer_roi" ]] || fail "--capture-backend screencapturekit-roi requires --viewer-roi"
+			local crop_x
+			local crop_y
+			local crop_w
+			local crop_h
+			crop_x="$(viewer_roi_field "$viewer_roi" 0)"
+			crop_y="$(viewer_roi_field "$viewer_roi" 1)"
+			crop_w="$(viewer_roi_field "$viewer_roi" 2)"
+			crop_h="$(viewer_roi_field "$viewer_roi" 3)"
+			if (( crop_w % 2 == 1 )); then
+				crop_w=$((crop_w - 1))
+			fi
+			if (( crop_h % 2 == 1 )); then
+				crop_h=$((crop_h - 1))
+			fi
+			local sck_capture_bin="${ARTIFACT_ROOT}/screen_capturekit_roi"
+			mkdir -p "$ARTIFACT_ROOT"
+			xcrun swiftc -parse-as-library "${ROOT_DIR}/scripts/screen_capturekit_roi.swift" -o "$sck_capture_bin" \
+				|| fail "could not compile ScreenCaptureKit ROI recorder"
+			"$sck_capture_bin" \
+				--output "$video_path" \
+				--roi "${crop_x},${crop_y},${crop_w},${crop_h}" \
+				--duration "$record_seconds" \
+				--fps "${STABILIZER_E2E_CAPTURE_FPS:-60}" \
+				--bit-rate "${STABILIZER_E2E_CAPTURE_BITRATE:-8000000}" &
+			;;
 		*)
 			fail "unknown capture backend: $capture_backend"
 			;;
