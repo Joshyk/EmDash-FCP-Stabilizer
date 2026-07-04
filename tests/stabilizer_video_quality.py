@@ -333,8 +333,24 @@ def summarize_ridge_motion(
     effective_sample_fps: float,
     source_baseline: dict[str, Any] | None = None,
 ) -> tuple[bool, list[str], dict[str, Any]]:
-    tracking_rows = [row for row in ridge_rows if bool(row.get("trackingOk"))]
-    tracking_ratio = (len(tracking_rows) / len(ridge_rows)) if ridge_rows else 0.0
+    all_tracking_rows = [row for row in ridge_rows if bool(row.get("trackingOk"))]
+    tracking_ratio = (len(all_tracking_rows) / len(ridge_rows)) if ridge_rows else 0.0
+    exclude_pts_irregular_from_ridge = bool(
+        quality.get(
+            "excludePtsIrregularFromRidgeMotion",
+            quality.get("excludePtsIrregularFromFrameJump", False),
+        )
+    )
+    pts_cadence_excluded_rows = [
+        row
+        for row in all_tracking_rows
+        if bool(row.get("ptsCadenceAffectedFrame"))
+    ]
+    tracking_rows = [
+        row
+        for row in all_tracking_rows
+        if not (exclude_pts_irregular_from_ridge and bool(row.get("ptsCadenceAffectedFrame")))
+    ]
     median_seconds = float(quality.get("ridgeRollingMedianWindowSeconds", 0.5))
     median_window = max(3, int(round(median_seconds * effective_sample_fps)))
     if median_window % 2 == 0:
@@ -530,8 +546,15 @@ def summarize_ridge_motion(
     summary = {
         "enabled": bool(ridge_rows),
         "rowCount": len(ridge_rows),
-        "trackingFrameCount": len(tracking_rows),
+        "trackingFrameCount": len(all_tracking_rows),
+        "measuredTrackingFrameCount": len(tracking_rows),
         "trackingRatio": tracking_ratio,
+        "ptsCadenceExcludedFrameCount": len(pts_cadence_excluded_rows) if exclude_pts_irregular_from_ridge else 0,
+        "ptsCadenceExcludedFrameRatio": (
+            len(pts_cadence_excluded_rows) / len(all_tracking_rows)
+            if exclude_pts_irregular_from_ridge and all_tracking_rows
+            else 0.0
+        ),
         "rollingMedianWindowSeconds": median_seconds,
         "maxHighFrequencyResidualPixels": max_vector,
         "highFrequencyResidualP95Pixels": p95_vector,
@@ -561,6 +584,7 @@ def summarize_ridge_motion(
             "maxRidgeHighFrequencyResidualP95SourceRatio": quality.get("maxRidgeHighFrequencyResidualP95SourceRatio"),
             "maxRidgeVerticalResidualP95SourceRatio": quality.get("maxRidgeVerticalResidualP95SourceRatio"),
             "maxRidgeLineVerticalJerkSourceRatio": quality.get("maxRidgeLineVerticalJerkSourceRatio"),
+            "excludePtsIrregularFromRidgeMotion": exclude_pts_irregular_from_ridge,
         },
         "sourceBaseline": source_ridge_baseline,
     }
@@ -583,7 +607,7 @@ def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def probe_pts_interval_metrics(video_path: Path, tolerance_ratio: float) -> dict[str, Any]:
+def probe_pts_timing(video_path: Path, tolerance_ratio: float) -> dict[str, Any]:
     command = [
         "ffprobe",
         "-v",
@@ -599,13 +623,15 @@ def probe_pts_interval_metrics(video_path: Path, tolerance_ratio: float) -> dict
     try:
         result = subprocess.run(command, check=False, capture_output=True, text=True)
     except FileNotFoundError:
-        return {"available": False, "reason": "ffprobe_not_found"}
+        return {"summary": {"available": False, "reason": "ffprobe_not_found"}}
 
     if result.returncode != 0:
         return {
-            "available": False,
-            "reason": "ffprobe_failed",
-            "stderr": result.stderr.strip()[:500],
+            "summary": {
+                "available": False,
+                "reason": "ffprobe_failed",
+                "stderr": result.stderr.strip()[:500],
+            }
         }
 
     timestamps: list[float] = []
@@ -620,35 +646,87 @@ def probe_pts_interval_metrics(video_path: Path, tolerance_ratio: float) -> dict
 
     if len(timestamps) < 2:
         return {
-            "available": False,
-            "reason": "insufficient_pts_frames",
-            "ptsFrameCount": len(timestamps),
+            "summary": {
+                "available": False,
+                "reason": "insufficient_pts_frames",
+                "ptsFrameCount": len(timestamps),
+            }
         }
 
     intervals = [b - a for a, b in zip(timestamps, timestamps[1:]) if b >= a]
     if not intervals:
         return {
-            "available": False,
-            "reason": "no_positive_pts_intervals",
-            "ptsFrameCount": len(timestamps),
+            "summary": {
+                "available": False,
+                "reason": "no_positive_pts_intervals",
+                "ptsFrameCount": len(timestamps),
+            }
         }
 
     median_interval = float(np.median(np.asarray(intervals, dtype=np.float64)))
     tolerance = max(0.0, median_interval * tolerance_ratio)
-    irregular_intervals = [
-        interval
-        for interval in intervals
-        if abs(float(interval) - median_interval) > tolerance
-    ]
+    irregular_frame_indexes: set[int] = set()
+    irregular_intervals: list[float] = []
+    for interval_index, interval in enumerate(intervals):
+        if abs(float(interval) - median_interval) > tolerance:
+            irregular_frame_indexes.add(interval_index + 1)
+            irregular_intervals.append(float(interval))
     return {
-        "available": True,
-        "ptsFrameCount": len(timestamps),
-        "ptsIntervalCount": len(intervals),
-        "medianPtsIntervalSeconds": median_interval,
-        "maxPtsIntervalSeconds": max(intervals),
-        "ptsIntervalToleranceRatio": tolerance_ratio,
-        "ptsIntervalIrregularCount": len(irregular_intervals),
-        "ptsIntervalIrregularRatio": len(irregular_intervals) / len(intervals),
+        "summary": {
+            "available": True,
+            "ptsFrameCount": len(timestamps),
+            "ptsIntervalCount": len(intervals),
+            "medianPtsIntervalSeconds": median_interval,
+            "maxPtsIntervalSeconds": max(intervals),
+            "ptsIntervalToleranceRatio": tolerance_ratio,
+            "ptsIntervalIrregularCount": len(irregular_intervals),
+            "ptsIntervalIrregularRatio": len(irregular_intervals) / len(intervals),
+        },
+        "timestamps": timestamps,
+        "intervals": intervals,
+        "irregularFrameIndexes": irregular_frame_indexes,
+    }
+
+
+def probe_pts_interval_metrics(video_path: Path, tolerance_ratio: float) -> dict[str, Any]:
+    return dict(probe_pts_timing(video_path, tolerance_ratio).get("summary", {}))
+
+
+def pts_interval_for_sample(
+    pts_timing: dict[str, Any],
+    previous_frame_index: int,
+    frame_index: int,
+) -> dict[str, Any]:
+    summary = pts_timing.get("summary", {})
+    timestamps = pts_timing.get("timestamps", [])
+    if (
+        not bool(summary.get("available"))
+        or previous_frame_index < 0
+        or frame_index <= previous_frame_index
+        or frame_index >= len(timestamps)
+        or previous_frame_index >= len(timestamps)
+    ):
+        return {
+            "ptsTimeSeconds": "",
+            "previousPtsTimeSeconds": "",
+            "ptsIntervalSeconds": "",
+            "ptsIntervalExpectedSeconds": "",
+            "ptsIntervalIrregularFrame": False,
+        }
+
+    median_interval = float(summary.get("medianPtsIntervalSeconds", 0.0))
+    tolerance_ratio = float(summary.get("ptsIntervalToleranceRatio", 0.0))
+    frame_delta = max(1, frame_index - previous_frame_index)
+    interval = float(timestamps[frame_index]) - float(timestamps[previous_frame_index])
+    expected = median_interval * frame_delta
+    tolerance = max(0.0, expected * tolerance_ratio)
+    irregular = abs(interval - expected) > tolerance
+    return {
+        "ptsTimeSeconds": float(timestamps[frame_index]),
+        "previousPtsTimeSeconds": float(timestamps[previous_frame_index]),
+        "ptsIntervalSeconds": interval,
+        "ptsIntervalExpectedSeconds": expected,
+        "ptsIntervalIrregularFrame": irregular,
     }
 
 
@@ -811,8 +889,17 @@ def write_diagnostic_overlay_video(
                 flags.append("hold")
             if bool(scale_row.get("frameJumpSkippedForCadence")):
                 flags.append("jump-skip")
+            if bool(scale_row.get("ptsIntervalIrregularFrame")):
+                flags.append("pts-gap")
+            if bool(scale_row.get("frameJumpSkippedForPtsCadence")):
+                flags.append("pts-jump-skip")
+            if bool(scale_row.get("scalePulseExcludedForPtsCadence")):
+                flags.append("pts-pulse-skip")
             if flags:
                 lines.append("flags " + ",".join(flags))
+            pts_interval = scale_row.get("ptsIntervalSeconds")
+            if isinstance(pts_interval, (int, float)) and math.isfinite(float(pts_interval)):
+                lines.append(f"pts dt={float(pts_interval):.4f}s")
         ridge_row = ridge_by_frame.get(frame_index)
         if ridge_row is not None and bool(ridge_row.get("trackingOk")):
             lines.append(
@@ -870,6 +957,7 @@ def summarize_failures(
     max_jump_time = None
     jump_pair_count = 0
     jump_pair_skipped_for_cadence = 0
+    jump_pair_skipped_for_pts_cadence = 0
     duplicate_like_rows = [
         row
         for row in scale_rows
@@ -884,6 +972,20 @@ def summarize_failures(
         if bool(row.get("cadenceHoldFrame"))
     ]
     cadence_hold_ratio = (len(cadence_hold_rows) / len(scale_rows)) if scale_rows else 0.0
+    pts_irregular_rows = [
+        row
+        for row in scale_rows
+        if bool(row.get("ptsIntervalIrregularFrame"))
+    ]
+    pts_irregular_ratio = (len(pts_irregular_rows) / len(scale_rows)) if scale_rows else 0.0
+    scale_pulse_pts_excluded_rows = [
+        row
+        for row in scale_rows
+        if bool(row.get("scalePulseExcludedForPtsCadence"))
+    ]
+    scale_pulse_pts_excluded_ratio = (
+        len(scale_pulse_pts_excluded_rows) / len(scale_rows) if scale_rows else 0.0
+    )
     max_cadence_hold_run = 0
     cadence_hold_run = 0
     cumulative_zoom_rows = [
@@ -929,6 +1031,9 @@ def summarize_failures(
     max_scale_pulse_run = 0
     scale_pulse_run = 0
     exclude_cadence_hold_from_jump = bool(quality.get("excludeCadenceHoldFromFrameJump", False))
+    exclude_pts_irregular_from_jump = bool(
+        quality.get("excludePtsIrregularFromFrameJump", exclude_cadence_hold_from_jump)
+    )
     previous_row: dict[str, Any] | None = None
     for row in sorted(scale_rows, key=lambda item: int(item.get("frame", 0))):
         is_adjacent_sample = False
@@ -956,9 +1061,18 @@ def summarize_failures(
         if previous_row is not None and row_quality_ok and bool(previous_row.get("scaleQualityOk", previous_row.get("trackingOk"))):
             if is_adjacent_sample:
                 cadence_pair = bool(row.get("cadenceHoldFrame")) or bool(previous_row.get("cadenceHoldFrame"))
-                if exclude_cadence_hold_from_jump and cadence_pair:
+                pts_irregular_pair = bool(row.get("ptsCadenceAffectedFrame")) or bool(
+                    previous_row.get("ptsCadenceAffectedFrame")
+                )
+                skip_cadence_pair = exclude_cadence_hold_from_jump and cadence_pair
+                skip_pts_pair = exclude_pts_irregular_from_jump and pts_irregular_pair
+                if skip_cadence_pair or skip_pts_pair:
                     row["frameJumpSkippedForCadence"] = True
-                    jump_pair_skipped_for_cadence += 1
+                    row["frameJumpSkippedForPtsCadence"] = skip_pts_pair
+                    if skip_cadence_pair:
+                        jump_pair_skipped_for_cadence += 1
+                    if skip_pts_pair:
+                        jump_pair_skipped_for_pts_cadence += 1
                     previous_row = row
                     continue
                 jump_x = float(row.get("dx", 0.0)) - float(previous_row.get("dx", 0.0))
@@ -1152,11 +1266,16 @@ def summarize_failures(
         "maxFrameJumpTimeSeconds": max_jump_time,
         "frameJumpPairCount": jump_pair_count,
         "frameJumpPairSkippedForCadenceCount": jump_pair_skipped_for_cadence,
+        "frameJumpPairSkippedForPtsCadenceCount": jump_pair_skipped_for_pts_cadence,
         "nearDuplicateFrameCount": len(duplicate_like_rows),
         "nearDuplicateFrameRatio": duplicate_like_ratio,
         "maxNearDuplicateRunFrames": max_duplicate_run,
         "cadenceHoldFrameCount": len(cadence_hold_rows),
         "cadenceHoldFrameRatio": cadence_hold_ratio,
+        "ptsIrregularScaleFrameCount": len(pts_irregular_rows),
+        "ptsIrregularScaleFrameRatio": pts_irregular_ratio,
+        "scalePulsePtsCadenceExcludedFrameCount": len(scale_pulse_pts_excluded_rows),
+        "scalePulsePtsCadenceExcludedFrameRatio": scale_pulse_pts_excluded_ratio,
         "maxCadenceHoldRunFrames": max_cadence_hold_run,
         "maxCumulativeZoomInPercent": max_cumulative_zoom_in,
         "maxCumulativeZoomRangePercent": max_cumulative_zoom_range,
@@ -1203,6 +1322,14 @@ def summarize_failures(
             "maxCumulativeZoomRangeSourceRatio": quality.get("maxCumulativeZoomRangeSourceRatio"),
             "maxScalePulsePeakToPeakSourceRatio": quality.get("maxScalePulsePeakToPeakSourceRatio"),
             "maxScalePulseDerivativeP95SourceRatio": quality.get("maxScalePulseDerivativeP95SourceRatio"),
+            "excludePtsIrregularFromFrameJump": quality.get(
+                "excludePtsIrregularFromFrameJump",
+                quality.get("excludeCadenceHoldFromFrameJump", False),
+            ),
+            "excludePtsIrregularFromScalePulse": quality.get(
+                "excludePtsIrregularFromScalePulse",
+                quality.get("excludePtsIrregularFromFrameJump", False),
+            ),
         },
         "sourceBaseline": source_baseline,
     }
@@ -1262,11 +1389,19 @@ def main() -> int:
     min_duration = float(quality.get("minDurationSeconds", case.get("durationSeconds", 0.0)))
     duplicate_mean_threshold = float(quality.get("nearDuplicateMeanAbsDiffThreshold", -1.0))
     duplicate_p95_threshold = float(quality.get("nearDuplicateP95AbsDiffThreshold", float("inf")))
+    duplicate_displacement_limit = float(quality.get("nearDuplicateMaxDisplacementFraction", float("inf")))
     cadence_hold_mean_threshold = float(quality.get("cadenceHoldMeanAbsDiffThreshold", -1.0))
     cadence_hold_p95_threshold = float(quality.get("cadenceHoldP95AbsDiffThreshold", float("inf")))
     cadence_hold_displacement_limit = float(quality.get("cadenceHoldMaxDisplacementFraction", float("inf")))
     cadence_hold_scale_limit = float(quality.get("cadenceHoldMaxScalePercent", float("inf")))
     pts_tolerance_ratio = float(quality.get("ptsIntervalToleranceRatio", 0.20))
+    pts_timing = probe_pts_timing(args.video, pts_tolerance_ratio)
+    exclude_pts_irregular_from_scale_pulse = bool(
+        quality.get(
+            "excludePtsIrregularFromScalePulse",
+            quality.get("excludePtsIrregularFromFrameJump", False),
+        )
+    )
     min_captured_fps_ratio = float(quality.get("minCapturedFpsRatio", 0.0))
     diagnostic_spikes_per_kind = max(1, int(quality.get("diagnosticSpikeFramesPerKind", 24)))
     diagnostic_contact_sheet_max_frames = max(1, int(quality.get("diagnosticContactSheetMaxFrames", 96)))
@@ -1352,18 +1487,23 @@ def main() -> int:
             diff = cv2.absdiff(previous_gray, content_gray)
             frame_diff_mean = float(diff.mean())
             frame_diff_p95 = float(np.percentile(diff, 95))
-            near_duplicate = (
+            near_duplicate_diff = (
                 duplicate_mean_threshold >= 0.0
                 and frame_diff_mean <= duplicate_mean_threshold
                 and frame_diff_p95 <= duplicate_p95_threshold
             )
             transform = estimate_transform(previous_gray, content_gray, min_inliers)
+            pts_interval = pts_interval_for_sample(pts_timing, previous_frame_index, frame_index)
             dx = float(transform.get("dx", 0.0))
             dy = float(transform.get("dy", 0.0))
             scale_percent = float(transform.get("scalePercent", 0.0))
             displacement_fraction = max(
                 abs(dx) / max(1, content_roi[2]),
                 abs(dy) / max(1, content_roi[3]),
+            )
+            near_duplicate = (
+                near_duplicate_diff
+                and displacement_fraction <= duplicate_displacement_limit
             )
             cadence_hold = (
                 cadence_hold_mean_threshold >= 0.0
@@ -1391,6 +1531,7 @@ def main() -> int:
                 "nearDuplicateFrame": near_duplicate,
                 "cadenceHoldFrame": cadence_hold,
                 "cadenceHoldDisplacementFraction": displacement_fraction,
+                **pts_interval,
             }
             scale_rows.append(row)
 
@@ -1509,12 +1650,47 @@ def main() -> int:
             and inlier_ratio >= min_scale_inlier_ratio
             and displacement_fraction <= max_scale_displacement_fraction
         )
+        row["scalePulseExcludedForPtsCadence"] = False
+
+    previous_scale_row: dict[str, Any] | None = None
+    for index, row in enumerate(scale_rows):
+        previous_pts_irregular = (
+            previous_scale_row is not None
+            and int(row.get("previousFrame", -1)) == int(previous_scale_row.get("frame", -2))
+            and bool(previous_scale_row.get("ptsIntervalIrregularFrame"))
+        )
+        next_scale_row = scale_rows[index + 1] if index + 1 < len(scale_rows) else None
+        next_pts_irregular = (
+            next_scale_row is not None
+            and int(next_scale_row.get("previousFrame", -1)) == int(row.get("frame", -2))
+            and bool(next_scale_row.get("ptsIntervalIrregularFrame"))
+        )
+        pts_cadence_affected = bool(row.get("ptsIntervalIrregularFrame")) or previous_pts_irregular or next_pts_irregular
+        row["ptsCadenceAffectedFrame"] = pts_cadence_affected
+        if exclude_pts_irregular_from_scale_pulse and pts_cadence_affected:
+            row["scalePulseExcludedForPtsCadence"] = True
+        previous_scale_row = row
+
+    scale_pts_flags_by_frame = {
+        int(row["frame"]): {
+            "ptsIntervalIrregularFrame": bool(row.get("ptsIntervalIrregularFrame")),
+            "ptsCadenceAffectedFrame": bool(row.get("ptsCadenceAffectedFrame")),
+            "scalePulseExcludedForPtsCadence": bool(row.get("scalePulseExcludedForPtsCadence")),
+        }
+        for row in scale_rows
+    }
+    for row in ridge_rows:
+        flags = scale_pts_flags_by_frame.get(int(row.get("frame", -1)))
+        if flags is not None:
+            row.update(flags)
 
     cumulative_scale_log = 0.0
     cumulative_scale_segment = 0
     previous_zoom_row: dict[str, Any] | None = None
     for row in scale_rows:
-        row_quality_ok = bool(row.get("scaleQualityOk", row.get("trackingOk")))
+        row_quality_ok = bool(row.get("scaleQualityOk", row.get("trackingOk"))) and not bool(
+            row.get("scalePulseExcludedForPtsCadence")
+        )
         if not row_quality_ok:
             row["cumulativeScalePathOk"] = False
             row["scalePulseDerivativePercentPerFrame"] = 0.0
@@ -1579,29 +1755,18 @@ def main() -> int:
         row["cumulativeScaleMedianPercent"] = median
         row["cumulativeScaleResidualPercent"] = float(row.get("cumulativeScalePercent", 0.0)) - median
 
-    pulse_rows = [row for row in scale_rows if bool(row.get("scaleQualityOk", row.get("trackingOk")))]
-    pulse_values = [float(row.get("scaleResidualPercent", 0.0)) for row in pulse_rows]
-    pulse_medians = rolling_median(pulse_values, pulse_median_window)
-    for row, median in zip(pulse_rows, pulse_medians):
-        row["scalePulseMedianPercent"] = median
-        row["scalePulseResidualPercent"] = float(row.get("scaleResidualPercent", 0.0)) - median
-
+    pulse_rows = [row for row in scale_rows if bool(row.get("cumulativeScalePathOk"))]
     rows_by_pulse_segment: dict[int, list[dict[str, Any]]] = {}
     for row in pulse_rows:
         rows_by_pulse_segment.setdefault(int(row.get("cumulativeScalePathSegment", 0)), []).append(row)
-    for segment_rows in rows_by_segment.values():
-        previous_residual_row: dict[str, Any] | None = None
-        for row in segment_rows:
-            if previous_residual_row is not None and int(row.get("previousFrame", -1)) == int(previous_residual_row.get("frame", -2)):
-                row["scalePulseDerivativePercentPerFrame"] = (
-                    float(row.get("scalePulseResidualPercent", 0.0))
-                    - float(previous_residual_row.get("scalePulseResidualPercent", 0.0))
-                )
-            else:
-                row["scalePulseDerivativePercentPerFrame"] = 0.0
-            previous_residual_row = row
 
     for segment_rows in rows_by_pulse_segment.values():
+        pulse_values = [float(row.get("scaleResidualPercent", 0.0)) for row in segment_rows]
+        pulse_medians = rolling_median(pulse_values, pulse_median_window)
+        for row, median in zip(segment_rows, pulse_medians):
+            row["scalePulseMedianPercent"] = median
+            row["scalePulseResidualPercent"] = float(row.get("scaleResidualPercent", 0.0)) - median
+
         previous_residual_row = None
         for row in segment_rows:
             if previous_residual_row is not None and int(row.get("previousFrame", -1)) == int(previous_residual_row.get("frame", -2)):
@@ -1613,10 +1778,10 @@ def main() -> int:
                 row["scalePulseDerivativePercentPerFrame"] = 0.0
             previous_residual_row = row
 
-    pulse_residuals = [float(row.get("scalePulseResidualPercent", 0.0)) for row in pulse_rows]
-    pulse_peak_to_peak = rolling_peak_to_peak(pulse_residuals, pulse_peak_window)
-    for row, peak_to_peak in zip(pulse_rows, pulse_peak_to_peak):
-        row["scalePulsePeakToPeakPercent"] = peak_to_peak
+        pulse_residuals = [float(row.get("scalePulseResidualPercent", 0.0)) for row in segment_rows]
+        pulse_peak_to_peak = rolling_peak_to_peak(pulse_residuals, pulse_peak_window)
+        for row, peak_to_peak in zip(segment_rows, pulse_peak_to_peak):
+            row["scalePulsePeakToPeakPercent"] = peak_to_peak
 
     cutoff_end = max(0.0, duration - ignore_end) if duration > 0 else float("inf")
     filtered_edges = [row for row in edge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
@@ -1663,7 +1828,7 @@ def main() -> int:
         failures.extend(ridge_failures)
         passed = False
     captured_fps_ratio = fps / source_frame_rate if source_frame_rate > 0.0 else 1.0
-    pts_metrics = probe_pts_interval_metrics(args.video, pts_tolerance_ratio)
+    pts_metrics = dict(pts_timing.get("summary", {}))
     max_pts_irregular_ratio = float(quality.get("maxPtsIntervalIrregularRatio", float("inf")))
     max_pts_interval_seconds = float(quality.get("maxPtsIntervalSeconds", float("inf")))
     if math.isfinite(max_pts_irregular_ratio):
@@ -1731,6 +1896,7 @@ def main() -> int:
             "minDurationSeconds": min_duration,
             "nearDuplicateMeanAbsDiffThreshold": duplicate_mean_threshold,
             "nearDuplicateP95AbsDiffThreshold": duplicate_p95_threshold,
+            "nearDuplicateMaxDisplacementFraction": duplicate_displacement_limit,
             "cadenceHoldMeanAbsDiffThreshold": cadence_hold_mean_threshold,
             "cadenceHoldP95AbsDiffThreshold": cadence_hold_p95_threshold,
             "cadenceHoldMaxDisplacementFraction": cadence_hold_displacement_limit,
@@ -1908,7 +2074,8 @@ def main() -> int:
     print(
         "  cadence-hold frames: "
         f"{summary['cadenceHoldFrameRatio']:.3f} "
-        f"(run {summary['maxCadenceHoldRunFrames']}, skipped jump pairs {summary['frameJumpPairSkippedForCadenceCount']})"
+        f"(run {summary['maxCadenceHoldRunFrames']}, skipped jump pairs {summary['frameJumpPairSkippedForCadenceCount']}, "
+        f"PTS skipped {summary['frameJumpPairSkippedForPtsCadenceCount']})"
     )
     print(
         "  cumulative zoom: "

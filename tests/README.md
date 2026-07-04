@@ -43,7 +43,7 @@ For far-field mountain ridge-line fine shake, use the P1000304 case around the r
 
 ```sh
 scripts/stabilizer_fcp_screen_capture_e2e.sh run \
-  --case tests/stabilizer_e2e_cases/p1000304_ridge_4m18_4m38.json
+  --case tests/stabilizer_e2e_cases/p1000304_ridge_4m23_4m43.json
 ```
 
 This case adds a `ridgeRoi` band over the distant mountain area and fails on high-frequency
@@ -57,6 +57,20 @@ CSV diagnostics, a per-frame `diagnostic_overlay.mp4`, and separate contact shee
 scale, jump, cadence/hold, pulse, edge, and ridge spikes. The contact sheets are visual
 indexes into the failure regions; the overlay video is the primary visual artifact for
 checking continuous pulsing or ridge-line shake.
+
+Frame translation jump is evaluated separately from Final Cut Pro playback cadence. When
+ffprobe PTS intervals show a dropped/held capture frame and the case enables
+`excludePtsIrregularFromFrameJump`, that frame pair is excluded from the jump maximum but
+the PTS irregular ratio remains its own operation-quality gate in `metrics.json` and the
+per-frame CSV/overlay diagnostics. `excludePtsIrregularFromScalePulse` applies the same
+separation to zoom-pulse windows by breaking the pulse path around PTS-cadence affected
+frames instead of letting capture drops inflate the Stabilizer pulse metric.
+`excludePtsIrregularFromRidgeMotion` keeps ridge max/p95 focused on real far-field wobble
+instead of the single-frame ridge spikes caused by playback cadence drops.
+Near-identical consecutive frames with tiny mean/p95 pixel difference and near-zero
+estimated displacement are also classified as cadence holds before frame-jump scoring. Those
+holds remain visible as cadence/duplicate operation failures; they are not counted as
+Stabilizer transform jumps.
 
 To evaluate an existing recording without driving Final Cut Pro:
 

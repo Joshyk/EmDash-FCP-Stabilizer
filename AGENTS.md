@@ -253,6 +253,18 @@ case is `tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json`: open
 `P1000307 Stabilized Review` project, play the `00:01:26` to `00:01:46` turn section in
 proxy with the Stabilizer effect and Remove Black Edges / crop enabled, record the Final Cut
 Pro Viewer, then evaluate the recording with `scripts/stabilizer_fcp_screen_capture_e2e.sh`.
+When an E2E case specifies proxy playback, such as `playbackMode: "Proxy Only"`,
+the test setup must actively set Final Cut Pro's Viewer media playback to that proxy mode
+before recording. Use `Proxy Only`; `Proxy Preferred` is not valid for these E2E cases
+because Final Cut Pro can silently fall back to original/optimized media. Confirm the
+effective render source through FxPlug runtime evidence, such as the Debug Overlay `P###`
+row or Host Analysis logs reporting `proxy yes`; a capture that logs `proxy no` or
+otherwise cannot prove proxy playback is not valid evidence for that case and must be rerun
+after fixing the setup.
+If Final Cut Pro opens a proxy E2E case with a black/uninitialized Viewer, the harness may
+warm the Viewer by temporarily selecting `Optimized/Original`, but it must immediately
+restore `Proxy Only`, log that warmup explicitly, and record/evaluate only after Proxy Only
+is active again. This warmup is not a substitute for Proxy Only playback evidence.
 If the screen-capture evaluator reports zoom pulse, visible black-edge breathing, or
 insufficient tracking confidence, treat that as a blocking regression and keep iterating.
 

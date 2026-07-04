@@ -24,7 +24,7 @@ Options:
   --video PATH                 Capture output or existing recording to evaluate.
   --viewer-roi x,y,w,h         Override absolute FCP Viewer ROI in the screen recording.
   --output-dir PATH            Directory for evaluator diagnostics.
-  --capture-backend NAME       screencapture or avfoundation-roi. Default: screencapture.
+  --capture-backend NAME       screencapture, avfoundation-roi, or screencapturekit-roi. Default: screencapture.
   --assume-current-fcp-state   Do not open the project by UI helper; use current FCP state.
   --assume-prepared-fcp        Skip prepare and only verify/capture current FCP state.
 
@@ -128,6 +128,18 @@ print(f"{time.time():.6f}")
 PY
 }
 
+log_timestamp_from_epoch() {
+	local epoch_seconds="$1"
+	local offset_seconds="${2:-0}"
+	python3 - "$epoch_seconds" "$offset_seconds" <<'PY'
+from datetime import datetime
+import sys
+
+epoch = float(sys.argv[1]) + float(sys.argv[2])
+print(datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S"))
+PY
+}
+
 write_e2e_benchmark() {
 	local output_dir="$1"
 	local case_file="$2"
@@ -222,6 +234,98 @@ payload = {
 }
 Path(output_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"E2E benchmark: {output_path}")
+PY
+}
+
+assert_proxy_render_evidence() {
+	local case_file="$1"
+	local start_epoch="$2"
+	local end_epoch="$3"
+	local output_dir="$4"
+	local playback_mode
+	playback_mode="$(json_value "$case_file" playbackMode)"
+	if [[ "$playback_mode" != "Proxy Only" ]]; then
+		return 0
+	fi
+
+	local start_date
+	local end_date
+	start_date="$(log_timestamp_from_epoch "$start_epoch" -3)"
+	end_date="$(log_timestamp_from_epoch "$end_epoch" 3)"
+	local evidence_dir
+	if [[ -n "$output_dir" ]]; then
+		evidence_dir="$output_dir"
+	else
+		evidence_dir="${ARTIFACT_ROOT}"
+	fi
+	mkdir -p "$evidence_dir"
+	local evidence_path="${evidence_dir}/proxy_render_evidence.log"
+	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND eventMessage CONTAINS "Render Host Analysis decision"'
+	if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$evidence_path" 2>&1; then
+		fail "could not read FxPlug render-source logs for Proxy Only evidence: $evidence_path"
+	fi
+
+	python3 - "$case_file" "$evidence_path" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+case_path = Path(sys.argv[1])
+evidence_path = Path(sys.argv[2])
+case = json.loads(case_path.read_text(encoding="utf-8"))
+source_clip = Path(case.get("sourceClip", "")).stem
+digits = "".join(re.findall(r"\d+", source_clip))
+clip_token = digits[-6:] if len(digits) >= 6 else source_clip
+frame_count = str(case.get("source", {}).get("frameCount", ""))
+
+lines = [
+    line.rstrip("\n")
+    for line in evidence_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if "Render Host Analysis decision" in line
+]
+relevant = []
+if clip_token:
+    relevant.extend(line for line in lines if clip_token in line or source_clip in line)
+if frame_count:
+    relevant.extend(line for line in lines if f"frames {frame_count}" in line)
+relevant = list(dict.fromkeys(relevant))
+
+if not relevant:
+    raise SystemExit(
+        "Proxy Only evidence missing: no FxPlug render decision matched "
+        f"clip={source_clip!r} token={clip_token!r}; log={evidence_path}"
+    )
+
+usable_proxy = [
+    line
+    for line in relevant
+    if "proxy yes" in line and "prepared yes" in line and "stabilization active" in line
+]
+proxy_yes = [line for line in relevant if "proxy yes" in line]
+proxy_no = [line for line in relevant if "proxy no" in line]
+prepared_no = [line for line in relevant if "prepared no" in line or "stabilization inactive" in line]
+if usable_proxy:
+    print(
+        "Proxy Only render evidence verified: "
+        f"{len(usable_proxy)} matching proxy yes + prepared yes + stabilization active log(s)."
+    )
+    raise SystemExit(0)
+if proxy_yes and prepared_no:
+    raise SystemExit(
+        "Proxy Only evidence failed: FxPlug rendered proxy media for the target clip, "
+        "but the Stabilizer prepared path was not active; "
+        f"log={evidence_path}"
+    )
+if proxy_no:
+    raise SystemExit(
+        "Proxy Only evidence failed: FxPlug rendered the target clip as proxy no; "
+        f"log={evidence_path}"
+    )
+raise SystemExit(
+    "Proxy Only evidence failed: matching FxPlug render decision did not report proxy yes; "
+    f"log={evidence_path}"
+)
 PY
 }
 
@@ -419,8 +523,21 @@ APPLESCRIPT
 	wait_for_ui_osascript "$osascript_pid" "stop playback key" 30 1
 }
 
+assert_fcp_frontmost() {
+	local context="${1:-FCP UI operation}"
+	local frontmost
+	frontmost="$(/usr/bin/osascript <<'APPLESCRIPT'
+tell application "System Events"
+	return name of first application process whose frontmost is true
+end tell
+APPLESCRIPT
+)"
+	[[ "$frontmost" == "Final Cut Pro" ]] \
+		|| fail "${context}: Final Cut Pro is not frontmost before recording (frontmost=${frontmost})"
+}
+
 dismiss_fcp_modal_alerts() {
-	/usr/bin/osascript <<'APPLESCRIPT'
+	/usr/bin/osascript <<'APPLESCRIPT' &
 tell application "Final Cut Pro" to activate
 tell application "System Events"
 	tell process "Final Cut Pro"
@@ -443,10 +560,12 @@ tell application "System Events"
 end tell
 return "none"
 APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "dismiss FCP modal alerts" 30 1
 }
 
 dismiss_known_screen_blockers() {
-	/usr/bin/osascript <<'APPLESCRIPT'
+	/usr/bin/osascript <<'APPLESCRIPT' &
 tell application "System Events"
 	if exists process "loginwindow" then
 		tell process "loginwindow"
@@ -494,15 +613,16 @@ tell application "System Events"
 				repeat with targetWindow in windows
 					try
 						if exists button "OK" of targetWindow then
-							click button "OK" of targetWindow
-							return "dismissed-" & processName
+							return "blocked-" & processName
+						end if
+						if exists button "Done" of targetWindow then
+							return "blocked-" & processName
 						end if
 					end try
 				end repeat
 				try
 					if frontmost is true then
-						set visible to false
-						return "hid-" & processName
+						return "blocked-" & processName
 					end if
 				end try
 			end tell
@@ -511,10 +631,19 @@ tell application "System Events"
 end tell
 return "none"
 APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "dismiss known screen blockers" 30 1
+}
+
+fail_if_known_screen_blocked() {
+	local blocker_result="$1"
+	if [[ "$blocker_result" == blocked-* ]]; then
+		fail "known screen blocker is in front of Final Cut Pro Viewer: ${blocker_result}. Refusing to record a non-FCP E2E video."
+	fi
 }
 
 set_viewer_zoom_to_fit() {
-	/usr/bin/osascript >/dev/null <<'APPLESCRIPT'
+	/usr/bin/osascript >/dev/null <<'APPLESCRIPT' &
 tell application "Final Cut Pro" to activate
 tell application "System Events"
 	tell process "Final Cut Pro"
@@ -525,12 +654,14 @@ tell application "System Events"
 	end tell
 end tell
 APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "viewer zoom to fit" 50 1
 }
 
 set_fcp_viewer_media_playback() {
 	local playback_mode="$1"
 	[[ -n "$playback_mode" ]] || return 0
-	/usr/bin/osascript - "$playback_mode" <<'APPLESCRIPT'
+	/usr/bin/osascript - "$playback_mode" <<'APPLESCRIPT' &
 on run argv
 	set playbackMode to item 1 of argv
 	tell application "Final Cut Pro" to activate
@@ -593,6 +724,8 @@ on firstMenuButtonWithDescription(rootElement, requiredDescription, remainingDep
 	return missing value
 end firstMenuButtonWithDescription
 APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "viewer media playback ${playback_mode}" 100 0
 }
 
 set_fcp_proxy_only() {
@@ -618,7 +751,7 @@ warm_fcp_proxy_only_viewer_render() {
 }
 
 focus_timeline() {
-	/usr/bin/osascript >/dev/null <<'APPLESCRIPT'
+	/usr/bin/osascript >/dev/null <<'APPLESCRIPT' &
 tell application "Final Cut Pro" to activate
 tell application "System Events"
 	tell process "Final Cut Pro"
@@ -627,12 +760,16 @@ tell application "System Events"
 	end tell
 end tell
 APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "focus timeline" 50 1
 }
 
 set_fcp_toolbar_checkbox() {
 	local checkbox_description="$1"
 	local desired_value="$2"
-	/usr/bin/osascript - "$checkbox_description" "$desired_value" <<'APPLESCRIPT'
+	local output_file
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-toolbar-checkbox.XXXXXX")"
+	/usr/bin/osascript - "$checkbox_description" "$desired_value" >"$output_file" 2>&1 <<'APPLESCRIPT' &
 on run argv
 	set targetDescription to item 1 of argv
 	set desiredValue to item 2 of argv as integer
@@ -640,34 +777,64 @@ on run argv
 	tell application "System Events"
 		tell process "Final Cut Pro"
 			set frontmost to true
-			repeat with targetWindow in windows
+			set targetWindow to my frontFinalCutProWindow()
+			try
 				try
 					set toolbarItems to checkboxes of toolbar 1 of targetWindow
+				on error errText
+					error "Could not read Final Cut Pro toolbar checkboxes from the standard window: " & errText
+					end try
 					repeat with toolbarItem in toolbarItems
+						set toolbarItemRef to contents of toolbarItem
 						set itemDescription to ""
 						try
-							set itemDescription to description of toolbarItem as text
+							set itemDescription to description of toolbarItemRef as text
 						end try
 						if itemDescription contains targetDescription then
 							try
-								if (value of toolbarItem as integer) is not desiredValue then
-									click toolbarItem
+								set currentValue to ((value of toolbarItemRef) as text) as integer
+								if currentValue is not desiredValue then
+									click toolbarItemRef
 									delay 0.3
 								end if
-								if (value of toolbarItem as integer) is not desiredValue then error "checkbox value did not change"
+								set updatedValue to ((value of toolbarItemRef) as text) as integer
+								if updatedValue is not desiredValue then error "checkbox value did not change"
 								return "set"
 							on error errText
-								error "Found toolbar checkbox " & targetDescription & " but could not set it: " & errText
-							end try
-						end if
-					end repeat
-				end try
-			end repeat
+							error "Found toolbar checkbox " & targetDescription & " but could not set it: " & errText
+						end try
+					end if
+				end repeat
+			on error errText
+				error errText
+			end try
 		end tell
 	end tell
 	error "Could not find Final Cut Pro toolbar checkbox: " & targetDescription
 end run
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
 APPLESCRIPT
+	local osascript_pid=$!
+	if wait_for_ui_osascript "$osascript_pid" "toolbar checkbox ${checkbox_description}" 80 0; then
+		cat "$output_file"
+		rm -f "$output_file"
+		return 0
+	fi
+	cat "$output_file" >&2
+	rm -f "$output_file"
+	return 1
 }
 
 set_fcp_window_checkbox() {
@@ -749,6 +916,7 @@ normalize_fcp_layout() {
 	printf 'Normalizing FCP layout for screen-capture E2E...\n'
 	local blocker_result
 	blocker_result="$(dismiss_known_screen_blockers)"
+	fail_if_known_screen_blocked "$blocker_result"
 	printf 'Known screen-blocking dialog state before layout normalize: %s\n' "$blocker_result"
 	set_fcp_toolbar_checkbox "Show or hide the Browser" 0 >/dev/null
 	set_fcp_toolbar_checkbox "Show or hide the Inspector" 0 >/dev/null
@@ -760,10 +928,56 @@ select_playhead_clip() {
 	"${ROOT_DIR}/scripts/fcp_ui_test.sh" select-playhead-clip
 }
 
+ensure_selected_timeline_clip_enabled() {
+	local result
+	local output_file
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-clip-enabled.XXXXXX")"
+	/usr/bin/osascript >"$output_file" 2>&1 <<'APPLESCRIPT' &
+tell application "Final Cut Pro" to activate
+tell application "System Events"
+	tell process "Final Cut Pro"
+		set frontmost to true
+		tell menu "Clip" of menu bar 1
+			if exists menu item "Enable" then
+				if enabled of menu item "Enable" then
+					click menu item "Enable"
+					delay 0.3
+					return "enabled"
+				end if
+			end if
+			if exists menu item "Disable" then
+				if enabled of menu item "Disable" then return "already-enabled"
+			end if
+		end tell
+	end tell
+end tell
+return "unknown"
+APPLESCRIPT
+	local osascript_pid=$!
+	if ! wait_for_ui_osascript "$osascript_pid" "selected clip enabled state" 80 0; then
+		result="$(cat "$output_file")"
+		rm -f "$output_file"
+		fail "could not inspect selected Final Cut Pro clip enabled state: ${result}"
+	fi
+	result="$(cat "$output_file")"
+	rm -f "$output_file"
+	case "$result" in
+		enabled)
+			printf 'Enabled selected Final Cut Pro timeline clip through Clip > Enable.\n'
+			;;
+		already-enabled)
+			printf 'Selected Final Cut Pro timeline clip is enabled.\n'
+			;;
+		*)
+			fail "could not confirm selected Final Cut Pro timeline clip is enabled: ${result}"
+			;;
+	esac
+}
+
 assert_inspector_contains_case_effect() {
 	local expected_effect="$1"
 	local remove_black_edges="$2"
-	/usr/bin/osascript - "$expected_effect" "$remove_black_edges" <<'APPLESCRIPT'
+	/usr/bin/osascript - "$expected_effect" "$remove_black_edges" <<'APPLESCRIPT' &
 on run argv
 	set expectedEffect to item 1 of argv
 	set requireRemoveBlackEdges to item 2 of argv
@@ -771,7 +985,7 @@ on run argv
 	tell application "System Events"
 		tell process "Final Cut Pro"
 			set frontmost to true
-			set frontWindow to window 1
+			set frontWindow to my frontFinalCutProWindow()
 			set allText to my collectedElementText(frontWindow, 0, 12)
 			if allText does not contain expectedEffect then error "Expected effect is not visible in the Final Cut Pro Inspector: " & expectedEffect
 			if requireRemoveBlackEdges is "true" and allText does not contain "Remove Black Edges" then error "Remove Black Edges control is not visible in the Final Cut Pro Inspector."
@@ -779,6 +993,19 @@ on run argv
 	end tell
 	return "inspector-ok"
 end run
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
 
 on collectedElementText(elementRef, currentDepth, maxDepth)
 	if currentDepth > maxDepth then return ""
@@ -808,6 +1035,8 @@ on collectedElementText(elementRef, currentDepth, maxDepth)
 	return textParts
 end collectedElementText
 APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "Inspector effect text" 80 0
 }
 
 assert_inspector_contains_case_effect_if_readable() {
@@ -887,7 +1116,11 @@ PY
 assert_fcp_viewer_not_nothing_loaded() {
 	local project_name="${1:-}"
 	local snapshot
-	snapshot="$(/usr/bin/osascript - "$project_name" <<'APPLESCRIPT'
+	local snapshot_file
+	local error_file
+	snapshot_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer_fcp_ui_snapshot.XXXXXX")"
+	error_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer_fcp_ui_snapshot_error.XXXXXX")"
+	/usr/bin/osascript - "$project_name" >"$snapshot_file" 2>"$error_file" <<'APPLESCRIPT' &
 on run argv
 	set expectedProjectName to ""
 	if (count of argv) > 0 then set expectedProjectName to item 1 of argv
@@ -949,7 +1182,18 @@ on collectedElementText(elementRef, currentDepth, maxDepth)
 	return textParts
 end collectedElementText
 APPLESCRIPT
-)"
+	local osascript_pid=$!
+	if ! wait_for_ui_osascript "$osascript_pid" "FCP viewer text snapshot" 80 0; then
+		local error_text=""
+		if [[ -s "$error_file" ]]; then
+			error_text=": $(tr '\n' ' ' <"$error_file" | cut -c 1-240)"
+		fi
+		rm -f "$snapshot_file" "$error_file"
+		printf 'Final Cut Pro UI snapshot timed out while checking Viewer state%s; continuing after Viewer ROI/playback preflight.\n' "$error_text" >&2
+		return 0
+	fi
+	snapshot="$(cat "$snapshot_file")"
+	rm -f "$snapshot_file" "$error_file"
 	if printf '%s\n' "$snapshot" | /usr/bin/grep -qi "Nothing Loaded"; then
 		fail "Final Cut Pro Viewer is showing Nothing Loaded; refusing to record a static/unloaded E2E video"
 	fi
@@ -960,6 +1204,17 @@ APPLESCRIPT
 			printf 'FCP UI text did not expose expected project name "%s"; continuing after clip/effect assertions.\n' "$project_name"
 		fi
 	fi
+}
+
+assert_fcp_viewer_not_nothing_loaded_with_proxy_warmup() {
+	local project_name="$1"
+	local timecode_entry="$2"
+	if (assert_fcp_viewer_not_nothing_loaded "$project_name"); then
+		return 0
+	fi
+	printf 'Final Cut Pro Viewer reported Nothing Loaded; warming Proxy Only render before recording.\n'
+	warm_fcp_proxy_only_viewer_render "$timecode_entry"
+	assert_fcp_viewer_not_nothing_loaded "$project_name"
 }
 
 assert_viewer_roi_playback_motion() {
@@ -1059,6 +1314,97 @@ PY
 	return "$last_status"
 }
 
+assert_current_viewer_roi_playback_motion() {
+	local viewer_roi="$1"
+	local label="${2:-recording-active}"
+	[[ -n "$viewer_roi" ]] || fail "viewer ROI is required for recording-motion guard"
+	mkdir -p "$ARTIFACT_ROOT"
+	local before_path="${ARTIFACT_ROOT}/fcp_${label}_motion_before_$(date +%Y%m%d_%H%M%S).png"
+	local after_path="${ARTIFACT_ROOT}/fcp_${label}_motion_after_$(date +%Y%m%d_%H%M%S).png"
+	assert_fcp_frontmost "${label} motion guard before screenshot"
+	/usr/sbin/screencapture -x "$before_path"
+	sleep "${STABILIZER_E2E_RECORDING_MOTION_GUARD_SECONDS:-0.45}"
+	assert_fcp_frontmost "${label} motion guard after screenshot"
+	/usr/sbin/screencapture -x "$after_path"
+	python3 - "$before_path" "$after_path" "$viewer_roi" "$label" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+import cv2
+import numpy as np
+
+before_path = Path(sys.argv[1])
+after_path = Path(sys.argv[2])
+roi_parts = [int(part) for part in sys.argv[3].split(",")]
+label = sys.argv[4]
+if len(roi_parts) != 4:
+    raise SystemExit("viewer ROI must be x,y,w,h")
+x, y, w, h = roi_parts
+before = cv2.imread(str(before_path), cv2.IMREAD_COLOR)
+after = cv2.imread(str(after_path), cv2.IMREAD_COLOR)
+if before is None or after is None:
+    raise SystemExit(f"{label}: could not read motion guard screenshots: {before_path}, {after_path}")
+if before.shape != after.shape:
+    raise SystemExit(f"{label}: motion guard screenshot shapes differ: {before.shape} vs {after.shape}")
+height, width = before.shape[:2]
+if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > width or y + h > height:
+    raise SystemExit(f"{label}: viewer ROI {x},{y},{w},{h} is outside screenshot bounds {width}x{height}")
+
+before_color = before[y:y + h, x:x + w]
+after_color = after[y:y + h, x:x + w]
+before_roi = cv2.cvtColor(before_color, cv2.COLOR_BGR2GRAY)
+after_roi = cv2.cvtColor(after_color, cv2.COLOR_BGR2GRAY)
+
+def frame_state(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    b, g, r = cv2.split(frame)
+    red_dominance = r.astype(np.int16) - np.maximum(g, b).astype(np.int16)
+    placeholder_mask = (red_dominance > 18) & (r > 35) & (g < 75) & (b < 75)
+    center_mask = placeholder_mask[h // 4 : (3 * h) // 4, w // 4 : (3 * w) // 4]
+    return {
+        "mean": float(gray.mean()),
+        "std": float(gray.std()),
+        "color": float(np.count_nonzero(hsv[:, :, 1] > 12)) / float(max(1, gray.size)),
+        "placeholder": float(np.count_nonzero(placeholder_mask)) / float(max(1, gray.size)),
+        "center_placeholder": float(np.count_nonzero(center_mask)) / float(max(1, center_mask.size)),
+    }
+
+for state_label, state, path in (
+    ("before", frame_state(before_color), before_path),
+    ("after", frame_state(after_color), after_path),
+):
+    if state["mean"] < 6.0 or state["std"] < 3.0 or state["color"] < 0.02:
+        raise SystemExit(
+            f"{label}: recording ROI is not a recordable FCP Viewer image in {state_label} screenshot: "
+            f"mean={state['mean']:.2f}, std={state['std']:.2f}, colorRatio={state['color']:.3f}, screenshot={path}"
+        )
+    if state["mean"] < 80.0 and state["placeholder"] > 0.55 and state["center_placeholder"] > 0.40:
+        raise SystemExit(
+            f"{label}: recording ROI is showing Missing Proxy/source-media placeholder in {state_label} screenshot: "
+            f"placeholderRatio={state['placeholder']:.3f}, centerPlaceholderRatio={state['center_placeholder']:.3f}, "
+            f"mean={state['mean']:.2f}, std={state['std']:.2f}, screenshot={path}"
+        )
+
+diff = cv2.absdiff(before_roi, after_roi)
+mean_abs = float(diff.mean())
+p95_abs = float(np.percentile(diff.astype(np.float32), 95))
+min_mean = float(os.environ.get("STABILIZER_E2E_MIN_RECORDING_MEAN_DIFF", "0.18"))
+min_p95 = float(os.environ.get("STABILIZER_E2E_MIN_RECORDING_P95_DIFF", "1.0"))
+if mean_abs < min_mean and p95_abs < min_p95:
+    raise SystemExit(
+        f"{label}: FCP Viewer is not moving while recording: "
+        f"meanAbsDiff={mean_abs:.3f} (<{min_mean:.3f}), "
+        f"p95AbsDiff={p95_abs:.3f} (<{min_p95:.3f}), before={before_path}, after={after_path}"
+    )
+print(
+    f"FCP Viewer recording motion guard passed: label={label}, "
+    f"meanAbsDiff={mean_abs:.3f}, p95AbsDiff={p95_abs:.3f}, before={before_path}, after={after_path}"
+)
+PY
+}
+
 wait_for_viewer_roi_recordable() {
 	local viewer_roi="$1"
 	local timecode_entry="$2"
@@ -1066,7 +1412,9 @@ wait_for_viewer_roi_recordable() {
 	local proxy_warmup_done=0
 	for attempt in $(seq 1 18); do
 		dismiss_fcp_modal_alerts >/dev/null
-		dismiss_known_screen_blockers >/dev/null
+		local blocker_result
+		blocker_result="$(dismiss_known_screen_blockers)"
+		fail_if_known_screen_blocked "$blocker_result"
 		if output="$(assert_viewer_roi_recordable "$viewer_roi" 2>&1)"; then
 			printf '%s\n' "$output"
 			return 0
@@ -1111,6 +1459,7 @@ preflight_playback_alerts() {
 	dismiss_result="$(dismiss_fcp_modal_alerts)"
 	printf 'FCP playback alert preflight: %s\n' "$dismiss_result"
 	dismiss_result="$(dismiss_known_screen_blockers)"
+	fail_if_known_screen_blocked "$dismiss_result"
 	printf 'Known screen-blocking dialog preflight: %s\n' "$dismiss_result"
 	sleep 0.2
 	press_stop_playback
@@ -1119,6 +1468,7 @@ preflight_playback_alerts() {
 	dismiss_result="$(dismiss_fcp_modal_alerts)"
 	printf 'FCP alert state before recording: %s\n' "$dismiss_result"
 	dismiss_result="$(dismiss_known_screen_blockers)"
+	fail_if_known_screen_blocked "$dismiss_result"
 	printf 'Known screen-blocking dialog state before recording: %s\n' "$dismiss_result"
 	press_stop_playback
 }
@@ -1196,7 +1546,9 @@ SWIFT
 select_visible_sidebar_event_by_text() {
 	local event_name="$1"
 	local click_point
-	click_point="$(/usr/bin/osascript - "$event_name" <<'APPLESCRIPT'
+	local output_file
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-event-point.XXXXXX")"
+	/usr/bin/osascript - "$event_name" >"$output_file" 2>&1 <<'APPLESCRIPT' &
 on run argv
 	set eventName to item 1 of argv
 	tell application "Final Cut Pro" to activate
@@ -1292,7 +1644,14 @@ on elementTextEquals(candidateElement, requiredText)
 	return false
 end elementTextEquals
 APPLESCRIPT
-)"
+	local osascript_pid=$!
+	if ! wait_for_ui_osascript "$osascript_pid" "visible Event sidebar row ${event_name}" 100 0; then
+		click_point="$(cat "$output_file")"
+		rm -f "$output_file"
+		fail "visible Event sidebar row click point was not usable: $click_point"
+	fi
+	click_point="$(cat "$output_file")"
+	rm -f "$output_file"
 	[[ "$click_point" =~ ^[0-9]+,[0-9]+$ ]] || fail "visible Event sidebar row click point was not usable: $click_point"
 	click_screen_point "${click_point%,*}" "${click_point#*,}"
 	sleep 0.8
@@ -1302,7 +1661,9 @@ APPLESCRIPT
 open_visible_browser_project_by_text() {
 	local project_name="$1"
 	local open_point
-	open_point="$(/usr/bin/osascript - "$project_name" <<'APPLESCRIPT'
+	local output_file
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-project-point.XXXXXX")"
+	/usr/bin/osascript - "$project_name" >"$output_file" 2>&1 <<'APPLESCRIPT' &
 on run argv
 	set projectName to item 1 of argv
 	tell application "Final Cut Pro" to activate
@@ -1453,7 +1814,14 @@ on hasUsableBounds(elementReference)
 	end tell
 end hasUsableBounds
 APPLESCRIPT
-)"
+	local osascript_pid=$!
+	if ! wait_for_ui_osascript "$osascript_pid" "visible Browser project ${project_name}" 100 0; then
+		open_point="$(cat "$output_file")"
+		rm -f "$output_file"
+		fail "visible Browser project open point was not usable: $open_point"
+	fi
+	open_point="$(cat "$output_file")"
+	rm -f "$output_file"
 	[[ "$open_point" =~ ^[0-9]+,[0-9]+$ ]] || fail "visible Browser project open point was not usable: $open_point"
 	double_click_screen_point "${open_point%,*}" "${open_point#*,}"
 	sleep 0.8
@@ -1499,7 +1867,11 @@ open_case_project() {
 		sleep 0.25
 	done
 	sleep 2
-	/usr/bin/osascript /Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript handle-e2e-import-prompts 6 "$library" >/dev/null
+	/usr/bin/osascript /Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript handle-e2e-import-prompts 6 "$library" >/dev/null &
+	local import_prompt_pid=$!
+	if ! wait_for_ui_osascript "$import_prompt_pid" "E2E import prompt handling" 90 1; then
+		fail "could not complete E2E import prompt handling"
+	fi
 
 	if [[ "$assume_current" == "1" ]]; then
 		printf 'Using current FCP project/state for case: %s\n' "$project"
@@ -1546,6 +1918,8 @@ assert_case_prepared() {
 	sleep 0.4
 	select_playhead_clip
 	sleep 0.4
+	ensure_selected_timeline_clip_enabled
+	sleep 0.4
 	assert_inspector_contains_case_effect_if_readable "$expected_effect" "$remove_black_edges"
 	wait_for_viewer_roi_recordable "$viewer_roi" "$timecode_entry"
 	assert_fcp_viewer_not_nothing_loaded "$project"
@@ -1561,6 +1935,7 @@ prepare_case() {
 	open_case_project "$case_file" "$assume_current"
 	local blocker_result
 	blocker_result="$(dismiss_known_screen_blockers)"
+	fail_if_known_screen_blocked "$blocker_result"
 	printf 'Known screen-blocking dialog state during prepare: %s\n' "$blocker_result"
 	dismiss_fcp_modal_alerts >/dev/null
 	normalize_fcp_layout
@@ -1605,27 +1980,32 @@ PY
 	fi
 	local blocker_result
 	blocker_result="$(dismiss_known_screen_blockers)"
+	fail_if_known_screen_blocked "$blocker_result"
 	printf 'Known screen-blocking dialog state before seek: %s\n' "$blocker_result"
 	focus_timeline
 	seek_timecode "$timecode_entry"
 	sleep 0.6
 	preflight_playback_alerts "$timecode_entry"
-	assert_fcp_viewer_not_nothing_loaded "$(json_value "$case_file" project)"
+	assert_fcp_viewer_not_nothing_loaded_with_proxy_warmup "$(json_value "$case_file" project)" "$timecode_entry"
 	if ! assert_viewer_roi_playback_motion "$viewer_roi" "$timecode_entry"; then
 		fail "FCP Viewer playback preflight did not show motion; refusing to record a static E2E video"
 	fi
-	assert_fcp_viewer_not_nothing_loaded "$(json_value "$case_file" project)"
+	assert_fcp_viewer_not_nothing_loaded_with_proxy_warmup "$(json_value "$case_file" project)" "$timecode_entry"
 	press_stop_playback
 	focus_timeline
+	seek_timecode "$timecode_entry"
+	focus_timeline
+	sleep 0.2
+	assert_fcp_frontmost "before starting E2E recording playback"
 
 	printf 'Recording FCP Viewer E2E case %s for %ss via %s: %s\n' "$case_id" "$record_seconds" "$capture_backend" "$video_path"
 	case "$capture_backend" in
 		screencapture)
 			/usr/sbin/screencapture -v -V "$record_seconds" "$video_path" &
 			;;
-		avfoundation-roi)
-			[[ -n "$viewer_roi" ]] || fail "--capture-backend avfoundation-roi requires --viewer-roi"
-			local ffmpeg_bin
+			avfoundation-roi)
+				[[ -n "$viewer_roi" ]] || fail "--capture-backend avfoundation-roi requires --viewer-roi"
+				local ffmpeg_bin
 			ffmpeg_bin="$(command -v ffmpeg || true)"
 			[[ -n "$ffmpeg_bin" ]] || fail "ffmpeg is required for --capture-backend avfoundation-roi"
 			local crop_x
@@ -1654,14 +2034,54 @@ PY
 				-c:v h264_videotoolbox \
 				-b:v 8M \
 				-allow_sw 0 \
-				"$video_path" &
-			;;
+					"$video_path" &
+				;;
+			screencapturekit-roi)
+				[[ -n "$viewer_roi" ]] || fail "--capture-backend screencapturekit-roi requires --viewer-roi"
+				local crop_x
+				local crop_y
+				local crop_w
+				local crop_h
+				crop_x="$(viewer_roi_field "$viewer_roi" 0)"
+				crop_y="$(viewer_roi_field "$viewer_roi" 1)"
+				crop_w="$(viewer_roi_field "$viewer_roi" 2)"
+				crop_h="$(viewer_roi_field "$viewer_roi" 3)"
+				if (( crop_w % 2 == 1 )); then
+					crop_w=$((crop_w - 1))
+				fi
+				if (( crop_h % 2 == 1 )); then
+					crop_h=$((crop_h - 1))
+				fi
+				local sck_capture_bin="${ARTIFACT_ROOT}/screen_capturekit_roi"
+				mkdir -p "$ARTIFACT_ROOT"
+				xcrun swiftc -parse-as-library "${ROOT_DIR}/scripts/screen_capturekit_roi.swift" -o "$sck_capture_bin" \
+					|| fail "could not compile ScreenCaptureKit ROI recorder"
+				"$sck_capture_bin" \
+					--output "$video_path" \
+					--roi "${crop_x},${crop_y},${crop_w},${crop_h}" \
+					--duration "$record_seconds" \
+					--fps "${STABILIZER_E2E_CAPTURE_FPS:-60}" \
+					--bit-rate "${STABILIZER_E2E_CAPTURE_BITRATE:-8000000}" &
+				;;
 		*)
 			fail "unknown capture backend: $capture_backend"
 			;;
 	esac
 	local capture_pid=$!
-	sleep 0.8
+	sleep 0.35
+	local recording_frontmost
+	recording_frontmost="$(/usr/bin/osascript <<'APPLESCRIPT'
+tell application "System Events"
+	return name of first application process whose frontmost is true
+end tell
+APPLESCRIPT
+)"
+	if [[ "$recording_frontmost" != "Final Cut Pro" ]]; then
+		kill -TERM "$capture_pid" 2>/dev/null || true
+		wait "$capture_pid" 2>/dev/null || true
+		press_stop_playback
+		fail "Final Cut Pro did not remain frontmost while the E2E recording was active (frontmost=${recording_frontmost})"
+	fi
 	focus_timeline
 	press_space
 	wait "$capture_pid"
@@ -1780,6 +2200,13 @@ case "$command_name" in
 		capture_start="$(now_epoch_seconds)"
 		if capture_case "$case_file" "$video_path" "$assume_current" "$viewer_roi" "$capture_backend" "$assume_prepared"; then
 			capture_end="$(now_epoch_seconds)"
+			if assert_proxy_render_evidence "$case_file" "$capture_start" "$capture_end" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
 			write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" 0
 		else
 			status=$?
@@ -1791,7 +2218,7 @@ case "$command_name" in
 	evaluate)
 		total_start="$(now_epoch_seconds)"
 		evaluation_viewer_roi="$viewer_roi"
-		if [[ "$capture_backend" == "avfoundation-roi" && -n "$viewer_roi" ]]; then
+		if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$viewer_roi" ]]; then
 			evaluation_viewer_roi="$(viewer_roi_zero_origin "$viewer_roi")"
 		fi
 		evaluate_start="$(now_epoch_seconds)"
@@ -1810,6 +2237,13 @@ case "$command_name" in
 		capture_start="$(now_epoch_seconds)"
 		if capture_case "$case_file" "$video_path" "$assume_current" "$viewer_roi" "$capture_backend" "$assume_prepared"; then
 			capture_end="$(now_epoch_seconds)"
+			if assert_proxy_render_evidence "$case_file" "$capture_start" "$capture_end" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
 		else
 			status=$?
 			capture_end="$(now_epoch_seconds)"
@@ -1817,9 +2251,9 @@ case "$command_name" in
 			exit "$status"
 		fi
 		evaluation_viewer_roi="$viewer_roi"
-		if [[ "$capture_backend" == "avfoundation-roi" && -n "$viewer_roi" ]]; then
-			evaluation_viewer_roi="$(viewer_roi_zero_origin "$viewer_roi")"
-		fi
+			if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$viewer_roi" ]]; then
+				evaluation_viewer_roi="$(viewer_roi_zero_origin "$viewer_roi")"
+			fi
 		evaluate_start="$(now_epoch_seconds)"
 		if evaluate_case "$case_file" "$video_path" "$evaluation_viewer_roi" "$output_dir"; then
 			evaluate_end="$(now_epoch_seconds)"
