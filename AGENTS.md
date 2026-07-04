@@ -252,6 +252,15 @@ Do not use a small fixed screenshot set, such as 12 frames, as the basis for acc
 motion-quality fixes. For screen-capture diagnostics, treat every captured frame, the
 per-frame CSV metrics, and the full diagnostic overlay video as the primary evidence.
 Contact sheets are only navigation aids for locating suspect frames.
+The Stabilizer evaluation policy is video-first, not screenshot-first. Screenshots,
+contact sheets, Inspector state, and logs can guide investigation, but they cannot decide
+acceptance for smoothness. Acceptance must come from a Final Cut Pro Preview screen-capture
+video, full per-frame CSV/PTS diagnostics, and an explicit visual review of the recorded
+motion. Record at least 3-5 seconds for a local spot check and roughly 20 seconds for a
+known regression or important motion section. The purpose of the E2E harness is to make
+the real FCP Preview smooth, not merely to satisfy numeric thresholds; if the recorded
+video still shows clouds, ridgelines, horizon lines, zoom, crop edges, or cadence artifacts
+moving unnaturally, treat the result as failed even when metrics report pass.
 Stabilizer smoothness acceptance must be video-first. Do not accept a change based on a
 few screenshots, a still contact sheet, Inspector text, or numeric pass/fail alone. Record
 the Final Cut Pro Viewer with the target project, target timecode range, `Proxy Only`, and
@@ -274,6 +283,8 @@ case is `tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json`: open
 `P1000307 Stabilized Review` project, play the `00:01:26` to `00:01:46` turn section in
 proxy with the Stabilizer effect and Remove Black Edges / crop enabled, record the Final Cut
 Pro Viewer, then evaluate the recording with `scripts/stabilizer_fcp_screen_capture_e2e.sh`.
+This is a fixed roughly 20-second regression window; do not replace it with a few still
+frames or a shorter contact-sheet-only inspection.
 The second fixed regression is `P1000304` around `00:04:28`, focused on the mountain
 ridgeline, clouds, and horizon. The canonical case is
 `tests/stabilizer_e2e_cases/p1000304_ridge_4m23_4m43.json`. Record enough context around
