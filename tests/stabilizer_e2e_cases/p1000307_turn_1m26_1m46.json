@@ -66,6 +66,17 @@
   "quality": {
     "targetSampleFps": "source",
     "sampleEveryCapturedFrame": true,
+    "requireEveryCapturedFrame": true,
+    "minDurationSeconds": 20.0,
+    "visualReviewRequired": true,
+    "contactSheetNavigationOnly": true,
+    "visualReviewFocus": [
+      "turn-time zoom pulse near 00:01:32",
+      "distant ridge and horizon stepping",
+      "cloud shimmer",
+      "crop/black-edge breathing",
+      "near-duplicate or frozen playback cadence"
+    ],
     "minCapturedFpsRatio": 0.85,
     "ignoreStartSeconds": 1.0,
     "ignoreEndSeconds": 0.5,

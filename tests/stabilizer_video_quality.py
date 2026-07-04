@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1343,6 +1344,15 @@ def main() -> int:
     parser.add_argument("--viewer-roi", help="Override absolute viewer ROI as x,y,w,h.")
     parser.add_argument("--output-dir", type=Path, help="Directory for JSON/CSV/PNG diagnostics.")
     parser.add_argument("--sample-fps", type=float, help="Override analysis sample rate.")
+    parser.add_argument(
+        "--visual-review",
+        choices=("passed", "failed", "not-reviewed"),
+        default=os.environ.get("STABILIZER_E2E_VISUAL_REVIEW", "not-reviewed"),
+        help=(
+            "Result of human visual review of the recorded FCP Preview video. "
+            "Required cases fail acceptance until this is passed."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.case.is_file():
@@ -1377,8 +1387,21 @@ def main() -> int:
         else derive_ridge_reference_roi(content_roi, ridge_roi) if ridge_roi is not None else None
     )
     source_frame_rate = parse_frame_rate(case.get("source", {}).get("frameRate", 30.0), 30.0)
+    case_duration = float(case.get("durationSeconds", 0.0) or 0.0)
     sample_fps = parse_frame_rate(args.sample_fps or quality.get("targetSampleFps", "source"), source_frame_rate)
     sample_every_captured_frame = bool(quality.get("sampleEveryCapturedFrame", False))
+    require_every_captured_frame = bool(quality.get("requireEveryCapturedFrame", sample_every_captured_frame))
+    visual_review_required = bool(quality.get("visualReviewRequired", case.get("visualReviewRequired", False)))
+    contact_sheet_navigation_only = bool(quality.get("contactSheetNavigationOnly", True))
+    visual_review_focus = quality.get(
+        "visualReviewFocus",
+        [
+            "clouds",
+            "distant ridgelines",
+            "horizon",
+            "crop/zoom breathing",
+        ],
+    )
     ignore_start = float(quality.get("ignoreStartSeconds", 1.0))
     ignore_end = float(quality.get("ignoreEndSeconds", 0.5))
     median_seconds = float(quality.get("rollingMedianWindowSeconds", 0.5))
@@ -1421,6 +1444,11 @@ def main() -> int:
     duration = frame_count / fps if frame_count > 0 else 0.0
     sample_step = 1 if sample_every_captured_frame else max(1, int(round(fps / sample_fps)))
     effective_sample_fps = fps / sample_step
+    if require_every_captured_frame and sample_step != 1:
+        fail(
+            "case requires every captured frame to be evaluated, "
+            f"but sampleStep={sample_step}; set quality.sampleEveryCapturedFrame=true"
+        )
 
     ok, first_frame = cap.read()
     if not ok:
@@ -1783,7 +1811,10 @@ def main() -> int:
         for row, peak_to_peak in zip(segment_rows, pulse_peak_to_peak):
             row["scalePulsePeakToPeakPercent"] = peak_to_peak
 
-    cutoff_end = max(0.0, duration - ignore_end) if duration > 0 else float("inf")
+    evaluation_duration = case_duration if case_duration > 0.0 else duration
+    if duration > 0.0 and evaluation_duration > 0.0:
+        evaluation_duration = min(duration, evaluation_duration)
+    cutoff_end = max(0.0, evaluation_duration - ignore_end) if evaluation_duration > 0.0 else float("inf")
     filtered_edges = [row for row in edge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     filtered_scales = [row for row in scale_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     filtered_ridge_rows = [row for row in ridge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
@@ -1857,6 +1888,19 @@ def main() -> int:
     if min_duration > 0.0 and duration + 1e-6 < min_duration:
         failures.append(f"recording duration {duration:.3f}s is shorter than required {min_duration:.3f}s")
         passed = False
+    metrics_passed = passed
+    visual_review_status = args.visual_review
+    if visual_review_required:
+        if visual_review_status == "failed":
+            failures.append(
+                "visual review failed: recorded FCP Preview still shows visible shimmer, stepping, or pulse"
+            )
+            passed = False
+        elif visual_review_status == "not-reviewed":
+            failures.append(
+                "visual review required: inspect the recorded FCP Preview video before accepting this case"
+            )
+            passed = False
     summary.update(
         {
             "caseId": case.get("caseId"),
@@ -1864,6 +1908,9 @@ def main() -> int:
             "fps": fps,
             "frameCount": frame_count,
             "durationSeconds": duration,
+            "caseDurationSeconds": case_duration,
+            "evaluationDurationSeconds": evaluation_duration,
+            "evaluationEndSeconds": cutoff_end,
             "sampleStep": sample_step,
             "sampleFps": effective_sample_fps,
             "targetSampleFps": sample_fps,
@@ -1871,6 +1918,7 @@ def main() -> int:
             "capturedFpsRatio": captured_fps_ratio,
             "minCapturedFpsRatio": min_captured_fps_ratio,
             "sampleEveryCapturedFrame": sample_every_captured_frame,
+            "requireEveryCapturedFrame": require_every_captured_frame,
             "viewerRoi": {"x": viewer_roi[0], "y": viewer_roi[1], "w": viewer_roi[2], "h": viewer_roi[3]},
             "contentRoi": {"x": content_roi[0], "y": content_roi[1], "w": content_roi[2], "h": content_roi[3]},
             "ridgeRoi": (
@@ -1912,6 +1960,43 @@ def main() -> int:
             "pts": pts_metrics,
             "maxPtsIntervalIrregularRatio": max_pts_irregular_ratio,
             "maxPtsIntervalSeconds": max_pts_interval_seconds,
+            "metricsPass": metrics_passed,
+            "visualReview": {
+                "required": visual_review_required,
+                "status": visual_review_status,
+                "focus": visual_review_focus,
+                "failureRule": (
+                    "Fail if the recorded FCP Preview video visibly shows cloud, ridgeline, horizon, "
+                    "crop, zoom, freeze, or cadence instability, even when numeric metrics pass."
+                ),
+            },
+            "videoAcceptancePolicy": {
+                "mode": "video-first",
+                "requiresRecordedFcpPreview": visual_review_required,
+                "requiresEveryCapturedFrame": require_every_captured_frame,
+                "contactSheets": "navigation-only" if contact_sheet_navigation_only else "diagnostic",
+                "measuredSignals": [
+                    "frame-to-frame translation jump",
+                    "scale pulse",
+                    "ridge/horizon residual",
+                    "black-edge breathing",
+                    "near-duplicate/freeze",
+                    "PTS irregularity",
+                ],
+                "fixedRegressions": [
+                    "P1000307 00:01:26-00:01:46 turn",
+                    "P1000304 around 00:04:28 ridge/cloud/horizon",
+                ],
+            },
+            "acceptanceEvidence": {
+                "primary": [
+                    "recorded FCP Preview video",
+                    "full per-frame CSV metrics",
+                    "PTS/frame-interval metrics",
+                    "human visual review",
+                ],
+                "contactSheetsAreNavigationOnly": contact_sheet_navigation_only,
+            },
             "pass": passed,
             "failures": failures,
         }
@@ -2032,6 +2117,13 @@ def main() -> int:
 
     status = "PASS" if passed else "FAIL"
     print(f"{status} {summary['caseId']} video={args.video}")
+    print(
+        "  acceptance: video-first "
+        f"(metricsPass={summary['metricsPass']}, visualReview={summary['visualReview']['status']}, "
+        f"required={summary['visualReview']['required']})"
+    )
+    if summary["acceptanceEvidence"]["contactSheetsAreNavigationOnly"]:
+        print("  contact sheets: diagnostic navigation only, not acceptance evidence")
     if bool(summary["operationFailure"]):
         print("  operation failure: recording did not show a valid moving FCP Viewer playback")
         for item in summary["operationFailures"]:

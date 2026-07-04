@@ -4,8 +4,8 @@
   "library": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle",
   "project": "P1000304 Stabilized Review",
   "sourceClip": "P1000304.mov",
-  "originalMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/🖼️稲尾真夏🫨🎨/Original Media/P1000304.mov",
-  "proxyMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/🖼️稲尾真夏🫨🎨/Transcoded Media/Proxy Media/P1000304.mov",
+  "originalMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/P1000307 Stabilized Review/Original Media/P1000304.mov",
+  "proxyMedia": "/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle/P1000307 Stabilized Review/Transcoded Media/Proxy Media/P1000304.mov",
   "startTimecode": "00:04:23;32",
   "startTimecodeEntry": "00042332",
   "endTimecode": "00:04:43;32",
@@ -48,6 +48,17 @@
   "quality": {
     "targetSampleFps": "source",
     "sampleEveryCapturedFrame": true,
+    "requireEveryCapturedFrame": true,
+    "minDurationSeconds": 20.0,
+    "visualReviewRequired": true,
+    "contactSheetNavigationOnly": true,
+    "visualReviewFocus": [
+      "mountain ridge-line fine shake around 00:04:28",
+      "cloud shimmer",
+      "horizon stepping",
+      "crop/black-edge breathing",
+      "near-duplicate or frozen playback cadence"
+    ],
     "minCapturedFpsRatio": 0.85,
     "ignoreStartSeconds": 1.0,
     "ignoreEndSeconds": 0.5,

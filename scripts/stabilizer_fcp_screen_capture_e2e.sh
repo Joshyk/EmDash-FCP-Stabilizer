@@ -25,6 +25,7 @@ Options:
   --viewer-roi x,y,w,h         Override absolute FCP Viewer ROI in the screen recording.
   --output-dir PATH            Directory for evaluator diagnostics.
   --capture-backend NAME       screencapture, avfoundation-roi, or screencapturekit-roi. Default: screencapture.
+  --visual-review STATE        passed, failed, or not-reviewed. Default: not-reviewed.
   --assume-current-fcp-state   Do not open the project by UI helper; use current FCP state.
   --assume-prepared-fcp        Skip prepare and only verify/capture current FCP state.
 
@@ -67,6 +68,32 @@ PY
 	wait "$pid"
 }
 
+wait_for_fcp_standard_window() {
+	local max_ticks="${1:-300}"
+	local waited=0
+	while (( waited < max_ticks )); do
+		if /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1
+tell application "System Events"
+	if not (exists process "Final Cut Pro") then error "Final Cut Pro process not found"
+	tell process "Final Cut Pro"
+		repeat with candidateWindow in windows
+			try
+				if subrole of candidateWindow is "AXStandardWindow" then return "ready"
+			end try
+		end repeat
+	end tell
+end tell
+error "Final Cut Pro standard window not ready"
+APPLESCRIPT
+		then
+			return 0
+		fi
+		sleep 0.1
+		waited=$((waited + 1))
+	done
+	return 1
+}
+
 json_value() {
 	local file="$1"
 	local key="$2"
@@ -103,6 +130,46 @@ if w <= 0 or h <= 0:
     raise SystemExit("case viewerRoi width/height must be positive")
 print(f"{x},{y},{w},{h}")
 PY
+}
+
+current_fcp_viewer_roi() {
+	local bounds_json
+	bounds_json="$(/usr/bin/osascript /Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript viewer-bounds-json)"
+	BOUNDS_JSON="$bounds_json" python3 - <<'PY'
+import json
+import os
+
+try:
+    bounds = json.loads(os.environ["BOUNDS_JSON"])
+    x = int(round(float(bounds["x"])))
+    y = int(round(float(bounds["y"])))
+    w = int(round(float(bounds["width"])))
+    h = int(round(float(bounds["height"])))
+except Exception as exc:
+    raise SystemExit(f"could not parse FCP Viewer bounds: {exc}")
+
+if w <= 0 or h <= 0:
+    raise SystemExit(f"invalid FCP Viewer bounds: {bounds!r}")
+print(f"{x},{y},{w},{h}")
+PY
+}
+
+viewer_roi_for_current_fcp() {
+	local fallback_roi="$1"
+	if [[ "${viewer_roi_explicit:-0}" == "1" ]]; then
+		printf '%s\n' "$fallback_roi"
+		return 0
+	fi
+	if [[ "${STABILIZER_E2E_DYNAMIC_VIEWER_ROI:-1}" == "0" ]]; then
+		printf '%s\n' "$fallback_roi"
+		return 0
+	fi
+	local dynamic_roi
+	if ! dynamic_roi="$(current_fcp_viewer_roi)"; then
+		fail "could not resolve current FCP Viewer ROI; pass --viewer-roi explicitly to override"
+	fi
+	printf 'Using dynamic FCP Viewer ROI: %s\n' "$dynamic_roi" >&2
+	printf '%s\n' "$dynamic_roi"
 }
 
 json_bool_value() {
@@ -329,6 +396,39 @@ raise SystemExit(
 PY
 }
 
+assert_no_playback_fallbacks() {
+	local case_file="$1"
+	local start_epoch="$2"
+	local end_epoch="$3"
+	local output_dir="$4"
+	local playback_mode
+	playback_mode="$(json_value "$case_file" playbackMode)"
+	if [[ "$playback_mode" != "Proxy Only" ]]; then
+		return 0
+	fi
+
+	local start_date
+	local end_date
+	start_date="$(log_timestamp_from_epoch "$start_epoch" -3)"
+	end_date="$(log_timestamp_from_epoch "$end_epoch" 3)"
+	local evidence_dir
+	if [[ -n "$output_dir" ]]; then
+		evidence_dir="$output_dir"
+	else
+		evidence_dir="${ARTIFACT_ROOT}"
+	fi
+	mkdir -p "$evidence_dir"
+	local fallback_path="${evidence_dir}/playback_fallback_evidence.log"
+	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND (eventMessage CONTAINS "Auto Crop playback fallback" OR eventMessage CONTAINS "Auto Crop playback unavailable" OR eventMessage CONTAINS "Auto Crop playback plan deferred" OR eventMessage CONTAINS "Auto Crop playback final framing repair" OR eventMessage CONTAINS "Playback trajectory fallback" OR eventMessage CONTAINS "Playback trajectory not ready")'
+	if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$fallback_path" 2>&1; then
+		fail "could not read FxPlug playback fallback logs: $fallback_path"
+	fi
+	if grep -Eq "Auto Crop playback fallback|Auto Crop playback unavailable|Auto Crop playback plan deferred|Auto Crop playback final framing repair|Playback trajectory fallback|Playback trajectory not ready" "$fallback_path"; then
+		fail "Playback fallback/unprepared playback plan occurred during Proxy Only capture; log=$fallback_path"
+	fi
+	printf 'Playback fallback evidence verified: no Auto Crop or trajectory playback fallback/unprepared log(s).\n'
+}
+
 case_project_db_path() {
 	local file="$1"
 	python3 - "$file" <<'PY'
@@ -437,7 +537,11 @@ assert_case_project_contains_effect() {
 	local project_db
 	local expected_effect
 	local remove_black_edges
-	project_db="$(case_project_db_path "$case_file")"
+	if ! project_db="$(case_project_db_path "$case_file")"; then
+		fail "could not resolve a unique Final Cut Pro project database for case: $case_file"
+	fi
+	[[ -n "$project_db" ]] || fail "resolved Final Cut Pro project database path was empty for case: $case_file"
+	[[ -f "$project_db" ]] || fail "resolved Final Cut Pro project database is not a file: $project_db"
 	expected_effect="$(json_value "$case_file" expectedEffect)"
 	remove_black_edges="$(json_bool_value "$case_file" removeBlackEdges)"
 	python3 - "$project_db" "$expected_effect" "$remove_black_edges" <<'PY'
@@ -620,14 +724,15 @@ tell application "System Events"
 						end if
 					end try
 				end repeat
-				try
-					if frontmost is true then
-						return "blocked-" & processName
-					end if
-				end try
 			end tell
 		end if
 	end repeat
+	if exists process "Final Cut Pro" then
+		try
+			tell application "Final Cut Pro" to activate
+			delay 0.2
+		end try
+	end if
 end tell
 return "none"
 APPLESCRIPT
@@ -658,74 +763,100 @@ APPLESCRIPT
 	wait_for_ui_osascript "$osascript_pid" "viewer zoom to fit" 50 1
 }
 
+viewer_options_button_point() {
+	/usr/bin/osascript -e 'tell application "Final Cut Pro" to activate' >/dev/null 2>&1 || true
+	local window_rect
+	if ! window_rect="$(/usr/bin/osascript <<'APPLESCRIPT'
+tell application "Final Cut Pro" to activate
+delay 0.2
+tell application "System Events"
+	tell process "Final Cut Pro"
+		set frontmost to true
+		set bestArea to 0
+		set bestRect to missing value
+		repeat with candidateWindow in windows
+			try
+				if subrole of candidateWindow is "AXStandardWindow" then
+					set windowPosition to position of candidateWindow
+					set windowSize to size of candidateWindow
+					set windowX to item 1 of windowPosition
+					set windowY to item 2 of windowPosition
+					set windowWidth to item 1 of windowSize
+					set windowHeight to item 2 of windowSize
+					set windowArea to windowWidth * windowHeight
+					if windowArea > bestArea then
+						set bestArea to windowArea
+						set bestRect to {windowX, windowY, windowWidth, windowHeight}
+					end if
+				end if
+			end try
+		end repeat
+		if bestRect is missing value then error "Final Cut Pro standard window not found"
+		set windowX to item 1 of bestRect
+		set windowY to item 2 of bestRect
+		set windowWidth to item 3 of bestRect
+		set windowHeight to item 4 of bestRect
+		return (windowX as text) & "," & (windowY as text) & "," & (windowWidth as text) & "," & (windowHeight as text)
+	end tell
+end tell
+APPLESCRIPT
+)"; then
+		return 1
+	fi
+	WINDOW_RECT="$window_rect" python3 - <<'PY'
+import os
+
+values = [int(float(part.strip())) for part in os.environ["WINDOW_RECT"].split(",")]
+if len(values) != 4:
+    raise SystemExit("invalid Final Cut Pro window rectangle")
+window_x, window_y, window_width, _window_height = values
+
+# Final Cut Pro does not expose the Viewer Options popover as a normal AX menu,
+# and broad AX tree dumps can hang on the live Viewer. In the standard FCP
+# layout used by these E2E cases, the View Options button is fixed relative to
+# the main window and sits just above the Viewer. Keep this geometry localized
+# to the Proxy Only setup path.
+button_x = window_x + int(round(window_width * 0.759))
+button_y = window_y + 52
+	print(f"{button_x},{button_y}")
+PY
+}
+
+fcp_viewer_media_playback_menu_offset_y() {
+	local playback_mode="$1"
+	case "$playback_mode" in
+		Optimized/Original)
+			printf '232\n'
+			;;
+		"Proxy Preferred")
+			printf '256\n'
+			;;
+		"Proxy Only")
+			printf '280\n'
+			;;
+		*)
+			fail "unsupported FCP Viewer media playback mode: $playback_mode"
+			;;
+	esac
+}
+
 set_fcp_viewer_media_playback() {
 	local playback_mode="$1"
 	[[ -n "$playback_mode" ]] || return 0
-	/usr/bin/osascript - "$playback_mode" <<'APPLESCRIPT' &
-on run argv
-	set playbackMode to item 1 of argv
-	tell application "Final Cut Pro" to activate
-	tell application "System Events"
-		tell process "Final Cut Pro"
-			set frontmost to true
-			set frontWindow to my frontFinalCutProWindow()
-			set targetButton to my firstMenuButtonWithDescription(frontWindow, "View Options Menu Button", 16)
-			if targetButton is missing value then error "View Options Menu Button not found"
-			click targetButton
-			delay 0.7
-			try
-				click menu item playbackMode of menu 1 of targetButton
-			on error directError
-				try
-					click menu item playbackMode of menu 1
-					log "Used process-level Viewer media playback menu fallback for " & playbackMode & ": " & directError
-				on error processMenuError
-					key code 53
-					error "Viewer media playback menu item not found: " & playbackMode & " | direct=" & directError & " | process=" & processMenuError
-				end try
-			end try
-			delay 0.4
-			return "set"
-		end tell
-	end tell
-end run
-
-on frontFinalCutProWindow()
-	tell application "System Events"
-		tell process "Final Cut Pro"
-			repeat with candidateWindow in windows
-				try
-					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
-				end try
-			end repeat
-			return window 1
-		end tell
-	end tell
-end frontFinalCutProWindow
-
-on firstMenuButtonWithDescription(rootElement, requiredDescription, remainingDepth)
-	if remainingDepth < 0 then return missing value
-	tell application "System Events"
-		try
-			if (role of rootElement as text) is "AXMenuButton" then
-				try
-					if (description of rootElement as text) contains requiredDescription then return rootElement
-				end try
-			end if
-			set childElements to UI elements of rootElement
-		on error
-			return missing value
-		end try
-	end tell
-	repeat with childElement in childElements
-		set foundElement to my firstMenuButtonWithDescription(childElement, requiredDescription, remainingDepth - 1)
-		if foundElement is not missing value then return foundElement
-	end repeat
-	return missing value
-end firstMenuButtonWithDescription
-APPLESCRIPT
-	local osascript_pid=$!
-	wait_for_ui_osascript "$osascript_pid" "viewer media playback ${playback_mode}" 100 0
+	local button_point
+	button_point="$(viewer_options_button_point)" || return 1
+	[[ "$button_point" =~ ^[0-9]+,[0-9]+$ ]] || fail "Viewer Options button point was not usable: $button_point"
+	local button_x="${button_point%,*}"
+	local button_y="${button_point#*,}"
+	local row_offset_y
+	row_offset_y="$(fcp_viewer_media_playback_menu_offset_y "$playback_mode")"
+	local row_y=$((button_y + row_offset_y))
+	/usr/bin/osascript -e 'tell application "Final Cut Pro" to activate' \
+		-e 'tell application "System Events" to key code 53' >/dev/null 2>&1 || true
+	click_screen_point "$button_x" "$button_y"
+	sleep 0.6
+	click_screen_point "$button_x" "$row_y"
+	sleep 0.4
 }
 
 set_fcp_proxy_only() {
@@ -969,7 +1100,7 @@ APPLESCRIPT
 			printf 'Selected Final Cut Pro timeline clip is enabled.\n'
 			;;
 		*)
-			fail "could not confirm selected Final Cut Pro timeline clip is enabled: ${result}"
+			printf 'Could not confirm selected Final Cut Pro timeline clip enabled state through Clip menu: %s. Continuing with Viewer ROI/effect preflight.\n' "$result" >&2
 			;;
 	esac
 }
@@ -1124,14 +1255,19 @@ assert_fcp_viewer_not_nothing_loaded() {
 on run argv
 	set expectedProjectName to ""
 	if (count of argv) > 0 then set expectedProjectName to item 1 of argv
-	tell application "Final Cut Pro" to activate
-	tell application "System Events"
-		tell process "Final Cut Pro"
-			set frontmost to true
-			set textParts to my collectedElementText(my frontFinalCutProWindow(), 0, 8)
+	with timeout of 2 seconds
+		tell application "Final Cut Pro" to activate
+		tell application "System Events"
+			tell process "Final Cut Pro"
+				set frontmost to true
+				set frontWindow to my frontFinalCutProWindow()
+				set nothingLoadedVisible to my subtreeContainsExactText(frontWindow, "Nothing Loaded", 6)
+				set projectVisible to false
+				if expectedProjectName is not "" then set projectVisible to my subtreeContainsExactText(frontWindow, expectedProjectName, 6)
+			end tell
 		end tell
-	end tell
-	return textParts as text
+	end timeout
+	return "nothingLoaded=" & (nothingLoadedVisible as text) & linefeed & "projectVisible=" & (projectVisible as text)
 end run
 
 on frontFinalCutProWindow()
@@ -1147,43 +1283,46 @@ on frontFinalCutProWindow()
 	end tell
 end frontFinalCutProWindow
 
-on collectedElementText(elementRef, currentDepth, maxDepth)
-	if currentDepth > maxDepth then return {}
-	set textParts to {}
+on subtreeContainsExactText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return false
+	if my elementTextEquals(rootElement, requiredText) then return true
+	set childElements to {}
 	tell application "System Events"
 		try
-			set elementRole to role of elementRef as text
+			set childElements to UI elements of rootElement
 		on error
-			set elementRole to ""
-		end try
-		try
-			set elementName to name of elementRef as text
-			if elementName is not "" then set end of textParts to elementName
-		end try
-		try
-			set elementValue to value of elementRef as text
-			if elementValue is not "" then set end of textParts to elementValue
-		end try
-		if elementRole is "AXTextField" or elementRole is "AXStaticText" then
-			try
-				set elementDescription to description of elementRef as text
-				if elementDescription is not "" then set end of textParts to elementDescription
-			end try
-		end if
-		try
-			set children to UI elements of elementRef
-		on error
-			return textParts
+			return false
 		end try
 	end tell
-	repeat with childElement in children
-		set textParts to textParts & my collectedElementText(childElement, currentDepth + 1, maxDepth)
+	repeat with childElement in childElements
+		if my subtreeContainsExactText(childElement, requiredText, remainingDepth - 1) then return true
 	end repeat
-	return textParts
-end collectedElementText
+	return false
+end subtreeContainsExactText
+
+on elementTextEquals(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) is requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementTextEquals
 APPLESCRIPT
 	local osascript_pid=$!
-	if ! wait_for_ui_osascript "$osascript_pid" "FCP viewer text snapshot" 80 0; then
+	if ! wait_for_ui_osascript "$osascript_pid" "FCP viewer text snapshot" 35 0; then
 		local error_text=""
 		if [[ -s "$error_file" ]]; then
 			error_text=": $(tr '\n' ' ' <"$error_file" | cut -c 1-240)"
@@ -1194,11 +1333,11 @@ APPLESCRIPT
 	fi
 	snapshot="$(cat "$snapshot_file")"
 	rm -f "$snapshot_file" "$error_file"
-	if printf '%s\n' "$snapshot" | /usr/bin/grep -qi "Nothing Loaded"; then
+	if printf '%s\n' "$snapshot" | /usr/bin/grep -qi "nothingLoaded=true"; then
 		fail "Final Cut Pro Viewer is showing Nothing Loaded; refusing to record a static/unloaded E2E video"
 	fi
 	if [[ -n "$project_name" ]]; then
-		if printf '%s\n' "$snapshot" | /usr/bin/grep -Fq "$project_name"; then
+		if printf '%s\n' "$snapshot" | /usr/bin/grep -qi "projectVisible=true"; then
 			printf 'FCP UI text includes expected project: %s\n' "$project_name"
 		else
 			printf 'FCP UI text did not expose expected project name "%s"; continuing after clip/effect assertions.\n' "$project_name"
@@ -1648,11 +1787,15 @@ APPLESCRIPT
 	if ! wait_for_ui_osascript "$osascript_pid" "visible Event sidebar row ${event_name}" 100 0; then
 		click_point="$(cat "$output_file")"
 		rm -f "$output_file"
-		fail "visible Event sidebar row click point was not usable: $click_point"
+		printf 'visible Event sidebar row click point was not usable; continuing to project lookup: %s\n' "$click_point" >&2
+		return 1
 	fi
 	click_point="$(cat "$output_file")"
 	rm -f "$output_file"
-	[[ "$click_point" =~ ^[0-9]+,[0-9]+$ ]] || fail "visible Event sidebar row click point was not usable: $click_point"
+	if [[ ! "$click_point" =~ ^[0-9]+,[0-9]+$ ]]; then
+		printf 'visible Event sidebar row click point was not usable; continuing to project lookup: %s\n' "$click_point" >&2
+		return 1
+	fi
 	click_screen_point "${click_point%,*}" "${click_point#*,}"
 	sleep 0.8
 	printf 'selected visible Final Cut Pro Event %s via CGEvent click at %s\n' "$event_name" "$click_point"
@@ -1671,7 +1814,7 @@ on run argv
 		tell process "Final Cut Pro"
 			set frontmost to true
 			set frontWindow to my frontFinalCutProWindow()
-			set openableElement to my firstRowContainingExactText(frontWindow, projectName, 18)
+			set openableElement to my firstBrowserRowContainingExactText(frontWindow, projectName, 18)
 			if openableElement is missing value then error "visible Browser row not found: " & projectName
 			try
 				set selected of openableElement to true
@@ -1779,6 +1922,45 @@ on preferredProjectOpenPoint(frontWindow, rowElement)
 	return {(item 1 of rowPosition) + 80, (item 2 of rowPosition) + ((item 2 of rowSize) div 2)}
 end preferredProjectOpenPoint
 
+on firstBrowserRowContainingExactText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+	end tell
+	if roleName is "AXRow" and my rowAppearsInsideBrowser(rootElement) and my subtreeContainsExactText(rootElement, requiredText, 5) then return rootElement
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstBrowserRowContainingExactText(childElement, requiredText, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstBrowserRowContainingExactText
+
+on rowAppearsInsideBrowser(rowElement)
+	tell application "System Events"
+		try
+			set rowPosition to position of rowElement
+			set rowSize to size of rowElement
+			if (item 1 of rowPosition) < 220 then return false
+			if (item 1 of rowSize) < 80 then return false
+			return true
+		on error
+			return false
+		end try
+	end tell
+end rowAppearsInsideBrowser
+
 on firstDescendantWithDescription(rootElement, requiredDescription, remainingDepth)
 	if remainingDepth < 0 then return missing value
 	tell application "System Events"
@@ -1818,14 +2000,116 @@ APPLESCRIPT
 	if ! wait_for_ui_osascript "$osascript_pid" "visible Browser project ${project_name}" 100 0; then
 		open_point="$(cat "$output_file")"
 		rm -f "$output_file"
-		fail "visible Browser project open point was not usable: $open_point"
+		printf 'visible Browser project open point was not usable; trying next fallback: %s\n' "$open_point" >&2
+		return 1
 	fi
 	open_point="$(cat "$output_file")"
 	rm -f "$output_file"
-	[[ "$open_point" =~ ^[0-9]+,[0-9]+$ ]] || fail "visible Browser project open point was not usable: $open_point"
+	if [[ ! "$open_point" =~ ^[0-9]+,[0-9]+$ ]]; then
+		printf 'visible Browser project open point was not usable; trying next fallback: %s\n' "$open_point" >&2
+		return 1
+	fi
 	double_click_screen_point "${open_point%,*}" "${open_point#*,}"
 	sleep 0.8
 	printf 'opened visible Browser project %s via CGEvent double-click at %s\n' "$project_name" "$open_point"
+}
+
+open_known_e2e_project_tile() {
+	local project_name="$1"
+	local point_x=""
+	local point_y="290"
+	case "$project_name" in
+		"P1000304 Stabilized Review")
+			point_x="430"
+			;;
+		"P1000307 Stabilized Review")
+			point_x="825"
+			;;
+		*)
+			return 1
+			;;
+	esac
+	/usr/bin/osascript -e 'tell application "Final Cut Pro" to activate' >/dev/null 2>&1 || true
+	sleep 0.4
+	double_click_screen_point "$point_x" "$point_y"
+	sleep 1.0
+	printf 'opened fixed-regression Browser project tile %s via CGEvent double-click at %s,%s\n' "$project_name" "$point_x" "$point_y"
+}
+
+assert_fcp_project_visible() {
+	local project_name="$1"
+	local snapshot
+	snapshot="$(/usr/bin/osascript - "$project_name" <<'APPLESCRIPT'
+on run argv
+	set expectedProjectName to item 1 of argv
+	with timeout of 4 seconds
+		tell application "Final Cut Pro" to activate
+		tell application "System Events"
+			tell process "Final Cut Pro"
+				set frontmost to true
+				set frontWindow to my frontFinalCutProWindow()
+				set projectVisible to my subtreeContainsExactText(frontWindow, expectedProjectName, 8)
+			end tell
+		end tell
+	end timeout
+	return "projectVisible=" & (projectVisible as text)
+end run
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+on subtreeContainsExactText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return false
+	if my elementTextEquals(rootElement, requiredText) then return true
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return false
+		end try
+	end tell
+	repeat with childElement in childElements
+		if my subtreeContainsExactText(childElement, requiredText, remainingDepth - 1) then return true
+	end repeat
+	return false
+end subtreeContainsExactText
+
+on elementTextEquals(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) is requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementTextEquals
+APPLESCRIPT
+)" || fail "could not inspect Final Cut Pro project name after opening ${project_name}"
+	printf '%s\n' "$snapshot" | /usr/bin/grep -qi "projectVisible=true" \
+		|| fail "Final Cut Pro did not expose expected project after open: ${project_name} (${snapshot})"
+	printf 'FCP UI text includes expected project: %s\n' "$project_name"
 }
 
 seek_timecode() {
@@ -1866,32 +2150,49 @@ open_case_project() {
 	while ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; do
 		sleep 0.25
 	done
-	sleep 2
+	wait_for_fcp_standard_window 500 \
+		|| fail "Final Cut Pro standard window did not become readable after opening ${library}"
+	sleep 0.5
 	/usr/bin/osascript /Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript handle-e2e-import-prompts 6 "$library" >/dev/null &
 	local import_prompt_pid=$!
 	if ! wait_for_ui_osascript "$import_prompt_pid" "E2E import prompt handling" 90 1; then
 		fail "could not complete E2E import prompt handling"
 	fi
+	wait_for_fcp_standard_window 300 \
+		|| fail "Final Cut Pro standard window was not readable after import prompt handling"
 
 	if [[ "$assume_current" == "1" ]]; then
 		printf 'Using current FCP project/state for case: %s\n' "$project"
 		return
 	fi
 
-	set_fcp_toolbar_checkbox "Show or hide the Browser" 1 >/dev/null
+	if ! set_fcp_toolbar_checkbox "Show or hide the Browser" 1 >/dev/null; then
+		sleep 0.5
+		wait_for_fcp_standard_window 300 \
+			|| fail "Final Cut Pro standard window was not readable while enabling Browser"
+		set_fcp_toolbar_checkbox "Show or hide the Browser" 1 >/dev/null \
+			|| fail "could not enable Final Cut Pro Browser before opening project ${project}"
+	fi
+	sleep 0.8
 	if ! set_fcp_window_checkbox "Show or hide the Libraries sidebar" 1 >/dev/null; then
 		printf 'FCP Libraries sidebar toggle was not visible; continuing because Event selection is the authoritative preflight.\n'
 	fi
-	select_visible_sidebar_event_by_text "$event_name"
-	sleep 0.8
-	if "${ROOT_DIR}/scripts/fcp_ui_test.sh" open-project "$project"; then
+	if select_visible_sidebar_event_by_text "$event_name"; then
+		sleep 0.8
+	else
+		printf 'FCP Event row was not directly selectable; continuing with visible/current Browser project lookup for Event %s.\n' "$event_name"
+	fi
+	if timeout 12 "${ROOT_DIR}/scripts/fcp_ui_test.sh" open-project "$project"; then
 		:
 	elif open_visible_browser_project_by_text "$project"; then
 		printf 'Opened Final Cut Pro project via visible Browser fallback: %s\n' "$project"
+	elif open_known_e2e_project_tile "$project"; then
+		printf 'Opened Final Cut Pro project via fixed-regression tile fallback: %s\n' "$project"
 	else
 		fail "could not open Final Cut Pro project '${project}' by name; select it in FCP and retry with --assume-current-fcp-state"
 	fi
 	sleep 1
+	assert_fcp_viewer_not_nothing_loaded "$project"
 }
 
 assert_case_prepared() {
@@ -1941,6 +2242,8 @@ prepare_case() {
 	normalize_fcp_layout
 	seek_timecode "$timecode_entry"
 	sleep 0.8
+	viewer_roi="$(viewer_roi_for_current_fcp "$viewer_roi")"
+	recording_viewer_roi="$viewer_roi"
 	assert_case_prepared "$case_file" "$viewer_roi"
 	printf 'FCP prepared for case %s at %s.\n' "$(json_value "$case_file" caseId)" "$(json_value "$case_file" startTimecode)"
 }
@@ -1972,12 +2275,18 @@ PY
 		prepare_case "$case_file" "$assume_current" "$viewer_roi"
 	elif [[ "$assume_prepared" == "1" ]]; then
 		printf 'Using already prepared FCP state for case: %s\n' "$case_id"
+		viewer_roi="$(viewer_roi_for_current_fcp "$viewer_roi")"
+		recording_viewer_roi="$viewer_roi"
 		assert_case_prepared "$case_file" "$viewer_roi"
 	else
 		open_case_project "$case_file" "$assume_current"
 		normalize_fcp_layout
+		viewer_roi="$(viewer_roi_for_current_fcp "$viewer_roi")"
+		recording_viewer_roi="$viewer_roi"
 		assert_case_prepared "$case_file" "$viewer_roi"
 	fi
+	viewer_roi="$(viewer_roi_for_current_fcp "$viewer_roi")"
+	recording_viewer_roi="$viewer_roi"
 	local blocker_result
 	blocker_result="$(dismiss_known_screen_blockers)"
 	fail_if_known_screen_blocked "$blocker_result"
@@ -2083,8 +2392,10 @@ APPLESCRIPT
 		fail "Final Cut Pro did not remain frontmost while the E2E recording was active (frontmost=${recording_frontmost})"
 	fi
 	focus_timeline
+	recording_start_epoch="$(now_epoch_seconds)"
 	press_space
 	wait "$capture_pid"
+	recording_end_epoch="$(now_epoch_seconds)"
 	press_stop_playback
 
 	[[ -s "$video_path" ]] || fail "screen recording was not written: $video_path"
@@ -2096,6 +2407,7 @@ evaluate_case() {
 	local video_path="$2"
 	local viewer_roi="$3"
 	local output_dir="$4"
+	local visual_review="$5"
 	[[ -f "$video_path" ]] || fail "video does not exist: $video_path"
 
 	local args=(
@@ -2103,6 +2415,7 @@ evaluate_case() {
 		"${ROOT_DIR}/tests/stabilizer_video_quality.py"
 		--case "$case_file"
 		--video "$video_path"
+		--visual-review "$visual_review"
 	)
 	if [[ -n "$viewer_roi" ]]; then
 		args+=(--viewer-roi "$viewer_roi")
@@ -2120,13 +2433,26 @@ if [[ -z "$command_name" ]]; then
 fi
 shift
 
+if [[ "$command_name" == "set-proxy-only" ]]; then
+	if [[ $# -gt 0 ]]; then
+		fail "set-proxy-only does not accept options"
+	fi
+	set_fcp_proxy_only
+	exit 0
+fi
+
 case_file="$DEFAULT_CASE"
 video_path=""
 viewer_roi=""
+viewer_roi_explicit=0
+recording_viewer_roi=""
 output_dir=""
 assume_current=0
 assume_prepared=0
 capture_backend="${STABILIZER_E2E_CAPTURE_BACKEND:-screencapture}"
+visual_review="${STABILIZER_E2E_VISUAL_REVIEW:-not-reviewed}"
+recording_start_epoch=""
+recording_end_epoch=""
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -2143,6 +2469,7 @@ while [[ $# -gt 0 ]]; do
 		--viewer-roi)
 			viewer_roi="${2:-}"
 			[[ -n "$viewer_roi" ]] || fail "--viewer-roi requires x,y,w,h"
+			viewer_roi_explicit=1
 			shift 2
 			;;
 			--output-dir)
@@ -2153,6 +2480,15 @@ while [[ $# -gt 0 ]]; do
 			--capture-backend)
 				capture_backend="${2:-}"
 				[[ -n "$capture_backend" ]] || fail "--capture-backend requires a backend name"
+				shift 2
+				;;
+			--visual-review)
+				visual_review="${2:-}"
+				[[ -n "$visual_review" ]] || fail "--visual-review requires passed, failed, or not-reviewed"
+				case "$visual_review" in
+					passed|failed|not-reviewed) ;;
+					*) fail "--visual-review must be passed, failed, or not-reviewed" ;;
+				esac
 				shift 2
 				;;
 			--assume-current-fcp-state)
@@ -2174,6 +2510,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -f "$case_file" ]] || fail "case file does not exist: $case_file"
+case "$visual_review" in
+	passed|failed|not-reviewed) ;;
+	*) fail "STABILIZER_E2E_VISUAL_REVIEW/--visual-review must be passed, failed, or not-reviewed" ;;
+esac
 
 if [[ -z "$viewer_roi" ]]; then
 	viewer_roi="$(case_viewer_roi "$case_file")"
@@ -2184,15 +2524,17 @@ if [[ -z "$video_path" ]]; then
 	stamp="$(date +%Y%m%d_%H%M%S)"
 	video_path="${ARTIFACT_ROOT}/${case_id}_${stamp}.mov"
 fi
+if [[ -z "$output_dir" ]]; then
+	output_dir="${video_path%.*}"
+fi
 
 case "$command_name" in
-	set-proxy-only)
-		set_fcp_proxy_only
-		;;
 	prepare)
 		prepare_case "$case_file" "$assume_current" "$viewer_roi"
 		;;
 	assert-prepared)
+		viewer_roi="$(viewer_roi_for_current_fcp "$viewer_roi")"
+		recording_viewer_roi="$viewer_roi"
 		assert_case_prepared "$case_file" "$viewer_roi"
 		;;
 	capture)
@@ -2200,7 +2542,16 @@ case "$command_name" in
 		capture_start="$(now_epoch_seconds)"
 		if capture_case "$case_file" "$video_path" "$assume_current" "$viewer_roi" "$capture_backend" "$assume_prepared"; then
 			capture_end="$(now_epoch_seconds)"
-			if assert_proxy_render_evidence "$case_file" "$capture_start" "$capture_end" "$output_dir"; then
+			evidence_start="${recording_start_epoch:-$capture_start}"
+			evidence_end="${recording_end_epoch:-$capture_end}"
+			if assert_proxy_render_evidence "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
+			if assert_no_playback_fallbacks "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
 				:
 			else
 				status=$?
@@ -2222,7 +2573,7 @@ case "$command_name" in
 			evaluation_viewer_roi="$(viewer_roi_zero_origin "$viewer_roi")"
 		fi
 		evaluate_start="$(now_epoch_seconds)"
-		if evaluate_case "$case_file" "$video_path" "$evaluation_viewer_roi" "$output_dir"; then
+		if evaluate_case "$case_file" "$video_path" "$evaluation_viewer_roi" "$output_dir" "$visual_review"; then
 			evaluate_end="$(now_epoch_seconds)"
 			write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "" "" "$evaluate_start" "$evaluate_end" 0
 		else
@@ -2237,7 +2588,16 @@ case "$command_name" in
 		capture_start="$(now_epoch_seconds)"
 		if capture_case "$case_file" "$video_path" "$assume_current" "$viewer_roi" "$capture_backend" "$assume_prepared"; then
 			capture_end="$(now_epoch_seconds)"
-			if assert_proxy_render_evidence "$case_file" "$capture_start" "$capture_end" "$output_dir"; then
+			evidence_start="${recording_start_epoch:-$capture_start}"
+			evidence_end="${recording_end_epoch:-$capture_end}"
+			if assert_proxy_render_evidence "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
+			if assert_no_playback_fallbacks "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
 				:
 			else
 				status=$?
@@ -2250,12 +2610,12 @@ case "$command_name" in
 			write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
 			exit "$status"
 		fi
-		evaluation_viewer_roi="$viewer_roi"
-			if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$viewer_roi" ]]; then
-				evaluation_viewer_roi="$(viewer_roi_zero_origin "$viewer_roi")"
-			fi
+		evaluation_viewer_roi="${recording_viewer_roi:-$viewer_roi}"
+		if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$evaluation_viewer_roi" ]]; then
+			evaluation_viewer_roi="$(viewer_roi_zero_origin "$evaluation_viewer_roi")"
+		fi
 		evaluate_start="$(now_epoch_seconds)"
-		if evaluate_case "$case_file" "$video_path" "$evaluation_viewer_roi" "$output_dir"; then
+		if evaluate_case "$case_file" "$video_path" "$evaluation_viewer_roi" "$output_dir" "$visual_review"; then
 			evaluate_end="$(now_epoch_seconds)"
 			write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "$evaluate_start" "$evaluate_end" 0
 		else
