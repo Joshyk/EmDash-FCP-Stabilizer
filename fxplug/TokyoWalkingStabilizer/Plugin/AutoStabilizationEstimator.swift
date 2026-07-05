@@ -2513,6 +2513,14 @@ enum AutoStabilizationEstimator {
                 farFieldSupport: farFieldWalkingXSupport
             ) * turnOwnedFootstepXFineGate
         )
+        let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+            bandPixels: microBandY * yScale,
+            farFieldSupport: farFieldWalkingXSupport
+        )
+        let footstepRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
+            bandDegrees: microBandRoll,
+            farFieldSupport: farFieldWalkingXSupport
+        )
         let strideXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
             bandMagnitude: abs(strideBandX * xScale),
             turnShakeSuppression: playbackTurnShakeSuppression,
@@ -2520,12 +2528,20 @@ enum AutoStabilizationEstimator {
             turnMacroMagnitude: turnXMacroPixels,
             farFieldSupport: farFieldWalkingXSupport
         ) * turnOwnedStrideXGateFloorScale
+        let strideYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+            bandPixels: strideBandY * yScale,
+            farFieldSupport: farFieldWalkingXSupport
+        ) * farFieldStrideVerticalConfidenceFloorScale
+        let strideRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
+            bandDegrees: strideBandRoll,
+            farFieldSupport: farFieldWalkingXSupport
+        ) * farFieldStrideRollConfidenceFloorScale
         let footstepXConfidence = max(rawFootstepXConfidence * footstepXTurnGate, farFieldFootstepXConfidenceFloor)
-        let footstepYConfidence = rawFootstepYConfidence * footstepYTurnGate
-        let footstepRollConfidence = rawFootstepRollConfidence * footstepRollTurnGate
+        let footstepYConfidence = max(rawFootstepYConfidence * footstepYTurnGate, footstepYFarFieldConfidenceFloor)
+        let footstepRollConfidence = max(rawFootstepRollConfidence * footstepRollTurnGate, footstepRollFarFieldConfidenceFloor)
         let strideXConfidence = max(rawStrideXConfidence * strideXTurnGate, strideXFarFieldConfidenceFloor)
-        let strideYConfidence = rawStrideYConfidence * strideYTurnGate
-        let strideRollConfidence = rawStrideRollConfidence * strideRollTurnGate
+        let strideYConfidence = max(rawStrideYConfidence * strideYTurnGate, strideYFarFieldConfidenceFloor)
+        let strideRollConfidence = max(rawStrideRollConfidence * strideRollTurnGate, strideRollFarFieldConfidenceFloor)
         let playbackMicroConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let playbackStrideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
 
@@ -6666,6 +6682,10 @@ enum AutoStabilizationEstimator {
             bandDegrees: footstepPathRollAtRender - microImpulseBaselineRoll,
             farFieldSupport: farFieldTurnOwnedXSupport
         )
+        let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+            bandPixels: footstepImpulseY * yScale,
+            farFieldSupport: farFieldTurnOwnedXSupport
+        )
         let strideXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
             bandMagnitude: abs(strideBandX),
             turnShakeSuppression: turnShakeSuppression,
@@ -6682,7 +6702,7 @@ enum AutoStabilizationEstimator {
             farFieldSupport: farFieldTurnOwnedXSupport
         ) * farFieldStrideRollConfidenceFloorScale
         let footstepXConfidence = max(rawFootstepXConfidence * footstepXTurnGate, footstepXFarFieldConfidenceFloor)
-        let footstepYConfidence = rawFootstepYConfidence * footstepYTurnGate
+        let footstepYConfidence = max(rawFootstepYConfidence * footstepYTurnGate, footstepYFarFieldConfidenceFloor)
         let footstepRollConfidence = max(rawFootstepRollConfidence * footstepRollTurnGate, footstepRollFarFieldConfidenceFloor)
         let strideXConfidence = max(rawStrideXConfidence * strideXTurnGate, strideXFarFieldConfidenceFloor)
         let strideYConfidence = max(rawStrideYConfidence * strideYTurnGate, strideYFarFieldConfidenceFloor)
@@ -7523,6 +7543,10 @@ enum AutoStabilizationEstimator {
             bandDegrees: footstepPathRollAtRender - microImpulseBaselineRoll,
             farFieldSupport: farFieldTurnOwnedXSupport
         )
+        let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+            bandPixels: (footstepPathYAtRender - footstepBaselineY) * yScale,
+            farFieldSupport: farFieldTurnOwnedXSupport
+        )
         let strideXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
             bandMagnitude: abs(strideBandX),
             turnShakeSuppression: turnShakeSuppression,
@@ -7539,7 +7563,7 @@ enum AutoStabilizationEstimator {
             farFieldSupport: farFieldTurnOwnedXSupport
         ) * farFieldStrideRollConfidenceFloorScale
         let footstepXConfidence = max(rawFootstepXConfidence * footstepXTurnGate, footstepXFarFieldConfidenceFloor)
-        let footstepYConfidence = rawFootstepYConfidence * footstepYTurnGate
+        let footstepYConfidence = max(rawFootstepYConfidence * footstepYTurnGate, footstepYFarFieldConfidenceFloor)
         let footstepRollConfidence = max(rawFootstepRollConfidence * footstepRollTurnGate, footstepRollFarFieldConfidenceFloor)
         let strideXConfidence = max(rawStrideXConfidence * strideXTurnGate, strideXFarFieldConfidenceFloor)
         let strideYConfidence = max(rawStrideYConfidence * strideYTurnGate, strideYFarFieldConfidenceFloor)
