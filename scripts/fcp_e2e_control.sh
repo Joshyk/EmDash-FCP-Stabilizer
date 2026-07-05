@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 E2E_SCRIPT="${ROOT_DIR}/scripts/stabilizer_fcp_screen_capture_e2e.sh"
 FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
+ARTIFACT_ROOT="${STABILIZER_E2E_ARTIFACT_DIR:-/tmp/stabilizer_e2e}"
 P1000307_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json"
 P1000304_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000304_ridge_4m23_4m43.json"
 DEFAULT_CASE="$P1000307_CASE"
@@ -21,8 +22,11 @@ Commands:
   open-case       Open the case library in Final Cut Pro and wait for a standard window.
   quit            Ask Final Cut Pro to quit through AppleScript and wait for exit.
   recover-case    Quit FCP, reopen the case library, then run harness prepare.
+  clear-render-files
+                  Move only the selected case Event's Render Files out of the FCP bundle.
   viewer-roi      Print the current FCP Viewer ROI as capture-pixel x,y,w,h.
   proxy-only      Set the current FCP Viewer media playback to Proxy Only.
+  warmup-proxy    Warm a black/uninitialized Proxy Only Viewer and reassert recordability.
   patterns        Print canonical fixed-regression command patterns.
   prepare         Open/normalize the case through the existing E2E harness.
   assert-prepared Verify Proxy Only, target project/effect, timecode, and Viewer ROI.
@@ -42,6 +46,7 @@ Options:
                                 avfoundation-roi unless
                                 STABILIZER_E2E_CAPTURE_BACKEND is set.
   --visual-review STATE        passed, failed, or not-reviewed.
+  --clear-render-files         For recover-case, move Event Render Files before reopening.
   --assume-current-fcp-state   Pass through to the E2E harness.
   --assume-prepared-fcp        Pass through to the E2E harness.
 
@@ -74,6 +79,32 @@ print(value)
 PY
 }
 
+case_event_name() {
+	local file="$1"
+	python3 - "$file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(case.get("event") or Path(case["originalMedia"]).parent.parent.name)
+PY
+}
+
+case_render_files_path() {
+	local file="$1"
+	python3 - "$file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+library = Path(case["library"])
+event_name = case.get("event") or Path(case["originalMedia"]).parent.parent.name
+print(library / event_name / "Render Files")
+PY
+}
+
 resolve_case_path() {
 	local requested="$1"
 	case "$requested" in
@@ -87,6 +118,50 @@ resolve_case_path() {
 			printf '%s\n' "$requested"
 			;;
 	esac
+}
+
+clear_case_render_files() {
+	local library
+	local event_name
+	local render_files
+	local case_id
+	local backup_root
+	local backup_path
+	library="$(json_value "$case_file" library)"
+	event_name="$(case_event_name "$case_file")"
+	render_files="$(case_render_files_path "$case_file")"
+	case_id="$(json_value "$case_file" caseId)"
+	backup_root="${STABILIZER_E2E_RENDER_FILES_BACKUP_ROOT:-${ARTIFACT_ROOT}/render_files_backups}"
+
+	[[ -d "$library" ]] || fail "case library does not exist: ${library}"
+	if /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
+		fail "Final Cut Pro is running; quit it before moving Render Files for ${case_id}"
+	fi
+	if [[ ! -e "$render_files" ]]; then
+		printf 'Render Files: already absent for %s (%s)\n' "$case_id" "$render_files"
+		return 0
+	fi
+	[[ -d "$render_files" ]] || fail "Render Files path is not a directory: ${render_files}"
+	[[ ! -L "$render_files" ]] || fail "refusing to move symlink Render Files path: ${render_files}"
+	case "$render_files" in
+		"$library"/*"/Render Files")
+			;;
+		*)
+			fail "refusing to move unexpected Render Files path outside the selected case library: ${render_files}"
+			;;
+	esac
+	[[ "$(basename "$render_files")" == "Render Files" ]] \
+		|| fail "refusing to move path whose basename is not Render Files: ${render_files}"
+
+	mkdir -p "$backup_root"
+	backup_path="${backup_root}/${case_id}_$(date +%Y%m%d_%H%M%S)_Render Files"
+	if [[ -e "$backup_path" ]]; then
+		fail "render-files backup path already exists: ${backup_path}"
+	fi
+	mv "$render_files" "$backup_path"
+	printf 'Moved FCP generated Render Files for %s / %s:\n  from: %s\n  to:   %s\n' \
+		"$case_id" "$event_name" "$render_files" "$backup_path"
+	printf 'Left Transcoded Media and Analysis Files untouched.\n'
 }
 
 print_case_run_pattern() {
@@ -109,9 +184,10 @@ print_case_run_pattern() {
 # range: ${start_timecode} - ${end_timecode}
 # fixed case ROI: ${viewer_roi}
 scripts/fcp_e2e_control.sh recover-case --case ${alias}
-scripts/fcp_e2e_control.sh run --case ${alias} --visual-review not-reviewed --assume-current-fcp-state
+scripts/fcp_e2e_control.sh warmup-proxy --case ${alias} --assume-current-fcp-state
+STABILIZER_E2E_PLAYBACK_READY_LOOKBACK_SECONDS=3600 STABILIZER_E2E_PROXY_EVIDENCE_LOOKBACK_SECONDS=3600 scripts/fcp_e2e_control.sh run --case ${alias} --capture-backend avfoundation-roi --visual-review not-reviewed --assume-current-fcp-state
 # Strict replay with the checked-in ROI instead of dynamic Viewer ROI:
-STABILIZER_E2E_DYNAMIC_VIEWER_ROI=0 scripts/fcp_e2e_control.sh run --case ${alias} --viewer-roi ${viewer_roi} --visual-review not-reviewed --assume-current-fcp-state
+STABILIZER_E2E_DYNAMIC_VIEWER_ROI=0 STABILIZER_E2E_PLAYBACK_READY_LOOKBACK_SECONDS=3600 STABILIZER_E2E_PROXY_EVIDENCE_LOOKBACK_SECONDS=3600 scripts/fcp_e2e_control.sh run --case ${alias} --viewer-roi ${viewer_roi} --capture-backend avfoundation-roi --visual-review not-reviewed --assume-current-fcp-state
 
 PATTERN
 }
@@ -230,15 +306,7 @@ print_status() {
 	local playback_mode
 	library="$(json_value "$case_file" library)"
 	project="$(json_value "$case_file" project)"
-	event_name="$(python3 - "$case_file" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(case.get("event") or Path(case["originalMedia"]).parent.parent.name)
-PY
-)"
+	event_name="$(case_event_name "$case_file")"
 	source_clip="$(json_value "$case_file" sourceClip)"
 	start_timecode="$(json_value "$case_file" startTimecode)"
 	playback_mode="$(json_value "$case_file" playbackMode)"
@@ -349,6 +417,7 @@ shift
 case_file="$DEFAULT_CASE"
 harness_args=()
 capture_backend_explicit=0
+clear_render_files=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -370,6 +439,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--assume-current-fcp-state|--assume-prepared-fcp)
 			harness_args+=("$1")
+			shift
+			;;
+		--clear-render-files)
+			clear_render_files=1
 			shift
 			;;
 		-h|--help)
@@ -408,14 +481,24 @@ case "$command_name" in
 	recover-case)
 		require_case_proxy_only
 		quit_fcp
+		if [[ "$clear_render_files" == "1" ]]; then
+			clear_case_render_files
+		fi
 		open_case_library
 		run_harness prepare
+		;;
+	clear-render-files)
+		require_case_proxy_only
+		clear_case_render_files
 		;;
 	viewer-roi)
 		print_viewer_roi
 		;;
 	proxy-only)
 		run_harness set-proxy-only
+		;;
+	warmup-proxy)
+		run_harness assert-prepared
 		;;
 	patterns)
 		print_patterns

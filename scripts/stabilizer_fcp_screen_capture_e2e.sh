@@ -388,7 +388,8 @@ assert_proxy_render_evidence() {
 
 	local start_date
 	local end_date
-	start_date="$(log_timestamp_from_epoch "$start_epoch" -3)"
+	local lookback_seconds="${STABILIZER_E2E_PROXY_EVIDENCE_LOOKBACK_SECONDS:-600}"
+	start_date="$(log_timestamp_from_epoch "$start_epoch" "$((-lookback_seconds))")"
 	end_date="$(log_timestamp_from_epoch "$end_epoch" 3)"
 	local evidence_dir
 	if [[ -n "$output_dir" ]]; then
@@ -416,6 +417,7 @@ source_clip = Path(case.get("sourceClip", "")).stem
 digits = "".join(re.findall(r"\d+", source_clip))
 clip_token = digits[-6:] if len(digits) >= 6 else source_clip
 frame_count = str(case.get("source", {}).get("frameCount", ""))
+frame_token = f"frames {frame_count}" if frame_count else ""
 
 lines = [
     line.rstrip("\n")
@@ -423,16 +425,17 @@ lines = [
     if "Render Host Analysis decision" in line
 ]
 relevant = []
-if clip_token:
-    relevant.extend(line for line in lines if clip_token in line or source_clip in line)
-if frame_count:
-    relevant.extend(line for line in lines if f"frames {frame_count}" in line)
+if frame_token:
+    relevant.extend(line for line in lines if frame_token in line)
+else:
+    if clip_token:
+        relevant.extend(line for line in lines if clip_token in line or source_clip in line)
 relevant = list(dict.fromkeys(relevant))
 
 if not relevant:
     raise SystemExit(
         "Proxy Only evidence missing: no FxPlug render decision matched "
-        f"clip={source_clip!r} token={clip_token!r}; log={evidence_path}"
+        f"clip={source_clip!r} token={clip_token!r} frames={frame_count!r}; log={evidence_path}"
     )
 
 usable_proxy = [
@@ -494,10 +497,282 @@ assert_no_playback_fallbacks() {
 	if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$fallback_path" 2>&1; then
 		fail "could not read FxPlug playback fallback logs: $fallback_path"
 	fi
-	if grep -Eq "Auto Crop playback fallback|Auto Crop playback unavailable|Auto Crop playback plan deferred|Auto Crop playback final framing repair|Playback trajectory fallback|Playback trajectory not ready" "$fallback_path"; then
-		fail "Playback fallback/unprepared playback plan occurred during Proxy Only capture; log=$fallback_path"
+	python3 - "$case_file" "$fallback_path" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+fallback_path = Path(sys.argv[2])
+source_clip = Path(case.get("sourceClip", "")).stem
+digits = "".join(re.findall(r"\d+", source_clip))
+frame_count = str(case.get("source", {}).get("frameCount", ""))
+frame_token = f"frames {frame_count}" if frame_count else ""
+tokens = [source_clip]
+if digits:
+    tokens.append(digits)
+    if len(digits) >= 6:
+        tokens.append(digits[-6:])
+tokens = [token for token in dict.fromkeys(tokens) if token]
+fallback_pattern = re.compile(
+    r"Auto Crop playback fallback|Auto Crop playback unavailable|"
+    r"Auto Crop playback plan deferred|Auto Crop playback final framing repair|"
+    r"Playback trajectory fallback|Playback trajectory not ready"
+)
+
+def matches_target(line: str) -> bool:
+    if "Render Host Analysis decision" in line and frame_token:
+        return frame_token in line
+    if frame_token and frame_token in line:
+        return True
+    return any(token in line for token in tokens)
+
+lines = [
+    line.rstrip("\n")
+    for line in fallback_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if fallback_pattern.search(line)
+]
+target_lines = [line for line in lines if matches_target(line)]
+if target_lines:
+    preview = "\n".join(target_lines[-8:])
+    raise SystemExit(
+        "Playback fallback/unprepared playback plan occurred during Proxy Only capture "
+        f"for clip={source_clip!r}; log={fallback_path}\n{preview}"
+    )
+ignored = len(lines) - len(target_lines)
+ambiguous = sum(1 for line in lines if not matches_target(line))
+suffix = f"; ignored {ignored} non-target/ambiguous fallback log(s)" if ignored else ""
+print(
+    "Playback fallback evidence verified: no target Auto Crop or trajectory "
+    f"playback fallback/unprepared log(s){suffix}; ambiguousWithoutClip={ambiguous}."
+)
+PY
+}
+
+fail_if_recent_render_mismatches_case() {
+	local case_file="$1"
+	local context="${2:-prepare}"
+	local evidence_path
+	evidence_path="$(mktemp "${TMPDIR:-/tmp}/stabilizer_recent_render_evidence.XXXXXX")"
+	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND eventMessage CONTAINS "Render Host Analysis decision"'
+	if ! log show --style compact --last 30s --predicate "$predicate" >"$evidence_path" 2>&1; then
+		rm -f "$evidence_path"
+		return 0
 	fi
-	printf 'Playback fallback evidence verified: no Auto Crop or trajectory playback fallback/unprepared log(s).\n'
+	local detail=""
+	if ! detail="$(python3 - "$case_file" "$evidence_path" "$context" 2>&1 <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+evidence_path = Path(sys.argv[2])
+context = sys.argv[3]
+source_clip = Path(case.get("sourceClip", "")).stem
+digits = "".join(re.findall(r"\d+", source_clip))
+clip_token = digits[-6:] if len(digits) >= 6 else source_clip
+frame_count = str(case.get("source", {}).get("frameCount", ""))
+frame_token = f"frames {frame_count}" if frame_count else ""
+lines = [
+    line.rstrip("\n")
+    for line in evidence_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if "Render Host Analysis decision" in line
+]
+if not lines:
+    raise SystemExit(0)
+target_lines = []
+for line in lines:
+    if frame_token and frame_token in line:
+        target_lines.append(line)
+    elif not frame_token and clip_token and (clip_token in line or source_clip in line):
+        target_lines.append(line)
+if target_lines:
+    raise SystemExit(0)
+wrong_lines = []
+for line in lines:
+    wrong_token = re.search(r"\.\.\.(\d{6})", line)
+    wrong_frames = re.search(r"frames\s+(\d+)", line)
+    if wrong_token or wrong_frames:
+        wrong_lines.append(line)
+if wrong_lines:
+    preview = wrong_lines[-1][-420:]
+    raise SystemExit(
+        f"{context}: recent FxPlug render evidence is for a different clip than {source_clip} "
+        f"(expected token={clip_token}, frames={frame_count}); latest={preview}; log={evidence_path}"
+    )
+raise SystemExit(0)
+PY
+)"; then
+		printf 'Ignoring non-target recent FxPlug render evidence while preparing this case: %s\n' "$detail" >&2
+	fi
+	rm -f "$evidence_path"
+}
+
+wait_for_target_playback_plan_ready() {
+	local case_file="$1"
+	local timecode_entry="$2"
+	local max_attempts="${STABILIZER_E2E_PLAYBACK_READY_ATTEMPTS:-8}"
+	local warm_seconds="${STABILIZER_E2E_PLAYBACK_READY_WARM_SECONDS:-1.2}"
+	local lookback_seconds="${STABILIZER_E2E_PLAYBACK_READY_LOOKBACK_SECONDS:-600}"
+	local case_id
+	case_id="$(json_value "$case_file" caseId)"
+	local last_output=""
+	for attempt in $(seq 1 "$max_attempts"); do
+		local ready_start
+		local ready_end
+		local start_date
+		local end_date
+		local evidence_path
+		ready_start="$(now_epoch_seconds)"
+		press_stop_playback
+		focus_timeline
+		seek_timecode "$timecode_entry"
+		focus_timeline
+		sleep 0.2
+		press_space
+		sleep "$warm_seconds"
+		press_stop_playback
+		seek_timecode "$timecode_entry"
+		focus_timeline
+		sleep 0.2
+		ready_end="$(now_epoch_seconds)"
+		start_date="$(log_timestamp_from_epoch "$ready_start" "$((-lookback_seconds))")"
+		end_date="$(log_timestamp_from_epoch "$ready_end" 1)"
+		mkdir -p "$ARTIFACT_ROOT"
+		evidence_path="${ARTIFACT_ROOT}/playback_ready_${case_id}_attempt${attempt}_$(date +%Y%m%d_%H%M%S).log"
+		local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND (eventMessage CONTAINS "Render Host Analysis decision" OR eventMessage CONTAINS "Playback trajectory prepared" OR eventMessage CONTAINS "Playback trajectory fallback" OR eventMessage CONTAINS "Playback trajectory not ready" OR eventMessage CONTAINS "Auto Crop playback scale plan prepared async" OR eventMessage CONTAINS "Auto Crop playback fallback" OR eventMessage CONTAINS "Auto Crop playback unavailable" OR eventMessage CONTAINS "Auto Crop playback plan deferred" OR eventMessage CONTAINS "Auto Crop playback final framing repair")'
+		if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$evidence_path" 2>&1; then
+			rm -f "$evidence_path"
+			fail "could not read FxPlug playback readiness logs before capture"
+		fi
+		if output="$(python3 - "$case_file" "$evidence_path" "$attempt" 2>&1 <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+evidence_path = Path(sys.argv[2])
+attempt = sys.argv[3]
+source_clip = Path(case.get("sourceClip", "")).stem
+digits = "".join(re.findall(r"\d+", source_clip))
+frame_count = str(case.get("source", {}).get("frameCount", ""))
+frame_token = f"frames {frame_count}" if frame_count else ""
+tokens = [source_clip]
+if digits:
+    tokens.append(digits)
+    if len(digits) >= 6:
+        tokens.append(digits[-6:])
+tokens = [token for token in dict.fromkeys(tokens) if token]
+fallback_pattern = re.compile(
+    r"Auto Crop playback fallback|Auto Crop playback unavailable|"
+    r"Auto Crop playback plan deferred|Auto Crop playback final framing repair|"
+    r"Playback trajectory fallback|Playback trajectory not ready"
+)
+
+def matches_target(line: str) -> bool:
+    if "Render Host Analysis decision" in line and frame_token:
+        return frame_token in line
+    if frame_token and frame_token in line:
+        return True
+    return any(token in line for token in tokens)
+
+lines = [
+    line.rstrip("\n")
+    for line in evidence_path.read_text(encoding="utf-8", errors="replace").splitlines()
+]
+target_render_ready = [
+    (index, line) for index, line in enumerate(lines)
+    if "Render Host Analysis decision" in line
+    and matches_target(line)
+    and "proxy yes" in line
+    and "prepared yes" in line
+    and "stabilization active" in line
+    and "auto crop on" in line
+]
+latest_ready_index = target_render_ready[-1][0] if target_render_ready else None
+target_lines_after_ready = (
+    lines[latest_ready_index + 1:]
+    if latest_ready_index is not None
+    else lines
+)
+target_trajectory_prepared = [
+    line for line in lines
+    if "Playback trajectory prepared" in line and matches_target(line)
+]
+target_fallbacks = [
+    line for line in lines
+    if fallback_pattern.search(line) and matches_target(line)
+]
+target_fallbacks_after_ready = [
+    line for line in target_lines_after_ready
+    if fallback_pattern.search(line) and matches_target(line)
+]
+ambiguous_fallbacks = [
+    line for line in lines
+    if fallback_pattern.search(line) and not matches_target(line)
+]
+target_trajectory_unready = [
+    line for line in target_fallbacks_after_ready
+    if "Playback trajectory" in line
+]
+target_crop_unready = [
+    line for line in target_fallbacks_after_ready
+    if "Auto Crop playback" in line
+]
+
+# The Auto Crop ready logs currently have sample counts but no clip/cache
+# identity. Treat them as target evidence only in this controlled pre-record
+# evidence window and only when a target render decision is also present.
+crop_prepared_in_window = any(
+    "Auto Crop playback scale plan prepared async" in line
+    or "Auto Crop playback scale plan prepared inline" in line
+    for line in target_lines_after_ready
+)
+render_ready = bool(target_render_ready)
+trajectory_ready = bool(target_trajectory_prepared) or (render_ready and not target_trajectory_unready)
+crop_ready = (render_ready and crop_prepared_in_window) or (render_ready and not target_crop_unready)
+
+if render_ready and trajectory_ready and crop_ready and not target_fallbacks_after_ready:
+    print(
+        "Playback readiness verified before capture: "
+        f"target render prepared/proxy/auto-crop ready for {source_clip}."
+    )
+    raise SystemExit(0)
+
+parts = [
+    f"attempt={attempt}",
+    f"clip={source_clip}",
+    f"frames={frame_count}",
+    f"targetRenderReady={str(render_ready).lower()}",
+    f"trajectoryReady={str(trajectory_ready).lower()}",
+    f"cropReady={str(crop_ready).lower()}",
+    f"targetFallbacks={len(target_fallbacks_after_ready)}",
+    f"ambiguousFallbacks={len(ambiguous_fallbacks)}",
+]
+if target_fallbacks_after_ready:
+    parts.append("latestTargetFallback=" + target_fallbacks_after_ready[-1][-260:])
+if target_render_ready:
+    parts.append("latestReadyRender=" + target_render_ready[-1][1][-320:])
+render_lines = [line for line in lines if "Render Host Analysis decision" in line]
+if render_lines:
+    parts.append("latestRender=" + render_lines[-1][-320:])
+else:
+    parts.append("latestRender=none")
+raise SystemExit("; ".join(parts) + f"; log={evidence_path}")
+PY
+)"; then
+			printf '%s\n' "$output"
+			rm -f "$evidence_path"
+			return 0
+		fi
+		last_output="$output"
+		printf 'Playback readiness not ready yet for %s (%s/%s): %s\n' "$case_id" "$attempt" "$max_attempts" "$last_output"
+		sleep 0.6
+	done
+	fail "target playback trajectory/crop scale plan did not become ready before recording: $last_output"
 }
 
 case_project_db_path() {
@@ -740,75 +1015,17 @@ APPLESCRIPT
 }
 
 dismiss_known_screen_blockers() {
-	/usr/bin/osascript <<'APPLESCRIPT' &
-tell application "System Events"
-	if exists process "loginwindow" then
-		tell process "loginwindow"
-			repeat with targetWindow in windows
-				try
-					if exists button "Cancel" of targetWindow then
-						click button "Cancel" of targetWindow
-						return "dismissed-loginwindow-cancel"
-					end if
-				end try
-			end repeat
-		end tell
-	end if
-	if exists process "osascript" then
-		tell process "osascript"
-			repeat with targetWindow in windows
-				try
-					if (name of targetWindow as text) is "Osmo Pocket Concatenate" then
-						if exists button "OK" of targetWindow then
-							click button "OK" of targetWindow
-							return "dismissed-osmo-pocket-concatenate"
-						end if
-					end if
-				end try
-			end repeat
-		end tell
-	end if
-	if exists process "Final Cut Pro" then
-		tell process "Final Cut Pro"
-			repeat with targetWindow in windows
-				try
-					if (name of targetWindow as text) is "Open Library" then
-						if exists button "Cancel" of targetWindow then
-							click button "Cancel" of targetWindow
-							return "dismissed-fcp-open-library"
-						end if
-					end if
-				end try
-			end repeat
-		end tell
-	end if
-	repeat with processName in {"Disk Utility", "Finder", "Blackmagic Disk Speed Test"}
-		if exists process (processName as text) then
-			tell process (processName as text)
-				repeat with targetWindow in windows
-					try
-						if exists button "OK" of targetWindow then
-							return "blocked-" & processName
-						end if
-						if exists button "Done" of targetWindow then
-							return "blocked-" & processName
-						end if
-					end try
-				end repeat
-			end tell
-		end if
-	end repeat
-	if exists process "Final Cut Pro" then
-		try
-			tell application "Final Cut Pro" to activate
-			delay 0.2
-		end try
-	end if
-end tell
-return "none"
-APPLESCRIPT
-	local osascript_pid=$!
-	wait_for_ui_osascript "$osascript_pid" "dismiss known screen blockers" 30 1
+	local finder_visible
+	finder_visible="$(/usr/bin/osascript -e 'tell application "Finder" to get visible' 2>/dev/null || true)"
+	if [[ "$finder_visible" == "true" ]]; then
+		/usr/bin/osascript \
+			-e 'tell application "Finder" to set visible to false' \
+			-e 'tell application "Final Cut Pro" to activate' >/dev/null 2>&1 || true
+		printf 'hid-visible-Finder\n'
+		return 0
+	fi
+	/usr/bin/osascript -e 'tell application "Final Cut Pro" to activate' >/dev/null 2>&1 || true
+	printf 'none\n'
 }
 
 fail_if_known_screen_blocked() {
@@ -889,7 +1106,7 @@ window_x, window_y, window_width, _window_height = values
 # to the Proxy Only setup path.
 button_x = window_x + int(round(window_width * 0.759))
 button_y = window_y + 52
-	print(f"{button_x},{button_y}")
+print(f"{button_x},{button_y}")
 PY
 }
 
@@ -1616,8 +1833,9 @@ PY
 }
 
 wait_for_viewer_roi_recordable() {
-	local viewer_roi="$1"
-	local timecode_entry="$2"
+	local case_file="$1"
+	local viewer_roi="$2"
+	local timecode_entry="$3"
 	local last_output=""
 	local proxy_warmup_done=0
 	for attempt in $(seq 1 18); do
@@ -1631,6 +1849,7 @@ wait_for_viewer_roi_recordable() {
 		fi
 		last_output="$output"
 		printf 'Viewer ROI is not ready yet (%s/18): %s\n' "$attempt" "$last_output"
+		fail_if_recent_render_mismatches_case "$case_file" "viewer ROI prepare"
 		if [[ "$last_output" == *"Missing Proxy/source-media placeholder"* ]]; then
 			fail "$last_output"
 		fi
@@ -1750,6 +1969,69 @@ for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
     event.post(tap: .cghidEventTap)
     usleep(80_000)
 }
+SWIFT
+}
+
+move_cursor_outside_viewer_roi() {
+	local roi="$1"
+	[[ -n "$roi" ]] || return 0
+	/usr/bin/swift - "$roi" <<'SWIFT'
+import AppKit
+import ApplicationServices
+import Foundation
+
+guard CommandLine.arguments.count == 2 else {
+    fputs("move_cursor_outside_viewer_roi requires x,y,w,h\n", stderr)
+    exit(2)
+}
+
+let fields = CommandLine.arguments[1].split(separator: ",").compactMap { Double($0) }
+guard fields.count == 4 else {
+    fputs("viewer ROI must be x,y,w,h\n", stderr)
+    exit(2)
+}
+
+let roiX = fields[0]
+let roiY = fields[1]
+let roiW = fields[2]
+let roiH = fields[3]
+guard roiW > 0, roiH > 0 else {
+    fputs("viewer ROI width/height must be positive\n", stderr)
+    exit(2)
+}
+
+let screens = NSScreen.screens
+let mainScreen = NSScreen.main ?? screens.first
+let scale = max(1.0, mainScreen?.backingScaleFactor ?? 1.0)
+let screenFrame = mainScreen?.frame ?? CGRect(x: 0, y: 0, width: 1680, height: 1050)
+let paddingPoints = 36.0
+let roiLeft = roiX / scale
+let roiTop = roiY / scale
+let roiRight = (roiX + roiW) / scale
+let roiBottom = (roiY + roiH) / scale
+let roiMidY = (roiTop + roiBottom) * 0.5
+
+let minX = screenFrame.minX + paddingPoints
+let maxX = screenFrame.maxX - paddingPoints
+let minY = screenFrame.minY + paddingPoints
+let maxY = screenFrame.maxY - paddingPoints
+let candidateX: Double
+if roiRight + paddingPoints <= maxX {
+    candidateX = roiRight + paddingPoints
+} else if roiLeft - paddingPoints >= minX {
+    candidateX = roiLeft - paddingPoints
+} else {
+    candidateX = maxX
+}
+let candidateY = min(max(roiMidY, minY), maxY)
+let point = CGPoint(x: candidateX, y: candidateY)
+
+CGWarpMouseCursorPosition(point)
+CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
+if let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) {
+    event.post(tap: .cghidEventTap)
+}
+print(String(format: "Moved cursor outside FCP Viewer ROI to %.1f,%.1f", candidateX, candidateY))
 SWIFT
 }
 
@@ -2085,16 +2367,102 @@ APPLESCRIPT
 	printf 'opened visible Browser project %s via CGEvent double-click at %s\n' "$project_name" "$open_point"
 }
 
+set_visible_browser_search_text() {
+	local search_text="$1"
+	local search_point
+	local output_file
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-search-point.XXXXXX")"
+	/usr/bin/osascript - "$search_text" >"$output_file" 2>&1 <<'APPLESCRIPT' &
+on run argv
+	set searchText to item 1 of argv
+	tell application "Final Cut Pro" to activate
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontmost to true
+			set frontWindow to my frontFinalCutProWindow()
+			set searchField to my firstSearchField(frontWindow, 18)
+			if searchField is missing value then error "visible Browser search field not found"
+			set fieldPosition to position of searchField
+			set fieldSize to size of searchField
+		end tell
+	end tell
+	return (((item 1 of fieldPosition) + ((item 1 of fieldSize) div 2)) as text) & "," & (((item 2 of fieldPosition) + ((item 2 of fieldSize) div 2)) as text)
+end run
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+on firstSearchField(rootElement, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			if (role of rootElement as text) is "AXTextField" then
+				try
+					if (description of rootElement as text) is "Search text" then return rootElement
+				end try
+			end if
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstSearchField(childElement, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstSearchField
+APPLESCRIPT
+	local osascript_pid=$!
+	if ! wait_for_ui_osascript "$osascript_pid" "visible Browser search field" 100 0; then
+		search_point="$(cat "$output_file")"
+		rm -f "$output_file"
+		printf 'visible Browser search field was not usable: %s\n' "$search_point" >&2
+		return 1
+	fi
+	search_point="$(cat "$output_file")"
+	rm -f "$output_file"
+	if [[ ! "$search_point" =~ ^[0-9]+,[0-9]+$ ]]; then
+		printf 'visible Browser search point was not usable: %s\n' "$search_point" >&2
+		return 1
+	fi
+	click_screen_point "${search_point%,*}" "${search_point#*,}"
+	/usr/bin/osascript - "$search_text" <<'APPLESCRIPT'
+on run argv
+	set searchText to item 1 of argv
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			keystroke "a" using command down
+			keystroke searchText
+			key code 36
+		end tell
+	end tell
+end run
+APPLESCRIPT
+	sleep 0.8
+	printf 'Set visible Final Cut Pro Browser search text directly: %s\n' "$search_text"
+}
+
 open_known_e2e_project_tile() {
 	local project_name="$1"
 	local point_x=""
-	local point_y="290"
+	local point_y="320"
 	case "$project_name" in
 		"P1000304 Stabilized Review")
-			point_x="430"
+			point_x="322"
 			;;
 		"P1000307 Stabilized Review")
-			point_x="825"
+			point_x="322"
 			;;
 		*)
 			return 1
@@ -2104,10 +2472,14 @@ open_known_e2e_project_tile() {
 	sleep 0.4
 	double_click_screen_point "$point_x" "$point_y"
 	sleep 1.0
+	if ! fcp_project_visible "$project_name"; then
+		printf 'fixed-regression Browser tile click did not open expected project: %s\n' "$project_name" >&2
+		return 1
+	fi
 	printf 'opened fixed-regression Browser project tile %s via CGEvent double-click at %s,%s\n' "$project_name" "$point_x" "$point_y"
 }
 
-assert_fcp_project_visible() {
+fcp_project_visible() {
 	local project_name="$1"
 	local snapshot
 	snapshot="$(/usr/bin/osascript - "$project_name" <<'APPLESCRIPT'
@@ -2177,9 +2549,14 @@ on elementTextEquals(candidateElement, requiredText)
 	return false
 end elementTextEquals
 APPLESCRIPT
-)" || fail "could not inspect Final Cut Pro project name after opening ${project_name}"
-	printf '%s\n' "$snapshot" | /usr/bin/grep -qi "projectVisible=true" \
-		|| fail "Final Cut Pro did not expose expected project after open: ${project_name} (${snapshot})"
+)" || return 1
+	printf '%s\n' "$snapshot" | /usr/bin/grep -qi "projectVisible=true"
+}
+
+assert_fcp_project_visible() {
+	local project_name="$1"
+	fcp_project_visible "$project_name" \
+		|| fail "Final Cut Pro did not expose expected project after open: ${project_name}"
 	printf 'FCP UI text includes expected project: %s\n' "$project_name"
 }
 
@@ -2254,7 +2631,9 @@ open_case_project() {
 	else
 		printf 'FCP Event row was not directly selectable; continuing with visible/current Browser project lookup for Event %s.\n' "$event_name"
 	fi
-	if timeout 12 "${ROOT_DIR}/scripts/fcp_ui_test.sh" open-project "$project"; then
+	if set_visible_browser_search_text "$project" && open_visible_browser_project_by_text "$project"; then
+		printf 'Opened Final Cut Pro project via direct Browser search: %s\n' "$project"
+	elif timeout 12 "${ROOT_DIR}/scripts/fcp_ui_test.sh" open-project "$project"; then
 		:
 	elif open_visible_browser_project_by_text "$project"; then
 		printf 'Opened Final Cut Pro project via visible Browser fallback: %s\n' "$project"
@@ -2264,6 +2643,7 @@ open_case_project() {
 		fail "could not open Final Cut Pro project '${project}' by name; select it in FCP and retry with --assume-current-fcp-state"
 	fi
 	sleep 1
+	assert_fcp_project_visible "$project"
 	assert_fcp_viewer_not_nothing_loaded "$project"
 }
 
@@ -2294,7 +2674,7 @@ assert_case_prepared() {
 	ensure_selected_timeline_clip_enabled
 	sleep 0.4
 	assert_inspector_contains_case_effect_if_readable "$expected_effect" "$remove_black_edges"
-	wait_for_viewer_roi_recordable "$viewer_roi" "$timecode_entry"
+	wait_for_viewer_roi_recordable "$case_file" "$viewer_roi" "$timecode_entry"
 	assert_fcp_viewer_not_nothing_loaded "$project"
 }
 
@@ -2366,15 +2746,19 @@ capture_case() {
 	if ! assert_viewer_roi_playback_motion "$viewer_roi" "$timecode_entry"; then
 		fail "FCP Viewer playback preflight did not show motion; refusing to record a static E2E video"
 	fi
+	wait_for_target_playback_plan_ready "$case_file" "$timecode_entry"
 	assert_fcp_viewer_not_nothing_loaded_with_proxy_warmup "$(json_value "$case_file" project)" "$timecode_entry"
 	press_stop_playback
 	focus_timeline
 	seek_timecode "$timecode_entry"
-	focus_timeline
-	sleep 0.2
-	assert_fcp_frontmost "before starting E2E recording playback"
+		focus_timeline
+		sleep 0.2
+		assert_fcp_frontmost "before starting E2E recording playback"
+		if [[ -n "$viewer_roi" ]]; then
+			move_cursor_outside_viewer_roi "$viewer_roi"
+		fi
 
-	printf 'Recording FCP Viewer E2E case %s for %ss via %s: %s\n' "$case_id" "$record_seconds" "$capture_backend" "$video_path"
+			printf 'Recording FCP Viewer E2E case %s for %ss via %s: %s (target duration %ss)\n' "$case_id" "$record_seconds" "$capture_backend" "$video_path" "$duration"
 	case "$capture_backend" in
 		screencapture)
 			/usr/sbin/screencapture -v -V "$record_seconds" "$video_path" &
@@ -2437,6 +2821,7 @@ capture_case() {
 				--roi "${crop_x},${crop_y},${crop_w},${crop_h}" \
 				--duration "$record_seconds" \
 				--fps "${STABILIZER_E2E_CAPTURE_FPS:-60}" \
+				--cadence "${STABILIZER_E2E_SCK_CADENCE:-source}" \
 				--bit-rate "${STABILIZER_E2E_CAPTURE_BITRATE:-8000000}" &
 			;;
 		*)

@@ -11,6 +11,12 @@ struct Options {
     var durationSeconds: Double = 0.0
     var fps: Double = 60.0
     var bitRate: Int = 8_000_000
+    var cadence: Cadence = .source
+}
+
+enum Cadence: String {
+    case source
+    case fixed
 }
 
 enum CaptureError: Error, CustomStringConvertible {
@@ -27,7 +33,7 @@ enum CaptureError: Error, CustomStringConvertible {
 
 func usage() -> String {
     """
-    Usage: screen_capturekit_roi.swift --output PATH --roi x,y,w,h --duration SECONDS [--fps 60] [--bit-rate 8000000]
+    Usage: screen_capturekit_roi.swift --output PATH --roi x,y,w,h --duration SECONDS [--fps 60] [--bit-rate 8000000] [--cadence source|fixed]
     """
 }
 
@@ -77,6 +83,12 @@ func parseOptions() throws -> Options {
                 throw CaptureError.usage("--bit-rate must be positive\n\(usage())")
             }
             options.bitRate = value
+        case "--cadence":
+            let value = try takeValue()
+            guard let cadence = Cadence(rawValue: value) else {
+                throw CaptureError.usage("--cadence must be source or fixed\n\(usage())")
+            }
+            options.cadence = cadence
         case "-h", "--help":
             print(usage())
             exit(0)
@@ -111,6 +123,7 @@ func backingScaleFactor(for displayID: CGDirectDisplayID) -> Double {
 final class CaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let stateLock = NSLock()
     private var latestPixelBuffer: CVPixelBuffer?
+    private var latestHostTimeNanos: UInt64 = 0
     private var sourceFrameSerial = 0
     private var receivedFrameCount = 0
 
@@ -127,6 +140,7 @@ final class CaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable {
 
         stateLock.withLock {
             latestPixelBuffer = imageBuffer
+            latestHostTimeNanos = DispatchTime.now().uptimeNanoseconds
             sourceFrameSerial += 1
             receivedFrameCount += 1
         }
@@ -141,12 +155,12 @@ final class CaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         return rawStatus == SCFrameStatus.complete.rawValue
     }
 
-    func latestFrame() -> (pixelBuffer: CVPixelBuffer, serial: Int)? {
+    func latestFrame() -> (pixelBuffer: CVPixelBuffer, serial: Int, hostTimeNanos: UInt64)? {
         stateLock.withLock {
             guard let latestPixelBuffer else {
                 return nil
             }
-            return (latestPixelBuffer, sourceFrameSerial)
+            return (latestPixelBuffer, sourceFrameSerial, latestHostTimeNanos)
         }
     }
 
@@ -243,6 +257,68 @@ func appendFixedCadenceFrames(
         encodedFrames += 1
     }
     return (encodedFrames, repeatedFrames, backpressureWaits)
+}
+
+func appendSourceCadenceFrames(
+    captureOutput: CaptureOutput,
+    adaptor: AVAssetWriterInputPixelBufferAdaptor,
+    input: AVAssetWriterInput,
+    durationSeconds: Double
+) async throws -> (encodedFrames: Int, repeatedFrames: Int, backpressureWaits: Int) {
+    guard let pixelBufferPool = adaptor.pixelBufferPool else {
+        throw CaptureError.runtime("AVAssetWriter did not create a pixel buffer pool")
+    }
+    let start = DispatchTime.now().uptimeNanoseconds
+    let deadline = start + UInt64(durationSeconds * 1_000_000_000.0)
+    let timeScale: CMTimeScale = 60_000
+    var encodedFrames = 0
+    var repeatedPolls = 0
+    var backpressureWaits = 0
+    var lastSerial = -1
+    var firstFrameTimeNanos: UInt64?
+    var lastPresentationTime = CMTime.invalid
+
+    while DispatchTime.now().uptimeNanoseconds < deadline {
+        try await waitForFirstFrame(captureOutput, timeoutSeconds: 2.0)
+        guard let latest = captureOutput.latestFrame() else {
+            throw CaptureError.runtime("ScreenCaptureKit latest frame disappeared while encoding")
+        }
+        guard latest.serial != lastSerial else {
+            repeatedPolls += 1
+            try await Task.sleep(nanoseconds: 1_000_000)
+            continue
+        }
+        lastSerial = latest.serial
+        let firstNanos = firstFrameTimeNanos ?? latest.hostTimeNanos
+        firstFrameTimeNanos = firstNanos
+        let elapsedNanos = latest.hostTimeNanos >= firstNanos ? latest.hostTimeNanos - firstNanos : 0
+        var presentationTime = CMTime(
+            seconds: Double(elapsedNanos) / 1_000_000_000.0,
+            preferredTimescale: timeScale
+        )
+        if lastPresentationTime.isValid,
+           CMTimeCompare(presentationTime, lastPresentationTime) <= 0 {
+            presentationTime = CMTimeAdd(lastPresentationTime, CMTime(value: 1, timescale: timeScale))
+        }
+
+        while !input.isReadyForMoreMediaData {
+            backpressureWaits += 1
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        var outputPixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferPoolCreatePixelBuffer(nil, pixelBufferPool, &outputPixelBuffer)
+        guard status == kCVReturnSuccess, let outputPixelBuffer else {
+            throw CaptureError.runtime("could not allocate AVAssetWriter pixel buffer: \(status)")
+        }
+        try copyPixelBuffer(latest.pixelBuffer, to: outputPixelBuffer)
+        guard adaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) else {
+            throw CaptureError.runtime("AVAssetWriter adaptor append failed")
+        }
+        lastPresentationTime = presentationTime
+        encodedFrames += 1
+    }
+    return (encodedFrames, repeatedPolls, backpressureWaits)
 }
 
 final class WriterBox: @unchecked Sendable {
@@ -352,13 +428,24 @@ struct ScreenCaptureKitROICapture {
             }
             writer.startSession(atSourceTime: .zero)
             try await waitForFirstFrame(captureOutput, timeoutSeconds: 2.0)
-            let encodeResult = try await appendFixedCadenceFrames(
-                captureOutput: captureOutput,
-                adaptor: adaptor,
-                input: input,
-                fps: options.fps,
-                durationSeconds: options.durationSeconds
-            )
+            let encodeResult: (encodedFrames: Int, repeatedFrames: Int, backpressureWaits: Int)
+            switch options.cadence {
+            case .source:
+                encodeResult = try await appendSourceCadenceFrames(
+                    captureOutput: captureOutput,
+                    adaptor: adaptor,
+                    input: input,
+                    durationSeconds: options.durationSeconds
+                )
+            case .fixed:
+                encodeResult = try await appendFixedCadenceFrames(
+                    captureOutput: captureOutput,
+                    adaptor: adaptor,
+                    input: input,
+                    fps: options.fps,
+                    durationSeconds: options.durationSeconds
+                )
+            }
             try await stream.stopCapture()
             try await finishWriter(writer, input: input)
             if encodeResult.encodedFrames <= 0 {
@@ -369,13 +456,14 @@ struct ScreenCaptureKitROICapture {
             let sourceCoverage = Double(sourceFrames) / Double(max(1, encodeResult.encodedFrames))
             print(
                 String(
-                    format: "ScreenCaptureKit ROI captured encoded=%d source=%d repeated=%d backpressure=%d duration=%.3fs fps=%.2f sourceCoverage=%.3f scale=%.3fx%.3f output=%@",
+                    format: "ScreenCaptureKit ROI captured encoded=%d source=%d repeated=%d backpressure=%d duration=%.3fs fps=%.2f cadence=%@ sourceCoverage=%.3f scale=%.3fx%.3f output=%@",
                     encodeResult.encodedFrames,
                     sourceFrames,
                     encodeResult.repeatedFrames,
                     encodeResult.backpressureWaits,
                     encodedDuration,
                     options.fps,
+                    options.cadence.rawValue,
                     sourceCoverage,
                     scaleX,
                     scaleY,
