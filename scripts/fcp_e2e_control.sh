@@ -4,7 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 E2E_SCRIPT="${ROOT_DIR}/scripts/stabilizer_fcp_screen_capture_e2e.sh"
 FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
-DEFAULT_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json"
+P1000307_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json"
+P1000304_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000304_ridge_4m23_4m43.json"
+DEFAULT_CASE="$P1000307_CASE"
 
 usage() {
 	cat <<'USAGE'
@@ -21,6 +23,7 @@ Commands:
   recover-case    Quit FCP, reopen the case library, then run harness prepare.
   viewer-roi      Print the current FCP Viewer ROI as capture-pixel x,y,w,h.
   proxy-only      Set the current FCP Viewer media playback to Proxy Only.
+  patterns        Print canonical fixed-regression command patterns.
   prepare         Open/normalize the case through the existing E2E harness.
   assert-prepared Verify Proxy Only, target project/effect, timecode, and Viewer ROI.
   capture         Capture the FCP Viewer through the existing E2E harness.
@@ -33,11 +36,14 @@ Options:
   --output-dir PATH            Diagnostics output directory.
   --viewer-roi x,y,w,h         Explicit absolute FCP Viewer ROI in capture pixels.
   --capture-backend NAME       screencapture, avfoundation-roi, or screencapturekit-roi.
+                                capture/run default to avfoundation-roi unless
+                                STABILIZER_E2E_CAPTURE_BACKEND is set.
   --visual-review STATE        passed, failed, or not-reviewed.
   --assume-current-fcp-state   Pass through to the E2E harness.
   --assume-prepared-fcp        Pass through to the E2E harness.
 
 Notes:
+  - --case accepts full paths and aliases: p1000307, p1000304.
   - Proxy Only is required by the checked-in E2E cases; Proxy Preferred is not accepted.
   - Smoothness acceptance still requires the recorded FCP Preview video, full CSV/PTS
     diagnostics, and explicit visual review.
@@ -62,6 +68,81 @@ with open(path, encoding="utf-8") as handle:
 for part in dotted.split("."):
     value = value[part]
 print(value)
+PY
+}
+
+resolve_case_path() {
+	local requested="$1"
+	case "$requested" in
+		p1000307|P1000307|307|turn)
+			printf '%s\n' "$P1000307_CASE"
+			;;
+		p1000304|P1000304|304|ridge)
+			printf '%s\n' "$P1000304_CASE"
+			;;
+		*)
+			printf '%s\n' "$requested"
+			;;
+	esac
+}
+
+print_case_run_pattern() {
+	local alias="$1"
+	local file="$2"
+	[[ -f "$file" ]] || fail "case file does not exist for ${alias}: ${file}"
+	local case_id
+	local project
+	local start_timecode
+	local end_timecode
+	local viewer_roi
+	case_id="$(json_value "$file" caseId)"
+	project="$(json_value "$file" project)"
+	start_timecode="$(json_value "$file" startTimecode)"
+	end_timecode="$(json_value "$file" endTimecode)"
+	viewer_roi="$(case_viewer_roi "$file")"
+	cat <<PATTERN
+# ${alias}: ${case_id}
+# project: ${project}
+# range: ${start_timecode} - ${end_timecode}
+# fixed case ROI: ${viewer_roi}
+scripts/fcp_e2e_control.sh recover-case --case ${alias}
+scripts/fcp_e2e_control.sh run --case ${alias} --visual-review not-reviewed --assume-current-fcp-state
+# Strict replay with the checked-in ROI instead of dynamic Viewer ROI:
+STABILIZER_E2E_DYNAMIC_VIEWER_ROI=0 scripts/fcp_e2e_control.sh run --case ${alias} --viewer-roi ${viewer_roi} --visual-review not-reviewed --assume-current-fcp-state
+
+PATTERN
+}
+
+print_patterns() {
+	cat <<'PATTERN'
+# Canonical Tokyo Walking Stabilizer FCP Preview E2E patterns.
+# The wrapper defaults capture/run to avfoundation-roi to preserve 50/59.94fps cadence.
+# Keep Proxy Only and crop/Remove Black Edges enabled; do not use Proxy Preferred.
+
+PATTERN
+	print_case_run_pattern p1000307 "$P1000307_CASE"
+	print_case_run_pattern p1000304 "$P1000304_CASE"
+}
+
+case_viewer_roi() {
+	local file="$1"
+	python3 - "$file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    case = json.load(handle)
+roi = case.get("viewerRoi") or {}
+try:
+    x = int(roi["x"])
+    y = int(roi["y"])
+    w = int(roi["w"])
+    h = int(roi["h"])
+except (KeyError, TypeError, ValueError):
+    raise SystemExit("case viewerRoi must contain integer x/y/w/h")
+if w <= 0 or h <= 0:
+    raise SystemExit("case viewerRoi width/height must be positive")
+print(f"{x},{y},{w},{h}")
 PY
 }
 
@@ -264,11 +345,12 @@ shift
 
 case_file="$DEFAULT_CASE"
 harness_args=()
+capture_backend_explicit=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--case)
-			case_file="${2:-}"
+			case_file="$(resolve_case_path "${2:-}")"
 			[[ -n "$case_file" ]] || fail "--case requires a path"
 			harness_args+=("--case" "$case_file")
 			shift 2
@@ -278,6 +360,9 @@ while [[ $# -gt 0 ]]; do
 			value="${2:-}"
 			[[ -n "$value" ]] || fail "${option} requires a value"
 			harness_args+=("$option" "$value")
+			if [[ "$option" == "--capture-backend" ]]; then
+				capture_backend_explicit=1
+			fi
 			shift 2
 			;;
 		--assume-current-fcp-state|--assume-prepared-fcp)
@@ -294,7 +379,17 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-[[ -f "$case_file" ]] || fail "case file does not exist: ${case_file}"
+case_file="$(resolve_case_path "$case_file")"
+[[ -f "$case_file" ]] || fail "case file does not exist: ${case_file} (aliases: p1000307, p1000304)"
+
+if [[ "$capture_backend_explicit" == "0" && -z "${STABILIZER_E2E_CAPTURE_BACKEND:-}" ]]; then
+	case "$command_name" in
+		capture|run)
+			harness_args+=("--capture-backend" "avfoundation-roi")
+			printf 'Defaulting FCP E2E capture backend to avfoundation-roi for cadence-sensitive Proxy Only video evidence.\n' >&2
+			;;
+	esac
+fi
 
 case "$command_name" in
 	status)
@@ -318,6 +413,9 @@ case "$command_name" in
 		;;
 	proxy-only)
 		run_harness set-proxy-only
+		;;
+	patterns)
+		print_patterns
 		;;
 	prepare|assert-prepared|capture|evaluate|run)
 		run_harness "$command_name"
