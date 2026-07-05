@@ -19,7 +19,7 @@ Commands:
   open-case       Open the case library in Final Cut Pro and wait for a standard window.
   quit            Ask Final Cut Pro to quit through AppleScript and wait for exit.
   recover-case    Quit FCP, reopen the case library, then run harness prepare.
-  viewer-roi      Print the current FCP Viewer ROI as x,y,w,h.
+  viewer-roi      Print the current FCP Viewer ROI as capture-pixel x,y,w,h.
   proxy-only      Set the current FCP Viewer media playback to Proxy Only.
   prepare         Open/normalize the case through the existing E2E harness.
   assert-prepared Verify Proxy Only, target project/effect, timecode, and Viewer ROI.
@@ -31,7 +31,7 @@ Options:
   --case PATH                  Case JSON. Default: P1000307 turn regression.
   --video PATH                 Recording path for capture/evaluate/run.
   --output-dir PATH            Diagnostics output directory.
-  --viewer-roi x,y,w,h         Explicit absolute FCP Viewer ROI.
+  --viewer-roi x,y,w,h         Explicit absolute FCP Viewer ROI in capture pixels.
   --capture-backend NAME       screencapture, avfoundation-roi, or screencapturekit-roi.
   --visual-review STATE        passed, failed, or not-reviewed.
   --assume-current-fcp-state   Pass through to the E2E harness.
@@ -186,19 +186,62 @@ APPLESCRIPT
 
 print_viewer_roi() {
 	[[ -f "$FCP_HELPER" ]] || fail "missing FCP helper: ${FCP_HELPER}"
-	/usr/bin/osascript "$FCP_HELPER" viewer-bounds-json | python3 -c '
-import json
-import sys
+	local bounds_json
+	bounds_json="$(/usr/bin/osascript "$FCP_HELPER" viewer-bounds-json)"
+	viewer_bounds_points_to_pixel_roi "$bounds_json"
+}
 
-bounds = json.load(sys.stdin)
-x = int(round(float(bounds["x"])))
-y = int(round(float(bounds["y"])))
-w = int(round(float(bounds["width"])))
-h = int(round(float(bounds["height"])))
-if w <= 0 or h <= 0:
-    raise SystemExit(f"invalid FCP Viewer bounds: {bounds!r}")
-print(f"{x},{y},{w},{h}")
-'
+viewer_bounds_points_to_pixel_roi() {
+	local bounds_json="$1"
+	BOUNDS_JSON="$bounds_json" /usr/bin/osascript -l JavaScript <<'JXA'
+ObjC.import('AppKit')
+ObjC.import('Foundation')
+
+const boundsText = $.NSProcessInfo.processInfo.environment.objectForKey('BOUNDS_JSON').js
+const bounds = JSON.parse(boundsText)
+const x = Number(bounds.x)
+const y = Number(bounds.y)
+const width = Number(bounds.width)
+const height = Number(bounds.height)
+
+if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+  throw new Error(`invalid FCP Viewer bounds: ${boundsText}`)
+}
+
+const centerX = x + width / 2.0
+const centerY = y + height / 2.0
+const screens = $.NSScreen.screens
+let screen = $.NSScreen.mainScreen
+for (let index = 0; index < screens.count; index++) {
+  const candidate = screens.objectAtIndex(index)
+  const frame = candidate.frame
+  if (
+    centerX >= frame.origin.x &&
+    centerX <= frame.origin.x + frame.size.width &&
+    centerY >= frame.origin.y &&
+    centerY <= frame.origin.y + frame.size.height
+  ) {
+    screen = candidate
+    break
+  }
+}
+
+const frame = screen.frame
+const scale = Number(screen.backingScaleFactor)
+if (!Number.isFinite(scale) || scale <= 0) {
+  throw new Error('could not determine backing scale factor for FCP Viewer screen')
+}
+
+const pixelX = Math.round((x - frame.origin.x) * scale)
+const pixelY = Math.round((y - frame.origin.y) * scale)
+const pixelWidth = Math.round(width * scale)
+const pixelHeight = Math.round(height * scale)
+if (pixelWidth <= 0 || pixelHeight <= 0) {
+  throw new Error(`invalid pixel FCP Viewer ROI: ${pixelX},${pixelY},${pixelWidth},${pixelHeight}`)
+}
+
+`${pixelX},${pixelY},${pixelWidth},${pixelHeight}`
+JXA
 }
 
 run_harness() {

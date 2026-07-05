@@ -22,7 +22,7 @@ Commands:
 Options:
   --case PATH                  Case JSON. Defaults to P1000307 turn E2E.
   --video PATH                 Capture output or existing recording to evaluate.
-  --viewer-roi x,y,w,h         Override absolute FCP Viewer ROI in the screen recording.
+  --viewer-roi x,y,w,h         Override absolute FCP Viewer ROI in capture pixels.
   --output-dir PATH            Directory for evaluator diagnostics.
   --capture-backend NAME       screencapture, avfoundation-roi, or screencapturekit-roi. Default: screencapture.
   --visual-review STATE        passed, failed, or not-reviewed. Default: not-reviewed.
@@ -135,23 +135,60 @@ PY
 current_fcp_viewer_roi() {
 	local bounds_json
 	bounds_json="$(/usr/bin/osascript /Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript viewer-bounds-json)"
-	BOUNDS_JSON="$bounds_json" python3 - <<'PY'
-import json
-import os
+	viewer_bounds_points_to_pixel_roi "$bounds_json"
+}
 
-try:
-    bounds = json.loads(os.environ["BOUNDS_JSON"])
-    x = int(round(float(bounds["x"])))
-    y = int(round(float(bounds["y"])))
-    w = int(round(float(bounds["width"])))
-    h = int(round(float(bounds["height"])))
-except Exception as exc:
-    raise SystemExit(f"could not parse FCP Viewer bounds: {exc}")
+viewer_bounds_points_to_pixel_roi() {
+	local bounds_json="$1"
+	BOUNDS_JSON="$bounds_json" /usr/bin/osascript -l JavaScript <<'JXA'
+ObjC.import('AppKit')
+ObjC.import('Foundation')
 
-if w <= 0 or h <= 0:
-    raise SystemExit(f"invalid FCP Viewer bounds: {bounds!r}")
-print(f"{x},{y},{w},{h}")
-PY
+const boundsText = $.NSProcessInfo.processInfo.environment.objectForKey('BOUNDS_JSON').js
+const bounds = JSON.parse(boundsText)
+const x = Number(bounds.x)
+const y = Number(bounds.y)
+const width = Number(bounds.width)
+const height = Number(bounds.height)
+
+if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+  throw new Error(`invalid FCP Viewer bounds: ${boundsText}`)
+}
+
+const centerX = x + width / 2.0
+const centerY = y + height / 2.0
+const screens = $.NSScreen.screens
+let screen = $.NSScreen.mainScreen
+for (let index = 0; index < screens.count; index++) {
+  const candidate = screens.objectAtIndex(index)
+  const frame = candidate.frame
+  if (
+    centerX >= frame.origin.x &&
+    centerX <= frame.origin.x + frame.size.width &&
+    centerY >= frame.origin.y &&
+    centerY <= frame.origin.y + frame.size.height
+  ) {
+    screen = candidate
+    break
+  }
+}
+
+const frame = screen.frame
+const scale = Number(screen.backingScaleFactor)
+if (!Number.isFinite(scale) || scale <= 0) {
+  throw new Error('could not determine backing scale factor for FCP Viewer screen')
+}
+
+const pixelX = Math.round((x - frame.origin.x) * scale)
+const pixelY = Math.round((y - frame.origin.y) * scale)
+const pixelWidth = Math.round(width * scale)
+const pixelHeight = Math.round(height * scale)
+if (pixelWidth <= 0 || pixelHeight <= 0) {
+  throw new Error(`invalid pixel FCP Viewer ROI: ${pixelX},${pixelY},${pixelWidth},${pixelHeight}`)
+}
+
+`${pixelX},${pixelY},${pixelWidth},${pixelHeight}`
+JXA
 }
 
 viewer_roi_for_current_fcp() {
@@ -168,7 +205,7 @@ viewer_roi_for_current_fcp() {
 	if ! dynamic_roi="$(current_fcp_viewer_roi)"; then
 		fail "could not resolve current FCP Viewer ROI; pass --viewer-roi explicitly to override"
 	fi
-	printf 'Using dynamic FCP Viewer ROI: %s\n' "$dynamic_roi" >&2
+	printf 'Using dynamic FCP Viewer ROI in capture pixels: %s\n' "$dynamic_roi" >&2
 	printf '%s\n' "$dynamic_roi"
 }
 
