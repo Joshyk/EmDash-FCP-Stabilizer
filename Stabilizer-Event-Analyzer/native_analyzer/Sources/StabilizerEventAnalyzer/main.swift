@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 29
+private let cacheSchemaVersion = 32
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -23,11 +23,11 @@ private let localSearchRadius = 5
 private let maximumMotionSearchRadius = 36
 private let minimumAcceptedMotionBlocks = 3
 private let minimumFarFieldMotionBlocks = 3
-private let staggeredMotionBlockFarFieldThreshold: Float = 0.70
-private let detailMotionBlockFarFieldThreshold: Float = 0.70
-private let denseSampleMotionBlockFarFieldThreshold: Float = 0.70
-private let verticalDetailMotionBlockFarFieldThreshold: Float = 0.85
-private let attitudeDetailMotionBlockFarFieldThreshold: Float = 0.45
+private let staggeredMotionBlockFarFieldThreshold: Float = 0.62
+private let detailMotionBlockFarFieldThreshold: Float = 0.62
+private let denseSampleMotionBlockFarFieldThreshold: Float = 0.62
+private let verticalDetailMotionBlockFarFieldThreshold: Float = 0.80
+private let attitudeDetailMotionBlockFarFieldThreshold: Float = 0.55
 private let attitudeDetailMotionBlockColumnRadius = 1
 private let staggeredMotionBlockMinimumWidth = 18
 private let staggeredMotionBlockMinimumHeight = 12
@@ -35,8 +35,8 @@ private let maxFarFieldShear: Float = 0.008
 private let maxFarFieldYawPitchProxy: Float = 0.004
 private let maxFarFieldPerspective: Float = 0.003
 private let farFieldConsensusConfidenceFloor: Float = 0.04
-private let farFieldConsensusMinimumWeight: Float = 3.0
-private let farFieldConsensusFullWeight: Float = 18.0
+private let farFieldConsensusMinimumWeight: Float = 2.5
+private let farFieldConsensusFullWeight: Float = 14.0
 private let farFieldConsensusCoherenceFrameFraction: Float = 0.010
 private let farFieldPlaneStrictThreshold: Float = 0.70
 private let farFieldPlaneBroadThreshold: Float = 0.55
@@ -110,6 +110,22 @@ struct AnalysisResult: Encodable {
     let middleFingerprint: String
     let lastFingerprint: String
     let preparedMotionPath: Bool
+    var analysisTimings: AnalysisTimingSummary? = nil
+}
+
+struct AnalysisTimingSummary: Encodable {
+    let frameCount: Int
+    let totalWallSeconds: Double
+    let readFramesWallSeconds: Double
+    let readerLaneWallSeconds: Double
+    let decoderCopyNextFrameSeconds: Double
+    let metalEncodeSeconds: Double
+    let metalCompleteSeconds: Double
+    let preparedPathSeconds: Double
+    let cacheBuildSeconds: Double
+    let cacheWriteSeconds: Double
+    let readerLaneCount: Int
+    let framesPerWallSecond: Double
 }
 
 struct ToolOutput: Encodable {
@@ -148,6 +164,10 @@ struct PairMotion {
     let residual: Float
     let signedRoll: Float
     let rollMotion: Float
+    let farFieldDx: Float
+    let farFieldDy: Float
+    let farFieldSignedRoll: Float
+    let farFieldConfidence: Float
     let yawProxy: Float
     let pitchProxy: Float
     let shearX: Float
@@ -167,6 +187,10 @@ struct PairMotion {
         residual: 0.0,
         signedRoll: 0.0,
         rollMotion: 0.0,
+        farFieldDx: 0.0,
+        farFieldDy: 0.0,
+        farFieldSignedRoll: 0.0,
+        farFieldConfidence: 0.0,
         yawProxy: 0.0,
         pitchProxy: 0.0,
         shearX: 0.0,
@@ -316,7 +340,7 @@ private func compressedVideoFormatDescription(url: URL) throws -> CMVideoFormatD
     }
     let reader = try AVAssetReader(asset: asset)
     let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-    output.alwaysCopiesSampleData = true
+    output.alwaysCopiesSampleData = false
     guard reader.canAdd(output) else {
         throw AnalyzerError("could not add compressed AVAssetReaderTrackOutput")
     }
@@ -415,7 +439,7 @@ private final class VideoToolboxDecodedFrameReader {
             reader.timeRange = timeRange
         }
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-        output.alwaysCopiesSampleData = true
+        output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else {
             throw AnalyzerError("could not add compressed AVAssetReaderTrackOutput")
         }
@@ -596,6 +620,10 @@ struct PreparedAnalysis {
     let pathX: [Float]
     let pathY: [Float]
     let pathRoll: [Float]
+    let farFieldPathX: [Float]
+    let farFieldPathY: [Float]
+    let farFieldPathRoll: [Float]
+    let farFieldConfidence: [Float]
     let footstepPathX: [Float]
     let footstepPathY: [Float]
     let footstepPathRoll: [Float]
@@ -631,6 +659,10 @@ struct PersistedHostAnalysisCache: Encodable {
     let pathX: [Float]?
     let pathY: [Float]?
     let pathRoll: [Float]?
+    let farFieldPathX: [Float]?
+    let farFieldPathY: [Float]?
+    let farFieldPathRoll: [Float]?
+    let farFieldConfidence: [Float]?
     let footstepPathX: [Float]?
     let footstepPathY: [Float]?
     let footstepPathRoll: [Float]?
@@ -1115,11 +1147,16 @@ private final class MetalMotionWorkspace {
     }
 
     private static func motionBlockSampleStep(width: Int, height: Int, farFieldWeight: Float) -> Int {
-        let baseSampleStep = max(1, min(width, height) / 72)
-        guard farFieldWeight >= denseSampleMotionBlockFarFieldThreshold else {
-            return baseSampleStep
+        let blockShortSide = max(1, min(width, height))
+        let farFieldBaseSampleStep = max(1, blockShortSide / 72)
+        if farFieldWeight >= denseSampleMotionBlockFarFieldThreshold {
+            let highResolutionDetailFloor = blockShortSide >= 128 ? 2 : 1
+            return max(highResolutionDetailFloor, (farFieldBaseSampleStep * 3) / 4)
         }
-        return max(1, (baseSampleStep * 3) / 4)
+        if farFieldWeight <= farFieldPlaneNearThreshold {
+            return max(farFieldBaseSampleStep, blockShortSide / 42)
+        }
+        return max(farFieldBaseSampleStep, blockShortSide / 56)
     }
 
     private static func coarseMotionBlockSampleStep(width: Int, height: Int, farFieldWeight: Float) -> Int {
@@ -1257,7 +1294,12 @@ private final class MetalMotionWorkspace {
 
     private static func farFieldWeight(centerY: Float, height: Int) -> Float {
         let normalizedY = centerY / Float(max(1, height))
-        return clamp((0.82 - normalizedY) / 0.62, 0.20, 1.0)
+        return clamp((0.72 - normalizedY) / 0.48, 0.04, 1.0)
+    }
+
+    private static func farFieldPriorityWeight(_ farFieldWeight: Float) -> Float {
+        let safeWeight = clamp(farFieldWeight, 0.0, 1.0)
+        return max(0.02, powf(safeWeight, 2.2))
     }
 
     private static func acceptedMotionBlocks(
@@ -1277,10 +1319,18 @@ private final class MetalMotionWorkspace {
         guard scoreFiltered.count >= minimumAcceptedMotionBlocks else {
             return []
         }
-        let farFieldFiltered = scoreFiltered.filter { $0.block.farFieldWeight >= 0.55 }
-        let clusterCandidates = farFieldFiltered.count >= minimumFarFieldMotionBlocks ? farFieldFiltered : scoreFiltered
-        let medianDx = weightedMedian(clusterCandidates.map { ($0.dx, $0.block.farFieldWeight) }) ?? global.dx
-        let medianDy = weightedMedian(clusterCandidates.map { ($0.dy, $0.block.farFieldWeight) }) ?? global.dy
+        let farFieldFiltered = scoreFiltered.filter { $0.block.farFieldWeight >= farFieldPlaneBroadThreshold }
+        let midFieldFiltered = scoreFiltered.filter { $0.block.farFieldWeight >= farFieldPlaneNearThreshold }
+        let clusterCandidates: [BlockShift]
+        if farFieldFiltered.count >= minimumFarFieldMotionBlocks {
+            clusterCandidates = farFieldFiltered
+        } else if midFieldFiltered.count >= minimumAcceptedMotionBlocks {
+            clusterCandidates = midFieldFiltered
+        } else {
+            clusterCandidates = scoreFiltered
+        }
+        let medianDx = weightedMedian(clusterCandidates.map { ($0.dx, farFieldPriorityWeight($0.block.farFieldWeight)) }) ?? global.dx
+        let medianDy = weightedMedian(clusterCandidates.map { ($0.dy, farFieldPriorityWeight($0.block.farFieldWeight)) }) ?? global.dy
         let distances = clusterCandidates.map { hypotf($0.dx - medianDx, $0.dy - medianDy) }
         let medianDistance = median(distances) ?? 0.0
         let distanceLimit = max(1.25, medianDistance * 3.0)
@@ -1298,7 +1348,7 @@ private final class MetalMotionWorkspace {
     }
 
     private static func motionBlockWeight(_ shift: BlockShift, scoreReference: Float) -> Float {
-        let baseWeight = shift.block.farFieldWeight
+        let baseWeight = farFieldPriorityWeight(shift.block.farFieldWeight)
         guard shift.score.isFinite else {
             return baseWeight * 0.05
         }
@@ -1593,7 +1643,7 @@ private final class MetalMotionWorkspace {
         height: Int,
         analysisConfidence: Float
     ) -> (yawProxy: Float, pitchProxy: Float, shearX: Float, shearY: Float, perspectiveX: Float, perspectiveY: Float, confidence: Float) {
-        let farFieldShifts = shifts.filter { $0.block.farFieldWeight >= 0.55 }
+        let farFieldShifts = shifts.filter { $0.block.farFieldWeight >= farFieldPlaneBroadThreshold }
         guard farFieldShifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
             return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         }
@@ -1613,7 +1663,7 @@ private final class MetalMotionWorkspace {
             let residualX = shift.dx - robustDx + (signedRoll * y)
             let residualY = shift.dy - robustDy - (signedRoll * x)
             let scoreWeight = clamp(1.0 - (shift.score / 48.0), 0.05, 1.0)
-            let weight = shift.block.farFieldWeight * scoreWeight
+            let weight = farFieldPriorityWeight(shift.block.farFieldWeight) * scoreWeight
             yawCandidates.append((clamp(residualX / halfWidth, -maxFarFieldYawPitchProxy, maxFarFieldYawPitchProxy), weight))
             pitchCandidates.append((clamp(residualY / halfHeight, -maxFarFieldYawPitchProxy, maxFarFieldYawPitchProxy), weight))
             if abs(y) > halfHeight * 0.15 {
@@ -1700,12 +1750,13 @@ private final class MetalMotionWorkspace {
     }
 
     private static func farFieldConsensusWeight(_ shift: BlockShift) -> Float {
+        let baseWeight = farFieldPriorityWeight(shift.block.farFieldWeight)
         guard shift.score.isFinite else {
-            return shift.block.farFieldWeight * 0.05
+            return baseWeight * 0.05
         }
         let scoreQuality = clamp(1.0 - (shift.score / 48.0), 0.05, 1.0)
         let searchHeadroom: Float = shift.searchRadiusHit ? 0.65 : 1.0
-        return shift.block.farFieldWeight * scoreQuality * searchHeadroom
+        return baseWeight * scoreQuality * searchHeadroom
     }
 
     private static func confidenceRamp(_ value: Float, start: Float, full: Float) -> Float {
@@ -1760,8 +1811,8 @@ private final class MetalMotionWorkspace {
             )
         }
         let finiteScores = blockShifts.map(\.score).filter(\.isFinite)
-        let globalDx = Self.weightedMedian(blockShifts.map { ($0.dx, $0.block.farFieldWeight) }) ?? 0.0
-        let globalDy = Self.weightedMedian(blockShifts.map { ($0.dy, $0.block.farFieldWeight) }) ?? 0.0
+        let globalDx = Self.weightedMedian(blockShifts.map { ($0.dx, Self.farFieldPriorityWeight($0.block.farFieldWeight)) }) ?? 0.0
+        let globalDy = Self.weightedMedian(blockShifts.map { ($0.dy, Self.farFieldPriorityWeight($0.block.farFieldWeight)) }) ?? 0.0
         let globalScore = median(finiteScores) ?? 0.0
         let acceptedBlocks = Self.acceptedMotionBlocks(blockShifts, global: (globalDx, globalDy, globalScore))
         let motionBlocksForModel = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks : blockShifts
@@ -1803,6 +1854,9 @@ private final class MetalMotionWorkspace {
         let signedRoll = farFieldPlane.map {
             broadSignedRoll + (($0.signedRoll - broadSignedRoll) * farFieldAuthority)
         } ?? broadSignedRoll
+        let farFieldDx = farFieldPlane?.dx ?? modelDx
+        let farFieldDy = farFieldPlane?.dy ?? modelDy
+        let farFieldSignedRoll = farFieldPlane?.signedRoll ?? signedRoll
         let rollMotion = rollCandidates.map { abs($0) }.max() ?? 0.0
         let acceptedCount = acceptedBlocks.count >= minimumAcceptedMotionBlocks ? acceptedBlocks.count : 0
         let farFieldAgreement = motionBlocksForModel.isEmpty ? 0.0 : Self.average(motionBlocksForModel.map(\.block.farFieldWeight))
@@ -1838,6 +1892,10 @@ private final class MetalMotionWorkspace {
             residual: modelScoreReference,
             signedRoll: signedRoll,
             rollMotion: rollMotion,
+            farFieldDx: farFieldDx,
+            farFieldDy: farFieldDy,
+            farFieldSignedRoll: farFieldSignedRoll,
+            farFieldConfidence: farFieldAuthority,
             yawProxy: modelYawProxy,
             pitchProxy: modelPitchProxy,
             shearX: modelShearX,
@@ -2683,6 +2741,9 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var pathX: [Float] = []
     var pathY: [Float] = []
     var rawRoll: [Float] = []
+    var farFieldPathX: [Float] = []
+    var farFieldPathY: [Float] = []
+    var farFieldRawRoll: [Float] = []
     var yaw: [Float] = []
     var pitch: [Float] = []
     var shearX: [Float] = []
@@ -2692,6 +2753,9 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var x: Float = 0
     var y: Float = 0
     var roll: Float = 0
+    var farFieldX: Float = 0
+    var farFieldY: Float = 0
+    var farFieldRoll: Float = 0
     var yawValue: Float = 0
     var pitchValue: Float = 0
     var shearXValue: Float = 0
@@ -2702,6 +2766,9 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         x += motion.dx
         y += motion.dy
         roll += motion.signedRoll
+        farFieldX += motion.farFieldDx
+        farFieldY += motion.farFieldDy
+        farFieldRoll += motion.farFieldSignedRoll
         yawValue += motion.yawProxy
         pitchValue += motion.pitchProxy
         shearXValue += motion.shearX
@@ -2711,6 +2778,9 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         pathX.append(x)
         pathY.append(y)
         rawRoll.append(roll)
+        farFieldPathX.append(farFieldX)
+        farFieldPathY.append(farFieldY)
+        farFieldRawRoll.append(farFieldRoll)
         yaw.append(yawValue)
         pitch.append(pitchValue)
         shearX.append(shearXValue)
@@ -2725,6 +2795,10 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         pathX: jerkLimitedMotionPath(pathX, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
         pathY: jerkLimitedMotionPath(pathY, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
         pathRoll: jerkLimitedMotionPath(rawRoll, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+        farFieldPathX: jerkLimitedMotionPath(farFieldPathX, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+        farFieldPathY: jerkLimitedMotionPath(farFieldPathY, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
+        farFieldPathRoll: jerkLimitedMotionPath(farFieldRawRoll, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+        farFieldConfidence: motions.map(\.farFieldConfidence),
         footstepPathX: pathX,
         footstepPathY: pathY,
         footstepPathRoll: rawRoll,
@@ -2841,6 +2915,36 @@ private struct FrameChunkResult {
     let index: Int
     let frames: [AnalysisFrame]
     let motions: [PairMotion]
+    let timings: FrameReadTimingAccumulator
+}
+
+private struct ReadFramesResult {
+    let prepared: PreparedAnalysis
+    let timings: FrameReadTimingAccumulator
+}
+
+private struct FrameReadTimingAccumulator {
+    var readFramesWallSeconds: Double = 0.0
+    var readerLaneWallSeconds: Double = 0.0
+    var decoderCopyNextFrameSeconds: Double = 0.0
+    var metalEncodeSeconds: Double = 0.0
+    var metalCompleteSeconds: Double = 0.0
+    var preparedPathSeconds: Double = 0.0
+    var readerLaneCount: Int = 0
+
+    mutating func add(_ other: FrameReadTimingAccumulator) {
+        readFramesWallSeconds += other.readFramesWallSeconds
+        readerLaneWallSeconds += other.readerLaneWallSeconds
+        decoderCopyNextFrameSeconds += other.decoderCopyNextFrameSeconds
+        metalEncodeSeconds += other.metalEncodeSeconds
+        metalCompleteSeconds += other.metalCompleteSeconds
+        preparedPathSeconds += other.preparedPathSeconds
+        readerLaneCount += other.readerLaneCount
+    }
+}
+
+private func timingNowSeconds() -> Double {
+    ProcessInfo.processInfo.systemUptime
 }
 
 private func analyzerOfferedProcessorCount() -> Int {
@@ -2957,7 +3061,7 @@ private func firstPresentationTimeSeconds(url: URL) throws -> Double {
     }
     let reader = try AVAssetReader(asset: asset)
     let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-    output.alwaysCopiesSampleData = true
+    output.alwaysCopiesSampleData = false
     guard reader.canAdd(output) else {
         throw AnalyzerError("could not add AVAssetReaderTrackOutput")
     }
@@ -3006,6 +3110,8 @@ private func readFrameChunk(
     metalContext: MetalAnalysisContext,
     decoderMode: DecoderMode
 ) throws -> FrameChunkResult {
+    let chunkWallStart = timingNowSeconds()
+    var timings = FrameReadTimingAccumulator(readerLaneCount: 1)
     let timeRange: CMTimeRange?
     if let readStartSeconds = chunk.readStartSeconds,
        let readEndSeconds = chunk.readEndSeconds {
@@ -3050,7 +3156,9 @@ private func readFrameChunk(
 
     func finishOldestPendingFrame() throws {
         let pending = pendingFrames.removeFirst()
+        let metalCompleteStart = timingNowSeconds()
         let frameAnalysis = try metalContext.completeFrame(pending.encoded)
+        timings.metalCompleteSeconds += timingNowSeconds() - metalCompleteStart
         completedEncodedFrameCount += 1
         if completedEncodedFrameCount % textureCacheFlushInterval == 0 {
             metalContext.flushTextureCache()
@@ -3080,7 +3188,10 @@ private func readFrameChunk(
             try finishOldestPendingFrame()
         }
         let shouldContinue = try autoreleasepool {
-            guard let decodedFrame = try frameReader.copyNextFrame() else {
+            let decodeStart = timingNowSeconds()
+            let nextFrame = try frameReader.copyNextFrame()
+            timings.decoderCopyNextFrameSeconds += timingNowSeconds() - decodeStart
+            guard let decodedFrame = nextFrame else {
                 return false
             }
             if let maxFrames, frames.count + pendingOutputFrameCount() >= maxFrames {
@@ -3101,6 +3212,7 @@ private func readFrameChunk(
                 throw AnalyzerError("parallel reader chunk \(chunk.index + 1) for \(planName) did not receive the required overlap frame")
             }
             let currentFrameSlot = frameSlots[currentFrameSlotIndex]
+            let metalEncodeStart = timingNowSeconds()
             let encodedFrame = try metalContext.encodeFrame(
                 from: pixelBuffer,
                 sampleWidth: sample.width,
@@ -3114,6 +3226,7 @@ private func readFrameChunk(
                 resultBuffer: currentFrameSlot.resultBuffer,
                 previousBuffer: shouldOutput ? previousLumaBuffer : nil
             )
+            timings.metalEncodeSeconds += timingNowSeconds() - metalEncodeStart
             pendingFrames.append((encoded: encodedFrame, time: time, shouldOutput: shouldOutput))
             previousLumaBuffer = currentFrameSlot.lumaBuffer
             currentFrameSlotIndex = (currentFrameSlotIndex + 1) % frameSlots.count
@@ -3133,7 +3246,10 @@ private func readFrameChunk(
     while !pendingFrames.isEmpty {
         try finishOldestPendingFrame()
     }
-    return FrameChunkResult(index: chunk.index, frames: frames, motions: motions)
+    let chunkWallSeconds = timingNowSeconds() - chunkWallStart
+    timings.readFramesWallSeconds = chunkWallSeconds
+    timings.readerLaneWallSeconds = chunkWallSeconds
+    return FrameChunkResult(index: chunk.index, frames: frames, motions: motions, timings: timings)
 }
 
 private func readFramesInParallel(
@@ -3144,7 +3260,8 @@ private func readFramesInParallel(
     decoderPlan: DecoderLanePlan,
     maxFrames: Int?,
     progressEnabled: Bool
-) throws -> PreparedAnalysis {
+) throws -> ReadFramesResult {
+    let readWallStart = timingNowSeconds()
     let frameDuration = plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
     let analysisDuration = analysisDurationSeconds(
         durationSeconds: plan.durationSeconds,
@@ -3156,7 +3273,10 @@ private func readFramesInParallel(
         frameDurationSeconds: frameDuration,
         readerLaneCount: decoderPlan.laneCount
     )
+    var aggregateTimings = FrameReadTimingAccumulator()
+    let basePTSStart = timingNowSeconds()
     let basePTS = try firstPresentationTimeSeconds(url: url)
+    aggregateTimings.decoderCopyNextFrameSeconds += timingNowSeconds() - basePTSStart
     let inFlightLimit = analyzerInFlightLimit(pixelCount: sample.width * sample.height, readerLaneCount: chunks.count)
     let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
     progress(progressEnabled, "using \(chunks.count) \(decoderPlan.description) Metal reader lane(s) with \(inFlightLimit) in-flight GPU frame slot(s) each (\(chunks.count * inFlightLimit) total), flushing Metal texture cache \(textureCacheFlushDescription(interval: textureCacheFlushInterval)) for \(plan.name)")
@@ -3232,22 +3352,31 @@ private func readFramesInParallel(
         }
         combinedFrames.append(contentsOf: result.frames)
         combinedMotions.append(contentsOf: result.motions)
+        aggregateTimings.readerLaneWallSeconds += result.timings.readFramesWallSeconds
+        aggregateTimings.decoderCopyNextFrameSeconds += result.timings.decoderCopyNextFrameSeconds
+        aggregateTimings.metalEncodeSeconds += result.timings.metalEncodeSeconds
+        aggregateTimings.metalCompleteSeconds += result.timings.metalCompleteSeconds
         results[index] = nil
     }
     guard combinedFrames.count >= 3 else {
         throw AnalyzerError("analysis requires at least 3 frames; got \(combinedFrames.count)")
     }
-    return try prepare(frames: combinedFrames, motions: combinedMotions)
+    aggregateTimings.readFramesWallSeconds = timingNowSeconds() - readWallStart
+    aggregateTimings.readerLaneCount = chunks.count
+    let prepareStart = timingNowSeconds()
+    let prepared = try prepare(frames: combinedFrames, motions: combinedMotions)
+    aggregateTimings.preparedPathSeconds = timingNowSeconds() - prepareStart
+    return ReadFramesResult(prepared: prepared, timings: aggregateTimings)
 }
 
-func readFrames(
+private func readFrames(
     asset plan: AssetPlan,
     sampleScalePercent: Double,
     maxFrames: Int?,
     progressEnabled: Bool,
     metalContext: MetalAnalysisContext,
     allowParallelReaders: Bool
-) throws -> PreparedAnalysis {
+) throws -> ReadFramesResult {
     guard plan.mediaKind == "original-media" || plan.mediaKind == "asset-src" else {
         throw AnalyzerError("analysis requires original media; got \(plan.mediaKind ?? "unknown") for \(plan.name)")
     }
@@ -3327,7 +3456,11 @@ func readFrames(
     guard result.frames.count >= 3 else {
         throw AnalyzerError("analysis requires at least 3 frames; got \(result.frames.count)")
     }
-    return try prepare(frames: result.frames, motions: result.motions)
+    var timings = result.timings
+    let prepareStart = timingNowSeconds()
+    let prepared = try prepare(frames: result.frames, motions: result.motions)
+    timings.preparedPathSeconds = timingNowSeconds() - prepareStart
+    return ReadFramesResult(prepared: prepared, timings: timings)
 }
 
 func timeKey(_ seconds: Double) -> Int64 {
@@ -3404,6 +3537,10 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         pathX: prepared.pathX,
         pathY: prepared.pathY,
         pathRoll: prepared.pathRoll,
+        farFieldPathX: prepared.farFieldPathX,
+        farFieldPathY: prepared.farFieldPathY,
+        farFieldPathRoll: prepared.farFieldPathRoll,
+        farFieldConfidence: prepared.farFieldConfidence,
         footstepPathX: prepared.footstepPathX,
         footstepPathY: prepared.footstepPathY,
         footstepPathRoll: prepared.footstepPathRoll,
@@ -3651,6 +3788,10 @@ private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationU
         try writeOptionalFloatArrayField("pathX", cache.pathX)
         try writeOptionalFloatArrayField("pathY", cache.pathY)
         try writeOptionalFloatArrayField("pathRoll", cache.pathRoll)
+        try writeOptionalFloatArrayField("farFieldPathX", cache.farFieldPathX)
+        try writeOptionalFloatArrayField("farFieldPathY", cache.farFieldPathY)
+        try writeOptionalFloatArrayField("farFieldPathRoll", cache.farFieldPathRoll)
+        try writeOptionalFloatArrayField("farFieldConfidence", cache.farFieldConfidence)
         try writeOptionalFloatArrayField("footstepPathX", cache.footstepPathX)
         try writeOptionalFloatArrayField("footstepPathY", cache.footstepPathY)
         try writeOptionalFloatArrayField("footstepPathRoll", cache.footstepPathRoll)
@@ -3753,7 +3894,8 @@ func run() throws {
     var results: [AnalysisResult] = []
     for (assetIndex, asset) in plan.assets.enumerated() {
         progress(arguments.progress, "starting asset \(assetIndex + 1)/\(plan.assets.count): \(asset.name)")
-        let prepared = try readFrames(
+        let totalStart = timingNowSeconds()
+        let readResult = try readFrames(
             asset: asset,
             sampleScalePercent: plan.sampleScalePercent,
             maxFrames: plan.maxFrames,
@@ -3761,6 +3903,8 @@ func run() throws {
             metalContext: metalContext,
             allowParallelReaders: true
         )
+        let prepared = readResult.prepared
+        let buildCacheStart = timingNowSeconds()
         let cache = buildCache(
             asset: asset,
             eventName: plan.eventName,
@@ -3768,12 +3912,30 @@ func run() throws {
             sampleScalePercent: plan.sampleScalePercent,
             maxFrames: plan.maxFrames
         )
-        let result = try writeCache(
+        let buildCacheSeconds = timingNowSeconds() - buildCacheStart
+        let writeCacheStart = timingNowSeconds()
+        var result = try writeCache(
             cacheRoot: cacheRoot,
             asset: asset,
             prepared: prepared,
             cache: cache,
             sampleScalePercent: plan.sampleScalePercent
+        )
+        let writeCacheSeconds = timingNowSeconds() - writeCacheStart
+        let totalWallSeconds = timingNowSeconds() - totalStart
+        result.analysisTimings = AnalysisTimingSummary(
+            frameCount: prepared.frames.count,
+            totalWallSeconds: totalWallSeconds,
+            readFramesWallSeconds: readResult.timings.readFramesWallSeconds,
+            readerLaneWallSeconds: readResult.timings.readerLaneWallSeconds,
+            decoderCopyNextFrameSeconds: readResult.timings.decoderCopyNextFrameSeconds,
+            metalEncodeSeconds: readResult.timings.metalEncodeSeconds,
+            metalCompleteSeconds: readResult.timings.metalCompleteSeconds,
+            preparedPathSeconds: readResult.timings.preparedPathSeconds,
+            cacheBuildSeconds: buildCacheSeconds,
+            cacheWriteSeconds: writeCacheSeconds,
+            readerLaneCount: readResult.timings.readerLaneCount,
+            framesPerWallSecond: Double(max(0, prepared.frames.count)) / max(1e-9, totalWallSeconds)
         )
         progress(arguments.progress, "saved \(result.cacheFileName)")
         results.append(result)
