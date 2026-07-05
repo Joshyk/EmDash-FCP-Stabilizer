@@ -97,6 +97,8 @@
     "cadenceHoldMaxDisplacementFraction": 0.0015,
     "cadenceHoldMaxScalePercent": 0.08,
     "excludeCadenceHoldFromFrameJump": true,
+    "excludeCaptureHoldFromRidgeMotion": true,
+    "excludePtsIrregularFromRidgeMotion": true,
     "maxCadenceHoldFrameRatio": 0.3,
     "maxCadenceHoldRunFrames": 45,
     "maxOperationCadenceHoldFrameRatio": 0.9,

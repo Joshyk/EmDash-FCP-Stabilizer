@@ -25,21 +25,21 @@
     "frameCount": 10500
   },
   "sourceBaseline": {
-    "description": "Original P1000307.mov 00:01:26-00:01:48 rendered viewer-like to 1120x600 and evaluated with the same every-frame metrics. Used to avoid treating natural turn parallax as Stabilizer zoom pulse.",
-    "maxAbsScaleResidualPercent": 0.5031978105474955,
-    "maxFrameTranslationJumpPixels": 4.525723865438267,
-    "maxFrameXJumpPixels": 2.601002813020785,
-    "maxFrameYJumpPixels": 3.7036415691661437,
-    "maxCumulativeZoomInPercent": 1205.8314166445095,
-    "maxCumulativeZoomRangePercent": 1190.3787810517033,
-    "maxScalePulsePeakToPeakPercent": 0.9403498833146506,
-    "maxScalePulseDerivativeP95PercentPerFrame": 0.14816183274797715,
-    "maxScalePulseResidualPercent": 0.5031978105474955,
+    "description": "Proxy P1000307.mov 00:01:26-00:01:47 rendered viewer-like to 1120x600 and evaluated with the same every-frame metrics and far-field ridge ROI. Used to avoid treating natural turn parallax as Stabilizer zoom pulse.",
+    "maxAbsScaleResidualPercent": 0.4136501025850947,
+    "maxFrameTranslationJumpPixels": 3.526039154813278,
+    "maxFrameXJumpPixels": 2.605113517019146,
+    "maxFrameYJumpPixels": 2.3762019452732703,
+    "maxCumulativeZoomInPercent": 773.898157763871,
+    "maxCumulativeZoomRangePercent": 758.5408482714766,
+    "maxScalePulsePeakToPeakPercent": 0.8117839184020537,
+    "maxScalePulseDerivativeP95PercentPerFrame": 0.1527258252835013,
+    "maxScalePulseResidualPercent": 0.4340246157915395,
     "ridge": {
-      "maxHighFrequencyResidualPixels": 2.6434427603603043,
-      "highFrequencyResidualP95Pixels": 1.1257899185976132,
-      "verticalResidualP95Pixels": 0.8887017206989166,
-      "lineVerticalJerkP95PixelsPerFrame": 2.8330942486741812
+      "maxHighFrequencyResidualPixels": 2.552390649653389,
+      "highFrequencyResidualP95Pixels": 1.0278497010889502,
+      "verticalResidualP95Pixels": 0.8771777465986106,
+      "lineVerticalJerkP95PixelsPerFrame": 1.2396598209756502
     }
   },
   "proxy": {
@@ -62,10 +62,10 @@
     "h": 470
   },
   "ridgeRoi": {
-    "x": 100,
+    "x": 240,
     "y": 55,
     "w": 720,
-    "h": 220
+    "h": 145
   },
   "quality": {
     "targetSampleFps": "source",
@@ -121,6 +121,7 @@
     "excludeCadenceHoldFromFrameJump": true,
     "excludePtsIrregularFromFrameJump": true,
     "excludePtsIrregularFromScalePulse": true,
+    "excludeCaptureHoldFromRidgeMotion": true,
     "excludePtsIrregularFromRidgeMotion": true,
     "maxCadenceHoldFrameRatio": 0.3,
     "maxCadenceHoldRunFrames": 45,

@@ -2456,13 +2456,13 @@ APPLESCRIPT
 open_known_e2e_project_tile() {
 	local project_name="$1"
 	local point_x=""
-	local point_y="320"
+	local point_y="294"
 	case "$project_name" in
 		"P1000304 Stabilized Review")
-			point_x="322"
+			point_x="455"
 			;;
 		"P1000307 Stabilized Review")
-			point_x="322"
+			point_x="455"
 			;;
 		*)
 			return 1

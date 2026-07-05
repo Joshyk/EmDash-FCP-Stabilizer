@@ -978,6 +978,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let requestedSampleScalePercent: Double
     }
 
+    private struct RenderMotionDiagnosticState {
+        let cacheIdentityShort: String
+        let analysisSeconds: Double
+        let lowerIndex: Int
+        let upperIndex: Int
+        let samplePosition: Double
+        let pixelOffset: vector_float2
+        let cropScale: Float
+        let cropPositionPixels: vector_float2
+        let tinyStep: Bool
+    }
+
     private static let serialAnalysisQueueLock = NSLock()
     private static var serialAnalysisQueue: [SerialHostAnalysisRequest] = []
     private static let activeAnalysisStoreLock = NSLock()
@@ -1030,6 +1042,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private let renderTimingLogLock = NSLock()
     private var lastRenderTimingLogWallTime: TimeInterval = 0.0
     private var lastRenderDiagnosticsLogWallTime: TimeInterval = 0.0
+    private var lastRenderMotionDiagnosticLogWallTime: TimeInterval = 0.0
+    private var lastRenderMotionDiagnosticState: RenderMotionDiagnosticState?
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
@@ -6473,6 +6487,244 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
     }
 
+    private func logRenderMotionCadenceIfNeeded(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths,
+        autoTransform: StabilizerAutoTransform,
+        autoCropFraming: AutoCropFraming,
+        renderSourceIsProxy: Bool,
+        autoCropEnabled: Bool,
+        cacheIdentityShort: String
+    ) {
+        let analysisSeconds = CMTimeGetSeconds(renderTime)
+        let frames = preparedAnalysis.frames
+        guard analysisSeconds.isFinite,
+              !frames.isEmpty
+        else {
+            return
+        }
+        let trajectoryDiagnostic = AutoStabilizationEstimator.playbackTrajectorySampleDiagnostic(
+            preparedAnalysis: preparedAnalysis,
+            renderTime: renderTime,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        )
+
+        let lastIndex = frames.count - 1
+        let lowerIndex: Int
+        let upperIndex: Int
+        let lowerTime: Double
+        let upperTime: Double
+        let fraction: Float
+        let lowerFingerprint: String
+        let upperFingerprint: String
+        let pathPixelOffset: vector_float2
+        if let trajectoryDiagnostic {
+            lowerIndex = trajectoryDiagnostic.lowerIndex
+            upperIndex = trajectoryDiagnostic.upperIndex
+            lowerTime = trajectoryDiagnostic.lowerTime
+            upperTime = trajectoryDiagnostic.upperTime
+            fraction = trajectoryDiagnostic.fraction
+            lowerFingerprint = trajectoryDiagnostic.lowerFingerprint
+            upperFingerprint = trajectoryDiagnostic.upperFingerprint
+            pathPixelOffset = trajectoryDiagnostic.transform.pixelOffset
+        } else if frames.count == 1 || analysisSeconds <= frames[0].time {
+            lowerIndex = 0
+            upperIndex = 0
+            lowerTime = frames[0].time
+            upperTime = frames[0].time
+            fraction = 0.0
+            lowerFingerprint = frames[0].fingerprint
+            upperFingerprint = frames[0].fingerprint
+            pathPixelOffset = autoTransform.pixelOffset
+        } else if analysisSeconds >= frames[lastIndex].time {
+            lowerIndex = lastIndex
+            upperIndex = lastIndex
+            lowerTime = frames[lastIndex].time
+            upperTime = frames[lastIndex].time
+            fraction = 0.0
+            lowerFingerprint = frames[lastIndex].fingerprint
+            upperFingerprint = frames[lastIndex].fingerprint
+            pathPixelOffset = autoTransform.pixelOffset
+        } else {
+            var low = 0
+            var high = lastIndex
+            while low + 1 < high {
+                let middle = (low + high) / 2
+                if frames[middle].time <= analysisSeconds {
+                    low = middle
+                } else {
+                    high = middle
+                }
+            }
+            lowerIndex = low
+            upperIndex = high
+            lowerTime = frames[low].time
+            upperTime = frames[high].time
+            let duration = upperTime - lowerTime
+            fraction = duration.isFinite && duration > Double.ulpOfOne
+                ? Float(min(1.0, max(0.0, (analysisSeconds - lowerTime) / duration)))
+                : 0.0
+            lowerFingerprint = frames[low].fingerprint
+            upperFingerprint = frames[high].fingerprint
+            pathPixelOffset = autoTransform.pixelOffset
+        }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let previous: RenderMotionDiagnosticState?
+        renderDiagnosticsLogLock.lock()
+        previous = lastRenderMotionDiagnosticState
+        renderDiagnosticsLogLock.unlock()
+
+        let fallbackFrameSeconds: Double
+        if preparedAnalysis.frames.count > 1 {
+            fallbackFrameSeconds = preparedAnalysis.frames[1].time - preparedAnalysis.frames[0].time
+        } else {
+            fallbackFrameSeconds = 1.0 / 60.0
+        }
+        let expectedFrameSeconds = max(
+            1.0 / 240.0,
+            upperTime > lowerTime
+                ? upperTime - lowerTime
+                : fallbackFrameSeconds
+        )
+        let deltaSeconds = previous.map { analysisSeconds - $0.analysisSeconds } ?? 0.0
+        let sameIdentity = previous?.cacheIdentityShort == cacheIdentityShort
+        let normalCadence = sameIdentity
+            && deltaSeconds.isFinite
+            && deltaSeconds > expectedFrameSeconds * 0.45
+            && deltaSeconds < expectedFrameSeconds * 1.85
+        let previousPixelOffset = previous?.pixelOffset ?? autoTransform.pixelOffset
+        let previousCropPosition = previous?.cropPositionPixels ?? autoCropFraming.positionPixels
+        let transformDelta = autoTransform.pixelOffset - previousPixelOffset
+        let cropPositionDelta = autoCropFraming.positionPixels - previousCropPosition
+        let samplePosition = Double(lowerIndex) + Double(fraction)
+        let sampleDelta = previous.map { samplePosition - $0.samplePosition } ?? 0.0
+        let transformStep = simd_length(transformDelta)
+        let cropPositionStep = simd_length(cropPositionDelta)
+        let cropScaleDeltaPercent = previous.map { abs(autoCropFraming.scale - $0.cropScale) * 100.0 } ?? 0.0
+        let hasPreviousSameIdentity = sameIdentity && previous != nil
+        let renderTimeGap = hasPreviousSameIdentity
+            && deltaSeconds.isFinite
+            && deltaSeconds > expectedFrameSeconds * 1.85
+        let renderTimeRepeat = hasPreviousSameIdentity
+            && deltaSeconds.isFinite
+            && deltaSeconds >= -expectedFrameSeconds * 0.10
+            && deltaSeconds <= expectedFrameSeconds * 0.45
+        let renderTimeRewind = hasPreviousSameIdentity
+            && deltaSeconds.isFinite
+            && deltaSeconds < -expectedFrameSeconds * 0.10
+        let preparedSampleGap = normalCadence
+            && sampleDelta.isFinite
+            && sampleDelta > 1.55
+        let preparedSampleRepeat = normalCadence
+            && sampleDelta.isFinite
+            && sampleDelta < 0.45
+        let irregularRenderCadence = renderTimeGap
+            || renderTimeRepeat
+            || renderTimeRewind
+            || preparedSampleGap
+            || preparedSampleRepeat
+        let tinyStep = normalCadence
+            && transformStep < 0.08
+            && cropPositionStep < 0.08
+            && cropScaleDeltaPercent < 0.04
+        let catchUpAfterTinyStep = normalCadence
+            && (previous?.tinyStep ?? false)
+            && (transformStep > 1.25 || cropPositionStep > 1.25 || cropScaleDeltaPercent > 0.18)
+        let largeSingleStep = normalCadence
+            && (transformStep > 2.0 || cropPositionStep > 2.0 || cropScaleDeltaPercent > 0.30)
+        let repeatedPreparedSample = normalCadence
+            && sameIdentity
+            && samplePosition <= (previous?.samplePosition ?? -1.0) + 0.05
+        let periodicSampleDue: Bool
+
+        renderDiagnosticsLogLock.lock()
+        periodicSampleDue = (now - lastRenderMotionDiagnosticLogWallTime) >= 0.5
+        if irregularRenderCadence
+            || catchUpAfterTinyStep
+            || largeSingleStep
+            || repeatedPreparedSample
+            || periodicSampleDue {
+            lastRenderMotionDiagnosticLogWallTime = now
+        }
+        lastRenderMotionDiagnosticState = RenderMotionDiagnosticState(
+            cacheIdentityShort: cacheIdentityShort,
+            analysisSeconds: analysisSeconds,
+            lowerIndex: lowerIndex,
+            upperIndex: upperIndex,
+            samplePosition: samplePosition,
+            pixelOffset: autoTransform.pixelOffset,
+            cropScale: autoCropFraming.scale,
+            cropPositionPixels: autoCropFraming.positionPixels,
+            tinyStep: tinyStep
+        )
+        renderDiagnosticsLogLock.unlock()
+
+        let reason: String
+        if renderTimeRewind {
+            reason = "render-time-rewind"
+        } else if renderTimeGap {
+            reason = "render-time-gap"
+        } else if renderTimeRepeat {
+            reason = "render-time-repeat"
+        } else if preparedSampleGap {
+            reason = "prepared-sample-gap"
+        } else if preparedSampleRepeat {
+            reason = "prepared-sample-repeat"
+        } else if catchUpAfterTinyStep {
+            reason = "catch-up-after-hold"
+        } else if largeSingleStep {
+            reason = "large-step"
+        } else if repeatedPreparedSample {
+            reason = "repeated-prepared-sample"
+        } else if periodicSampleDue {
+            reason = "sample"
+        } else {
+            return
+        }
+        let lowerFingerprintForLog = String(lowerFingerprint.prefix(8))
+        let upperFingerprintForLog = String(upperFingerprint.prefix(8))
+        os_log(
+            "Render motion cadence | FxPlug %{public}@ | reason %{public}@ | render %.3f dt %.5f expected %.5f sample %.3f dSample %.3f idx %d-%d frac %.3f fp %{public}@/%{public}@ | X %.3f Y %.3f dX %.3f dY %.3f step %.3f pathX %.3f pathY %.3f | cropScale %.5f dScale %.4f cropX %.3f cropY %.3f cropStep %.3f | proxy %{public}@ crop %{public}@ identity %{public}@",
+            log: stabilizerHostAnalysisLog,
+            type: (irregularRenderCadence || catchUpAfterTinyStep || largeSingleStep || repeatedPreparedSample)
+                ? .error
+                : .default,
+            tokyoWalkingStabilizerVersion,
+            reason,
+            analysisSeconds,
+            deltaSeconds,
+            expectedFrameSeconds,
+            samplePosition,
+            sampleDelta,
+            lowerIndex,
+            upperIndex,
+            fraction,
+            lowerFingerprintForLog,
+            upperFingerprintForLog,
+            autoTransform.pixelOffset.x,
+            autoTransform.pixelOffset.y,
+            transformDelta.x,
+            transformDelta.y,
+            transformStep,
+            pathPixelOffset.x,
+            pathPixelOffset.y,
+            autoCropFraming.scale,
+            cropScaleDeltaPercent,
+            autoCropFraming.positionPixels.x,
+            autoCropFraming.positionPixels.y,
+            cropPositionStep,
+            renderSourceIsProxy ? "yes" : "no",
+            autoCropEnabled ? "yes" : "no",
+            cacheIdentityShort
+        )
+    }
+
     private func publishAnalysisCallbackStatus(
         _ analysisStore: StabilizerHostAnalysisStore,
         canPublishCallbackStatus: Bool = true
@@ -9204,6 +9456,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFraming = .identity
         }
         let cropFinishedAt = CFAbsoluteTimeGetCurrent()
+        if transformEnabled,
+           renderUsesPreparedAnalysis,
+           let preparedAnalysis = activePreparedAnalysis {
+            let motionRenderTime = activeAnalysisRenderTime
+                ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
+            logRenderMotionCadenceIfNeeded(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: motionRenderTime,
+                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                panSmoothSeconds: state.panSmoothSeconds,
+                strengths: correctionStrengths,
+                autoTransform: autoTransform,
+                autoCropFraming: autoCropFraming,
+                renderSourceIsProxy: renderSourceIsProxy,
+                autoCropEnabled: state.autoCropEnabled,
+                cacheIdentityShort: renderCacheIdentityShort
+            )
+        }
         if debugOverlayActive {
             diagnostic5.y = min(1.0, max(0.0, (autoCropFraming.scale - 1.0) / 0.25))
             logDebugOverlayRenderTruthIfNeeded(

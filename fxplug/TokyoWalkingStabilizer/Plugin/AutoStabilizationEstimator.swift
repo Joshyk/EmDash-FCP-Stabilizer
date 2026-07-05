@@ -805,6 +805,13 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryLandingShockMaximumCorrectionDegrees: Float = 0.038
     private static let playbackTrajectoryLandingShockTurnSuppressionStart: Float = 0.52
     private static let playbackTrajectoryLandingShockTurnSuppressionFull: Float = 0.88
+    private static let playbackTrajectoryVelocityCollapseMinimumPixels: Float = 0.32
+    private static let playbackTrajectoryVelocityCollapseMinimumPixelFraction: Float = 0.00024
+    private static let playbackTrajectoryVelocityCollapseMaximumCorrectionPixels: Float = 0.72
+    private static let playbackTrajectoryVelocityCollapseMaximumCorrectionPixelFraction: Float = 0.00082
+    private static let playbackTrajectoryVelocityCollapseMaximumStepRatio: Float = 0.34
+    private static let playbackTrajectoryVelocityCollapseMinimumFarFieldSupport: Float = 0.20
+    private static let playbackTrajectoryVelocityCollapseMaximumBlend: Float = 0.78
     private static let playbackTrajectoryFootstepPreservationStartPixels: Float = 0.38
     private static let playbackTrajectoryFootstepPreservationFullPixels: Float = 1.65
     private static let playbackTrajectoryFootstepRotationPreservationStartDegrees: Float = 0.020
@@ -821,7 +828,8 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumBlend: Float = 0.72
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 41
+    private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 46
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -1100,6 +1108,17 @@ enum AutoStabilizationEstimator {
         var maximumTurnJerkPixels: Float = 0.0
         var maximumWarpJerk: Float = 0.0
         var maximumRotationJerkDegrees: Float = 0.0
+    }
+
+    struct PlaybackTrajectorySampleDiagnostic {
+        let lowerIndex: Int
+        let upperIndex: Int
+        let lowerTime: Double
+        let upperTime: Double
+        let fraction: Float
+        let lowerFingerprint: String
+        let upperFingerprint: String
+        let transform: StabilizerAutoTransform
     }
 
     private struct EstimatedPath {
@@ -1772,6 +1791,76 @@ enum AutoStabilizationEstimator {
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths
         ) != nil
+    }
+
+    static func playbackTrajectorySampleDiagnostic(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths = .defaultStrengths
+    ) -> PlaybackTrajectorySampleDiagnostic? {
+        let renderSeconds = CMTimeGetSeconds(renderTime)
+        guard renderSeconds.isFinite,
+              let trajectory = cachedPlaybackTrajectory(
+                for: analysis,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths
+              ),
+              trajectory.times.count == analysis.frames.count,
+              trajectory.times.count == trajectory.transforms.count,
+              !trajectory.times.isEmpty
+        else {
+            return nil
+        }
+
+        let lastIndex = trajectory.times.count - 1
+        let lowerBound: Int
+        let upperBound: Int
+        let fraction: Float
+        if renderSeconds <= trajectory.times[0] {
+            lowerBound = 0
+            upperBound = 0
+            fraction = 0.0
+        } else if renderSeconds >= trajectory.times[lastIndex] {
+            lowerBound = lastIndex
+            upperBound = lastIndex
+            fraction = 0.0
+        } else {
+            var low = 0
+            var high = lastIndex
+            while low + 1 < high {
+                let middle = (low + high) / 2
+                if trajectory.times[middle] <= renderSeconds {
+                    low = middle
+                } else {
+                    high = middle
+                }
+            }
+            lowerBound = low
+            upperBound = high
+            let duration = trajectory.times[high] - trajectory.times[low]
+            fraction = duration.isFinite && duration > Double.ulpOfOne
+                ? Float(min(1.0, max(0.0, (renderSeconds - trajectory.times[low]) / duration)))
+                : 0.0
+        }
+
+        guard analysis.frames.indices.contains(lowerBound),
+              analysis.frames.indices.contains(upperBound)
+        else {
+            return nil
+        }
+
+        return PlaybackTrajectorySampleDiagnostic(
+            lowerIndex: lowerBound,
+            upperIndex: upperBound,
+            lowerTime: trajectory.times[lowerBound],
+            upperTime: trajectory.times[upperBound],
+            fraction: fraction,
+            lowerFingerprint: analysis.frames[lowerBound].fingerprint,
+            upperFingerprint: analysis.frames[upperBound].fingerprint,
+            transform: trajectory.transform(at: renderSeconds, outputSize: outputSize)
+        )
     }
 
     static func schedulePlaybackTrajectoryPreparation(
@@ -3869,9 +3958,23 @@ enum AutoStabilizationEstimator {
                 despiked.maximumRotationDeviation
             )
         }
+        let velocityCollapseGuarded = playbackTrajectoryVelocityCollapseGuardedTransforms(
+            frames: frames,
+            transforms: despiked.transforms,
+            outputSize: outputSize
+        )
+        if velocityCollapseGuarded.pixelFrameCount > 0 {
+            os_log(
+                "Playback trajectory velocity-collapse guard | pixelFrames %d maxPixel %.3f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                velocityCollapseGuarded.pixelFrameCount,
+                velocityCollapseGuarded.maximumPixelDeviation
+            )
+        }
         let postShockLimitedTransforms = playbackTrajectoryZeroPhaseLimitedTransforms(
             frames: frames,
-            rawTransforms: despiked.transforms,
+            rawTransforms: velocityCollapseGuarded.transforms,
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
@@ -4154,6 +4257,236 @@ enum AutoStabilizationEstimator {
             rotationFrameCount: rotationFrameCount,
             maximumPixelDeviation: maximumPixelDeviation,
             maximumRotationDeviation: maximumRotationDeviation
+        )
+    }
+
+    private static func playbackTrajectoryVelocityCollapseGuardedTransforms(
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform],
+        outputSize: vector_float2
+    ) -> PlaybackTrajectoryDespikeResult {
+        guard frames.count == transforms.count,
+              transforms.count >= 5
+        else {
+            return PlaybackTrajectoryDespikeResult(
+                transforms: transforms,
+                pixelFrameCount: 0,
+                rotationFrameCount: 0,
+                maximumPixelDeviation: 0.0,
+                maximumRotationDeviation: 0.0
+            )
+        }
+
+        let outputReference = max(Float(1.0), min(outputSize.x, outputSize.y))
+        let minimumStep = max(
+            playbackTrajectoryVelocityCollapseMinimumPixels,
+            outputReference * playbackTrajectoryVelocityCollapseMinimumPixelFraction
+        )
+        let maximumCorrection = max(
+            playbackTrajectoryVelocityCollapseMaximumCorrectionPixels,
+            outputReference * playbackTrajectoryVelocityCollapseMaximumCorrectionPixelFraction
+        )
+        let medianFrameStep = max(
+            1e-6,
+            localFrameStepSeconds(frames: frames, centerIndex: frames.count / 2)
+        )
+        let stepMagnitudesX = (1..<transforms.count).map { index in
+            abs(transforms[index].pixelOffset.x - transforms[index - 1].pixelOffset.x)
+        }
+        let radius = max(1, playbackTrajectoryFrameCadenceDespikeWindowFrames / 2)
+
+        func isNormalCadence(_ index: Int) -> Bool {
+            guard frames.indices.contains(index - 1),
+                  frames.indices.contains(index + 1)
+            else {
+                return false
+            }
+            let previousDelta = frames[index].time - frames[index - 1].time
+            let nextDelta = frames[index + 1].time - frames[index].time
+            guard previousDelta.isFinite,
+                  nextDelta.isFinite,
+                  previousDelta > 0.0,
+                  nextDelta > 0.0
+            else {
+                return false
+            }
+            let low = medianFrameStep * 0.65
+            let high = medianFrameStep * 1.55
+            return previousDelta >= low
+                && previousDelta <= high
+                && nextDelta >= low
+                && nextDelta <= high
+        }
+
+        func farFieldSupport(_ transform: StabilizerAutoTransform) -> Float {
+            let edgeQuality = searchRadiusEdgeQuality(
+                hitCount: transform.searchRadiusHitCount,
+                totalCount: transform.searchRadiusTotalCount
+            )
+            return farFieldTurnOwnedWalkingXSupport(
+                warpConfidence: transform.warpConfidence,
+                trackingConfidence: max(transform.walkingTrackingConfidence, transform.trackingConfidence),
+                edgeQuality: edgeQuality
+            )
+        }
+
+        func sameDirection(_ a: Float, _ b: Float) -> Bool {
+            guard a.isFinite, b.isFinite else {
+                return false
+            }
+            return (a * b) > 0.0
+        }
+
+        func localStepThreshold(_ index: Int) -> Float {
+            let stepIndex = max(0, min(stepMagnitudesX.count - 1, index - 1))
+            return max(
+                minimumStep,
+                localMedian(
+                    stepMagnitudesX,
+                    centerIndex: stepIndex,
+                    radius: radius
+                ) * 0.72
+            )
+        }
+
+        var result = transforms
+        var pixelFrameCount = 0
+        var candidateFrameCount = 0
+        var supportRejectedFrameCount = 0
+        var deviationRejectedFrameCount = 0
+        var blendRejectedFrameCount = 0
+        var maximumPixelDeviation = Float(0.0)
+        var maximumBridgeMagnitude = Float(0.0)
+        var maximumCandidateBridgeMagnitude = Float(0.0)
+        var minimumCandidateSupport = Float.greatestFiniteMagnitude
+        var maximumCorrectionMagnitude = Float(0.0)
+        for index in 2..<(transforms.count - 2) where isNormalCadence(index) {
+            let previous2 = transforms[index - 2].pixelOffset.x
+            let previous = transforms[index - 1].pixelOffset.x
+            let current = transforms[index].pixelOffset.x
+            let next = transforms[index + 1].pixelOffset.x
+            let next2 = transforms[index + 2].pixelOffset.x
+
+            let incoming = current - previous
+            let outgoing = next - current
+            let previousOuter = previous - previous2
+            let nextOuter = next2 - next
+            let bridge = next - previous
+            let bridgeMagnitude = abs(bridge)
+            let threshold = localStepThreshold(index)
+            maximumBridgeMagnitude = max(maximumBridgeMagnitude, bridgeMagnitude)
+            guard bridgeMagnitude > max(minimumStep * 1.8, threshold),
+                  abs(incoming).isFinite,
+                  abs(outgoing).isFinite
+            else {
+                continue
+            }
+
+            let incomingMagnitude = abs(incoming)
+            let outgoingMagnitude = abs(outgoing)
+            let previousHold = incomingMagnitude <= max(minimumStep * 0.55, outgoingMagnitude * playbackTrajectoryVelocityCollapseMaximumStepRatio)
+                && outgoingMagnitude >= threshold
+                && sameDirection(previousOuter, outgoing)
+            let nextHold = outgoingMagnitude <= max(minimumStep * 0.55, incomingMagnitude * playbackTrajectoryVelocityCollapseMaximumStepRatio)
+                && incomingMagnitude >= threshold
+                && sameDirection(incoming, nextOuter)
+            guard previousHold || nextHold else {
+                continue
+            }
+            candidateFrameCount += 1
+            maximumCandidateBridgeMagnitude = max(maximumCandidateBridgeMagnitude, bridgeMagnitude)
+
+            let support = min(
+                farFieldSupport(transforms[index]),
+                min(
+                    farFieldSupport(transforms[index - 1]),
+                    farFieldSupport(transforms[index + 1])
+                )
+            )
+            minimumCandidateSupport = min(minimumCandidateSupport, support)
+            guard support >= playbackTrajectoryVelocityCollapseMinimumFarFieldSupport else {
+                supportRejectedFrameCount += 1
+                continue
+            }
+
+            let fraction = interpolationFraction(
+                previousTime: frames[index - 1].time,
+                currentTime: frames[index].time,
+                nextTime: frames[index + 1].time
+            )
+            let predicted = previous + (bridge * fraction)
+            let deviation = current - predicted
+            let deviationMagnitude = abs(deviation)
+            guard deviationMagnitude > minimumStep * 0.55 else {
+                deviationRejectedFrameCount += 1
+                continue
+            }
+
+            let smallStep = min(incomingMagnitude, outgoingMagnitude)
+            let largeStep = max(incomingMagnitude, outgoingMagnitude)
+            let collapseSeverity = confidenceRamp(
+                (largeStep - smallStep) / max(largeStep, Float.ulpOfOne),
+                start: 0.50,
+                full: 0.88
+            )
+            let turnScale = 1.0 - (0.35 * confidenceRamp(
+                transforms[index].turnConfidence,
+                start: 0.42,
+                full: 0.86
+            ))
+            let blend = clamp(
+                collapseSeverity * confidenceRamp(support, start: 0.18, full: 0.72) * turnScale,
+                min: 0.0,
+                max: playbackTrajectoryVelocityCollapseMaximumBlend
+            )
+            guard blend > 0.05 else {
+                blendRejectedFrameCount += 1
+                continue
+            }
+
+            let correction = clamp(
+                -deviation * blend,
+                min: -maximumCorrection,
+                max: maximumCorrection
+            )
+            guard abs(correction) > Float.ulpOfOne else {
+                continue
+            }
+
+            result[index].pixelOffset.x += correction
+            result[index].macroPixelOffset.x += correction
+            result[index].temporalSmoothingPixelDelta.x += correction
+            maximumPixelDeviation = max(maximumPixelDeviation, deviationMagnitude)
+            maximumCorrectionMagnitude = max(maximumCorrectionMagnitude, abs(correction))
+            pixelFrameCount += 1
+        }
+
+        if candidateFrameCount > 0 || maximumBridgeMagnitude > minimumStep * 2.0 {
+            let minimumSupportForLog = minimumCandidateSupport == Float.greatestFiniteMagnitude
+                ? Float(0.0)
+                : minimumCandidateSupport
+            os_log(
+                "Playback trajectory velocity-collapse scan | candidates %d applied %d supportReject %d deviationReject %d blendReject %d maxBridge %.3f maxCandidateBridge %.3f minCandidateSupport %.3f maxCorrection %.3f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                candidateFrameCount,
+                pixelFrameCount,
+                supportRejectedFrameCount,
+                deviationRejectedFrameCount,
+                blendRejectedFrameCount,
+                maximumBridgeMagnitude,
+                maximumCandidateBridgeMagnitude,
+                minimumSupportForLog,
+                maximumCorrectionMagnitude
+            )
+        }
+
+        return PlaybackTrajectoryDespikeResult(
+            transforms: result,
+            pixelFrameCount: pixelFrameCount,
+            rotationFrameCount: 0,
+            maximumPixelDeviation: maximumPixelDeviation,
+            maximumRotationDeviation: 0.0
         )
     }
 
@@ -4983,6 +5316,76 @@ enum AutoStabilizationEstimator {
             )
         }
 
+        let rawPlaybackMicroBandYPath = frames.indices.map { index -> Float in
+            let frame = frames[index]
+            let renderSeconds = frame.time
+            let searchRadiusHitCount = analysis.searchRadiusHitCounts.indices.contains(index) ? analysis.searchRadiusHitCounts[index] : 0
+            let searchRadiusTotalCount = analysis.searchRadiusTotalCounts.indices.contains(index) ? analysis.searchRadiusTotalCounts[index] : 0
+            let edgeQuality = searchRadiusEdgeQuality(
+                hitCount: searchRadiusHitCount,
+                totalCount: searchRadiusTotalCount
+            )
+            let walkingTrackingConfidence = walkingTrackingConfidences[index]
+            let smoothedWalkingTrackingConfidence = playbackPreparedSmoothedValue(
+                walkingTrackingConfidences,
+                frames: frames,
+                renderSeconds: renderSeconds,
+                halfWindow: confidenceHalfWindow,
+                sampleCount: 9
+            )
+            let strideContinuityConfidence = playbackContinuityConfidence(
+                center: walkingTrackingConfidence,
+                smoothed: smoothedWalkingTrackingConfidence
+            )
+            let farFieldMacroConfidence = clamp(
+                playbackPreparedSmoothedValue(
+                    analysis.farFieldConfidence,
+                    frames: frames,
+                    renderSeconds: renderSeconds,
+                    halfWindow: mediumHalfWindow,
+                    sampleCount: 13
+                ),
+                min: 0.0,
+                max: 1.0
+            )
+            let smoothedWarpConfidence = clamp(
+                playbackPreparedSmoothedValue(
+                    analysis.warpConfidence,
+                    frames: frames,
+                    renderSeconds: renderSeconds,
+                    halfWindow: mediumHalfWindow,
+                    sampleCount: 13
+                ),
+                min: 0.0,
+                max: 1.0
+            )
+            let farFieldBandBlend = farFieldWalkingBandBlend(
+                farFieldConfidence: farFieldMacroConfidence,
+                warpConfidence: smoothedWarpConfidence,
+                trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+                edgeQuality: edgeQuality
+            )
+            let footstepY = analysis.footstepPathY.indices.contains(index) ? analysis.footstepPathY[index] : 0.0
+            let farFieldY = analysis.farFieldPathY.indices.contains(index) ? analysis.farFieldPathY[index] : 0.0
+            return blendedFarFieldBand(
+                footstepBand: footstepY - footstepBaselineYPath[index],
+                farFieldBand: farFieldY - farFieldBaselineYPath[index],
+                blend: farFieldBandBlend * farFieldWalkingBandBlendYScale,
+                hasFarField: analysis.farFieldPathY.indices.contains(index)
+            )
+        }
+        let playbackMicroBandYPath = frames.indices.map { index -> Float in
+            let frame = frames[index]
+            return playbackPreparedSmoothedValue(
+                rawPlaybackMicroBandYPath,
+                frames: frames,
+                renderSeconds: frame.time,
+                halfWindow: playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds,
+                sampleCount: 5
+            )
+        }
+        let zeroPlaybackMicroBandYBaseline = EstimatedPath(values: Array(repeating: Float(0.0), count: frames.count))
+
         let transforms = frames.indices.map { index in
             let frame = frames[index]
             let renderSeconds = frame.time
@@ -5037,10 +5440,8 @@ enum AutoStabilizationEstimator {
             )
 
             let footstepX = analysis.footstepPathX.indices.contains(index) ? analysis.footstepPathX[index] : 0.0
-            let footstepY = analysis.footstepPathY.indices.contains(index) ? analysis.footstepPathY[index] : 0.0
             let footstepRoll = analysis.footstepPathRoll.indices.contains(index) ? analysis.footstepPathRoll[index] : 0.0
             let footstepBaselineX = footstepBaselineXPath[index]
-            let footstepBaselineY = footstepBaselineYPath[index]
             let footstepBaselineRoll = footstepBaselineRollPath[index]
             let cleanedFootstepX = footstepCleanXPath[index]
             let cleanedFootstepY = footstepCleanYPath[index]
@@ -5052,10 +5453,8 @@ enum AutoStabilizationEstimator {
             let broadY = broadYPath[index]
             let broadRoll = broadRollPath[index]
             let farFieldX = analysis.farFieldPathX.indices.contains(index) ? analysis.farFieldPathX[index] : 0.0
-            let farFieldY = analysis.farFieldPathY.indices.contains(index) ? analysis.farFieldPathY[index] : 0.0
             let farFieldRoll = analysis.farFieldPathRoll.indices.contains(index) ? analysis.farFieldPathRoll[index] : 0.0
             let farFieldBaselineX = farFieldBaselineXPath[index]
-            let farFieldBaselineY = farFieldBaselineYPath[index]
             let farFieldBaselineRoll = farFieldBaselineRollPath[index]
             let farFieldCleanedX = farFieldCleanXPath[index]
             let farFieldCleanedY = farFieldCleanYPath[index]
@@ -5095,10 +5494,8 @@ enum AutoStabilizationEstimator {
             let farFieldBandBlendY = farFieldBandBlend * farFieldWalkingBandBlendYScale
             let farFieldBandBlendRoll = farFieldBandBlend * farFieldWalkingBandBlendRollScale
             let footstepMicroBandX = footstepX - footstepBaselineX
-            let footstepMicroBandY = footstepY - footstepBaselineY
             let footstepMicroBandRoll = footstepRoll - footstepBaselineRoll
             let farFieldMicroBandX = farFieldX - farFieldBaselineX
-            let farFieldMicroBandY = farFieldY - farFieldBaselineY
             let farFieldMicroBandRoll = farFieldRoll - farFieldBaselineRoll
             let microBandX = blendedFarFieldBand(
                 footstepBand: footstepMicroBandX,
@@ -5106,12 +5503,7 @@ enum AutoStabilizationEstimator {
                 blend: farFieldBandBlendX,
                 hasFarField: analysis.farFieldPathX.indices.contains(index)
             )
-            let microBandY = blendedFarFieldBand(
-                footstepBand: footstepMicroBandY,
-                farFieldBand: farFieldMicroBandY,
-                blend: farFieldBandBlendY,
-                hasFarField: analysis.farFieldPathY.indices.contains(index)
-            )
+            let microBandY = playbackMicroBandYPath[index]
             let microBandRoll = blendedFarFieldBand(
                 footstepBand: footstepMicroBandRoll,
                 farFieldBand: farFieldMicroBandRoll,
@@ -5227,8 +5619,8 @@ enum AutoStabilizationEstimator {
             )
             let rawFootstepYConfidenceBase = cache.footstepFrameConfidence(
                 kind: .footstepY,
-                values: analysis.footstepPathY,
-                baselineValues: footstepBaselineYPath,
+                values: playbackMicroBandYPath,
+                baselineValues: zeroPlaybackMicroBandYBaseline,
                 frames: frames,
                 index: index,
                 trackingConfidence: walkingTrackingConfidence,
@@ -5383,8 +5775,8 @@ enum AutoStabilizationEstimator {
             let limitedMicroPixelOffsetY = strengths.microJitterY > 0.0
                 ? footstepContinuityLimitedCorrection(
                     .footstepY,
-                    values: analysis.footstepPathY,
-                    baselineValues: footstepBaselineYPath,
+                    values: playbackMicroBandYPath,
+                    baselineValues: zeroPlaybackMicroBandYBaseline,
                     analysis: analysis,
                     centerTime: renderSeconds,
                     rawCorrection: rawMicroPixelOffsetY,

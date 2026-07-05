@@ -471,9 +471,22 @@ def summarize_ridge_motion(
     quality: dict[str, Any],
     effective_sample_fps: float,
     source_baseline: dict[str, Any] | None = None,
+    pixel_scale_x: float = 1.0,
+    pixel_scale_y: float = 1.0,
 ) -> tuple[bool, list[str], dict[str, Any]]:
+    pixel_scale_x = max(1e-6, pixel_scale_x if math.isfinite(pixel_scale_x) else 1.0)
+    pixel_scale_y = max(1e-6, pixel_scale_y if math.isfinite(pixel_scale_y) else 1.0)
     all_tracking_rows = [row for row in ridge_rows if bool(row.get("trackingOk"))]
     tracking_ratio = (len(all_tracking_rows) / len(ridge_rows)) if ridge_rows else 0.0
+    exclude_capture_hold_from_ridge = bool(
+        quality.get(
+            "excludeCaptureHoldFromRidgeMotion",
+            quality.get(
+                "excludeCadenceHoldFromRidgeMotion",
+                quality.get("excludeCadenceHoldFromFrameJump", False),
+            ),
+        )
+    )
     exclude_pts_irregular_from_ridge = bool(
         quality.get(
             "excludePtsIrregularFromRidgeMotion",
@@ -485,11 +498,20 @@ def summarize_ridge_motion(
         for row in all_tracking_rows
         if bool(row.get("ptsCadenceAffectedFrame"))
     ]
-    tracking_rows = [
+    capture_hold_excluded_rows = [
         row
         for row in all_tracking_rows
-        if not (exclude_pts_irregular_from_ridge and bool(row.get("ptsCadenceAffectedFrame")))
+        if bool(row.get("captureHoldAffectedFrame"))
     ]
+    tracking_rows: list[dict[str, Any]] = []
+    for row in all_tracking_rows:
+        excluded_for_pts = exclude_pts_irregular_from_ridge and bool(row.get("ptsCadenceAffectedFrame"))
+        excluded_for_capture_hold = exclude_capture_hold_from_ridge and bool(row.get("captureHoldAffectedFrame"))
+        row["ridgeExcludedForPtsCadence"] = excluded_for_pts
+        row["ridgeExcludedForCaptureHold"] = excluded_for_capture_hold
+        row["ridgeMeasuredFrame"] = not (excluded_for_pts or excluded_for_capture_hold)
+        if not (excluded_for_pts or excluded_for_capture_hold):
+            tracking_rows.append(row)
     median_seconds = float(quality.get("ridgeRollingMedianWindowSeconds", 0.5))
     median_window = max(3, int(round(median_seconds * effective_sample_fps)))
     if median_window % 2 == 0:
@@ -512,8 +534,8 @@ def summarize_ridge_motion(
     ridge_reference_rows = [row for row in tracking_rows if bool(row.get("ridgeReferenceTrackingOk"))]
     previous_line_row: dict[str, Any] | None = None
     for row in tracking_rows:
-        x_residual = float(row.get("dxResidual", 0.0))
-        y_residual = float(row.get("dyResidual", 0.0))
+        x_residual = float(row.get("dxResidual", 0.0)) / pixel_scale_x
+        y_residual = float(row.get("dyResidual", 0.0)) / pixel_scale_y
         vector_residual = math.hypot(x_residual, y_residual)
         row["ridgeHighFrequencyResidualPixels"] = vector_residual
         row["ridgeVerticalResidualPixels"] = abs(y_residual)
@@ -522,7 +544,8 @@ def summarize_ridge_motion(
         vertical_residuals.append(abs(y_residual))
         horizontal_residuals.append(abs(x_residual))
         if "ridgeLineDyMinusAffineDy" in row:
-            line_residual = float(row.get("ridgeLineDyMinusAffineDy", 0.0))
+            line_residual = float(row.get("ridgeLineDyMinusAffineDy", 0.0)) / pixel_scale_y
+            row["ridgeLineDyMinusAffineDyMetric"] = line_residual
             row["ridgeLineVerticalResidualPixels"] = abs(line_residual)
             ridge_line_vertical_residuals.append(abs(line_residual))
             if (
@@ -530,15 +553,20 @@ def summarize_ridge_motion(
                 and int(row.get("previousFrame", -1)) == int(previous_line_row.get("frame", -2))
                 and "ridgeLineDyMinusAffineDy" in previous_line_row
             ):
-                line_jerk = line_residual - float(previous_line_row.get("ridgeLineDyMinusAffineDy", 0.0))
+                previous_line_residual = (
+                    float(previous_line_row.get("ridgeLineDyMinusAffineDyMetric", 0.0))
+                    if "ridgeLineDyMinusAffineDyMetric" in previous_line_row
+                    else float(previous_line_row.get("ridgeLineDyMinusAffineDy", 0.0)) / pixel_scale_y
+                )
+                line_jerk = line_residual - previous_line_residual
                 row["ridgeLineVerticalJerkPixelsPerFrame"] = line_jerk
                 ridge_line_jerks.append(abs(line_jerk))
             else:
                 row["ridgeLineVerticalJerkPixelsPerFrame"] = 0.0
             previous_line_row = row
         if bool(row.get("ridgeReferenceTrackingOk")):
-            ridge_reference_vertical_deltas.append(abs(float(row.get("ridgeMinusReferenceDy", 0.0))))
-            ridge_reference_horizontal_deltas.append(abs(float(row.get("ridgeMinusReferenceDx", 0.0))))
+            ridge_reference_vertical_deltas.append(abs(float(row.get("ridgeMinusReferenceDy", 0.0))) / pixel_scale_y)
+            ridge_reference_horizontal_deltas.append(abs(float(row.get("ridgeMinusReferenceDx", 0.0))) / pixel_scale_x)
 
     max_vector = max(residual_vectors, default=0.0)
     p95_vector = (
@@ -688,6 +716,14 @@ def summarize_ridge_motion(
         "trackingFrameCount": len(all_tracking_rows),
         "measuredTrackingFrameCount": len(tracking_rows),
         "trackingRatio": tracking_ratio,
+        "captureHoldExcludedFrameCount": (
+            len(capture_hold_excluded_rows) if exclude_capture_hold_from_ridge else 0
+        ),
+        "captureHoldExcludedFrameRatio": (
+            len(capture_hold_excluded_rows) / len(all_tracking_rows)
+            if exclude_capture_hold_from_ridge and all_tracking_rows
+            else 0.0
+        ),
         "ptsCadenceExcludedFrameCount": len(pts_cadence_excluded_rows) if exclude_pts_irregular_from_ridge else 0,
         "ptsCadenceExcludedFrameRatio": (
             len(pts_cadence_excluded_rows) / len(all_tracking_rows)
@@ -723,9 +759,12 @@ def summarize_ridge_motion(
             "maxRidgeHighFrequencyResidualP95SourceRatio": quality.get("maxRidgeHighFrequencyResidualP95SourceRatio"),
             "maxRidgeVerticalResidualP95SourceRatio": quality.get("maxRidgeVerticalResidualP95SourceRatio"),
             "maxRidgeLineVerticalJerkSourceRatio": quality.get("maxRidgeLineVerticalJerkSourceRatio"),
+            "excludeCaptureHoldFromRidgeMotion": exclude_capture_hold_from_ridge,
             "excludePtsIrregularFromRidgeMotion": exclude_pts_irregular_from_ridge,
         },
         "sourceBaseline": source_ridge_baseline,
+        "metricPixelScaleX": pixel_scale_x,
+        "metricPixelScaleY": pixel_scale_y,
     }
     return not failures, failures, summary
 
@@ -736,7 +775,11 @@ def finalize_black_edge_transform_rows(
     median_window: int,
     pulse_median_window: int,
     pulse_peak_window: int,
+    pixel_scale_x: float = 1.0,
+    pixel_scale_y: float = 1.0,
 ) -> None:
+    pixel_scale_x = max(1e-6, pixel_scale_x if math.isfinite(pixel_scale_x) else 1.0)
+    pixel_scale_y = max(1e-6, pixel_scale_y if math.isfinite(pixel_scale_y) else 1.0)
     transform_rows = [row for row in rows if bool(row.get("trackingOk"))]
     if not transform_rows:
         return
@@ -757,7 +800,7 @@ def finalize_black_edge_transform_rows(
     for row in transform_rows:
         center_x_residual = float(row.get("centerXResidual", 0.0))
         center_y_residual = float(row.get("centerYResidual", 0.0))
-        row["centerResidualPixels"] = math.hypot(center_x_residual, center_y_residual)
+        row["centerResidualPixels"] = math.hypot(center_x_residual / pixel_scale_x, center_y_residual / pixel_scale_y)
         row["scalePulseExcludedForPtsCadence"] = False
 
     exclude_pts_irregular = bool(
@@ -805,9 +848,9 @@ def finalize_black_edge_transform_rows(
             continue
         center_jump_x = float(row.get("centerX", 0.0)) - float(previous_row.get("centerX", 0.0))
         center_jump_y = float(row.get("centerY", 0.0)) - float(previous_row.get("centerY", 0.0))
-        row["centerJumpX"] = center_jump_x
-        row["centerJumpY"] = center_jump_y
-        row["centerJumpPixels"] = math.hypot(center_jump_x, center_jump_y)
+        row["centerJumpX"] = center_jump_x / pixel_scale_x
+        row["centerJumpY"] = center_jump_y / pixel_scale_y
+        row["centerJumpPixels"] = math.hypot(center_jump_x / pixel_scale_x, center_jump_y / pixel_scale_y)
         row["scaleJumpPercent"] = float(row.get("scalePercent", 0.0)) - float(previous_row.get("scalePercent", 0.0))
         row["rotationJumpDegrees"] = angle_delta_degrees(
             float(row.get("rotationDegreesUnwrapped", row.get("rotationDegrees", 0.0))),
@@ -1301,23 +1344,31 @@ def write_diagnostic_overlay_video(
                 lines.append(f"pts dt={float(pts_interval):.4f}s")
         ridge_row = ridge_by_frame.get(frame_index)
         if ridge_row is not None and bool(ridge_row.get("trackingOk")):
-            lines.append(
-                "ridge "
-                f"hf={float(ridge_row.get('ridgeHighFrequencyResidualPixels', 0.0)):.3f}px "
-                f"v={float(ridge_row.get('ridgeVerticalResidualPixels', 0.0)):.3f}px"
-            )
-            if "ridgeLineVerticalResidualPixels" in ridge_row:
+            ridge_flags: list[str] = []
+            if bool(ridge_row.get("ridgeExcludedForCaptureHold")):
+                ridge_flags.append("hold")
+            if bool(ridge_row.get("ridgeExcludedForPtsCadence")):
+                ridge_flags.append("pts")
+            if ridge_flags:
+                lines.append("ridge skipped " + ",".join(ridge_flags))
+            else:
                 lines.append(
-                    "ridge-line "
-                    f"v={float(ridge_row.get('ridgeLineVerticalResidualPixels', 0.0)):.3f}px "
-                    f"jerk={float(ridge_row.get('ridgeLineVerticalJerkPixelsPerFrame', 0.0)):+.3f}px/f"
+                    "ridge "
+                    f"hf={float(ridge_row.get('ridgeHighFrequencyResidualPixels', 0.0)):.3f}px "
+                    f"v={float(ridge_row.get('ridgeVerticalResidualPixels', 0.0)):.3f}px"
                 )
-            if bool(ridge_row.get("ridgeReferenceTrackingOk")):
-                lines.append(
-                    "ridge-ref "
-                    f"dx={float(ridge_row.get('ridgeMinusReferenceDx', 0.0)):+.2f}px "
-                    f"dy={float(ridge_row.get('ridgeMinusReferenceDy', 0.0)):+.2f}px"
-                )
+                if "ridgeLineVerticalResidualPixels" in ridge_row:
+                    lines.append(
+                        "ridge-line "
+                        f"v={float(ridge_row.get('ridgeLineVerticalResidualPixels', 0.0)):.3f}px "
+                        f"jerk={float(ridge_row.get('ridgeLineVerticalJerkPixelsPerFrame', 0.0)):+.3f}px/f"
+                    )
+                if bool(ridge_row.get("ridgeReferenceTrackingOk")):
+                    lines.append(
+                        "ridge-ref "
+                        f"dx={float(ridge_row.get('ridgeMinusReferenceDx', 0.0)):+.2f}px "
+                        f"dy={float(ridge_row.get('ridgeMinusReferenceDy', 0.0)):+.2f}px"
+                    )
         edge_row = edge_by_frame.get(frame_index)
         if edge_row is not None:
             lines.append(
@@ -1345,7 +1396,13 @@ def summarize_failures(
     edge_rows: list[dict[str, Any]],
     quality: dict[str, Any],
     source_baseline: dict[str, Any] | None = None,
+    black_edge_transform_summary: dict[str, Any] | None = None,
+    remove_black_edges: bool = True,
+    pixel_scale_x: float = 1.0,
+    pixel_scale_y: float = 1.0,
 ) -> tuple[bool, list[str], dict[str, Any]]:
+    pixel_scale_x = max(1e-6, pixel_scale_x if math.isfinite(pixel_scale_x) else 1.0)
+    pixel_scale_y = max(1e-6, pixel_scale_y if math.isfinite(pixel_scale_y) else 1.0)
     scale_quality_rows = [
         row
         for row in scale_rows
@@ -1482,8 +1539,8 @@ def summarize_failures(
                         jump_pair_skipped_for_pts_cadence += 1
                     previous_row = row
                     continue
-                jump_x = float(row.get("dx", 0.0)) - float(previous_row.get("dx", 0.0))
-                jump_y = float(row.get("dy", 0.0)) - float(previous_row.get("dy", 0.0))
+                jump_x = (float(row.get("dx", 0.0)) - float(previous_row.get("dx", 0.0))) / pixel_scale_x
+                jump_y = (float(row.get("dy", 0.0)) - float(previous_row.get("dy", 0.0))) / pixel_scale_y
                 jump_vector = math.hypot(jump_x, jump_y)
                 row["frameJumpX"] = jump_x
                 row["frameJumpY"] = jump_y
@@ -1521,8 +1578,144 @@ def summarize_failures(
     scale_pulse_frame_ratio_limit = float(quality.get("maxScalePulseFrameRatio", float("inf")))
 
     failures: list[str] = []
+    suppressed_failures: list[str] = []
     operation_failures: list[str] = []
     source_baseline = source_baseline or {}
+
+    def finite_float(value: Any, default: float = 0.0) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if math.isfinite(parsed) else default
+
+    def black_edge_scale_pulse_evidence() -> dict[str, Any]:
+        enabled = bool(quality.get("scalePulseUseBlackEdgeTransformDisambiguation", False))
+        transform_summary = black_edge_transform_summary or {}
+        allow_with_remove_black_edges = bool(
+            quality.get("allowScalePulseBlackEdgeTransformDisambiguationWithRemoveBlackEdges", False)
+        )
+        min_tracking_ratio = float(
+            quality.get(
+                "minScalePulseBlackEdgeTransformTrackingRatio",
+                quality.get("minBlackEdgeTransformValidRatio", 0.50),
+            )
+        )
+        min_pulse_frames = int(quality.get("minScalePulseBlackEdgeTransformFrames", 24))
+        min_outside_ratio = float(
+            quality.get(
+                "minScalePulseBlackEdgeTransformOutsideRatio",
+                quality.get("minBlackEdgeOutsideRatio", 0.002),
+            )
+        )
+        center_jump_limit = float(
+            quality.get(
+                "maxScalePulseBlackEdgeTransformCenterJumpPixels",
+                quality.get("maxBlackEdgeTransformCenterJumpPixels", 1.0),
+            )
+        )
+        scale_jump_limit = float(
+            quality.get(
+                "maxScalePulseBlackEdgeTransformScaleJumpPercent",
+                quality.get("maxBlackEdgeTransformScaleJumpPercent", 0.08),
+            )
+        )
+        scale_p2p_limit = float(
+            quality.get(
+                "maxScalePulseBlackEdgeTransformScalePulsePeakToPeakPercent",
+                quality.get("maxBlackEdgeTransformScalePulsePeakToPeakPercent", 0.12),
+            )
+        )
+        scale_derivative_limit = float(
+            quality.get(
+                "maxScalePulseBlackEdgeTransformScaleDerivativeP95PercentPerFrame",
+                quality.get("maxBlackEdgeTransformScaleDerivativeP95PercentPerFrame", 0.04),
+            )
+        )
+        rotation_jump_limit = float(
+            quality.get(
+                "maxScalePulseBlackEdgeTransformRotationJumpDegrees",
+                quality.get("maxBlackEdgeTransformRotationJumpDegrees", 0.08),
+            )
+        )
+        tracking_ratio = finite_float(transform_summary.get("trackingRatio"))
+        outside_ratio = finite_float(transform_summary.get("maxBlackOutsideRatio"))
+        center_jump = finite_float(transform_summary.get("maxCenterJumpPixels"))
+        scale_jump = finite_float(transform_summary.get("maxScaleJumpPercent"))
+        scale_p2p = finite_float(transform_summary.get("maxScalePulsePeakToPeakPercent"))
+        scale_derivative = finite_float(transform_summary.get("scaleDerivativeP95PercentPerFrame"))
+        rotation_jump = finite_float(transform_summary.get("maxRotationJumpDegrees"))
+        pulse_frame_count = int(transform_summary.get("pulseFrameCount") or 0)
+        reasons: list[str] = []
+        if not enabled:
+            reasons.append("disabled")
+        elif remove_black_edges and not allow_with_remove_black_edges:
+            reasons.append("Remove Black Edges is on; black-edge transform disambiguation requires a crop-off diagnostic")
+        elif not bool(transform_summary.get("required")):
+            reasons.append("black-edge transform diagnostic is not required for this case")
+        elif not bool(transform_summary.get("enabled")):
+            reasons.append("black-edge transform diagnostic unavailable")
+        elif pulse_frame_count < min_pulse_frames:
+            reasons.append(f"black-edge transform frames {pulse_frame_count} below {min_pulse_frames}")
+        elif tracking_ratio < min_tracking_ratio:
+            reasons.append(
+                f"tracking ratio {tracking_ratio:.3f} below {min_tracking_ratio:.3f}"
+            )
+        elif outside_ratio < min_outside_ratio:
+            reasons.append(
+                f"outside black ratio {outside_ratio:.4f} below {min_outside_ratio:.4f}"
+            )
+        else:
+            if center_jump > center_jump_limit:
+                reasons.append(f"center jump {center_jump:.3f}px exceeds {center_jump_limit:.3f}px")
+            if scale_jump > scale_jump_limit:
+                reasons.append(f"scale jump {scale_jump:.3f}% exceeds {scale_jump_limit:.3f}%")
+            if scale_p2p > scale_p2p_limit:
+                reasons.append(f"scale p2p {scale_p2p:.3f}% exceeds {scale_p2p_limit:.3f}%")
+            if scale_derivative > scale_derivative_limit:
+                reasons.append(
+                    f"scale derivative {scale_derivative:.3f}%/frame exceeds "
+                    f"{scale_derivative_limit:.3f}%/frame"
+                )
+            if rotation_jump > rotation_jump_limit:
+                reasons.append(
+                    f"rotation jump {rotation_jump:.3f}deg exceeds {rotation_jump_limit:.3f}deg"
+                )
+        stable = enabled and not reasons
+        return {
+            "enabled": enabled,
+            "stable": stable,
+            "reason": "stable black-edge transform; optical-flow scale pulse is not crop pulse"
+            if stable
+            else "; ".join(reasons),
+            "trackingRatio": tracking_ratio,
+            "pulseFrameCount": pulse_frame_count,
+            "maxBlackOutsideRatio": outside_ratio,
+            "maxCenterJumpPixels": center_jump,
+            "maxScaleJumpPercent": scale_jump,
+            "maxScalePulsePeakToPeakPercent": scale_p2p,
+            "scaleDerivativeP95PercentPerFrame": scale_derivative,
+            "maxRotationJumpDegrees": rotation_jump,
+            "thresholds": {
+                "minScalePulseBlackEdgeTransformTrackingRatio": min_tracking_ratio,
+                "minScalePulseBlackEdgeTransformFrames": min_pulse_frames,
+                "minScalePulseBlackEdgeTransformOutsideRatio": min_outside_ratio,
+                "maxScalePulseBlackEdgeTransformCenterJumpPixels": center_jump_limit,
+                "maxScalePulseBlackEdgeTransformScaleJumpPercent": scale_jump_limit,
+                "maxScalePulseBlackEdgeTransformScalePulsePeakToPeakPercent": scale_p2p_limit,
+                "maxScalePulseBlackEdgeTransformScaleDerivativeP95PercentPerFrame": scale_derivative_limit,
+                "maxScalePulseBlackEdgeTransformRotationJumpDegrees": rotation_jump_limit,
+            },
+        }
+
+    scale_pulse_evidence = black_edge_scale_pulse_evidence()
+    scale_pulse_confirmed_not_crop = bool(scale_pulse_evidence.get("stable"))
+
+    def add_scale_pulse_failure(message: str) -> None:
+        if scale_pulse_confirmed_not_crop:
+            suppressed_failures.append(message)
+        else:
+            failures.append(message)
 
     def add_source_ratio_failure(
         label: str,
@@ -1530,6 +1723,7 @@ def summarize_failures(
         baseline_key: str,
         ratio_key: str,
         unit: str = "",
+        suppress_with_black_edge_transform: bool = False,
     ) -> None:
         if ratio_key not in quality:
             return
@@ -1542,10 +1736,14 @@ def summarize_failures(
         ratio_limit = float(quality[ratio_key])
         source_limit = baseline_float * ratio_limit
         if value > source_limit:
-            failures.append(
+            message = (
                 f"{label} {value:.3f}{unit} exceeds source baseline "
                 f"{baseline_float:.3f}{unit} * {ratio_limit:.3f} = {source_limit:.3f}{unit}"
             )
+            if suppress_with_black_edge_transform and scale_pulse_confirmed_not_crop:
+                suppressed_failures.append(message)
+            else:
+                failures.append(message)
 
     if not scale_rows:
         operation_failures.append("no scale-analysis frames were produced from the recording")
@@ -1592,19 +1790,19 @@ def summarize_failures(
             f"{max_cumulative_zoom_range:.3f}% exceeds {cumulative_zoom_range_limit:.3f}%"
         )
     if max_scale_pulse_peak_to_peak > scale_pulse_peak_to_peak_limit:
-        failures.append(
+        add_scale_pulse_failure(
             "scale pulse peak-to-peak "
             f"{max_scale_pulse_peak_to_peak:.3f}% exceeds {scale_pulse_peak_to_peak_limit:.3f}%"
         )
     if scale_pulse_derivative_p95 > scale_pulse_derivative_p95_limit:
-        failures.append(
+        add_scale_pulse_failure(
             "scale pulse derivative p95 "
             f"{scale_pulse_derivative_p95:.3f}%/frame exceeds {scale_pulse_derivative_p95_limit:.3f}%/frame"
         )
     if max_scale_pulse_run > scale_pulse_run_limit:
-        failures.append(f"scale pulse run {max_scale_pulse_run} exceeds {scale_pulse_run_limit}")
+        add_scale_pulse_failure(f"scale pulse run {max_scale_pulse_run} exceeds {scale_pulse_run_limit}")
     if scale_pulse_frame_ratio > scale_pulse_frame_ratio_limit:
-        failures.append(
+        add_scale_pulse_failure(
             "scale pulse frame ratio "
             f"{scale_pulse_frame_ratio:.3f} exceeds {scale_pulse_frame_ratio_limit:.3f}"
         )
@@ -1653,6 +1851,7 @@ def summarize_failures(
         "maxScalePulsePeakToPeakPercent",
         "maxScalePulsePeakToPeakSourceRatio",
         unit="%",
+        suppress_with_black_edge_transform=True,
     )
     add_source_ratio_failure(
         "scale pulse derivative p95",
@@ -1660,6 +1859,7 @@ def summarize_failures(
         "maxScalePulseDerivativeP95PercentPerFrame",
         "maxScalePulseDerivativeP95SourceRatio",
         unit="%/frame",
+        suppress_with_black_edge_transform=True,
     )
 
     summary = {
@@ -1692,6 +1892,9 @@ def summarize_failures(
         "scalePulseFrameCount": len(scale_pulse_rows),
         "scalePulseFrameRatio": scale_pulse_frame_ratio,
         "maxScalePulseRunFrames": max_scale_pulse_run,
+        "scalePulseBlackEdgeTransformEvidence": scale_pulse_evidence,
+        "scalePulseSuppressedFailureCount": len(suppressed_failures),
+        "scalePulseSuppressedFailures": suppressed_failures,
         "cumulativeScalePathFrameCount": len(cumulative_zoom_rows),
         "lowTrackingRatio": low_inlier_ratio,
         "scaleQualityRatio": scale_quality_ratio,
@@ -1739,6 +1942,8 @@ def summarize_failures(
             ),
         },
         "sourceBaseline": source_baseline,
+        "metricPixelScaleX": pixel_scale_x,
+        "metricPixelScaleY": pixel_scale_y,
     }
     return not failures, failures, summary
 
@@ -1769,6 +1974,7 @@ def main() -> int:
     case = json.loads(args.case.read_text(encoding="utf-8"))
     quality = dict(case.get("quality", {}))
     source_baseline = case.get("sourceBaseline", {})
+    remove_black_edges = bool(case.get("removeBlackEdges", True))
     case_viewer_roi = roi_from_case(case["viewerRoi"], "viewerRoi")
     viewer_roi = parse_roi(args.viewer_roi) if args.viewer_roi else case_viewer_roi
     content_roi = scale_roi_to_viewer(
@@ -1866,6 +2072,8 @@ def main() -> int:
         clamp_roi(ridge_roi, viewer_roi[2], viewer_roi[3], "ridge")
     if ridge_reference_roi is not None:
         clamp_roi(ridge_reference_roi, viewer_roi[2], viewer_roi[3], "ridgeReference")
+    metric_pixel_scale_x = viewer_roi[2] / max(1.0, float(case_viewer_roi[2]))
+    metric_pixel_scale_y = viewer_roi[3] / max(1.0, float(case_viewer_roi[3]))
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     edge_rows: list[dict[str, Any]] = []
@@ -2067,16 +2275,16 @@ def main() -> int:
             row[f"{key}Residual"] = abs(float(row[key]) - median)
     for row in edge_rows:
         row["edgeMarginPx"] = max(
-            float(row["left"]),
-            float(row["right"]),
-            float(row["top"]),
-            float(row["bottom"]),
+            float(row["left"]) / metric_pixel_scale_x,
+            float(row["right"]) / metric_pixel_scale_x,
+            float(row["top"]) / metric_pixel_scale_y,
+            float(row["bottom"]) / metric_pixel_scale_y,
         )
         row["edgeResidualPx"] = max(
-            float(row["leftResidual"]),
-            float(row["rightResidual"]),
-            float(row["topResidual"]),
-            float(row["bottomResidual"]),
+            float(row["leftResidual"]) / metric_pixel_scale_x,
+            float(row["rightResidual"]) / metric_pixel_scale_x,
+            float(row["topResidual"]) / metric_pixel_scale_y,
+            float(row["bottomResidual"]) / metric_pixel_scale_y,
         )
 
     scale_medians = rolling_median([float(row["scalePercent"]) for row in scale_rows], median_window)
@@ -2105,14 +2313,37 @@ def main() -> int:
             and int(row.get("previousFrame", -1)) == int(previous_scale_row.get("frame", -2))
             and bool(previous_scale_row.get("ptsIntervalIrregularFrame"))
         )
+        previous_capture_hold = (
+            previous_scale_row is not None
+            and int(row.get("previousFrame", -1)) == int(previous_scale_row.get("frame", -2))
+            and (
+                bool(previous_scale_row.get("nearDuplicateFrame"))
+                or bool(previous_scale_row.get("cadenceHoldFrame"))
+            )
+        )
         next_scale_row = scale_rows[index + 1] if index + 1 < len(scale_rows) else None
         next_pts_irregular = (
             next_scale_row is not None
             and int(next_scale_row.get("previousFrame", -1)) == int(row.get("frame", -2))
             and bool(next_scale_row.get("ptsIntervalIrregularFrame"))
         )
+        next_capture_hold = (
+            next_scale_row is not None
+            and int(next_scale_row.get("previousFrame", -1)) == int(row.get("frame", -2))
+            and (
+                bool(next_scale_row.get("nearDuplicateFrame"))
+                or bool(next_scale_row.get("cadenceHoldFrame"))
+            )
+        )
         pts_cadence_affected = bool(row.get("ptsIntervalIrregularFrame")) or previous_pts_irregular or next_pts_irregular
+        capture_hold_affected = (
+            bool(row.get("nearDuplicateFrame"))
+            or bool(row.get("cadenceHoldFrame"))
+            or previous_capture_hold
+            or next_capture_hold
+        )
         row["ptsCadenceAffectedFrame"] = pts_cadence_affected
+        row["captureHoldAffectedFrame"] = capture_hold_affected
         if exclude_pts_irregular_from_scale_pulse and pts_cadence_affected:
             row["scalePulseExcludedForPtsCadence"] = True
         previous_scale_row = row
@@ -2122,6 +2353,9 @@ def main() -> int:
             "ptsIntervalIrregularFrame": bool(row.get("ptsIntervalIrregularFrame")),
             "ptsCadenceAffectedFrame": bool(row.get("ptsCadenceAffectedFrame")),
             "scalePulseExcludedForPtsCadence": bool(row.get("scalePulseExcludedForPtsCadence")),
+            "nearDuplicateFrame": bool(row.get("nearDuplicateFrame")),
+            "cadenceHoldFrame": bool(row.get("cadenceHoldFrame")),
+            "captureHoldAffectedFrame": bool(row.get("captureHoldAffectedFrame")),
         }
         for row in scale_rows
     }
@@ -2179,6 +2413,8 @@ def main() -> int:
         median_window,
         pulse_median_window,
         pulse_peak_window,
+        metric_pixel_scale_x,
+        metric_pixel_scale_y,
     )
 
     zoom_path_rows = [row for row in scale_rows if bool(row.get("cumulativeScalePathOk"))]
@@ -2271,7 +2507,19 @@ def main() -> int:
     max_placeholder_ratio = float(quality.get("maxOperationMissingProxyPlaceholderFrameRatio", 0.02))
     max_placeholder_run_limit = int(quality.get("maxOperationMissingProxyPlaceholderRunFrames", 2))
 
-    passed, failures, summary = summarize_failures(filtered_scales, filtered_edges, quality, source_baseline)
+    black_edge_transform_passed, black_edge_transform_failures, black_edge_transform_summary = (
+        summarize_black_edge_transform(filtered_black_edge_transforms, quality)
+    )
+    passed, failures, summary = summarize_failures(
+        filtered_scales,
+        filtered_edges,
+        quality,
+        source_baseline,
+        black_edge_transform_summary,
+        remove_black_edges,
+        metric_pixel_scale_x,
+        metric_pixel_scale_y,
+    )
     if placeholder_ratio > max_placeholder_ratio or max_placeholder_run > max_placeholder_run_limit:
         operation_failure = (
             "recording shows Final Cut Pro Missing Proxy/source-media placeholder: "
@@ -2287,13 +2535,12 @@ def main() -> int:
         quality,
         effective_sample_fps,
         source_baseline,
+        metric_pixel_scale_x,
+        metric_pixel_scale_y,
     )
     if ridge_roi is not None and not ridge_passed:
         failures.extend(ridge_failures)
         passed = False
-    black_edge_transform_passed, black_edge_transform_failures, black_edge_transform_summary = (
-        summarize_black_edge_transform(filtered_black_edge_transforms, quality)
-    )
     if not black_edge_transform_passed:
         failures.extend(black_edge_transform_failures)
         passed = False
@@ -2348,12 +2595,15 @@ def main() -> int:
             "frameCount": frame_count,
             "durationSeconds": duration,
             "caseDurationSeconds": case_duration,
+            "removeBlackEdges": remove_black_edges,
             "evaluationDurationSeconds": evaluation_duration,
             "evaluationEndSeconds": cutoff_end,
             "sampleStep": sample_step,
             "sampleFps": effective_sample_fps,
             "targetSampleFps": sample_fps,
             "sourceFrameRate": source_frame_rate,
+            "metricPixelScaleX": metric_pixel_scale_x,
+            "metricPixelScaleY": metric_pixel_scale_y,
             "capturedFpsRatio": captured_fps_ratio,
             "minCapturedFpsRatio": min_captured_fps_ratio,
             "sampleEveryCapturedFrame": sample_every_captured_frame,
@@ -2487,7 +2737,13 @@ def main() -> int:
         reverse=True,
     )[:diagnostic_spikes_per_kind]
     ridge_spikes = sorted(
-        [row for row in filtered_ridge_rows if bool(row.get("trackingOk"))],
+        [
+            row
+            for row in filtered_ridge_rows
+            if bool(row.get("trackingOk"))
+            and not bool(row.get("ridgeExcludedForCaptureHold"))
+            and not bool(row.get("ridgeExcludedForPtsCadence"))
+        ],
         key=lambda row: float(row.get("ridgeHighFrequencyResidualPixels", 0.0)),
         reverse=True,
     )[:diagnostic_spikes_per_kind]
@@ -2668,7 +2924,9 @@ def main() -> int:
             f"max {summary['ridge']['maxHighFrequencyResidualPixels']:.3f}px, "
             f"p95 {summary['ridge']['highFrequencyResidualP95Pixels']:.3f}px, "
             f"vertical p95 {summary['ridge']['verticalResidualP95Pixels']:.3f}px, "
-            f"tracking {summary['ridge']['trackingRatio']:.3f}"
+            f"tracking {summary['ridge']['trackingRatio']:.3f}, "
+            f"hold excluded {summary['ridge']['captureHoldExcludedFrameCount']}, "
+            f"PTS excluded {summary['ridge']['ptsCadenceExcludedFrameCount']}"
         )
         print(
             "  ridge line/reference: "
