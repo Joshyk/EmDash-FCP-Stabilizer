@@ -2776,22 +2776,42 @@ capture_case() {
 			crop_y="$(viewer_roi_field "$viewer_roi" 1)"
 			crop_w="$(viewer_roi_field "$viewer_roi" 2)"
 			crop_h="$(viewer_roi_field "$viewer_roi" 3)"
-			if (( crop_w % 2 == 1 )); then
-				crop_w=$((crop_w - 1))
-			fi
-			if (( crop_h % 2 == 1 )); then
-				crop_h=$((crop_h - 1))
-			fi
-			"$ffmpeg_bin" -y -hide_banner \
-				-f avfoundation \
-				-framerate 60 \
-				-capture_cursor 0 \
-				-pixel_format bgr0 \
-				-i "1:none" \
-				-t "$record_seconds" \
-				-vf "crop=${crop_w}:${crop_h}:${crop_x}:${crop_y}" \
-				-an \
-				-c:v h264_videotoolbox \
+				if (( crop_w % 2 == 1 )); then
+					crop_w=$((crop_w - 1))
+				fi
+				if (( crop_h % 2 == 1 )); then
+					crop_h=$((crop_h - 1))
+				fi
+				local video_filter="crop=${crop_w}:${crop_h}:${crop_x}:${crop_y}"
+				if [[ "${STABILIZER_E2E_NORMALIZE_ROI_CAPTURE_TO_CASE:-1}" == "1" ]]; then
+					local case_roi
+					local target_w
+					local target_h
+					case_roi="$(case_viewer_roi "$case_file")"
+					target_w="$(viewer_roi_field "$case_roi" 2)"
+					target_h="$(viewer_roi_field "$case_roi" 3)"
+					if (( target_w % 2 == 1 )); then
+						target_w=$((target_w - 1))
+					fi
+					if (( target_h % 2 == 1 )); then
+						target_h=$((target_h - 1))
+					fi
+					video_filter="${video_filter},scale=${target_w}:${target_h}:flags=lanczos"
+					recording_viewer_roi="0,0,${target_w},${target_h}"
+					printf 'Normalizing ROI capture from %sx%s to case viewer %sx%s without dropping frames.\n' "$crop_w" "$crop_h" "$target_w" "$target_h"
+				else
+					recording_viewer_roi="$viewer_roi"
+				fi
+				"$ffmpeg_bin" -y -hide_banner \
+					-f avfoundation \
+					-framerate 60 \
+					-capture_cursor 0 \
+					-pixel_format bgr0 \
+					-i "1:none" \
+					-t "$record_seconds" \
+					-vf "$video_filter" \
+					-an \
+					-c:v h264_videotoolbox \
 				-b:v 8M \
 				-allow_sw 0 \
 				"$video_path" &
