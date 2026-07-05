@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json"
 ARTIFACT_ROOT="${STABILIZER_E2E_ARTIFACT_DIR:-/tmp/stabilizer_e2e}"
+FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
 
 usage() {
 	cat <<'USAGE'
@@ -133,8 +134,9 @@ PY
 }
 
 current_fcp_viewer_roi() {
+	[[ -f "$FCP_HELPER" ]] || fail "missing FCP helper: ${FCP_HELPER}"
 	local bounds_json
-	bounds_json="$(/usr/bin/osascript /Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript viewer-bounds-json)"
+	bounds_json="$(/usr/bin/osascript "$FCP_HELPER" viewer-bounds-json)"
 	viewer_bounds_points_to_pixel_roi "$bounds_json"
 }
 
@@ -2190,7 +2192,8 @@ open_case_project() {
 	wait_for_fcp_standard_window 500 \
 		|| fail "Final Cut Pro standard window did not become readable after opening ${library}"
 	sleep 0.5
-	/usr/bin/osascript /Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript handle-e2e-import-prompts 6 "$library" >/dev/null &
+	[[ -f "$FCP_HELPER" ]] || fail "missing FCP helper: ${FCP_HELPER}"
+	/usr/bin/osascript "$FCP_HELPER" handle-e2e-import-prompts 6 "$library" >/dev/null &
 	local import_prompt_pid=$!
 	if ! wait_for_ui_osascript "$import_prompt_pid" "E2E import prompt handling" 90 1; then
 		fail "could not complete E2E import prompt handling"
