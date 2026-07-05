@@ -18,6 +18,8 @@ Commands:
              Verify the current FCP UI state is recordable for the case.
   capture    Record the current FCP Viewer playback for the configured E2E case.
   evaluate   Evaluate an existing screen recording.
+  assert-recording-progress
+             Verify an existing recording keeps advancing through the case window.
   run        Capture, then evaluate.
 
 Options:
@@ -224,6 +226,36 @@ with open(path, encoding="utf-8") as handle:
 for part in dotted.split("."):
     value = value[part]
 print("true" if bool(value) else "false")
+PY
+}
+
+case_record_seconds() {
+	local file="$1"
+	python3 - "$file" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+duration = float(case.get("durationSeconds", 0.0) or 0.0)
+recording = case.get("recording") or {}
+explicit = recording.get("recordSeconds", case.get("recordSeconds"))
+if explicit is None:
+    pad = float(recording.get("recordPadSeconds", 2.0))
+    value = math.ceil(duration + pad)
+else:
+    value = float(explicit)
+if value <= 0.0:
+    raise SystemExit("recordSeconds must be positive")
+if duration > 0.0 and value + 1e-9 < duration:
+    raise SystemExit(
+        f"recordSeconds {value:.3f} must be >= durationSeconds {duration:.3f}"
+    )
+if abs(value - round(value)) < 1e-9:
+    print(str(int(round(value))))
+else:
+    print(f"{value:.3f}".rstrip("0").rstrip("."))
 PY
 }
 
@@ -2303,12 +2335,7 @@ capture_case() {
 	case_id="$(json_value "$case_file" caseId)"
 	duration="$(json_value "$case_file" durationSeconds)"
 	timecode_entry="$(json_value "$case_file" startTimecodeEntry)"
-	record_seconds="$(python3 - "$duration" <<'PY'
-import math
-import sys
-print(int(math.ceil(float(sys.argv[1]) + 2.0)))
-PY
-)"
+	record_seconds="$(case_record_seconds "$case_file")"
 
 	mkdir -p "$(dirname "$video_path")"
 	if [[ "$assume_current" == "0" && "$assume_prepared" == "0" ]]; then
@@ -2466,6 +2493,153 @@ evaluate_case() {
 	"${args[@]}"
 }
 
+assert_recorded_playback_progress() {
+	local case_file="$1"
+	local video_path="$2"
+	local viewer_roi="$3"
+	[[ -f "$video_path" ]] || fail "video does not exist for playback-progress guard: $video_path"
+	[[ -n "$viewer_roi" ]] || fail "viewer ROI is required for playback-progress guard"
+	python3 - "$case_file" "$video_path" "$viewer_roi" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+video_path = Path(sys.argv[2])
+roi_values = [int(part) for part in sys.argv[3].split(",")]
+if len(roi_values) != 4:
+    raise SystemExit("viewer ROI must be x,y,w,h")
+roi_x, roi_y, roi_w, roi_h = roi_values
+if roi_w <= 0 or roi_h <= 0:
+    raise SystemExit("viewer ROI width/height must be positive")
+
+quality = case.get("quality") or {}
+recording = case.get("recording") or {}
+guard = recording.get("progressGuard") or {}
+enabled = bool(guard.get("enabled", quality.get("requireEveryCapturedFrame", False)))
+if not enabled:
+    print("Recorded playback progress guard disabled for this case.")
+    raise SystemExit(0)
+
+max_hold_run = int(guard.get("maxHoldRunFrames", quality.get("maxCadenceHoldRunFrames", 0)))
+if max_hold_run <= 0:
+    print("Recorded playback progress guard has no positive maxHoldRunFrames; skipped.")
+    raise SystemExit(0)
+
+mean_threshold = float(
+    guard.get(
+        "meanAbsDiffThreshold",
+        quality.get("cadenceHoldMeanAbsDiffThreshold", quality.get("nearDuplicateMeanAbsDiffThreshold", 0.08)),
+    )
+)
+p95_threshold = float(
+    guard.get(
+        "p95AbsDiffThreshold",
+        quality.get("cadenceHoldP95AbsDiffThreshold", quality.get("nearDuplicateP95AbsDiffThreshold", 0.5)),
+    )
+)
+ignore_start = float(guard.get("ignoreStartSeconds", quality.get("ignoreStartSeconds", 1.0)))
+ignore_end = float(guard.get("ignoreEndSeconds", quality.get("ignoreEndSeconds", 0.5)))
+case_duration = float(case.get("durationSeconds", 0.0) or 0.0)
+
+cap = cv2.VideoCapture(str(video_path))
+if not cap.isOpened():
+    raise SystemExit(f"could not open video for playback-progress guard: {video_path}")
+fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+if fps <= 1.0:
+    raise SystemExit("could not determine video fps for playback-progress guard")
+frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+duration = frame_count / fps if frame_count > 0 else 0.0
+evaluation_duration = case_duration if case_duration > 0.0 else duration
+if duration > 0.0 and evaluation_duration > 0.0:
+    evaluation_duration = min(duration, evaluation_duration)
+cutoff_end = max(0.0, evaluation_duration - ignore_end) if evaluation_duration > 0.0 else float("inf")
+
+ok, first_frame = cap.read()
+if not ok:
+    raise SystemExit(f"could not read first frame for playback-progress guard: {video_path}")
+height, width = first_frame.shape[:2]
+if roi_x == 0 and roi_y == 0 and (roi_w > width or roi_h > height):
+    print(
+        "Recorded playback progress guard using the full ROI-cropped recording "
+        f"frame {width}x{height} instead of configured ROI {roi_w}x{roi_h}.",
+        file=sys.stderr,
+    )
+    roi_w = width
+    roi_h = height
+if roi_x < 0 or roi_y < 0 or roi_x + roi_w > width or roi_y + roi_h > height:
+    raise SystemExit(
+        f"viewer ROI {roi_x},{roi_y},{roi_w},{roi_h} is outside recording frame {width}x{height}"
+    )
+cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+previous_gray = None
+previous_frame_index = None
+current_run = 0
+current_start_frame = None
+current_start_time = None
+best_run = 0
+best_start_frame = None
+best_end_frame = None
+best_start_time = None
+best_end_time = None
+sampled_pairs = 0
+frame_index = -1
+while True:
+    ok, frame = cap.read()
+    if not ok:
+        break
+    frame_index += 1
+    timestamp = frame_index / fps
+    if timestamp < ignore_start or timestamp > cutoff_end:
+        continue
+    viewer = frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w]
+    gray = cv2.cvtColor(viewer, cv2.COLOR_BGR2GRAY)
+    if previous_gray is not None and previous_frame_index is not None:
+        diff = cv2.absdiff(previous_gray, gray)
+        mean_diff = float(diff.mean())
+        p95_diff = float(np.percentile(diff, 95))
+        adjacent = frame_index == previous_frame_index + 1
+        hold = adjacent and mean_diff <= mean_threshold and p95_diff <= p95_threshold
+        sampled_pairs += 1
+        if hold:
+            if current_run == 0:
+                current_start_frame = frame_index
+                current_start_time = timestamp
+            current_run += 1
+            if current_run > best_run:
+                best_run = current_run
+                best_start_frame = current_start_frame
+                best_end_frame = frame_index
+                best_start_time = current_start_time
+                best_end_time = timestamp
+        else:
+            current_run = 0
+            current_start_frame = None
+            current_start_time = None
+    previous_gray = gray
+    previous_frame_index = frame_index
+
+if sampled_pairs <= 0:
+    raise SystemExit("playback-progress guard could not sample frame pairs in the evaluation window")
+if best_run > max_hold_run:
+    raise SystemExit(
+        "Recorded playback progress guard failed: "
+        f"hold/freeze run {best_run} frame(s) from frame {best_start_frame} to {best_end_frame} "
+        f"({best_start_time:.3f}-{best_end_time:.3f}s) exceeds limit {max_hold_run}; "
+        f"evaluation window {ignore_start:.3f}-{cutoff_end:.3f}s; video={video_path}"
+    )
+print(
+    "Recorded playback progress guard passed: "
+    f"max hold/freeze run {best_run} frame(s) <= {max_hold_run}; "
+    f"evaluation window {ignore_start:.3f}-{cutoff_end:.3f}s."
+)
+PY
+}
+
 command_name="${1:-}"
 if [[ -z "$command_name" ]]; then
 	usage
@@ -2598,6 +2772,17 @@ case "$command_name" in
 				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
 				exit "$status"
 			fi
+			progress_viewer_roi="${recording_viewer_roi:-$viewer_roi}"
+			if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$progress_viewer_roi" ]]; then
+				progress_viewer_roi="$(viewer_roi_zero_origin "$progress_viewer_roi")"
+			fi
+			if assert_recorded_playback_progress "$case_file" "$video_path" "$progress_viewer_roi"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
 			write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" 0
 		else
 			status=$?
@@ -2623,6 +2808,20 @@ case "$command_name" in
 			exit "$status"
 		fi
 		;;
+	assert-recording-progress)
+		total_start="$(now_epoch_seconds)"
+		progress_viewer_roi="$viewer_roi"
+		if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$progress_viewer_roi" ]]; then
+			progress_viewer_roi="$(viewer_roi_zero_origin "$progress_viewer_roi")"
+		fi
+		if assert_recorded_playback_progress "$case_file" "$video_path" "$progress_viewer_roi"; then
+			write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "" "" "" "" 0
+		else
+			status=$?
+			write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "" "" "" "" "$status"
+			exit "$status"
+		fi
+		;;
 	run)
 		total_start="$(now_epoch_seconds)"
 		capture_start="$(now_epoch_seconds)"
@@ -2638,6 +2837,17 @@ case "$command_name" in
 				exit "$status"
 			fi
 			if assert_no_playback_fallbacks "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
+			progress_viewer_roi="${recording_viewer_roi:-$viewer_roi}"
+			if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$progress_viewer_roi" ]]; then
+				progress_viewer_roi="$(viewer_roi_zero_origin "$progress_viewer_roi")"
+			fi
+			if assert_recorded_playback_progress "$case_file" "$video_path" "$progress_viewer_roi"; then
 				:
 			else
 				status=$?

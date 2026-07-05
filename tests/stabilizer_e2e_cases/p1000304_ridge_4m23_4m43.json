@@ -10,6 +10,14 @@
   "startTimecodeEntry": "00042332",
   "endTimecode": "00:04:43;32",
   "durationSeconds": 20.0,
+  "recording": {
+    "recordSeconds": 21.0,
+    "contract": "Record one second beyond the 20s target for recorder startup; scoring still uses every captured frame in the case evaluation window.",
+    "progressGuard": {
+      "enabled": true,
+      "maxHoldRunFrames": 30
+    }
+  },
   "playbackMode": "Proxy Only",
   "removeBlackEdges": true,
   "expectedEffect": "Tokyo Walking Stabilizer",

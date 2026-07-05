@@ -28,6 +28,8 @@ Commands:
   assert-prepared Verify Proxy Only, target project/effect, timecode, and Viewer ROI.
   capture         Capture the FCP Viewer through the existing E2E harness.
   evaluate        Evaluate an existing recording through the existing E2E harness.
+  assert-recording-progress
+                  Check an existing recording for long playback hold/freeze runs.
   run             Capture and evaluate through the existing E2E harness.
 
 Options:
@@ -36,7 +38,8 @@ Options:
   --output-dir PATH            Diagnostics output directory.
   --viewer-roi x,y,w,h         Explicit absolute FCP Viewer ROI in capture pixels.
   --capture-backend NAME       screencapture, avfoundation-roi, or screencapturekit-roi.
-                                capture/run default to avfoundation-roi unless
+                                capture/run/assert-recording-progress default to
+                                avfoundation-roi unless
                                 STABILIZER_E2E_CAPTURE_BACKEND is set.
   --visual-review STATE        passed, failed, or not-reviewed.
   --assume-current-fcp-state   Pass through to the E2E harness.
@@ -384,7 +387,7 @@ case_file="$(resolve_case_path "$case_file")"
 
 if [[ "$capture_backend_explicit" == "0" && -z "${STABILIZER_E2E_CAPTURE_BACKEND:-}" ]]; then
 	case "$command_name" in
-		capture|run)
+		capture|run|assert-recording-progress)
 			harness_args+=("--capture-backend" "avfoundation-roi")
 			printf 'Defaulting FCP E2E capture backend to avfoundation-roi for cadence-sensitive Proxy Only video evidence.\n' >&2
 			;;
@@ -417,7 +420,7 @@ case "$command_name" in
 	patterns)
 		print_patterns
 		;;
-	prepare|assert-prepared|capture|evaluate|run)
+	prepare|assert-prepared|capture|evaluate|assert-recording-progress|run)
 		run_harness "$command_name"
 		;;
 	-h|--help|help)
