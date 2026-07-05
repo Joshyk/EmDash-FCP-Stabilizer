@@ -19,7 +19,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FCPBUNDLE_SOURCE_CACHE = REPO_ROOT / ".cache" / "fcpbundle_sources"
-FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 10
+FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION = 11
 VIDEO_MEDIA_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -269,6 +269,28 @@ def fcpbundle_original_media_link_reason(media_path: Path) -> str | None:
     return None
 
 
+def fcpbundle_proxy_media_path(event_dir: Path, media_path: Path) -> Path | None:
+    proxy_dir = event_dir / "Transcoded Media" / "Proxy Media"
+    if not proxy_dir.is_dir():
+        return None
+    exact = proxy_dir / media_path.name
+    if exact.is_file() or exact.is_symlink():
+        return exact
+    stem = media_path.stem
+    suffix = media_path.suffix.lower()
+    candidates = [
+        item
+        for item in proxy_dir.iterdir()
+        if (item.is_file() or item.is_symlink())
+        and not item.name.startswith(".")
+        and item.suffix.lower() == suffix
+        and (item.stem == stem or item.stem.startswith(f"{stem} (fcp"))
+    ]
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
 def fcpbundle_media_signature_item(event_dir: Path, media_path: Path) -> dict:
     entry_stat = media_path.lstat()
     item = {
@@ -307,7 +329,15 @@ def fcpbundle_media_signature_item(event_dir: Path, media_path: Path) -> dict:
 
 
 def fcpbundle_signature(bundle_path: Path, media_files: list[tuple[Path, Path]]) -> dict:
-    items = [fcpbundle_media_signature_item(event_dir, media_path) for event_dir, media_path in media_files]
+    items = []
+    for event_dir, media_path in media_files:
+        item = fcpbundle_media_signature_item(event_dir, media_path)
+        proxy_path = fcpbundle_proxy_media_path(event_dir, media_path)
+        if proxy_path is not None:
+            item["proxyMedia"] = fcpbundle_media_signature_item(event_dir, proxy_path)
+        else:
+            item["proxyMedia"] = None
+        items.append(item)
     return {
         "syntheticSchemaVersion": FCPBUNDLE_SYNTHETIC_SCHEMA_VERSION,
         "bundlePath": str(bundle_path),
@@ -589,6 +619,13 @@ def materialize_fcpbundle_info(bundle_path: Path) -> Path:
                 "media-rep",
                 {"kind": "original-media", "sig": attrs["uid"], "src": path_to_file_url(media_path)},
             )
+            proxy_path = fcpbundle_proxy_media_path(event_dir, media_path)
+            if proxy_path is not None:
+                ET.SubElement(
+                    asset,
+                    "media-rep",
+                    {"kind": "proxy-media", "sig": attrs["uid"], "src": path_to_file_url(proxy_path)},
+                )
             ET.SubElement(event_node, "asset-clip", clip_attrs)
     try:
         ET.indent(root, space="  ")

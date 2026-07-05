@@ -131,7 +131,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
     "utf8"
   );
   const clipPath = path.join(originalMedia, "LibraryClip.mov");
-  const proxyPath = path.join(proxyMedia, "ProxyClip.mov");
+  const proxyPath = path.join(proxyMedia, "LibraryClip.mov");
   fs.writeFileSync(proxyPath, "");
   const ffmpeg = spawnSync("ffmpeg", [
     "-hide_banner",
@@ -171,7 +171,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.equal(payload.assetCount, 1);
   const info = fs.readFileSync(payload.infoPath, "utf8");
   const sourceManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(payload.infoPath), "source-manifest.json"), "utf8"));
-  assert.equal(sourceManifest.syntheticSchemaVersion, 10);
+  assert.equal(sourceManifest.syntheticSchemaVersion, 11);
   assert.equal(sourceManifest.colorProcessing, "wide-hdr");
   assert.match(info, /<library colorProcessing="wide-hdr">/);
   assert.doesNotMatch(info, /name="FFVideoFormat160x90"/);
@@ -185,7 +185,8 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   assert.match(info, /<asset[^>]+audioSources="1"/);
   assert.match(info, /<asset[^>]+audioChannels="1"/);
   assert.match(info, /<asset[^>]+audioRate="48000"/);
-  assert.match(info, /<media-rep[^>]+sig="[A-F0-9]{32}"/);
+  assert.match(info, /<media-rep kind="original-media"[^>]+sig="[A-F0-9]{32}"/);
+  assert.match(info, /<media-rep kind="proxy-media"[^>]+LibraryClip\.mov/);
   assert.match(info, /<asset-clip[^>]+start="55847\/15s"/);
   assert.match(info, /<asset-clip[^>]+tcStart="55847\/15s"/);
   assert.match(info, /<asset-clip[^>]+tcFormat="NDF"[^>]+audioRole="dialogue"/);
@@ -445,6 +446,61 @@ test("build_stabilizer_fcpxml_import inserts Stabilizer filter", () => {
   assert.match(info, /Host Analysis Cache Identity/);
   assert.doesNotMatch(info, /nameOverride=/);
   assert.doesNotMatch(info, /videoOverride=/);
+});
+
+test("build_stabilizer_fcpxml_import adds matching external proxy media refs", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-import-proxy-ref-"));
+  const originalDir = path.join(tmp, "Final Cut Original Media", "2022-08-09");
+  const proxyDir = path.join(tmp, "Final Cut Proxy Media", "2022-08-09");
+  fs.mkdirSync(originalDir, { recursive: true });
+  fs.mkdirSync(proxyDir, { recursive: true });
+  const originalPath = path.join(originalDir, "P1000307.mov");
+  const proxyPath = path.join(proxyDir, "P1000307.mov");
+  fs.writeFileSync(originalPath, "");
+  fs.writeFileSync(proxyPath, "");
+  const targetEventRoot = path.join(tmp, "Target Library.fcpbundle", "P1000307 Stabilized Review");
+  const targetOriginalDir = path.join(targetEventRoot, "Original Media");
+  const targetProxyDir = path.join(targetEventRoot, "Transcoded Media", "Proxy Media");
+  fs.mkdirSync(targetOriginalDir, { recursive: true });
+  fs.mkdirSync(targetProxyDir, { recursive: true });
+  const targetOriginalPath = path.join(targetOriginalDir, "P1000307.mov");
+  const targetProxyPath = path.join(targetProxyDir, "P1000307.mov");
+  fs.writeFileSync(targetOriginalPath, "");
+  fs.writeFileSync(targetProxyPath, "");
+  const pkg = path.join(tmp, "Source.fcpxmld");
+  writeFcpxmld(
+    pkg,
+    `<asset id="r2" name="P1000307" uid="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" start="0s" duration="30030/30000s" hasVideo="1" format="r1">
+      <media-rep kind="original-media" src="${pathToFileURL(originalPath).href}"/>
+    </asset>`
+  );
+  const analysis = analysisResult("r2", "P1000307");
+  analysis.mediaPath = originalPath;
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(analysisPath, JSON.stringify({ status: "ok", results: [analysis] }), "utf8");
+
+  const payload = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    pkg,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--target-event-name",
+    "P1000307 Stabilized Review",
+    "--target-event-root",
+    targetEventRoot,
+  ]);
+
+  const info = fs.readFileSync(payload.infoPath, "utf8");
+  const expectedTargetOriginal = fs.realpathSync(targetOriginalPath);
+  const expectedTargetProxy = fs.realpathSync(targetProxyPath);
+  assert.doesNotMatch(info, /uid="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"/);
+  assert.match(info, /<event name="P1000307 Stabilized Review">/);
+  assert.match(info, new RegExp(`<media-rep kind="original-media"[^>]+${pathToFileURL(expectedTargetOriginal).href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(info, new RegExp(`<media-rep kind="proxy-media"[^>]+${pathToFileURL(expectedTargetProxy).href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
 test("build_stabilizer_fcpxml_import attaches video refs to parent clips", () => {

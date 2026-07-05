@@ -566,6 +566,95 @@ function buildCacheRootFromAnalysis(analysis) {
   return analysis.cacheRoot;
 }
 
+const ANALYSIS_TIMING_STAGE_KEYS = [
+  "decoderCopyNextFrameSeconds",
+  "metalEncodeSeconds",
+  "metalCompleteSeconds",
+  "preparedPathSeconds",
+  "cacheBuildSeconds",
+  "cacheWriteSeconds",
+];
+
+function numericTimingValue(timings, key) {
+  const value = Number(timings && timings[key]);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function analysisTimingBreakdown(timings) {
+  if (!timings || !Number.isFinite(Number(timings.totalWallSeconds))) {
+    return null;
+  }
+  const totalWallSeconds = Math.max(1e-9, Number(timings.totalWallSeconds));
+  const stages = ANALYSIS_TIMING_STAGE_KEYS.map((key) => {
+    const seconds = numericTimingValue(timings, key);
+    return {
+      key,
+      seconds,
+      wallRatio: seconds / totalWallSeconds,
+    };
+  });
+  const bottleneck = stages.reduce((winner, stage) => (
+    stage.seconds > winner.seconds ? stage : winner
+  ), { key: "none", seconds: 0, wallRatio: 0 });
+  return {
+    totalWallSeconds,
+    readerLaneWallSeconds: numericTimingValue(timings, "readerLaneWallSeconds"),
+    readFramesWallSeconds: numericTimingValue(timings, "readFramesWallSeconds"),
+    framesPerWallSecond: numericTimingValue(timings, "framesPerWallSecond"),
+    readerLaneCount: Number(timings.readerLaneCount || 0),
+    stages,
+    bottleneck,
+  };
+}
+
+function analysisBenchmarkPayload({
+  sourcePath,
+  sourceName,
+  sourceIndex,
+  totalSources,
+  analysisPath,
+  analysis,
+  summary = null,
+}) {
+  const results = Array.isArray(analysis && analysis.results) ? analysis.results : [];
+  return {
+    schemaVersion: 1,
+    benchmarkType: "stabilizer-analysis-wall-clock",
+    generatedAtEpochMs: Date.now(),
+    appVersion: packageInfo.version,
+    gitCommit: GIT_COMMIT,
+    cacheSchemaVersion: CACHE_SCHEMA_VERSION,
+    sourcePath,
+    sourceName,
+    sourceIndex,
+    totalSources,
+    analysisPath,
+    summaryAnalysisTimings: summary && summary.analysisTimings ? summary.analysisTimings : null,
+    results: results.map((result) => ({
+      assetId: result.assetId,
+      name: result.name,
+      footageFileName: result.footageFileName,
+      mediaKind: result.mediaKind,
+      sampleScalePercent: result.sampleScalePercent,
+      sampleWidth: result.sampleWidth,
+      sampleHeight: result.sampleHeight,
+      frameCount: result.frameCount,
+      frameDurationSeconds: result.frameDurationSeconds,
+      rangeDurationSeconds: result.rangeDurationSeconds,
+      cacheSchemaVersion: result.cacheSchemaVersion,
+      cacheIdentityShort: result.cacheIdentity ? String(result.cacheIdentity).slice(0, 64) : "",
+      analysisTimings: result.analysisTimings || null,
+      timingBreakdown: analysisTimingBreakdown(result.analysisTimings),
+    })),
+  };
+}
+
+async function writeJsonFile(pathname, payload) {
+  await fsp.mkdir(path.dirname(pathname), { recursive: true });
+  await fsp.writeFile(pathname, JSON.stringify(payload, null, 2) + "\n", "utf8");
+  return pathname;
+}
+
 function outputDirValue(value, sourcePath) {
   const defaultImportsDir = defaultImportsDirForSource(sourcePath);
   const resolved = expandPath(isFcpBundleSource(sourcePath) ? defaultImportsDir : (value || defaultImportsDir || OUTPUT_DIR));
@@ -676,7 +765,16 @@ async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId
     onStderr: progressLineHandler(id, sourcePrefix.replace(/:\s*$/, "")),
   });
   const analysisPath = path.join(dir, "analysis.json");
-  await fsp.writeFile(analysisPath, JSON.stringify(analysis, null, 2), "utf8");
+  await writeJsonFile(analysisPath, analysis);
+  const analysisBenchmarkPath = path.join(dir, "analysis_benchmark.json");
+  await writeJsonFile(analysisBenchmarkPath, analysisBenchmarkPayload({
+    sourcePath,
+    sourceName,
+    sourceIndex: sourceIndex + 1,
+    totalSources,
+    analysisPath,
+    analysis,
+  }));
   const analysisCacheRoot = buildCacheRootFromAnalysis(analysis);
 
   progress("building", `${sourcePrefix}Building analyzed-footage Stabilizer FCPXMLD import package with review project.`, progressPatch);
@@ -727,6 +825,7 @@ async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId
     const firstFailure = validationFailures[0];
     const reason = (firstFailure.failures || [firstFailure.error || "validation failed"])[0];
     const error = new Error(`FCPXMLD validation failed for ${path.basename(firstFailure.packageDirectory || firstFailure.outputPackage || "package")}: ${reason}`);
+    error.analysisBenchmarkPath = analysisBenchmarkPath;
     error.validations = validations;
     error.packages = packages;
     error.analysis = analysis;
@@ -758,6 +857,7 @@ async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId
   if (installFailures.length) {
     const firstFailure = installFailures[0];
     const error = new Error(`Event cache install failed for ${path.basename(firstFailure.packageDirectory || firstFailure.outputPackage || "package")}: ${firstFailure.error || "install failed"}`);
+    error.analysisBenchmarkPath = analysisBenchmarkPath;
     error.eventCacheInstallations = eventCacheInstallations;
     error.validations = validations;
     error.packages = packages;
@@ -768,6 +868,15 @@ async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId
 
   const source = { sourcePath, sourceName };
   const summary = batchSummary(analysis, build, validations, eventCacheInstallations, source);
+  await writeJsonFile(analysisBenchmarkPath, analysisBenchmarkPayload({
+    sourcePath,
+    sourceName,
+    sourceIndex: sourceIndex + 1,
+    totalSources,
+    analysisPath,
+    analysis,
+    summary,
+  }));
 
   return {
     status: "ok",
@@ -781,6 +890,7 @@ async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId
     cacheRoot: analysisCacheRoot,
     importsDir,
     analysisPath,
+    analysisBenchmarkPath,
     resultCount: (analysis.results || []).length,
     results: analysis.results || [],
     skipped: analysis.skipped || [],
@@ -801,6 +911,43 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
   const results = Array.isArray(analysis.results) ? analysis.results : [];
   const skipped = Array.isArray(analysis.skipped) ? analysis.skipped : [];
   const packages = Array.isArray(build.packages) ? build.packages : [];
+  const timingRows = results
+    .map((result) => result && result.analysisTimings)
+    .filter((timings) => timings && Number.isFinite(Number(timings.totalWallSeconds)));
+  const timingTotals = timingRows.reduce((totals, timings) => {
+    for (const key of [
+      "totalWallSeconds",
+      "readFramesWallSeconds",
+      "readerLaneWallSeconds",
+      "decoderCopyNextFrameSeconds",
+      "metalEncodeSeconds",
+      "metalCompleteSeconds",
+      "preparedPathSeconds",
+      "cacheBuildSeconds",
+      "cacheWriteSeconds",
+    ]) {
+      totals[key] = Number(totals[key] || 0) + Number(timings[key] || 0);
+    }
+    totals.frameCount += Number(timings.frameCount || 0);
+    return totals;
+  }, { frameCount: 0 });
+  const analyzedFrames = results.reduce((sum, result) => sum + Number(result.frameCount || 0), 0);
+  const timingSummary = timingRows.length
+    ? {
+        resultCount: timingRows.length,
+        frameCount: analyzedFrames,
+        totalWallSeconds: timingTotals.totalWallSeconds || 0,
+        readFramesWallSeconds: timingTotals.readFramesWallSeconds || 0,
+        readerLaneWallSeconds: timingTotals.readerLaneWallSeconds || 0,
+        decoderCopyNextFrameSeconds: timingTotals.decoderCopyNextFrameSeconds || 0,
+        metalEncodeSeconds: timingTotals.metalEncodeSeconds || 0,
+        metalCompleteSeconds: timingTotals.metalCompleteSeconds || 0,
+        preparedPathSeconds: timingTotals.preparedPathSeconds || 0,
+        cacheBuildSeconds: timingTotals.cacheBuildSeconds || 0,
+        cacheWriteSeconds: timingTotals.cacheWriteSeconds || 0,
+        framesPerWallSecond: analyzedFrames / Math.max(1e-9, timingTotals.totalWallSeconds || 0),
+      }
+    : null;
   const validationPass = validations.filter((item) => item.status === "pass" && item.importReady === true).length;
   const validationFail = Math.max(0, validations.length - validationPass);
   const eventCacheInstallPass = eventCacheInstallations.filter((item) => item.status === "ok").length;
@@ -813,6 +960,7 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
     validationFailCount: validationFail,
     eventCacheInstallPassCount: eventCacheInstallPass,
     eventCacheInstallFailCount: eventCacheInstallFail,
+    analysisTimings: timingSummary,
     fcpImportReady: packages.length > 0
       && validationFail === 0
       && validationPass === packages.length
@@ -848,6 +996,7 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
         sampleHeight: pkg.sampleHeight,
         cacheSchemaVersion: pkg.cacheSchemaVersion,
         cacheIdentityShort: pkg.cacheIdentityShort,
+        analysisTimings: pkg.analysisTimings || null,
         eventCacheInstalled,
         eventCacheRoot: installation && installation.cacheRoot,
         sourceEffectStack: pkg.sourceEffectStack || null,
@@ -880,6 +1029,7 @@ function failedSourceResult(sourceJob, error, sourceIndex, totalSources) {
     totalSources,
     error: error.message || "analysis failed",
     resultCount: 0,
+    analysisBenchmarkPath: error.analysisBenchmarkPath || null,
     results: Array.isArray(analysis.results) ? analysis.results : [],
     skipped: Array.isArray(analysis.skipped) ? analysis.skipped : [],
     packages: Array.isArray(build.packages) ? build.packages : [],
@@ -893,6 +1043,33 @@ function combineSourceSummaries(sourceResults) {
   const summaries = sourceResults.map((result) => result.summary || {});
   const packages = summaries.flatMap((summary) => Array.isArray(summary.packages) ? summary.packages : []);
   const failedClips = summaries.flatMap((summary) => Array.isArray(summary.failedClips) ? summary.failedClips : []);
+  const timingSummaries = summaries
+    .map((summary) => summary.analysisTimings)
+    .filter((timings) => timings && Number.isFinite(Number(timings.totalWallSeconds)));
+  const analysisTimings = timingSummaries.length
+    ? timingSummaries.reduce((totals, timings) => {
+        for (const key of [
+          "resultCount",
+          "frameCount",
+          "totalWallSeconds",
+          "readFramesWallSeconds",
+          "readerLaneWallSeconds",
+          "decoderCopyNextFrameSeconds",
+          "metalEncodeSeconds",
+          "metalCompleteSeconds",
+          "preparedPathSeconds",
+          "cacheBuildSeconds",
+          "cacheWriteSeconds",
+        ]) {
+          totals[key] = Number(totals[key] || 0) + Number(timings[key] || 0);
+        }
+        return totals;
+      }, {})
+    : null;
+  if (analysisTimings) {
+    analysisTimings.framesPerWallSecond = Number(analysisTimings.frameCount || 0)
+      / Math.max(1e-9, Number(analysisTimings.totalWallSeconds || 0));
+  }
   const sourceSuccessCount = sourceResults.filter((result) => result.status === "ok").length;
   const sourceFailureCount = Math.max(0, sourceResults.length - sourceSuccessCount);
   const validationPassCount = summaries.reduce((sum, summary) => sum + Number(summary.validationPassCount || 0), 0);
@@ -910,6 +1087,7 @@ function combineSourceSummaries(sourceResults) {
     validationFailCount,
     eventCacheInstallPassCount,
     eventCacheInstallFailCount,
+    analysisTimings,
     fcpImportReady: sourceResults.length > 0
       && sourceFailureCount === 0
       && packages.length > 0
@@ -956,6 +1134,28 @@ async function runBatchAnalyzer(body, progress, forcedJobId) {
   const packages = successfulResults.flatMap((result) => Array.isArray(result.packages) ? result.packages : []);
   const validations = sourceResults.flatMap((result) => Array.isArray(result.validations) ? result.validations : []);
   const eventCacheInstallations = sourceResults.flatMap((result) => Array.isArray(result.eventCacheInstallations) ? result.eventCacheInstallations : []);
+  const analysisBenchmarkPath = path.join(JOB_DIR, id, "analysis_benchmark.json");
+  await writeJsonFile(analysisBenchmarkPath, {
+    schemaVersion: 1,
+    benchmarkType: "stabilizer-analysis-wall-clock-batch",
+    generatedAtEpochMs: Date.now(),
+    appVersion: packageInfo.version,
+    gitCommit: GIT_COMMIT,
+    cacheSchemaVersion: CACHE_SCHEMA_VERSION,
+    sourceCount: sourceJobs.length,
+    summaryAnalysisTimings: summary.analysisTimings || null,
+    sourceResults: sourceResults.map((result) => ({
+      status: result.status,
+      sourcePath: result.sourcePath,
+      sourceName: result.sourceName,
+      sourceIndex: result.sourceIndex,
+      totalSources: result.totalSources,
+      analysisPath: result.analysisPath || null,
+      analysisBenchmarkPath: result.analysisBenchmarkPath || null,
+      error: result.error || null,
+      summaryAnalysisTimings: result.summary && result.summary.analysisTimings ? result.summary.analysisTimings : null,
+    })),
+  });
   return {
     status: failedSources.length ? "partial" : "ok",
     jobId: id,
@@ -972,6 +1172,7 @@ async function runBatchAnalyzer(body, progress, forcedJobId) {
     validations,
     eventCacheInstallations,
     summary,
+    analysisBenchmarkPath,
     outputPackage: packages[0] && packages[0].outputPackage,
     outputPackages: packages.map((pkg) => pkg.outputPackage),
     onlyAnalyzedAssets: true,
@@ -1173,6 +1374,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  analysisBenchmarkPayload,
+  analysisTimingBreakdown,
   buildCacheRootFromAnalysis,
   cacheRootValue,
   combineSourceSummaries,

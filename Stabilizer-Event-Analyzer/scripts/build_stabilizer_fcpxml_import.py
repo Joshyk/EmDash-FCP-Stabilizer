@@ -22,6 +22,7 @@ from fcpxml_common import (
     file_url_to_path,
     local_name,
     parse_time,
+    path_to_file_url,
     resolve_info_path,
     resources,
     safe_file_component,
@@ -34,6 +35,25 @@ EFFECT_UID = "~/Effects.localized/Emdash Studios/Tokyo Walking Stabilizer/Tokyo 
 PARAM_PREFIX = "9999/10013/10016/3/10036"
 FILTER_NAMES = {EFFECT_NAME, "Tokyo Walking Stabilizer copy"}
 LEGACY_FILTER_NAMES = {"Stabilizer Transform"}
+STABILIZER_VISIBLE_DEFAULT_PARAMS = [
+    ("Footstep Jitter X Strength", 7, "1"),
+    ("Footstep Jitter Y Strength", 18, "1"),
+    ("Footstep Jitter Rotation Strength", 8, "0.5"),
+    ("Stride Wobble X Strength", 29, "1"),
+    ("Stride Wobble Y Strength", 30, "1"),
+    ("Stride Wobble Rotation Strength", 31, "0.5"),
+    ("Overall Strength", 1, "1"),
+    ("Far-field Warp Strength", 45, "0.5"),
+    ("Turn Smoothing Strength", 23, "2"),
+    ("Turn Detection Window", 9, "6"),
+    ("Remove Black Edges", 41, "1"),
+    ("Auto Crop Zoom-Out Time", 42, "10"),
+    ("Auto Crop Zoom-In Time", 43, "10"),
+    ("Auto Crop Hold Time", 44, "2"),
+    ("Sample Size", 19, "0"),
+    ("Edge Display Mode", 27, "1"),
+    ("Debug Overlay", 10, "0"),
+]
 PRE_EFFECT_CHILD_TAGS = {
     "note",
     "conform-rate",
@@ -162,6 +182,8 @@ def stabilizer_filter(ref: str, result: dict) -> ET.Element:
     schema = result.get("cacheSchemaVersion", 16)
     revision = str(zlib.adler32(identity.encode("utf-8")) % 999_983)
     node = ET.Element("filter-video", {"ref": ref, "name": EFFECT_NAME})
+    for name, parameter_id, value in STABILIZER_VISIBLE_DEFAULT_PARAMS:
+        add_param(node, name, parameter_id, value)
     add_param(node, "Host Analysis Status", 15, f"Persisted Analysis Loaded | Schema: {schema}")
     add_param(
         node,
@@ -463,10 +485,109 @@ def asset_uid_seed(asset: ET.Element) -> str:
     return "|".join(parts)
 
 
-def normalized_resource_copy(resource: ET.Element) -> ET.Element:
+def inferred_proxy_media_path(original_path: Path) -> Path | None:
+    sibling = original_path.parent.parent / "Transcoded Media" / "Proxy Media" / original_path.name
+    if sibling.is_file() or sibling.is_symlink():
+        return sibling
+    parts = list(original_path.parts)
+    for index, part in enumerate(parts):
+        if part != "Final Cut Original Media":
+            continue
+        candidate = Path(*parts[:index], "Final Cut Proxy Media", *parts[index + 1 :])
+        if candidate.is_file() or candidate.is_symlink():
+            return candidate
+    return None
+
+
+def event_media_path(event_root: Path, relative_dir: Path, file_name: str) -> Path | None:
+    media_dir = event_root / relative_dir
+    candidate = media_dir / file_name
+    if candidate.is_file() or candidate.is_symlink():
+        return candidate
+    if not media_dir.is_dir():
+        return None
+    target_lower = file_name.lower()
+    for child in media_dir.iterdir():
+        if child.name.lower() == target_lower and (child.is_file() or child.is_symlink()):
+            return child
+    return None
+
+
+def retarget_asset_media_reps(asset: ET.Element, target_event_root: Path | None) -> None:
+    if target_event_root is None:
+        return
+    event_root = target_event_root.expanduser().resolve()
+    if not event_root.is_dir():
+        raise ValueError(f"target Event root does not exist: {target_event_root}")
+    original_file_names: list[str] = []
+    for child in asset:
+        if local_name(child.tag) != "media-rep" or not child.attrib.get("src"):
+            continue
+        try:
+            source_path = file_url_to_path(child.attrib["src"])
+        except ValueError:
+            continue
+        file_name = source_path.name
+        if child.attrib.get("kind") == "original-media":
+            original_file_names.append(file_name)
+            target_path = event_media_path(event_root, Path("Original Media"), file_name)
+            if target_path is not None:
+                child.attrib["src"] = path_to_file_url(target_path)
+        elif child.attrib.get("kind") == "proxy-media":
+            target_path = event_media_path(event_root, Path("Transcoded Media") / "Proxy Media", file_name)
+            if target_path is not None:
+                child.attrib["src"] = path_to_file_url(target_path)
+
+    existing_proxy_srcs = {
+        child.attrib.get("src")
+        for child in asset
+        if local_name(child.tag) == "media-rep"
+        and child.attrib.get("kind") == "proxy-media"
+        and child.attrib.get("src")
+    }
+    for file_name in original_file_names:
+        proxy_path = event_media_path(event_root, Path("Transcoded Media") / "Proxy Media", file_name)
+        if proxy_path is None:
+            continue
+        proxy_src = path_to_file_url(proxy_path)
+        if proxy_src in existing_proxy_srcs:
+            continue
+        ET.SubElement(asset, "media-rep", {"kind": "proxy-media", "src": proxy_src})
+        existing_proxy_srcs.add(proxy_src)
+
+
+def ensure_proxy_media_rep(asset: ET.Element, uid: str) -> None:
+    existing_srcs = {
+        child.attrib.get("src")
+        for child in asset
+        if local_name(child.tag) == "media-rep" and child.attrib.get("src")
+    }
+    original_reps = [
+        child
+        for child in asset
+        if local_name(child.tag) == "media-rep"
+        and child.attrib.get("kind") == "original-media"
+        and child.attrib.get("src")
+    ]
+    for rep in original_reps:
+        try:
+            proxy_path = inferred_proxy_media_path(file_url_to_path(rep.attrib["src"]))
+        except ValueError:
+            continue
+        if proxy_path is None:
+            continue
+        proxy_src = path_to_file_url(proxy_path)
+        if proxy_src in existing_srcs:
+            continue
+        ET.SubElement(asset, "media-rep", {"kind": "proxy-media", "sig": uid, "src": proxy_src})
+        existing_srcs.add(proxy_src)
+
+
+def normalized_resource_copy(resource: ET.Element, target_event_root: Path | None = None) -> ET.Element:
     copied = copy.deepcopy(resource)
     if local_name(copied.tag) != "asset":
         return copied
+    retarget_asset_media_reps(copied, target_event_root)
     uid = copied.attrib.get("uid")
     if not uid:
         uid = stable_fcp_asset_uid(asset_uid_seed(copied))
@@ -474,6 +595,19 @@ def normalized_resource_copy(resource: ET.Element) -> ET.Element:
     for child in copied:
         if local_name(child.tag) == "media-rep" and child.attrib.get("src") and not child.attrib.get("sig"):
             child.attrib["sig"] = uid
+    ensure_proxy_media_rep(copied, uid)
+    return copied
+
+
+def analyzed_asset_resource_copy(asset: ET.Element, result: dict, target_event_root: Path | None = None) -> ET.Element:
+    copied = normalized_resource_copy(asset, target_event_root=target_event_root)
+    cache_identity = (result.get("cacheIdentity") or "").strip()
+    if cache_identity:
+        uid = stable_fcp_asset_uid(f"stabilizer-analyzed-import|{asset_uid_seed(copied)}|{cache_identity}")
+        copied.attrib["uid"] = uid
+        for child in copied:
+            if local_name(child.tag) == "media-rep" and child.attrib.get("src"):
+                child.attrib["sig"] = uid
     return copied
 
 
@@ -511,7 +645,13 @@ def review_project_name(source_root: ET.Element, event_name: str, asset_id: str 
     return f"{event_name} Stabilized Review"
 
 
-def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) -> ET.Element:
+def build_analyzed_only_tree(
+    source_root: ET.Element,
+    results: dict[str, dict],
+    *,
+    target_event_name: str | None = None,
+    target_event_root: Path | None = None,
+) -> ET.Element:
     root = ET.Element("fcpxml", dict(source_root.attrib))
     target_resources = ET.SubElement(root, "resources")
     copied_resource_ids: set[str] = set()
@@ -538,14 +678,17 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         for resource in (fmt, asset):
             resource_id = resource.attrib.get("id")
             if resource_id and resource_id not in copied_resource_ids:
-                target_resources.append(normalized_resource_copy(resource))
+                if resource is asset:
+                    target_resources.append(analyzed_asset_resource_copy(asset, results[asset_id], target_event_root=target_event_root))
+                else:
+                    target_resources.append(normalized_resource_copy(resource, target_event_root=target_event_root))
                 copied_resource_ids.add(resource_id)
     for resource_id in sorted(extra_resource_ids):
         if resource_id in copied_resource_ids:
             continue
         resource = resource_by_id(source_root, resource_id)
         if resource is not None:
-            target_resources.append(normalized_resource_copy(resource))
+            target_resources.append(normalized_resource_copy(resource, target_event_root=target_event_root))
             copied_resource_ids.add(resource_id)
 
     ref = ensure_effect_resource(root)
@@ -559,7 +702,7 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
         asset = resource_by_id(source_root, asset_id)
         source_clip = first_event_asset_clip(source_root, asset_id) or first_asset_clip(source_root, asset_id)
         effect_source_clip = effect_source_clips.get(asset_id)
-        event_name = source_event_names.get(asset_id) or fallback_event_name
+        event_name = target_event_name or source_event_names.get(asset_id) or fallback_event_name
         event = event_nodes.get(event_name)
         if event is None:
             event = ET.SubElement(library, "event", {"name": event_name})
@@ -604,8 +747,20 @@ def build_analyzed_only_tree(source_root: ET.Element, results: dict[str, dict]) 
     return root
 
 
-def build_single_asset_tree(source_root: ET.Element, asset_id: str, result: dict) -> ET.Element:
-    return build_analyzed_only_tree(source_root, {asset_id: result})
+def build_single_asset_tree(
+    source_root: ET.Element,
+    asset_id: str,
+    result: dict,
+    *,
+    target_event_name: str | None = None,
+    target_event_root: Path | None = None,
+) -> ET.Element:
+    return build_analyzed_only_tree(
+        source_root,
+        {asset_id: result},
+        target_event_name=target_event_name,
+        target_event_root=target_event_root,
+    )
 
 
 def output_package_path(output_dir: Path, source_path: Path) -> Path:
@@ -715,7 +870,7 @@ def source_effect_stack_unavailable_reason(source_path: Path, inherited_filter_c
         return None
     source = source_path.expanduser()
     if source.suffix == ".fcpbundle":
-        return "direct .fcpbundle sources expose Original Media only; export FCPXMLD from Final Cut Pro to inherit timeline effects"
+        return "direct .fcpbundle sources synthesize Original/Proxy media refs only; export FCPXMLD from Final Cut Pro to inherit timeline effects"
     return None
 
 
@@ -726,21 +881,34 @@ def analysis_manifest(
     result: dict,
     cache_root: str | None = None,
     cache_payload: dict | None = None,
+    target_event_name: str | None = None,
+    target_event_root: Path | None = None,
 ) -> dict:
     asset = resource_by_id(source_root, asset_id)
+    manifest_asset = normalized_resource_copy(asset, target_event_root=target_event_root) if asset is not None else None
     source_clip = first_event_asset_clip(source_root, asset_id) or first_asset_clip(source_root, asset_id)
     effect_source_clip = inherited_filter_source_clip(source_root, asset_id)
     effect_stack = inherited_filter_summary(effect_source_clip)
     unavailable_reason = source_effect_stack_unavailable_reason(source_path, effect_stack["inheritedFilterCount"])
-    source_event_name = event_name_by_asset_id(source_root).get(asset_id)
+    source_event_name = target_event_name or event_name_by_asset_id(source_root).get(asset_id)
+    event_root = str(target_event_root.expanduser().resolve()) if target_event_root is not None else event_root_for_source(source_path, source_event_name)
     media_reps = []
-    if asset is not None:
-        for child in asset:
+    if manifest_asset is not None:
+        for child in manifest_asset:
             if local_name(child.tag) == "media-rep":
                 media_reps.append({
                     "kind": child.attrib.get("kind"),
                     "src": child.attrib.get("src"),
                 })
+    media_path = result.get("mediaPath")
+    if manifest_asset is not None:
+        for child in manifest_asset:
+            if local_name(child.tag) == "media-rep" and child.attrib.get("kind") == "original-media" and child.attrib.get("src"):
+                try:
+                    media_path = str(file_url_to_path(child.attrib["src"]))
+                except ValueError:
+                    media_path = result.get("mediaPath")
+                break
     frame_count = result.get("frameCount")
     prepared_fields = (
         result.get("preparedMotionPath") is True
@@ -761,8 +929,8 @@ def analysis_manifest(
         "footageName": result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
         "footageFileName": result.get("footageFileName") or result.get("name") or (asset.attrib.get("name") if asset is not None else asset_id),
         "eventName": source_event_name,
-        "eventRoot": event_root_for_source(source_path, source_event_name),
-        "mediaPath": result.get("mediaPath"),
+        "eventRoot": event_root,
+        "mediaPath": media_path,
         "mediaKind": result.get("mediaKind"),
         "mediaReps": media_reps,
         "sourceMediaFingerprint": result.get("sourceMediaFingerprint") or result.get("firstFingerprint"),
@@ -784,6 +952,7 @@ def analysis_manifest(
         "cacheIdentityShort": short_identity(result.get("cacheIdentity")),
         "cacheFileName": result.get("cacheFileName"),
         "cacheRoot": cache_root,
+        "analysisTimings": result.get("analysisTimings"),
         "cachePayloadDirectory": (cache_payload or {}).get("cachePayloadDirectory"),
         "cachePayloadFiles": (cache_payload or {}).get("cachePayloadFiles") or [],
         "cachePayloadCacheFile": (cache_payload or {}).get("cachePayloadCacheFile"),
@@ -809,7 +978,16 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict], source_path: Path, output_dir: Path, cache_root: str | None) -> list[dict]:
+def build_per_footage_packages(
+    source_root: ET.Element,
+    results: dict[str, dict],
+    source_path: Path,
+    output_dir: Path,
+    cache_root: str | None,
+    *,
+    target_event_name: str | None = None,
+    target_event_root: Path | None = None,
+) -> list[dict]:
     packages = []
     output_dir.mkdir(parents=True, exist_ok=True)
     for asset_id, result in results.items():
@@ -821,11 +999,28 @@ def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict]
         fcpxmld_path = package_dir / f"{footage}.fcpxmld"
         fcpxmld_path.mkdir()
         info_path = fcpxmld_path / "Info.fcpxml"
-        tree = ET.ElementTree(build_single_asset_tree(source_root, asset_id, result))
+        tree = ET.ElementTree(
+            build_single_asset_tree(
+                source_root,
+                asset_id,
+                result,
+                target_event_name=target_event_name,
+                target_event_root=target_event_root,
+            )
+        )
         tree.write(info_path, encoding="utf-8", xml_declaration=True)
         manifest_path = package_dir / f"{footage}.analysis-manifest.json"
         cache_payload = copy_cache_payload(package_dir, footage, result, cache_root)
-        manifest = analysis_manifest(source_root, source_path, asset_id, result, cache_root=cache_root, cache_payload=cache_payload)
+        manifest = analysis_manifest(
+            source_root,
+            source_path,
+            asset_id,
+            result,
+            cache_root=cache_root,
+            cache_payload=cache_payload,
+            target_event_name=target_event_name,
+            target_event_root=target_event_root,
+        )
         write_json(manifest_path, manifest)
         packages.append({
             "assetId": asset_id,
@@ -844,6 +1039,7 @@ def build_per_footage_packages(source_root: ET.Element, results: dict[str, dict]
             "sampleWidth": result.get("sampleWidth"),
             "sampleHeight": result.get("sampleHeight"),
             "frameCount": result.get("frameCount"),
+            "analysisTimings": result.get("analysisTimings"),
             "preparedMotionPath": manifest["preparedMotionPath"],
             "sourceEffectStack": manifest["sourceEffectStack"],
         })
@@ -878,6 +1074,15 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         action="store_true",
         help="Build one import package directory per analyzed footage with a manifest next to the FCPXMLD.",
     )
+    parser.add_argument(
+        "--target-event-name",
+        help="Override the output Event name when importing into an existing Final Cut Pro Event.",
+    )
+    parser.add_argument(
+        "--target-event-root",
+        type=Path,
+        help="Retarget original/proxy media reps to this existing Final Cut Pro Event folder.",
+    )
     parser.add_argument("--cache-root", type=Path)
     return parser.parse_args(argv)
 
@@ -901,6 +1106,8 @@ def main(argv: Iterable[str]) -> int:
                     args.source_fcpxml,
                     args.output_dir,
                     str(args.cache_root or analysis.get("cacheRoot") or ""),
+                    target_event_name=args.target_event_name,
+                    target_event_root=args.target_event_root,
                 )
                 return emit(
                     {
@@ -930,7 +1137,12 @@ def main(argv: Iterable[str]) -> int:
         if not all("requestedAssetId" in result for result in results.values()):
             results = resolve_analysis_results(root, results)
         if args.only_analyzed_assets:
-            root = build_analyzed_only_tree(root, results)
+            root = build_analyzed_only_tree(
+                root,
+                results,
+                target_event_name=args.target_event_name,
+                target_event_root=args.target_event_root,
+            )
             tree = ET.ElementTree(root)
             tree.write(target_info, encoding="utf-8", xml_declaration=True)
             return emit(

@@ -52,6 +52,10 @@ private struct PersistedHostAnalysisCache: Codable {
     let pathX: [Float]?
     let pathY: [Float]?
     let pathRoll: [Float]?
+    let farFieldPathX: [Float]?
+    let farFieldPathY: [Float]?
+    let farFieldPathRoll: [Float]?
+    let farFieldConfidence: [Float]?
     let footstepPathX: [Float]?
     let footstepPathY: [Float]?
     let footstepPathRoll: [Float]?
@@ -211,8 +215,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 23
-    private static let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23]
+    private static let cacheSchemaVersion = 32
+    private static let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -283,6 +287,22 @@ final class StabilizerHostAnalysisStore {
         lock.lock()
         defer { lock.unlock() }
         return renderRevisionToken
+    }
+
+    @discardableResult
+    func notePlaybackPreparationReadyForRender(reason: String) -> Double {
+        lock.lock()
+        renderRevisionToken = Self.nextRenderInvalidationToken(after: renderRevisionToken)
+        let token = renderRevisionToken
+        lock.unlock()
+        os_log(
+            "Playback preparation render invalidation | token %.3f | %{public}@",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            token,
+            reason
+        )
+        return token
     }
 
     var infoText: String {
@@ -981,7 +1001,9 @@ final class StabilizerHostAnalysisStore {
         let preferredIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let preferredIdentity,
            !preferredIdentity.isEmpty {
-            _ = activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true)
+            if !activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true) {
+                _ = activatePersistentCache(matchingSourceIdentity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true)
+            }
         }
         if let expectedRange, expectedRange.isValid {
             _ = activateCompletedMemoryAnalysisIfNeeded(expectedRange: expectedRange)
@@ -1009,7 +1031,12 @@ final class StabilizerHostAnalysisStore {
             if let activeIdentity,
                !Self.cacheIdentity(activeIdentity, matches: expectedRange) {
                 let explicitPreferredIdentityMatchesActive = preferredIdentity == activeIdentity
-                if explicitPreferredIdentityMatchesActive,
+                let explicitPreferredSourceMatchesActive = Self.cacheIdentitySourceMatches(
+                    preferredIdentity,
+                    activeIdentity
+                )
+                let explicitPreferredCanNameActiveCache = explicitPreferredIdentityMatchesActive || explicitPreferredSourceMatchesActive
+                if explicitPreferredCanNameActiveCache,
                    Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange) {
                     installExplicitRenderTimeMappingIfNeeded(
                         renderTime: renderTime,
@@ -1022,21 +1049,33 @@ final class StabilizerHostAnalysisStore {
                     return analysis
                 }
                 if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
-                    let canUseExplicitPreferredIdentity = explicitPreferredIdentityMatchesActive
+                    let canUseExplicitPreferredIdentity = explicitPreferredCanNameActiveCache
                         && Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange)
+                    let canUseExplicitPreferredSource = explicitPreferredIdentityMatchesActive || explicitPreferredSourceMatchesActive
+                    let canUseRangeMismatchedPreview = Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange)
+                        || canUseExplicitPreferredIdentity
+                        || canUseExplicitPreferredSource
+                    if canUseRangeMismatchedPreview {
+                        installExplicitRenderTimeMappingIfNeeded(
+                            renderTime: renderTime,
+                            expectedRange: expectedRange,
+                            analysis: analysis
+                        )
+                    }
                     let mappedRenderSeconds = CMTimeGetSeconds(analysisRenderTime(for: renderTime, preparedAnalysis: analysis))
-                    if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity),
+                    if canUseRangeMismatchedPreview,
                        Self.renderSeconds(mappedRenderSeconds, isInside: analysis.frames) {
                         if unvalidatedPreviewStatusIsAlreadyActive(isScaledProxy: validationIssue.isScaledProxy) {
                             return analysis
                         }
                         os_log(
-                            "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ reason=%{public}@.",
+                            "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ sourceMatch=%{public}@ reason=%{public}@.",
                             log: stabilizerHostAnalysisLog,
                             type: .default,
                             activeIdentity,
                             Self.expectedRangeDescription(expectedRange),
                             canUseExplicitPreferredIdentity ? "yes" : "no",
+                            canUseExplicitPreferredSource ? "yes" : "no",
                             validationIssue.reason
                         )
                         if validationIssue.isScaledProxy {
@@ -1052,18 +1091,30 @@ final class StabilizerHostAnalysisStore {
                 if let rejectionReason = persistentCacheRejectionReason(for: analysis, validating: sourceImage, at: renderTime) {
                     guard activateNextPersistentCache(afterRejecting: rejectionReason, expectedRange: expectedRange, allowRangeMismatch: true) else {
                         if let validationIssue = StabilizerOriginalMediaPolicy.originalMediaValidationIssue(for: sourceImage) {
-                            let canUseExplicitPreferredIdentity = explicitPreferredIdentityMatchesActive
+                            let canUseExplicitPreferredIdentity = explicitPreferredCanNameActiveCache
                                 && Self.cacheIdentityDurationMatches(activeIdentity, expectedRange: expectedRange)
+                            let canUseExplicitPreferredSource = explicitPreferredIdentityMatchesActive || explicitPreferredSourceMatchesActive
+                            let canUseRangeMismatchedPreview = Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange)
+                                || canUseExplicitPreferredIdentity
+                                || canUseExplicitPreferredSource
+                            if canUseRangeMismatchedPreview {
+                                installExplicitRenderTimeMappingIfNeeded(
+                                    renderTime: renderTime,
+                                    expectedRange: expectedRange,
+                                    analysis: analysis
+                                )
+                            }
                             let mappedRenderSeconds = CMTimeGetSeconds(analysisRenderTime(for: renderTime, preparedAnalysis: analysis))
-                            if (Self.cacheIdentityStartMatches(activeIdentity, expectedRange: expectedRange) || canUseExplicitPreferredIdentity),
+                            if canUseRangeMismatchedPreview,
                                Self.renderSeconds(mappedRenderSeconds, isInside: analysis.frames) {
                                 os_log(
-                                    "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ reason=%{public}@ validation=%{public}@.",
+                                    "Using explicit range-mismatched Host Analysis cache before original-frame validation. identity=%{public}@ expectedRange=%{public}@ explicitPreferred=%{public}@ sourceMatch=%{public}@ reason=%{public}@ validation=%{public}@.",
                                     log: stabilizerHostAnalysisLog,
                                     type: .default,
                                     activeIdentity,
                                     Self.expectedRangeDescription(expectedRange),
                                     canUseExplicitPreferredIdentity ? "yes" : "no",
+                                    canUseExplicitPreferredSource ? "yes" : "no",
                                     validationIssue.reason,
                                     rejectionReason
                                 )
@@ -1307,7 +1358,7 @@ final class StabilizerHostAnalysisStore {
         defer {
             markCurrentPersistentCacheGenerationObserved()
         }
-        var candidateURLs = filteredPersistentCacheCandidateURLs()
+        var candidateURLs = filteredPersistentCacheCandidateURLs(expectedRange: expectedRange)
         var unusableCacheSummaries: [(status: HostAnalysisStatus, summary: String)] = []
         while !candidateURLs.isEmpty {
             let activeURL = candidateURLs.removeFirst()
@@ -1404,7 +1455,7 @@ final class StabilizerHostAnalysisStore {
         }
         lock.unlock()
 
-        for candidateURL in Self.persistentCacheCandidateURLs() {
+        for candidateURL in Self.persistentCacheCandidateURLs(exactIdentity: trimmedIdentity, expectedRange: expectedRange) {
             guard let candidate = Self.loadPersistentCache(at: candidateURL),
                   candidate.identity == trimmedIdentity,
                   (allowRangeMismatch || Self.cache(candidate.cache, matches: expectedRange))
@@ -1417,6 +1468,53 @@ final class StabilizerHostAnalysisStore {
             lock.unlock()
             markCurrentPersistentCacheGenerationObserved()
             NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache \(candidate.fileName) by saved clip identity.")
+            return true
+        }
+        return false
+    }
+
+    func activatePersistentCache(matchingSourceIdentity identity: String, expectedRange: HostAnalysisExpectedRange? = nil, allowRangeMismatch: Bool = false) -> Bool {
+        let trimmedIdentity = identity.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedIdentity.isEmpty else {
+            return false
+        }
+        guard allowRangeMismatch || Self.cacheIdentity(trimmedIdentity, matches: expectedRange) else {
+            return false
+        }
+
+        lock.lock()
+        if let activeIdentity = activePersistentCacheIdentity,
+           preparedAnalysis != nil,
+           Self.cacheIdentitySourceMatches(trimmedIdentity, activeIdentity),
+           (allowRangeMismatch || Self.cacheIdentity(activeIdentity, matches: expectedRange)) {
+            lock.unlock()
+            return true
+        }
+        if let cached = persistentCachesByIdentity.values.first(where: {
+            Self.cacheIdentitySourceMatches(trimmedIdentity, $0.identity)
+                && (allowRangeMismatch || Self.cache($0.cache, matches: expectedRange))
+        }) {
+            installPersistentCacheLocked(cached)
+            lock.unlock()
+            markCurrentPersistentCacheGenerationObserved()
+            NSLog("TokyoWalkingStabilizer: reactivated Host Analysis cache \(cached.fileName) by saved source identity.")
+            return true
+        }
+        lock.unlock()
+
+        for candidateURL in Self.persistentCacheCandidateURLs(preferredSourceIdentity: trimmedIdentity, expectedRange: expectedRange) {
+            guard let candidate = Self.loadPersistentCache(at: candidateURL),
+                  Self.cacheIdentitySourceMatches(trimmedIdentity, candidate.identity),
+                  (allowRangeMismatch || Self.cache(candidate.cache, matches: expectedRange))
+            else {
+                continue
+            }
+            lock.lock()
+            installPersistentCacheLocked(candidate)
+            persistentCacheCandidates.removeAll { $0.lastPathComponent == candidate.fileName }
+            lock.unlock()
+            markCurrentPersistentCacheGenerationObserved()
+            NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache \(candidate.fileName) by saved source identity.")
             return true
         }
         return false
@@ -1659,6 +1757,10 @@ final class StabilizerHostAnalysisStore {
             pathX: prepared.pathX,
             pathY: prepared.pathY,
             pathRoll: prepared.pathRoll,
+            farFieldPathX: prepared.farFieldPathX,
+            farFieldPathY: prepared.farFieldPathY,
+            farFieldPathRoll: prepared.farFieldPathRoll,
+            farFieldConfidence: prepared.farFieldConfidence,
             footstepPathX: prepared.footstepPathX,
             footstepPathY: prepared.footstepPathY,
             footstepPathRoll: prepared.footstepPathRoll,
@@ -1779,6 +1881,10 @@ final class StabilizerHostAnalysisStore {
                 pathX: analysis.pathX,
                 pathY: analysis.pathY,
                 pathRoll: analysis.pathRoll,
+                farFieldPathX: analysis.farFieldPathX,
+                farFieldPathY: analysis.farFieldPathY,
+                farFieldPathRoll: analysis.farFieldPathRoll,
+                farFieldConfidence: analysis.farFieldConfidence,
                 footstepPathX: analysis.footstepPathX,
                 footstepPathY: analysis.footstepPathY,
                 footstepPathRoll: analysis.footstepPathRoll,
@@ -2328,8 +2434,8 @@ final class StabilizerHostAnalysisStore {
         bumpRevisionLocked()
     }
 
-    private func filteredPersistentCacheCandidateURLs() -> [URL] {
-        let candidateURLs = Self.persistentCacheCandidateURLs()
+    private func filteredPersistentCacheCandidateURLs(expectedRange: HostAnalysisExpectedRange? = nil) -> [URL] {
+        let candidateURLs = Self.persistentCacheCandidateURLs(expectedRange: expectedRange)
         lock.lock()
         let rejectedFileNames = rejectedPersistentCacheFileNames
         lock.unlock()
@@ -2542,6 +2648,35 @@ final class StabilizerHostAnalysisStore {
             && rangeDurationKey == timeKey(expectedRange.durationSeconds)
     }
 
+    private static func cacheIdentitySourceMatches(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs = lhs?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let rhs = rhs?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !lhs.isEmpty,
+              !rhs.isEmpty
+        else {
+            return false
+        }
+        func sourceFields(_ identity: String) -> [Substring]? {
+            let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
+            let startIndex = parts.count >= 10 ? 1 : 0
+            guard parts.count > startIndex + 8 else {
+                return nil
+            }
+            var fields = Array(parts[(startIndex + 3)...(startIndex + 8)])
+            if parts.count > startIndex + 10 {
+                fields.append(parts[startIndex + 10])
+            }
+            return fields
+        }
+        guard let lhsFields = sourceFields(lhs),
+              let rhsFields = sourceFields(rhs),
+              lhsFields.count == rhsFields.count
+        else {
+            return false
+        }
+        return zip(lhsFields, rhsFields).allSatisfy { $0 == $1 }
+    }
+
     private static func cacheIdentityStartMatches(_ identity: String, expectedRange: HostAnalysisExpectedRange?) -> Bool {
         guard let expectedRange, expectedRange.isValid else {
             return true
@@ -2583,6 +2718,14 @@ final class StabilizerHostAnalysisStore {
         }
         return timeKey(cache.rangeStartSeconds) == timeKey(expectedRange.startSeconds)
             && timeKey(cache.rangeDurationSeconds) == timeKey(expectedRange.durationSeconds)
+    }
+
+    private static func cacheIndexEntry(_ entry: PersistedHostAnalysisIndexEntry, matches expectedRange: HostAnalysisExpectedRange?) -> Bool {
+        guard let expectedRange, expectedRange.isValid else {
+            return true
+        }
+        return timeKey(entry.rangeStartSeconds) == timeKey(expectedRange.startSeconds)
+            && timeKey(entry.rangeDurationSeconds) == timeKey(expectedRange.durationSeconds)
     }
 
     private static func validFrameDurationSeconds(_ frameDuration: CMTime, frames: [StabilizerAnalysisFrame]) -> Double {
@@ -2775,6 +2918,10 @@ final class StabilizerHostAnalysisStore {
             cache.pathX,
             cache.pathY,
             cache.pathRoll,
+            cache.schemaVersion >= 31 ? cache.farFieldPathX : cache.pathX,
+            cache.schemaVersion >= 31 ? cache.farFieldPathY : cache.pathY,
+            cache.schemaVersion >= 31 ? cache.farFieldPathRoll : cache.pathRoll,
+            cache.schemaVersion >= 31 ? cache.farFieldConfidence : cache.warpConfidence,
             cache.footstepPathX,
             cache.footstepPathY,
             cache.footstepPathRoll,
@@ -2801,6 +2948,10 @@ final class StabilizerHostAnalysisStore {
            let pathX = cache.pathX,
            let pathY = cache.pathY,
            let pathRoll = cache.pathRoll,
+           let persistedFarFieldPathX = cache.schemaVersion >= 31 ? cache.farFieldPathX : cache.pathX,
+           let persistedFarFieldPathY = cache.schemaVersion >= 31 ? cache.farFieldPathY : cache.pathY,
+           let persistedFarFieldPathRoll = cache.schemaVersion >= 31 ? cache.farFieldPathRoll : cache.pathRoll,
+           let persistedFarFieldConfidence = cache.schemaVersion >= 31 ? cache.farFieldConfidence : cache.warpConfidence,
            let footstepPathX = cache.footstepPathX,
            let footstepPathY = cache.footstepPathY,
            let footstepPathRoll = cache.footstepPathRoll,
@@ -2827,6 +2978,10 @@ final class StabilizerHostAnalysisStore {
                 pathX: pathX,
                 pathY: pathY,
                 pathRoll: pathRoll,
+                farFieldPathX: persistedFarFieldPathX,
+                farFieldPathY: persistedFarFieldPathY,
+                farFieldPathRoll: persistedFarFieldPathRoll,
+                farFieldConfidence: persistedFarFieldConfidence,
                 footstepPathX: footstepPathX,
                 footstepPathY: footstepPathY,
                 footstepPathRoll: footstepPathRoll,
@@ -2859,6 +3014,10 @@ final class StabilizerHostAnalysisStore {
             ("pathX", cache.pathX),
             ("pathY", cache.pathY),
             ("pathRoll", cache.pathRoll),
+            ("farFieldPathX", cache.schemaVersion >= 31 ? cache.farFieldPathX : cache.pathX),
+            ("farFieldPathY", cache.schemaVersion >= 31 ? cache.farFieldPathY : cache.pathY),
+            ("farFieldPathRoll", cache.schemaVersion >= 31 ? cache.farFieldPathRoll : cache.pathRoll),
+            ("farFieldConfidence", cache.schemaVersion >= 31 ? cache.farFieldConfidence : cache.warpConfidence),
             ("footstepPathX", cache.footstepPathX),
             ("footstepPathY", cache.footstepPathY),
             ("footstepPathRoll", cache.footstepPathRoll),
@@ -2897,9 +3056,17 @@ final class StabilizerHostAnalysisStore {
         return nil
     }
 
-    private static func persistentCacheCandidateURLs() -> [URL] {
+    private static func persistentCacheCandidateURLs(
+        exactIdentity: String? = nil,
+        preferredSourceIdentity: String? = nil,
+        expectedRange: HostAnalysisExpectedRange? = nil
+    ) -> [URL] {
         var candidateURLs: [URL] = []
         var seenPaths = Set<String>()
+        let trimmedExactIdentity = exactIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasExactIdentityFilter = trimmedExactIdentity?.isEmpty == false
+        let trimmedPreferredSourceIdentity = preferredSourceIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasSourceIdentityFilter = trimmedPreferredSourceIdentity?.isEmpty == false
 
         func appendCandidateURL(_ url: URL) {
             guard FileManager.default.fileExists(atPath: url.path),
@@ -2913,6 +3080,7 @@ final class StabilizerHostAnalysisStore {
         for directoryURL in cacheDirectoryURLs {
             let directoryCacheIndexURL = cacheIndexURL(in: directoryURL)
             let directoryCacheStorageURL = cacheStorageDirectoryURL(in: directoryURL)
+            var hasSupportedIndex = false
             if FileManager.default.fileExists(atPath: directoryCacheIndexURL.path) {
                 do {
                     let data = try Data(contentsOf: directoryCacheIndexURL)
@@ -2920,7 +3088,21 @@ final class StabilizerHostAnalysisStore {
                     if !supportedCacheSchemaVersions.contains(index.schemaVersion) {
                         NSLog("TokyoWalkingStabilizer: ignoring Host Analysis cache index with unsupported schema \(index.schemaVersion) at \(directoryCacheIndexURL.path).")
                     } else {
-                        for entry in index.entries {
+                        hasSupportedIndex = true
+                        let sortedEntries = sortedPersistentCacheIndexEntries(
+                            index.entries,
+                            preferredSourceIdentity: trimmedPreferredSourceIdentity,
+                            expectedRange: expectedRange
+                        )
+                        for entry in sortedEntries {
+                            if hasExactIdentityFilter,
+                               entry.cacheIdentity != trimmedExactIdentity {
+                                continue
+                            }
+                            if hasSourceIdentityFilter,
+                               !cacheIdentitySourceMatches(trimmedPreferredSourceIdentity, entry.cacheIdentity) {
+                                continue
+                            }
                             appendCandidateURL(directoryCacheStorageURL.appendingPathComponent(entry.cacheFileName, isDirectory: false))
                         }
                     }
@@ -2929,7 +3111,8 @@ final class StabilizerHostAnalysisStore {
                 }
             }
 
-            if let cacheURLs = try? FileManager.default.contentsOfDirectory(
+            if !(hasSupportedIndex && (hasExactIdentityFilter || hasSourceIdentityFilter)),
+               let cacheURLs = try? FileManager.default.contentsOfDirectory(
                 at: directoryCacheStorageURL,
                 includingPropertiesForKeys: [.contentModificationDateKey],
                 options: [.skipsHiddenFiles]
@@ -2946,10 +3129,46 @@ final class StabilizerHostAnalysisStore {
                 }
             }
 
-            appendCandidateURL(cacheURL(in: directoryURL))
+            if !(hasSupportedIndex && (hasExactIdentityFilter || hasSourceIdentityFilter)) {
+                appendCandidateURL(cacheURL(in: directoryURL))
+            }
         }
 
         return candidateURLs
+    }
+
+    private static func sortedPersistentCacheIndexEntries(
+        _ entries: [PersistedHostAnalysisIndexEntry],
+        preferredSourceIdentity: String?,
+        expectedRange: HostAnalysisExpectedRange?
+    ) -> [PersistedHostAnalysisIndexEntry] {
+        entries.sorted { left, right in
+            let leftScore = persistentCacheIndexEntryPriority(left, preferredSourceIdentity: preferredSourceIdentity, expectedRange: expectedRange)
+            let rightScore = persistentCacheIndexEntryPriority(right, preferredSourceIdentity: preferredSourceIdentity, expectedRange: expectedRange)
+            if leftScore != rightScore {
+                return leftScore < rightScore
+            }
+            return left.createdAt > right.createdAt
+        }
+    }
+
+    private static func persistentCacheIndexEntryPriority(
+        _ entry: PersistedHostAnalysisIndexEntry,
+        preferredSourceIdentity: String?,
+        expectedRange: HostAnalysisExpectedRange?
+    ) -> Int {
+        let sourceMatches = cacheIdentitySourceMatches(preferredSourceIdentity, entry.cacheIdentity)
+        let rangeMatches = cacheIndexEntry(entry, matches: expectedRange)
+        switch (sourceMatches, rangeMatches) {
+        case (true, true):
+            return 0
+        case (true, false):
+            return 1
+        case (false, true):
+            return 2
+        case (false, false):
+            return 3
+        }
     }
 
     private static func loadPersistentCache(at url: URL) -> LoadedPersistentHostAnalysisCache? {
@@ -3059,6 +3278,10 @@ final class StabilizerHostAnalysisStore {
                 pathX: cache.pathX,
                 pathY: cache.pathY,
                 pathRoll: cache.pathRoll,
+                farFieldPathX: cache.farFieldPathX,
+                farFieldPathY: cache.farFieldPathY,
+                farFieldPathRoll: cache.farFieldPathRoll,
+                farFieldConfidence: cache.farFieldConfidence,
                 footstepPathX: cache.footstepPathX,
                 footstepPathY: cache.footstepPathY,
                 footstepPathRoll: cache.footstepPathRoll,

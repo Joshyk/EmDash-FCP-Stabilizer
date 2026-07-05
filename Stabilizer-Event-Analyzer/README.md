@@ -49,15 +49,14 @@ analysis. Compressed video samples are decoded through `VTDecompressionSession`
 into Metal-compatible native YUV pixel buffers, preserving 10-bit luma for
 10-bit sources. Luma sampling, blur metric reduction, cache-validation
 fingerprints, and frame-to-frame block motion search run through Metal compute
-kernels. Schema 23 analysis uses upper-row far-field detail blocks,
-denser in-block sample density for high far-field blocks, sub-pixel block shift
-refinement, and chunked
-fingerprints so full-resolution frames do not serialize fingerprint work through
-one GPU thread. If hardware decode is unavailable for a source format, the analyzer
-logs the hardware failure and uses an explicit software-only VideoToolbox decode
-fallback while keeping luma sampling and stabilization analysis on Metal. That
-visible decode fallback is CPU work because VideoToolbox could not provide a
-hardware decoder for the source. If a Metal device, command queue, or kernel
+kernels. Schema 24 analysis uses upper-row far-field detail blocks, denser
+high far-field vertical detail blocks, central attitude-detail blocks for
+yaw/pitch/roll evidence, denser in-block sample density for high far-field
+blocks, sub-pixel block shift refinement, and chunked fingerprints so
+full-resolution frames do not serialize fingerprint work through one GPU
+thread. If hardware decode is unavailable for a source format, the analyzer
+logs the codec, dimensions, and VideoToolbox failure, then fails visibly instead
+of switching to software decode. If a Metal device, command queue, or kernel
 dispatch is unavailable, analysis fails visibly instead of falling back to CPU
 motion search. The CPU still feeds VideoToolbox, formats Metal results, and
 writes the final cache JSON. Selected assets remain strictly serial: the analyzer
@@ -77,8 +76,7 @@ Some camera sources can be unsupported by Apple's hardware decoder even when
 Final Cut Pro or QuickTime can play them through another path. High resolution
 H.264 sources, including some Insta360 `5312x2988` originals, may be rejected by
 hardware-required VideoToolbox on M1. In that case the analyzer prints the codec,
-dimensions, and VideoToolbox status, then continues with the visible software
-decode fallback.
+dimensions, and VideoToolbox status, then stops so unsupported decode is visible.
 
 When `--progress` is enabled in an interactive terminal, frame and chunk
 progress updates rewrite one stderr line. When stderr is piped, such as through
@@ -113,7 +111,7 @@ cache files are staged below that folder:
 ```text
 Exports/
 Exports/SomeLibrary.fcpbundle
-Exports/stablizer_analysis/P1000304__sample100__schema23__63720f__2026-06-22/P1000304.fcpxmld/
+Exports/stablizer_analysis/P1000304__sample100__schema26__63720f__2026-06-22/P1000304.fcpxmld/
 Exports/stablizer_analysis/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
 ```
 

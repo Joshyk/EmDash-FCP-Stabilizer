@@ -1,7 +1,7 @@
 import Foundation
 import Metal
 
-private let maxCommandQueues = 5
+private let maxCommandQueues = 8
 private let keyInUse = "InUse"
 private let keyCommandQueue = "CommandQueue"
 

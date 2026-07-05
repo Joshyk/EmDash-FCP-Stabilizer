@@ -5,6 +5,8 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  analysisBenchmarkPayload,
+  analysisTimingBreakdown,
   buildCacheRootFromAnalysis,
   cacheRootValue,
   combineSourceSummaries,
@@ -18,6 +20,70 @@ const {
   processFailureMessage,
   readNativeAnalyzerCacheSchemaVersion,
 } = require("../server.js");
+
+test("analysisTimingBreakdown reports the measured bottleneck stage", () => {
+  const breakdown = analysisTimingBreakdown({
+    frameCount: 600,
+    totalWallSeconds: 10,
+    readFramesWallSeconds: 8,
+    readerLaneWallSeconds: 14,
+    decoderCopyNextFrameSeconds: 3,
+    metalEncodeSeconds: 1.2,
+    metalCompleteSeconds: 4.5,
+    preparedPathSeconds: 0.8,
+    cacheBuildSeconds: 0.1,
+    cacheWriteSeconds: 0.4,
+    readerLaneCount: 2,
+    framesPerWallSecond: 60,
+  });
+  assert.equal(breakdown.bottleneck.key, "metalCompleteSeconds");
+  assert.equal(breakdown.totalWallSeconds, 10);
+  assert.equal(breakdown.readerLaneCount, 2);
+});
+
+test("analysisBenchmarkPayload preserves full-resolution analysis timing metadata", () => {
+  const result = {
+    assetId: "r2",
+    name: "P1000307",
+    footageFileName: "P1000307.mov",
+    mediaKind: "original-media",
+    sampleScalePercent: 100,
+    sampleWidth: 5728,
+    sampleHeight: 3024,
+    frameCount: 10500,
+    frameDurationSeconds: 1001 / 60000,
+    rangeDurationSeconds: 175.175,
+    cacheSchemaVersion: 32,
+    cacheIdentity: "32:0:105105:1001:5728:3024:10500:aaa:bbb:ccc:end105105:P1000307",
+    analysisTimings: {
+      frameCount: 10500,
+      totalWallSeconds: 120,
+      readFramesWallSeconds: 90,
+      readerLaneWallSeconds: 180,
+      decoderCopyNextFrameSeconds: 22,
+      metalEncodeSeconds: 12,
+      metalCompleteSeconds: 50,
+      preparedPathSeconds: 9,
+      cacheBuildSeconds: 2,
+      cacheWriteSeconds: 6,
+      readerLaneCount: 4,
+      framesPerWallSecond: 87.5,
+    },
+  };
+  const payload = analysisBenchmarkPayload({
+    sourcePath: "/tmp/Library.fcpbundle",
+    sourceName: "Library.fcpbundle",
+    sourceIndex: 1,
+    totalSources: 1,
+    analysisPath: "/tmp/job/analysis.json",
+    analysis: { results: [result] },
+  });
+  assert.equal(payload.benchmarkType, "stabilizer-analysis-wall-clock");
+  assert.equal(payload.results[0].sampleScalePercent, 100);
+  assert.equal(payload.results[0].frameCount, 10500);
+  assert.equal(payload.results[0].sampleWidth, 5728);
+  assert.equal(payload.results[0].timingBreakdown.bottleneck.key, "metalCompleteSeconds");
+});
 
 test("buildCacheRootFromAnalysis requires analyzer-normalized cache root", () => {
   assert.equal(

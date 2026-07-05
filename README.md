@@ -337,6 +337,11 @@ sampling for those high far-field blocks before sub-pixel block shift refinement
 Cache writing uses the prepared analysis frame set as the authoritative timeline,
 so a reduced retained source-frame map does not prevent a completed prepared path
 from being saved.
+On 16 GB Apple Silicon and larger machines, the native analyzer keeps three GPU
+frame slots in flight per hardware VideoToolbox reader lane. This improves decode
+and Metal overlap without reducing sample scale, block density, fingerprints, or
+motion-search quality. Lower-memory Apple Silicon machines keep the conservative
+two-slot pipeline.
 
 The installed plug-in bundle is signed with sandbox and security-scoped file
 entitlements so the effect can inspect the Event-scoped cache root that Final Cut Pro exposes

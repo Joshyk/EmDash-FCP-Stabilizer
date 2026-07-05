@@ -45,6 +45,13 @@ effect applies its own internal crop/scale. The native effect renders a transfor
 texture with Metal and applies automatic walking-gimbal stabilization inside the FxPlug
 render path.
 
+The primary footage this stabilizer is designed to correct is walking footage captured with
+a camera mounted on a gimbal. The gimbal reduces gross camera shake, but the operator's body
+motion still introduces walking-induced movement, including footstep impulses, vertical bob,
+residual pitch/yaw/roll, stride wobble, and parallax between near ground and distant
+background. Stabilization design and tests should treat those body-motion artifacts as the
+core problem, not as generic tripod shake or purely optical crop drift.
+
 ## Analysis Cache And Legacy Host Analysis
 
 Current analysis generation is owned by the local Stabilizer Event Analyzer. New FxPlug
@@ -224,6 +231,81 @@ The overlay panel should scale proportionally to the current render output so Fi
 original/proxy playback presents one readable viewer footprint; high-resolution original
 frames must not make the bars tiny, and proxy output must not make them balloon over the
 preview.
+
+When verifying a Final Cut Pro-visible playback problem, especially zoom pulsing, wobble,
+crop breathing, turn smoothness, or proxy playback heaviness, do not rely only on still
+screenshots or Inspector/log state. Capture a short screen-recorded video of the Final Cut
+Pro Viewer around the reported time range, using the same project, clip, proxy/original
+setting, and effect controls the user reported. Inspect the recording visually and, when the
+problem is motion/scale related, analyze the captured frames with `ffmpeg`/OpenCV or an
+equivalent local tool to measure frame-to-frame apparent scale/translation changes. Treat
+that video evidence as part of the verification result before claiming the visible issue is
+fixed.
+Do not downsample or thin verification frames when the reported artifact is a single-frame
+or frame-local jump. Respect the source clip cadence, including 50fps, `60000/1001`
+(`59.94fps`), and other high-frame-rate clips, and evaluate screen captures, OpenCV motion
+metrics, and cache path diagnostics at frame cadence close to the source/captured cadence
+instead of reducing the analysis to about 30fps; otherwise x/y frame jumps can be missed. If
+the screen recording cannot preserve the source cadence exactly, still sample every captured
+frame and make the capture frame rate limitation explicit in the result.
+Do not use a small fixed screenshot set, such as 12 frames, as the basis for accepting
+motion-quality fixes. For screen-capture diagnostics, treat every captured frame, the
+per-frame CSV metrics, and the full diagnostic overlay video as the primary evidence.
+Contact sheets are only navigation aids for locating suspect frames.
+The Stabilizer evaluation policy is video-first, not screenshot-first. Screenshots,
+contact sheets, Inspector state, and logs can guide investigation, but they cannot decide
+acceptance for smoothness. Acceptance must come from a Final Cut Pro Preview screen-capture
+video, full per-frame CSV/PTS diagnostics, and an explicit visual review of the recorded
+motion. Record at least 3-5 seconds for a local spot check and roughly 20 seconds for a
+known regression or important motion section. The purpose of the E2E harness is to make
+the real FCP Preview smooth, not merely to satisfy numeric thresholds; if the recorded
+video still shows clouds, ridgelines, horizon lines, zoom, crop edges, or cadence artifacts
+moving unnaturally, treat the result as failed even when metrics report pass.
+Stabilizer smoothness acceptance must be video-first. Do not accept a change based on a
+few screenshots, a still contact sheet, Inspector text, or numeric pass/fail alone. Record
+the Final Cut Pro Viewer with the target project, target timecode range, `Proxy Only`, and
+Remove Black Edges / crop enabled, then judge the result from the video, the full per-frame
+CSV, PTS/frame-interval evidence, and a visual review of the actual motion. The evaluator
+must measure frame-to-frame translation jump, scale pulse, ridge/horizon residual, black-edge
+breathing, near-duplicate/freeze frames, and PTS irregularity across every captured frame.
+If the metrics pass but clouds, distant ridgelines, or the horizon still visibly shimmer,
+pulse, or step in the recorded FCP Preview, treat the result as failed and keep iterating.
+The evaluator must keep visual review explicit: default to `--visual-review not-reviewed`
+and treat that as an acceptance failure for these cases. Only rerun or mark evaluation with
+`--visual-review passed` after actually watching the recorded FCP Preview video and checking
+the full per-frame CSV/PTS diagnostics; use `--visual-review failed` when the video still
+shows visible shake, crop breathing, freeze, or cadence artifacts.
+For development changes that affect stabilization smoothness, Auto Crop / Remove Black
+Edges, turn smoothing, playback zoom, or proxy playback behavior, run the repo E2E
+screen-capture case for `P1000307.mov` before claiming the issue is fixed. The canonical
+case is `tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json`: open
+`/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle`, use the
+`P1000307 Stabilized Review` project, play the `00:01:26` to `00:01:46` turn section in
+proxy with the Stabilizer effect and Remove Black Edges / crop enabled, record the Final Cut
+Pro Viewer, then evaluate the recording with `scripts/stabilizer_fcp_screen_capture_e2e.sh`.
+This is a fixed roughly 20-second regression window; do not replace it with a few still
+frames or a shorter contact-sheet-only inspection.
+The second fixed regression is `P1000304` around `00:04:28`, focused on the mountain
+ridgeline, clouds, and horizon. The canonical case is
+`tests/stabilizer_e2e_cases/p1000304_ridge_4m23_4m43.json`. Record enough context around
+that point, typically at least 3-5 seconds for a spot check and roughly 20 seconds for the
+canonical regression window, with the same `Proxy Only` and crop-on requirements.
+Near-ground grass, road, or water may move more than the far field, but distant background
+instability is a visible-quality failure.
+When an E2E case specifies proxy playback, such as `playbackMode: "Proxy Only"`,
+the test setup must actively set Final Cut Pro's Viewer media playback to that proxy mode
+before recording. Use `Proxy Only`; `Proxy Preferred` is not valid for these E2E cases
+because Final Cut Pro can silently fall back to original/optimized media. Confirm the
+effective render source through FxPlug runtime evidence, such as the Debug Overlay `P###`
+row or Host Analysis logs reporting `proxy yes`; a capture that logs `proxy no` or
+otherwise cannot prove proxy playback is not valid evidence for that case and must be rerun
+after fixing the setup.
+If Final Cut Pro opens a proxy E2E case with a black/uninitialized Viewer, the harness may
+warm the Viewer by temporarily selecting `Optimized/Original`, but it must immediately
+restore `Proxy Only`, log that warmup explicitly, and record/evaluate only after Proxy Only
+is active again. This warmup is not a substitute for Proxy Only playback evidence.
+If the screen-capture evaluator reports zoom pulse, visible black-edge breathing, or
+insufficient tracking confidence, treat that as a blocking regression and keep iterating.
 
 ## Playback And Render
 
