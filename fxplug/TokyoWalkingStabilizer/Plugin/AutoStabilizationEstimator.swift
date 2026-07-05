@@ -8556,7 +8556,7 @@ enum AutoStabilizationEstimator {
             * max(0.35, boundedCenterConfidence)
         let localAverageMagnitude = abs(localAverage)
         if localAverageMagnitude < centerMagnitude {
-            let farFieldAuthority = confidenceRamp(
+            let farFieldSmoothingAuthority = confidenceRamp(
                 clamp(centerFarFieldSupport, min: 0.0, max: 1.0),
                 start: footstepCenterImpulsePreservationFarFieldStart,
                 full: footstepCenterImpulsePreservationFarFieldFull
@@ -8571,7 +8571,8 @@ enum AutoStabilizationEstimator {
                 start: playbackTrajectoryFootstepAuthorityGateStart,
                 full: playbackTrajectoryFootstepAuthorityGateFull
             )
-            blend *= 1.0 - (footstepCenterImpulsePreservationScale * centerDominance * centerAuthority * farFieldAuthority)
+            let nearFieldImpulseAuthority = 1.0 - farFieldSmoothingAuthority
+            blend *= 1.0 - (footstepCenterImpulsePreservationScale * centerDominance * centerAuthority * nearFieldImpulseAuthority)
         }
         let smoothed = centerValue + ((localAverage - centerValue) * blend)
         return smoothed
