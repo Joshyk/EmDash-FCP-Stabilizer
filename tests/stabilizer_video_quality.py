@@ -176,6 +176,144 @@ def black_margins(gray: np.ndarray, threshold: int) -> dict[str, int]:
     return {"left": left, "right": right, "top": top, "bottom": bottom}
 
 
+def normalize_angle_degrees(value: float) -> float:
+    result = float(value)
+    while result <= -90.0:
+        result += 180.0
+    while result > 90.0:
+        result -= 180.0
+    return result
+
+
+def angle_delta_degrees(current: float, previous: float) -> float:
+    return normalize_angle_degrees(float(current) - float(previous))
+
+
+def unwrap_angles_degrees(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    result = [float(values[0])]
+    for value in values[1:]:
+        result.append(result[-1] + angle_delta_degrees(float(value), result[-1]))
+    return result
+
+
+def estimate_black_edge_transform(
+    gray: np.ndarray,
+    threshold: int,
+    quality: dict[str, Any],
+) -> dict[str, Any]:
+    height, width = gray.shape[:2]
+    if height < 8 or width < 8:
+        return {"ok": False, "reason": "viewer_too_small"}
+
+    black = (gray <= threshold).astype(np.uint8)
+    black_pixel_count = int(np.count_nonzero(black))
+    black_ratio = black_pixel_count / float(max(1, black.size))
+    min_outside_ratio = float(quality.get("minBlackEdgeOutsideRatio", 0.002))
+    if black_ratio < min_outside_ratio:
+        return {
+            "ok": False,
+            "reason": "black_edge_not_visible",
+            "blackOutsideRatio": black_ratio,
+            "outsideBlackPixelCount": black_pixel_count,
+        }
+
+    component_count, labels, _stats, _centroids = cv2.connectedComponentsWithStats(black, connectivity=8)
+    if component_count <= 1:
+        return {
+            "ok": False,
+            "reason": "black_edge_not_visible",
+            "blackOutsideRatio": black_ratio,
+            "outsideBlackPixelCount": black_pixel_count,
+        }
+
+    border_labels = set(labels[0, :].tolist())
+    border_labels.update(labels[height - 1, :].tolist())
+    border_labels.update(labels[:, 0].tolist())
+    border_labels.update(labels[:, width - 1].tolist())
+    border_labels.discard(0)
+    if not border_labels:
+        return {
+            "ok": False,
+            "reason": "black_edge_not_touching_viewer_border",
+            "blackOutsideRatio": black_ratio,
+            "outsideBlackPixelCount": black_pixel_count,
+        }
+
+    outside_black = np.isin(labels, list(border_labels))
+    outside_black_count = int(np.count_nonzero(outside_black))
+    outside_ratio = outside_black_count / float(max(1, black.size))
+    if outside_ratio < min_outside_ratio:
+        return {
+            "ok": False,
+            "reason": "outside_black_edge_too_small",
+            "blackOutsideRatio": outside_ratio,
+            "outsideBlackPixelCount": outside_black_count,
+        }
+
+    content_mask = (~outside_black).astype(np.uint8) * 255
+    contours, _hierarchy = cv2.findContours(content_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return {
+            "ok": False,
+            "reason": "content_contour_missing",
+            "blackOutsideRatio": outside_ratio,
+            "outsideBlackPixelCount": outside_black_count,
+        }
+
+    contour = max(contours, key=cv2.contourArea)
+    contour_area = float(cv2.contourArea(contour))
+    content_area_ratio = contour_area / float(max(1, width * height))
+    min_content_area_ratio = float(quality.get("minBlackEdgeTransformContentAreaRatio", 0.10))
+    if content_area_ratio < min_content_area_ratio:
+        return {
+            "ok": False,
+            "reason": "content_contour_too_small",
+            "blackOutsideRatio": outside_ratio,
+            "outsideBlackPixelCount": outside_black_count,
+            "contentAreaRatio": content_area_ratio,
+        }
+
+    (center_x, center_y), (rect_width, rect_height), rect_angle = cv2.minAreaRect(contour)
+    if rect_width <= 0.0 or rect_height <= 0.0:
+        return {
+            "ok": False,
+            "reason": "content_rect_invalid",
+            "blackOutsideRatio": outside_ratio,
+            "outsideBlackPixelCount": outside_black_count,
+            "contentAreaRatio": content_area_ratio,
+        }
+    if rect_width < rect_height:
+        rect_width, rect_height = rect_height, rect_width
+        rect_angle += 90.0
+    rotation = normalize_angle_degrees(rect_angle)
+    content_scale = math.sqrt((rect_width * rect_height) / float(max(1, width * height)))
+    box = cv2.boxPoints(((center_x, center_y), (rect_width, rect_height), rect_angle))
+    box_min_x = float(np.min(box[:, 0]))
+    box_max_x = float(np.max(box[:, 0]))
+    box_min_y = float(np.min(box[:, 1]))
+    box_max_y = float(np.max(box[:, 1]))
+    return {
+        "ok": True,
+        "reason": "",
+        "blackOutsideRatio": outside_ratio,
+        "outsideBlackPixelCount": outside_black_count,
+        "contentAreaRatio": content_area_ratio,
+        "centerX": float(center_x),
+        "centerY": float(center_y),
+        "rectWidth": float(rect_width),
+        "rectHeight": float(rect_height),
+        "rectAreaRatio": float((rect_width * rect_height) / float(max(1, width * height))),
+        "scalePercent": (content_scale - 1.0) * 100.0,
+        "rotationDegrees": rotation,
+        "boxMinX": box_min_x,
+        "boxMaxX": box_max_x,
+        "boxMinY": box_min_y,
+        "boxMaxY": box_max_y,
+    }
+
+
 def crop(frame: np.ndarray, roi: Roi) -> np.ndarray:
     x, y, w, h = roi
     return frame[y : y + h, x : x + w]
@@ -592,6 +730,264 @@ def summarize_ridge_motion(
     return not failures, failures, summary
 
 
+def finalize_black_edge_transform_rows(
+    rows: list[dict[str, Any]],
+    quality: dict[str, Any],
+    median_window: int,
+    pulse_median_window: int,
+    pulse_peak_window: int,
+) -> None:
+    transform_rows = [row for row in rows if bool(row.get("trackingOk"))]
+    if not transform_rows:
+        return
+
+    for component in ("centerX", "centerY", "scalePercent"):
+        medians = rolling_median([float(row.get(component, 0.0)) for row in transform_rows], median_window)
+        for row, median in zip(transform_rows, medians):
+            row[f"{component}Median"] = median
+            row[f"{component}Residual"] = float(row.get(component, 0.0)) - median
+
+    unwrapped_angles = unwrap_angles_degrees([float(row.get("rotationDegrees", 0.0)) for row in transform_rows])
+    angle_medians = rolling_median(unwrapped_angles, median_window)
+    for row, angle, median in zip(transform_rows, unwrapped_angles, angle_medians):
+        row["rotationDegreesUnwrapped"] = angle
+        row["rotationMedianDegrees"] = median
+        row["rotationResidualDegrees"] = angle_delta_degrees(angle, median)
+
+    for row in transform_rows:
+        center_x_residual = float(row.get("centerXResidual", 0.0))
+        center_y_residual = float(row.get("centerYResidual", 0.0))
+        row["centerResidualPixels"] = math.hypot(center_x_residual, center_y_residual)
+        row["scalePulseExcludedForPtsCadence"] = False
+
+    exclude_pts_irregular = bool(
+        quality.get(
+            "excludePtsIrregularFromBlackEdgeTransform",
+            quality.get(
+                "excludePtsIrregularFromScalePulse",
+                quality.get("excludePtsIrregularFromFrameJump", False),
+            ),
+        )
+    )
+    pulse_rows = [
+        row
+        for row in transform_rows
+        if not (exclude_pts_irregular and bool(row.get("ptsCadenceAffectedFrame")))
+    ]
+    pulse_row_ids = {id(row) for row in pulse_rows}
+    for row in transform_rows:
+        row["scalePulseExcludedForPtsCadence"] = id(row) not in pulse_row_ids
+
+    pulse_values = [float(row.get("scalePercentResidual", 0.0)) for row in pulse_rows]
+    pulse_medians = rolling_median(pulse_values, pulse_median_window)
+    previous_pulse_row: dict[str, Any] | None = None
+    for row, median in zip(pulse_rows, pulse_medians):
+        row["scalePulseMedianPercent"] = median
+        row["scalePulseResidualPercent"] = float(row.get("scalePercentResidual", 0.0)) - median
+        if previous_pulse_row is not None and int(row.get("previousFrame", -1)) == int(previous_pulse_row.get("frame", -2)):
+            row["scalePulseDerivativePercentPerFrame"] = (
+                float(row.get("scalePulseResidualPercent", 0.0))
+                - float(previous_pulse_row.get("scalePulseResidualPercent", 0.0))
+            )
+        else:
+            row["scalePulseDerivativePercentPerFrame"] = 0.0
+        previous_pulse_row = row
+
+    pulse_residuals = [float(row.get("scalePulseResidualPercent", 0.0)) for row in pulse_rows]
+    pulse_peak_to_peak = rolling_peak_to_peak(pulse_residuals, pulse_peak_window)
+    for row, peak_to_peak in zip(pulse_rows, pulse_peak_to_peak):
+        row["scalePulsePeakToPeakPercent"] = peak_to_peak
+
+    previous_row: dict[str, Any] | None = None
+    for row in transform_rows:
+        if previous_row is None or int(row.get("previousFrame", -1)) != int(previous_row.get("frame", -2)):
+            previous_row = row
+            continue
+        center_jump_x = float(row.get("centerX", 0.0)) - float(previous_row.get("centerX", 0.0))
+        center_jump_y = float(row.get("centerY", 0.0)) - float(previous_row.get("centerY", 0.0))
+        row["centerJumpX"] = center_jump_x
+        row["centerJumpY"] = center_jump_y
+        row["centerJumpPixels"] = math.hypot(center_jump_x, center_jump_y)
+        row["scaleJumpPercent"] = float(row.get("scalePercent", 0.0)) - float(previous_row.get("scalePercent", 0.0))
+        row["rotationJumpDegrees"] = angle_delta_degrees(
+            float(row.get("rotationDegreesUnwrapped", row.get("rotationDegrees", 0.0))),
+            float(previous_row.get("rotationDegreesUnwrapped", previous_row.get("rotationDegrees", 0.0))),
+        )
+        previous_row = row
+
+
+def summarize_black_edge_transform(
+    rows: list[dict[str, Any]],
+    quality: dict[str, Any],
+) -> tuple[bool, list[str], dict[str, Any]]:
+    diagnostic_required = bool(quality.get("blackEdgeTransformDiagnostic", False)) or bool(
+        quality.get("blackEdgeTransformDiagnosticRequired", False)
+    )
+    tracking_rows = [row for row in rows if bool(row.get("trackingOk"))]
+    valid_ratio = len(tracking_rows) / len(rows) if rows else 0.0
+    pulse_rows = [
+        row
+        for row in tracking_rows
+        if not bool(row.get("scalePulseExcludedForPtsCadence"))
+    ]
+    jump_rows = [row for row in tracking_rows if "centerJumpPixels" in row]
+    max_center_jump = max((float(row.get("centerJumpPixels", 0.0)) for row in jump_rows), default=0.0)
+    max_center_x_jump = max((abs(float(row.get("centerJumpX", 0.0))) for row in jump_rows), default=0.0)
+    max_center_y_jump = max((abs(float(row.get("centerJumpY", 0.0))) for row in jump_rows), default=0.0)
+    max_scale_jump = max((abs(float(row.get("scaleJumpPercent", 0.0))) for row in jump_rows), default=0.0)
+    max_rotation_jump = max((abs(float(row.get("rotationJumpDegrees", 0.0))) for row in jump_rows), default=0.0)
+    rotation_jumps = [abs(float(row.get("rotationJumpDegrees", 0.0))) for row in jump_rows]
+    rotation_jump_p95 = (
+        float(np.percentile(np.asarray(rotation_jumps, dtype=np.float64), 95))
+        if rotation_jumps
+        else 0.0
+    )
+    rotation_residuals = [abs(float(row.get("rotationResidualDegrees", 0.0))) for row in tracking_rows]
+    rotation_residual_p95 = (
+        float(np.percentile(np.asarray(rotation_residuals, dtype=np.float64), 95))
+        if rotation_residuals
+        else 0.0
+    )
+    center_residuals = [float(row.get("centerResidualPixels", 0.0)) for row in tracking_rows]
+    center_residual_p95 = (
+        float(np.percentile(np.asarray(center_residuals, dtype=np.float64), 95))
+        if center_residuals
+        else 0.0
+    )
+    max_scale_pulse_peak_to_peak = max(
+        (float(row.get("scalePulsePeakToPeakPercent", 0.0)) for row in pulse_rows),
+        default=0.0,
+    )
+    scale_pulse_derivatives = [
+        abs(float(row.get("scalePulseDerivativePercentPerFrame", 0.0)))
+        for row in pulse_rows
+    ]
+    scale_pulse_derivative_p95 = (
+        float(np.percentile(np.asarray(scale_pulse_derivatives, dtype=np.float64), 95))
+        if scale_pulse_derivatives
+        else 0.0
+    )
+    max_black_outside_ratio = max((float(row.get("blackOutsideRatio", 0.0)) for row in rows), default=0.0)
+    max_content_area_ratio = max((float(row.get("contentAreaRatio", 0.0)) for row in tracking_rows), default=0.0)
+
+    min_valid_ratio = float(
+        quality.get(
+            "minBlackEdgeTransformValidRatio",
+            0.50 if diagnostic_required else 0.0,
+        )
+    )
+    center_jump_limit = float(quality.get("maxBlackEdgeTransformCenterJumpPixels", float("inf")))
+    center_x_jump_limit = float(quality.get("maxBlackEdgeTransformXJumpPixels", center_jump_limit))
+    center_y_jump_limit = float(quality.get("maxBlackEdgeTransformYJumpPixels", center_jump_limit))
+    scale_jump_limit = float(quality.get("maxBlackEdgeTransformScaleJumpPercent", float("inf")))
+    scale_pulse_peak_to_peak_limit = float(
+        quality.get("maxBlackEdgeTransformScalePulsePeakToPeakPercent", float("inf"))
+    )
+    scale_pulse_derivative_p95_limit = float(
+        quality.get("maxBlackEdgeTransformScaleDerivativeP95PercentPerFrame", float("inf"))
+    )
+    rotation_jump_limit = float(quality.get("maxBlackEdgeTransformRotationJumpDegrees", float("inf")))
+    rotation_jump_p95_limit = float(quality.get("maxBlackEdgeTransformRotationJumpP95Degrees", float("inf")))
+    rotation_residual_p95_limit = float(
+        quality.get("maxBlackEdgeTransformRotationResidualP95Degrees", float("inf"))
+    )
+    center_residual_p95_limit = float(quality.get("maxBlackEdgeTransformCenterResidualP95Pixels", float("inf")))
+
+    failures: list[str] = []
+    if valid_ratio < min_valid_ratio:
+        failures.append(f"black-edge transform valid ratio {valid_ratio:.3f} below {min_valid_ratio:.3f}")
+    if max_center_jump > center_jump_limit:
+        failures.append(
+            f"black-edge transform center jump {max_center_jump:.3f}px exceeds {center_jump_limit:.3f}px"
+        )
+    if max_center_x_jump > center_x_jump_limit:
+        failures.append(
+            f"black-edge transform x jump {max_center_x_jump:.3f}px exceeds {center_x_jump_limit:.3f}px"
+        )
+    if max_center_y_jump > center_y_jump_limit:
+        failures.append(
+            f"black-edge transform y jump {max_center_y_jump:.3f}px exceeds {center_y_jump_limit:.3f}px"
+        )
+    if max_scale_jump > scale_jump_limit:
+        failures.append(
+            f"black-edge transform scale jump {max_scale_jump:.3f}% exceeds {scale_jump_limit:.3f}%"
+        )
+    if max_scale_pulse_peak_to_peak > scale_pulse_peak_to_peak_limit:
+        failures.append(
+            "black-edge transform scale pulse peak-to-peak "
+            f"{max_scale_pulse_peak_to_peak:.3f}% exceeds {scale_pulse_peak_to_peak_limit:.3f}%"
+        )
+    if scale_pulse_derivative_p95 > scale_pulse_derivative_p95_limit:
+        failures.append(
+            "black-edge transform scale derivative p95 "
+            f"{scale_pulse_derivative_p95:.3f}%/frame exceeds {scale_pulse_derivative_p95_limit:.3f}%/frame"
+        )
+    if max_rotation_jump > rotation_jump_limit:
+        failures.append(
+            f"black-edge transform rotation jump {max_rotation_jump:.3f}deg exceeds {rotation_jump_limit:.3f}deg"
+        )
+    if rotation_jump_p95 > rotation_jump_p95_limit:
+        failures.append(
+            "black-edge transform rotation jump p95 "
+            f"{rotation_jump_p95:.3f}deg exceeds {rotation_jump_p95_limit:.3f}deg"
+        )
+    if rotation_residual_p95 > rotation_residual_p95_limit:
+        failures.append(
+            "black-edge transform rotation residual p95 "
+            f"{rotation_residual_p95:.3f}deg exceeds {rotation_residual_p95_limit:.3f}deg"
+        )
+    if center_residual_p95 > center_residual_p95_limit:
+        failures.append(
+            "black-edge transform center residual p95 "
+            f"{center_residual_p95:.3f}px exceeds {center_residual_p95_limit:.3f}px"
+        )
+
+    summary = {
+        "enabled": diagnostic_required or bool(tracking_rows),
+        "required": diagnostic_required,
+        "rowCount": len(rows),
+        "trackingFrameCount": len(tracking_rows),
+        "trackingRatio": valid_ratio,
+        "pulseFrameCount": len(pulse_rows),
+        "jumpPairCount": len(jump_rows),
+        "maxBlackOutsideRatio": max_black_outside_ratio,
+        "maxContentAreaRatio": max_content_area_ratio,
+        "maxCenterJumpPixels": max_center_jump,
+        "maxXJumpPixels": max_center_x_jump,
+        "maxYJumpPixels": max_center_y_jump,
+        "centerResidualP95Pixels": center_residual_p95,
+        "maxScaleJumpPercent": max_scale_jump,
+        "maxScalePulsePeakToPeakPercent": max_scale_pulse_peak_to_peak,
+        "scaleDerivativeP95PercentPerFrame": scale_pulse_derivative_p95,
+        "maxRotationJumpDegrees": max_rotation_jump,
+        "rotationJumpP95Degrees": rotation_jump_p95,
+        "rotationResidualP95Degrees": rotation_residual_p95,
+        "thresholds": {
+            "minBlackEdgeTransformValidRatio": min_valid_ratio,
+            "maxBlackEdgeTransformCenterJumpPixels": center_jump_limit,
+            "maxBlackEdgeTransformXJumpPixels": center_x_jump_limit,
+            "maxBlackEdgeTransformYJumpPixels": center_y_jump_limit,
+            "maxBlackEdgeTransformScaleJumpPercent": scale_jump_limit,
+            "maxBlackEdgeTransformScalePulsePeakToPeakPercent": scale_pulse_peak_to_peak_limit,
+            "maxBlackEdgeTransformScaleDerivativeP95PercentPerFrame": scale_pulse_derivative_p95_limit,
+            "maxBlackEdgeTransformRotationJumpDegrees": rotation_jump_limit,
+            "maxBlackEdgeTransformRotationJumpP95Degrees": rotation_jump_p95_limit,
+            "maxBlackEdgeTransformRotationResidualP95Degrees": rotation_residual_p95_limit,
+            "maxBlackEdgeTransformCenterResidualP95Pixels": center_residual_p95_limit,
+            "minBlackEdgeOutsideRatio": quality.get("minBlackEdgeOutsideRatio", 0.002),
+            "minBlackEdgeTransformContentAreaRatio": quality.get("minBlackEdgeTransformContentAreaRatio", 0.10),
+            "excludePtsIrregularFromBlackEdgeTransform": quality.get(
+                "excludePtsIrregularFromBlackEdgeTransform",
+                quality.get(
+                    "excludePtsIrregularFromScalePulse",
+                    quality.get("excludePtsIrregularFromFrameJump", False),
+                ),
+            ),
+        },
+    }
+    return not failures, failures, summary
+
+
 def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     rows = list(rows)
     if not rows:
@@ -842,6 +1238,7 @@ def write_diagnostic_overlay_video(
     scale_rows: list[dict[str, Any]],
     edge_rows: list[dict[str, Any]],
     ridge_rows: list[dict[str, Any]],
+    black_edge_transform_rows: list[dict[str, Any]],
     fps: float,
 ) -> bool:
     cap = cv2.VideoCapture(str(video_path))
@@ -861,6 +1258,7 @@ def write_diagnostic_overlay_video(
     scale_by_frame = row_by_frame(scale_rows)
     edge_by_frame = row_by_frame(edge_rows)
     ridge_by_frame = row_by_frame(ridge_rows)
+    black_edge_transform_by_frame = row_by_frame(black_edge_transform_rows)
     frame_index = -1
     while True:
         ok, frame = cap.read()
@@ -925,6 +1323,14 @@ def write_diagnostic_overlay_video(
             lines.append(
                 f"edge={float(edge_row.get('edgeResidualPx', 0.0)):.1f}px "
                 f"margin={float(edge_row.get('edgeMarginPx', 0.0)):.1f}px"
+            )
+        black_edge_transform_row = black_edge_transform_by_frame.get(frame_index)
+        if black_edge_transform_row is not None and bool(black_edge_transform_row.get("trackingOk")):
+            lines.append(
+                "black-xform "
+                f"jump={float(black_edge_transform_row.get('centerJumpPixels', 0.0)):.2f}px "
+                f"scale={float(black_edge_transform_row.get('scalePulseResidualPercent', 0.0)):+.3f}% "
+                f"rot={float(black_edge_transform_row.get('rotationJumpDegrees', 0.0)):+.3f}deg"
             )
         put_label_lines(viewer, lines)
         writer.write(viewer)
@@ -1465,6 +1871,7 @@ def main() -> int:
     edge_rows: list[dict[str, Any]] = []
     scale_rows: list[dict[str, Any]] = []
     ridge_rows: list[dict[str, Any]] = []
+    black_edge_transform_rows: list[dict[str, Any]] = []
     placeholder_rows: list[dict[str, Any]] = []
     previous_gray: np.ndarray | None = None
     previous_ridge_gray: np.ndarray | None = None
@@ -1510,6 +1917,17 @@ def main() -> int:
                 "bottom": margins["bottom"],
             }
         )
+        black_edge_transform = estimate_black_edge_transform(viewer_gray, black_threshold, quality)
+        black_edge_transform_row = {
+            "frame": frame_index,
+            "time": timestamp,
+            "trackingOk": bool(black_edge_transform.get("ok")),
+            "reason": black_edge_transform.get("reason") or "",
+            **{key: value for key, value in black_edge_transform.items() if key not in ("ok", "reason")},
+        }
+        if previous_frame_index is not None:
+            black_edge_transform_row["previousFrame"] = previous_frame_index
+        black_edge_transform_rows.append(black_edge_transform_row)
 
         if previous_gray is not None and previous_frame_index is not None:
             diff = cv2.absdiff(previous_gray, content_gray)
@@ -1711,6 +2129,10 @@ def main() -> int:
         flags = scale_pts_flags_by_frame.get(int(row.get("frame", -1)))
         if flags is not None:
             row.update(flags)
+    for row in black_edge_transform_rows:
+        flags = scale_pts_flags_by_frame.get(int(row.get("frame", -1)))
+        if flags is not None:
+            row.update(flags)
 
     cumulative_scale_log = 0.0
     cumulative_scale_segment = 0
@@ -1750,6 +2172,14 @@ def main() -> int:
     pulse_peak_window = max(3, int(round(pulse_peak_seconds * effective_sample_fps)))
     if pulse_peak_window % 2 == 0:
         pulse_peak_window += 1
+
+    finalize_black_edge_transform_rows(
+        black_edge_transform_rows,
+        quality,
+        median_window,
+        pulse_median_window,
+        pulse_peak_window,
+    )
 
     zoom_path_rows = [row for row in scale_rows if bool(row.get("cumulativeScalePathOk"))]
     rows_by_segment: dict[int, list[dict[str, Any]]] = {}
@@ -1818,6 +2248,9 @@ def main() -> int:
     filtered_edges = [row for row in edge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     filtered_scales = [row for row in scale_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     filtered_ridge_rows = [row for row in ridge_rows if ignore_start <= float(row["time"]) <= cutoff_end]
+    filtered_black_edge_transforms = [
+        row for row in black_edge_transform_rows if ignore_start <= float(row["time"]) <= cutoff_end
+    ]
     filtered_placeholders = [row for row in placeholder_rows if ignore_start <= float(row["time"]) <= cutoff_end]
     placeholder_frame_rows = [row for row in filtered_placeholders if bool(row.get("placeholderFrame"))]
     placeholder_ratio = (len(placeholder_frame_rows) / len(filtered_placeholders)) if filtered_placeholders else 0.0
@@ -1857,6 +2290,12 @@ def main() -> int:
     )
     if ridge_roi is not None and not ridge_passed:
         failures.extend(ridge_failures)
+        passed = False
+    black_edge_transform_passed, black_edge_transform_failures, black_edge_transform_summary = (
+        summarize_black_edge_transform(filtered_black_edge_transforms, quality)
+    )
+    if not black_edge_transform_passed:
+        failures.extend(black_edge_transform_failures)
         passed = False
     captured_fps_ratio = fps / source_frame_rate if source_frame_rate > 0.0 else 1.0
     pts_metrics = dict(pts_timing.get("summary", {}))
@@ -1937,6 +2376,7 @@ def main() -> int:
                 else None
             ),
             "ridge": ridge_summary,
+            "blackEdgeTransform": black_edge_transform_summary,
             "ignoreStartSeconds": ignore_start,
             "ignoreEndSeconds": ignore_end,
             "minScaleInlierRatio": min_scale_inlier_ratio,
@@ -1978,6 +2418,7 @@ def main() -> int:
                 "measuredSignals": [
                     "frame-to-frame translation jump",
                     "scale pulse",
+                    "black-edge transform jump/scale/rotation",
                     "ridge/horizon residual",
                     "black-edge breathing",
                     "near-duplicate/freeze",
@@ -2005,6 +2446,7 @@ def main() -> int:
     write_csv(output_dir / "edge_stats.csv", edge_rows)
     write_csv(output_dir / "scale_stats.csv", scale_rows)
     write_csv(output_dir / "ridge_stats.csv", ridge_rows)
+    write_csv(output_dir / "black_edge_transform_stats.csv", black_edge_transform_rows)
     write_csv(output_dir / "placeholder_stats.csv", placeholder_rows)
 
     scale_spikes = sorted(
@@ -2035,6 +2477,15 @@ def main() -> int:
         key=lambda row: float(row.get("edgeResidualPx", 0.0)),
         reverse=True,
     )[:diagnostic_spikes_per_kind]
+    black_edge_transform_spikes = sorted(
+        [row for row in filtered_black_edge_transforms if bool(row.get("trackingOk"))],
+        key=lambda row: max(
+            float(row.get("centerJumpPixels", 0.0)),
+            abs(float(row.get("scalePulseResidualPercent", 0.0))) * 10.0,
+            abs(float(row.get("rotationJumpDegrees", 0.0))) * 10.0,
+        ),
+        reverse=True,
+    )[:diagnostic_spikes_per_kind]
     ridge_spikes = sorted(
         [row for row in filtered_ridge_rows if bool(row.get("trackingOk"))],
         key=lambda row: float(row.get("ridgeHighFrequencyResidualPixels", 0.0)),
@@ -2046,6 +2497,7 @@ def main() -> int:
     cadence_frames: list[tuple[int, str]] = []
     pulse_frames: list[tuple[int, str]] = []
     edge_frames: list[tuple[int, str]] = []
+    black_edge_transform_frames: list[tuple[int, str]] = []
     ridge_frames: list[tuple[int, str]] = []
     for row in scale_spikes:
         scale_frames.append((int(row["frame"]), f"scale {float(row['scaleResidualPercent']):+.2f}% t={float(row['time']):.2f}s"))
@@ -2064,6 +2516,17 @@ def main() -> int:
         )
     for row in edge_spikes:
         edge_frames.append((int(row["frame"]), f"edge {float(row['edgeResidualPx']):.1f}px t={float(row['time']):.2f}s"))
+    for row in black_edge_transform_spikes:
+        black_edge_transform_frames.append(
+            (
+                int(row["frame"]),
+                "black-xform "
+                f"jump {float(row.get('centerJumpPixels', 0.0)):.1f}px "
+                f"scale {float(row.get('scalePulseResidualPercent', 0.0)):+.2f}% "
+                f"rot {float(row.get('rotationJumpDegrees', 0.0)):+.2f}deg "
+                f"t={float(row['time']):.2f}s",
+            )
+        )
     for row in ridge_spikes:
         ridge_frames.append(
             (
@@ -2079,6 +2542,11 @@ def main() -> int:
         ("cadenceContactSheet", output_dir / "cadence_spikes_contact_sheet.png", cadence_frames),
         ("pulseContactSheet", output_dir / "pulse_spikes_contact_sheet.png", pulse_frames),
         ("edgeContactSheet", output_dir / "edge_spikes_contact_sheet.png", edge_frames),
+        (
+            "blackEdgeTransformContactSheet",
+            output_dir / "black_edge_transform_spikes_contact_sheet.png",
+            black_edge_transform_frames,
+        ),
         ("ridgeContactSheet", output_dir / "ridge_spikes_contact_sheet.png", ridge_frames),
     ]
     for key, path, frames in sheet_specs:
@@ -2092,6 +2560,7 @@ def main() -> int:
         + cadence_frames
         + pulse_frames
         + edge_frames
+        + black_edge_transform_frames
         + ridge_frames
     )[:diagnostic_contact_sheet_max_frames]
     combined_sheet_path = output_dir / "spikes_contact_sheet.png"
@@ -2106,6 +2575,7 @@ def main() -> int:
         scale_rows,
         edge_rows,
         ridge_rows,
+        black_edge_transform_rows,
         fps,
     ):
         diagnostic_artifacts["diagnosticOverlayVideo"] = str(overlay_path)
@@ -2143,6 +2613,14 @@ def main() -> int:
         f"{summary['maxBlackEdgeMarginPixels']:.1f}px "
         f"(limit {summary['thresholds']['maxBlackEdgeMarginPixels']:.1f}px)"
     )
+    if summary["blackEdgeTransform"]["enabled"]:
+        print(
+            "  black-edge transform: "
+            f"tracking {summary['blackEdgeTransform']['trackingRatio']:.3f}, "
+            f"center jump {summary['blackEdgeTransform']['maxCenterJumpPixels']:.3f}px, "
+            f"scale p2p {summary['blackEdgeTransform']['maxScalePulsePeakToPeakPercent']:.3f}%, "
+            f"rot jump {summary['blackEdgeTransform']['maxRotationJumpDegrees']:.3f}deg"
+        )
     print(
         "  max frame jump: "
         f"{summary['maxFrameTranslationJumpPixels']:.3f}px "
