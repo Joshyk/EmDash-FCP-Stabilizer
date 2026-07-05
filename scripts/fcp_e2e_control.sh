@@ -248,6 +248,10 @@ run_harness() {
 	local command="$1"
 	shift
 	require_case_proxy_only
+	if [[ "$command" == "set-proxy-only" ]]; then
+		"$E2E_SCRIPT" "$command" "$@"
+		return
+	fi
 	"$E2E_SCRIPT" "$command" "${harness_args[@]}" "$@"
 }
 
