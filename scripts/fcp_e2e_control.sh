@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+E2E_SCRIPT="${ROOT_DIR}/scripts/stabilizer_fcp_screen_capture_e2e.sh"
+FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
+DEFAULT_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json"
+
+usage() {
+	cat <<'USAGE'
+Usage: scripts/fcp_e2e_control.sh COMMAND [OPTIONS]
+
+Stable Final Cut Pro control entry points for Tokyo Walking Stabilizer E2E.
+This script wraps the existing screen-capture harness and keeps open/quit/recover
+operations terminal-first through open(1) and osascript.
+
+Commands:
+  status          Print FCP process/front-window state and selected case metadata.
+  open-case       Open the case library in Final Cut Pro and wait for a standard window.
+  quit            Ask Final Cut Pro to quit through AppleScript and wait for exit.
+  recover-case    Quit FCP, reopen the case library, then run harness prepare.
+  viewer-roi      Print the current FCP Viewer ROI as x,y,w,h.
+  proxy-only      Set the current FCP Viewer media playback to Proxy Only.
+  prepare         Open/normalize the case through the existing E2E harness.
+  assert-prepared Verify Proxy Only, target project/effect, timecode, and Viewer ROI.
+  capture         Capture the FCP Viewer through the existing E2E harness.
+  evaluate        Evaluate an existing recording through the existing E2E harness.
+  run             Capture and evaluate through the existing E2E harness.
+
+Options:
+  --case PATH                  Case JSON. Default: P1000307 turn regression.
+  --video PATH                 Recording path for capture/evaluate/run.
+  --output-dir PATH            Diagnostics output directory.
+  --viewer-roi x,y,w,h         Explicit absolute FCP Viewer ROI.
+  --capture-backend NAME       screencapture, avfoundation-roi, or screencapturekit-roi.
+  --visual-review STATE        passed, failed, or not-reviewed.
+  --assume-current-fcp-state   Pass through to the E2E harness.
+  --assume-prepared-fcp        Pass through to the E2E harness.
+
+Notes:
+  - Proxy Only is required by the checked-in E2E cases; Proxy Preferred is not accepted.
+  - Smoothness acceptance still requires the recorded FCP Preview video, full CSV/PTS
+    diagnostics, and explicit visual review.
+USAGE
+}
+
+fail() {
+	printf 'fcp_e2e_control.sh: %s\n' "$*" >&2
+	exit 2
+}
+
+json_value() {
+	local file="$1"
+	local key="$2"
+	python3 - "$file" "$key" <<'PY'
+import json
+import sys
+
+path, dotted = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle)
+for part in dotted.split("."):
+    value = value[part]
+print(value)
+PY
+}
+
+require_case_proxy_only() {
+	local playback_mode
+	playback_mode="$(json_value "$case_file" playbackMode)"
+	[[ "$playback_mode" == "Proxy Only" ]] \
+		|| fail "case playbackMode must be Proxy Only, got: ${playback_mode}"
+}
+
+wait_for_fcp_standard_window() {
+	local timeout_seconds="${1:-60}"
+	local waited=0
+	while (( waited < timeout_seconds * 10 )); do
+		if /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1
+tell application "System Events"
+	if not (exists process "Final Cut Pro") then error "Final Cut Pro process not found"
+	tell process "Final Cut Pro"
+		repeat with candidateWindow in windows
+			try
+				if subrole of candidateWindow is "AXStandardWindow" then return "ready"
+			end try
+		end repeat
+	end tell
+end tell
+error "Final Cut Pro standard window not ready"
+APPLESCRIPT
+		then
+			return 0
+		fi
+		sleep 0.1
+		waited=$((waited + 1))
+	done
+	return 1
+}
+
+wait_for_fcp_exit() {
+	local timeout_seconds="${1:-45}"
+	local waited=0
+	while (( waited < timeout_seconds * 10 )); do
+		if ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
+			return 0
+		fi
+		sleep 0.1
+		waited=$((waited + 1))
+	done
+	return 1
+}
+
+open_case_library() {
+	local library
+	library="$(json_value "$case_file" library)"
+	[[ -d "$library" ]] || fail "case library does not exist: ${library}"
+	/usr/bin/open -a "Final Cut Pro" "$library"
+	while ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; do
+		sleep 0.25
+	done
+	wait_for_fcp_standard_window 60 \
+		|| fail "Final Cut Pro standard window did not become readable after opening ${library}"
+	printf 'Opened FCP case library: %s\n' "$library"
+}
+
+quit_fcp() {
+	if ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
+		printf 'Final Cut Pro: not running\n'
+		return 0
+	fi
+	/usr/bin/osascript <<'APPLESCRIPT'
+tell application "Final Cut Pro" to quit
+APPLESCRIPT
+	wait_for_fcp_exit 45 \
+		|| fail "Final Cut Pro did not quit within 45s; close save dialogs or quit it manually before retrying"
+	printf 'Final Cut Pro: quit\n'
+}
+
+print_status() {
+	local library
+	local project
+	local event_name
+	local source_clip
+	local start_timecode
+	local playback_mode
+	library="$(json_value "$case_file" library)"
+	project="$(json_value "$case_file" project)"
+	event_name="$(python3 - "$case_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(case.get("event") or Path(case["originalMedia"]).parent.parent.name)
+PY
+)"
+	source_clip="$(json_value "$case_file" sourceClip)"
+	start_timecode="$(json_value "$case_file" startTimecode)"
+	playback_mode="$(json_value "$case_file" playbackMode)"
+	printf 'case: %s\n' "$case_file"
+	printf 'library: %s\n' "$library"
+	printf 'event: %s\n' "$event_name"
+	printf 'project: %s\n' "$project"
+	printf 'source: %s\n' "$source_clip"
+	printf 'start: %s\n' "$start_timecode"
+	printf 'playbackMode: %s\n' "$playback_mode"
+	if /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
+		printf 'Final Cut Pro: running\n'
+		if wait_for_fcp_standard_window 1; then
+			printf 'FCP standard window: ready\n'
+		else
+			printf 'FCP standard window: not ready\n'
+		fi
+		/usr/bin/osascript <<'APPLESCRIPT' 2>/dev/null || true
+tell application "System Events"
+	try
+		return "frontmost: " & (name of first application process whose frontmost is true)
+	end try
+end tell
+APPLESCRIPT
+	else
+		printf 'Final Cut Pro: not running\n'
+	fi
+}
+
+print_viewer_roi() {
+	[[ -f "$FCP_HELPER" ]] || fail "missing FCP helper: ${FCP_HELPER}"
+	/usr/bin/osascript "$FCP_HELPER" viewer-bounds-json | python3 -c '
+import json
+import sys
+
+bounds = json.load(sys.stdin)
+x = int(round(float(bounds["x"])))
+y = int(round(float(bounds["y"])))
+w = int(round(float(bounds["width"])))
+h = int(round(float(bounds["height"])))
+if w <= 0 or h <= 0:
+    raise SystemExit(f"invalid FCP Viewer bounds: {bounds!r}")
+print(f"{x},{y},{w},{h}")
+'
+}
+
+run_harness() {
+	local command="$1"
+	shift
+	require_case_proxy_only
+	"$E2E_SCRIPT" "$command" "${harness_args[@]}" "$@"
+}
+
+command_name="${1:-}"
+if [[ -z "$command_name" ]]; then
+	usage
+	exit 2
+fi
+shift
+
+case_file="$DEFAULT_CASE"
+harness_args=()
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--case)
+			case_file="${2:-}"
+			[[ -n "$case_file" ]] || fail "--case requires a path"
+			harness_args+=("--case" "$case_file")
+			shift 2
+			;;
+		--video|--output-dir|--viewer-roi|--capture-backend|--visual-review)
+			option="$1"
+			value="${2:-}"
+			[[ -n "$value" ]] || fail "${option} requires a value"
+			harness_args+=("$option" "$value")
+			shift 2
+			;;
+		--assume-current-fcp-state|--assume-prepared-fcp)
+			harness_args+=("$1")
+			shift
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			fail "unknown option: $1"
+			;;
+	esac
+done
+
+[[ -f "$case_file" ]] || fail "case file does not exist: ${case_file}"
+
+case "$command_name" in
+	status)
+		print_status
+		;;
+	open-case)
+		require_case_proxy_only
+		open_case_library
+		;;
+	quit)
+		quit_fcp
+		;;
+	recover-case)
+		require_case_proxy_only
+		quit_fcp
+		open_case_library
+		run_harness prepare
+		;;
+	viewer-roi)
+		print_viewer_roi
+		;;
+	proxy-only)
+		run_harness set-proxy-only
+		;;
+	prepare|assert-prepared|capture|evaluate|run)
+		run_harness "$command_name"
+		;;
+	-h|--help|help)
+		usage
+		;;
+	*)
+		usage >&2
+		fail "unknown command: ${command_name}"
+		;;
+esac
