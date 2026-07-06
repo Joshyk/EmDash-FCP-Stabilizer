@@ -92,6 +92,11 @@ p {
   padding: 14px;
 }
 
+.right-column {
+  display: grid;
+  gap: 14px;
+}
+
 .panel-header {
   display: flex;
   justify-content: space-between;
@@ -268,6 +273,10 @@ td:nth-child(5) {
   font-size: 12px;
 }
 
+.compact-status {
+  min-height: 58px;
+}
+
 .status-box.ok {
   color: var(--ok);
 }
@@ -276,7 +285,8 @@ td:nth-child(5) {
   color: var(--error);
 }
 
-.batch-summary {
+.batch-summary,
+.restore-summary {
   display: grid;
   gap: 10px;
   border: 1px solid var(--border);
@@ -294,7 +304,8 @@ td:nth-child(5) {
 }
 
 .summary-grid div,
-.package-item {
+.package-item,
+.restore-item {
   display: grid;
   gap: 3px;
   border: 1px solid #2a3038;
@@ -304,14 +315,17 @@ td:nth-child(5) {
 }
 
 .summary-grid strong,
-.package-item strong {
+.package-item strong,
+.restore-item strong {
   font-size: 11px;
   color: var(--muted);
 }
 
 .summary-grid span,
 .package-item span,
-.package-item code {
+.package-item code,
+.restore-item span,
+.restore-item code {
   overflow-wrap: anywhere;
 }
 

@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
@@ -19,6 +21,7 @@ const {
   processFailureDetails,
   processFailureMessage,
   readNativeAnalyzerCacheSchemaVersion,
+  restorePackageInfoForPath,
 } = require("../server.js");
 
 test("analysisTimingBreakdown reports the measured bottleneck stage", () => {
@@ -93,6 +96,57 @@ test("buildCacheRootFromAnalysis requires analyzer-normalized cache root", () =>
   assert.throws(
     () => buildCacheRootFromAnalysis({}),
     /analyzer did not return a normalized cache root/
+  );
+});
+
+test("restorePackageInfoForPath reads a per-clip restore package directory", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-restore-package-"));
+  const packageDir = path.join(tmp, "Library__Event__P1000307__schema32__sample100__10500f__20260706-010203__abc123ef");
+  const cacheDir = path.join(packageDir, "P1000307.analysis-cache");
+  const cachesDir = path.join(cacheDir, "caches");
+  fs.mkdirSync(cachesDir, { recursive: true });
+  fs.mkdirSync(path.join(packageDir, "P1000307.fcpxmld"));
+  const cacheFile = "host-analysis-v2-P1000307.json";
+  fs.writeFileSync(path.join(cachesDir, cacheFile), JSON.stringify({ schemaVersion: 32, frames: [] }), "utf8");
+  fs.writeFileSync(path.join(cacheDir, "host-analysis-index-v2.json"), JSON.stringify({ schemaVersion: 32, entries: [] }), "utf8");
+  fs.writeFileSync(
+    path.join(packageDir, "P1000307.analysis-manifest.json"),
+    JSON.stringify({
+      footageFileName: "P1000307.mov",
+      footageName: "P1000307",
+      eventName: "Event",
+      eventRoot: "/Volumes/Edit/Library.fcpbundle/Event",
+      mediaPath: "/Volumes/Edit/Library.fcpbundle/Event/Original Media/P1000307.mov",
+      cacheSchemaVersion: 32,
+      sampleScalePercent: 100,
+      sampleWidth: 5728,
+      sampleHeight: 3024,
+      frameCount: 10500,
+      cacheIdentity: "identity",
+      cacheIdentityShort: "abc123ef",
+      cachePayloadDirectory: "P1000307.analysis-cache",
+      cachePayloadCacheFile: `P1000307.analysis-cache/caches/${cacheFile}`,
+      packageAnalysisTimestamp: "20260706-010203",
+      packageShortUUID: "abc123ef",
+    }),
+    "utf8"
+  );
+  const item = await restorePackageInfoForPath(packageDir);
+  assert.equal(item.name, path.basename(packageDir));
+  assert.equal(item.footageFileName, "P1000307.mov");
+  assert.equal(item.eventName, "Event");
+  assert.equal(item.cacheSchemaVersion, 32);
+  assert.equal(item.cacheIdentityShort, "abc123ef");
+  assert.equal(item.fcpxmldPath, path.join(packageDir, "P1000307.fcpxmld"));
+  assert.equal(item.cachePayloadCacheFile, path.join(cachesDir, cacheFile));
+  assert.deepEqual(item.warnings, []);
+});
+
+test("restorePackageInfoForPath rejects folders without one manifest", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-restore-empty-"));
+  await assert.rejects(
+    () => restorePackageInfoForPath(tmp),
+    /missing \*\.analysis-manifest\.json/
   );
 });
 

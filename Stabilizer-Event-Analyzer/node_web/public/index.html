@@ -61,43 +61,71 @@
           </div>
         </section>
 
-        <section class="panel run-panel">
-          <div class="panel-header">
-            <h2>Run</h2>
-            <span id="selectedText" class="muted">No media selected</span>
-          </div>
-          <label class="field">
-            <span>Imports</span>
-            <input id="cacheRootInput" type="text" autocomplete="off" readonly>
-            <small class="field-help">
-              Choose the package output folder, not an FCPXMLD or JSON file. Per-clip package folders with FCPXMLD, manifest, and analysis-cache will be created here for restore or reuse.
-            </small>
-          </label>
-          <div class="button-row">
-            <button id="selectCacheRootButton" type="button">Select Imports</button>
-          </div>
-          <label class="field">
-            <span>Sample size</span>
-            <select id="sampleScaleInput">
-              <option value="100" selected>100%</option>
-              <option value="75">75%</option>
-              <option value="50">50%</option>
-              <option value="25">25%</option>
-              <option value="10">10%</option>
-            </select>
-          </label>
-          <div class="button-row">
-            <button id="runButton" class="primary-button" type="button" disabled>Run Serial Analysis</button>
-            <button id="cancelButton" type="button" class="hidden">Cancel</button>
-          </div>
-          <div id="statusBox" class="status-box"></div>
-          <div id="batchSummary" class="batch-summary hidden"></div>
-          <div id="resultActions" class="button-row hidden">
-            <button id="revealCacheButton" type="button">Reveal Cache</button>
-            <button id="revealImportButton" type="button">Reveal Import</button>
-            <button id="openImportButton" type="button">Open Import</button>
-          </div>
-        </section>
+        <div class="right-column">
+          <section class="panel run-panel">
+            <div class="panel-header">
+              <h2>Run</h2>
+              <span id="selectedText" class="muted">No media selected</span>
+            </div>
+            <label class="field">
+              <span>Imports</span>
+              <input id="cacheRootInput" type="text" autocomplete="off" readonly>
+              <small class="field-help">
+                Choose the package output folder, not an FCPXMLD or JSON file. Per-clip package folders with FCPXMLD, manifest, and analysis-cache will be created here for restore or reuse.
+              </small>
+            </label>
+            <div class="button-row">
+              <button id="selectCacheRootButton" type="button">Select Imports</button>
+            </div>
+            <label class="field">
+              <span>Sample size</span>
+              <select id="sampleScaleInput">
+                <option value="100" selected>100%</option>
+                <option value="75">75%</option>
+                <option value="50">50%</option>
+                <option value="25">25%</option>
+                <option value="10">10%</option>
+              </select>
+            </label>
+            <div class="button-row">
+              <button id="runButton" class="primary-button" type="button" disabled>Run Serial Analysis</button>
+              <button id="cancelButton" type="button" class="hidden">Cancel</button>
+            </div>
+            <div id="statusBox" class="status-box"></div>
+            <div id="batchSummary" class="batch-summary hidden"></div>
+            <div id="resultActions" class="button-row hidden">
+              <button id="revealCacheButton" type="button">Reveal Cache</button>
+              <button id="revealImportButton" type="button">Reveal Import</button>
+              <button id="openImportButton" type="button">Open Import</button>
+            </div>
+          </section>
+
+          <section class="panel restore-panel">
+            <div class="panel-header">
+              <h2>Restore</h2>
+              <span class="muted">Install saved cache</span>
+            </div>
+            <label class="field">
+              <span>Package folder</span>
+              <input id="restorePackagePathInput" type="text" autocomplete="off" placeholder="/path/to/stabilizer_analysis/...package folder">
+              <small class="field-help">
+                Select the per-clip package folder, not the FCPXMLD. The folder must contain one analysis-manifest JSON file and its analysis-cache directory.
+              </small>
+            </label>
+            <div class="button-row">
+              <button id="selectRestorePackageButton" type="button">Select Package Folder</button>
+              <button id="loadRestorePackageButton" type="button">Load Path</button>
+              <button id="installRestorePackageButton" class="primary-button" type="button" disabled>Install Cache</button>
+            </div>
+            <div id="restoreSummary" class="restore-summary hidden"></div>
+            <div id="restoreStatusBox" class="status-box compact-status"></div>
+            <div class="button-row restore-actions">
+              <button id="revealRestorePackageButton" type="button" disabled>Reveal Package</button>
+              <button id="revealInstalledCacheButton" type="button" disabled>Reveal Installed Cache</button>
+              <button id="openRestoreImportButton" type="button" disabled>Open FCPXMLD</button>
+            </div>
+          </section>
+        </div>
       </main>
     </div>
     <script src="/version.js?v=__ASSET_VERSION__"></script>

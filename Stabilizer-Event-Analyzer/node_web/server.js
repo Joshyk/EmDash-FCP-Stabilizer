@@ -527,6 +527,142 @@ async function selectCacheRoot() {
   return { item: await cacheRootItemForPath(selectedPath) };
 }
 
+function assertRelativePackagePath(value, label) {
+  const text = String(value || "").trim();
+  if (!text) throw new Error(`manifest is missing ${label}`);
+  if (path.isAbsolute(text)) throw new Error(`manifest ${label} must be relative to the package directory`);
+  return text;
+}
+
+function assertInsidePackage(packagePath, targetPath, label) {
+  const root = path.resolve(packagePath);
+  const target = path.resolve(targetPath);
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+    throw new Error(`${label} points outside the selected package directory`);
+  }
+}
+
+async function singleRestoreManifestPath(packagePath) {
+  const entries = await fsp.readdir(packagePath, { withFileTypes: true });
+  const manifests = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".analysis-manifest.json"))
+    .map((entry) => path.join(packagePath, entry.name));
+  if (manifests.length === 0) {
+    throw new Error("selected folder is not a Stabilizer package: missing *.analysis-manifest.json");
+  }
+  if (manifests.length > 1) {
+    throw new Error("selected folder contains multiple analysis manifests; choose one per-clip package folder");
+  }
+  return manifests[0];
+}
+
+async function singleFCPXMLDPath(packagePath) {
+  const entries = await fsp.readdir(packagePath, { withFileTypes: true });
+  const packages = entries
+    .filter((entry) => entry.isDirectory() && entry.name.endsWith(".fcpxmld"))
+    .map((entry) => path.join(packagePath, entry.name));
+  return packages.length === 1 ? packages[0] : "";
+}
+
+async function restorePackageInfoForPath(selectedPath) {
+  const packagePath = expandPath(selectedPath);
+  const stat = await fsp.stat(packagePath);
+  if (!stat.isDirectory()) {
+    throw new Error("restore package must be a directory containing an analysis manifest and analysis-cache");
+  }
+  const manifestPath = await singleRestoreManifestPath(packagePath);
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
+  const payloadDirName = assertRelativePackagePath(manifest.cachePayloadDirectory, "cachePayloadDirectory");
+  const payloadCacheName = assertRelativePackagePath(manifest.cachePayloadCacheFile, "cachePayloadCacheFile");
+  const payloadDir = path.resolve(packagePath, payloadDirName);
+  const payloadCacheFile = path.resolve(packagePath, payloadCacheName);
+  assertInsidePackage(packagePath, payloadDir, "cachePayloadDirectory");
+  assertInsidePackage(packagePath, payloadCacheFile, "cachePayloadCacheFile");
+  const indexPath = path.join(payloadDir, "host-analysis-index-v2.json");
+  const requiredFiles = [
+    [payloadDir, "cache payload directory", "directory"],
+    [payloadCacheFile, "cache payload file", "file"],
+    [indexPath, "cache payload index", "file"],
+  ];
+  for (const [requiredPath, label, kind] of requiredFiles) {
+    try {
+      await fsp.access(requiredPath, fs.constants.R_OK);
+    } catch {
+      throw new Error(`${label} is missing or unreadable: ${requiredPath}`);
+    }
+    const requiredStat = await fsp.stat(requiredPath);
+    if (kind === "directory" && !requiredStat.isDirectory()) {
+      throw new Error(`${label} is not a directory: ${requiredPath}`);
+    }
+    if (kind === "file" && !requiredStat.isFile()) {
+      throw new Error(`${label} is not a file: ${requiredPath}`);
+    }
+  }
+  const fcpxmldPath = await singleFCPXMLDPath(packagePath);
+  const warnings = [];
+  if (!fcpxmldPath) {
+    warnings.push("No single FCPXMLD package was found; cache restore can run, but Open FCPXMLD is unavailable.");
+  }
+  return {
+    name: path.basename(packagePath),
+    packagePath,
+    manifestPath,
+    fcpxmldPath,
+    cachePayloadDirectory: payloadDir,
+    cachePayloadCacheFile: payloadCacheFile,
+    cachePayloadIndex: indexPath,
+    footageName: manifest.footageName || "",
+    footageFileName: manifest.footageFileName || "",
+    eventName: manifest.eventName || "",
+    eventRoot: manifest.eventRoot || "",
+    mediaPath: manifest.mediaPath || "",
+    cacheSchemaVersion: manifest.cacheSchemaVersion || null,
+    sampleScalePercent: manifest.sampleScalePercent || null,
+    sampleWidth: manifest.sampleWidth || null,
+    sampleHeight: manifest.sampleHeight || null,
+    frameCount: manifest.frameCount || null,
+    cacheIdentity: manifest.cacheIdentity || "",
+    cacheIdentityShort: manifest.cacheIdentityShort || "",
+    packageAnalysisTimestamp: manifest.packageAnalysisTimestamp || "",
+    packageShortUUID: manifest.packageShortUUID || "",
+    warnings,
+  };
+}
+
+async function selectRestorePackage() {
+  const script = [
+    'set selectedFolder to choose folder with prompt "Select a Stabilizer analysis package folder"',
+    "return POSIX path of selectedFolder",
+  ].join("\n");
+  let stdout = "";
+  try {
+    stdout = await runTextProcess("osascript", ["-e", script]);
+  } catch (error) {
+    if (String(error.stderr || error.message).includes("-128")) {
+      return { item: null };
+    }
+    throw error;
+  }
+  const selectedPath = stdout.trim();
+  if (!selectedPath) {
+    return { item: null };
+  }
+  return { item: await restorePackageInfoForPath(selectedPath) };
+}
+
+async function installRestorePackage(packagePath) {
+  const item = await restorePackageInfoForPath(packagePath);
+  const installation = await runJsonProcess(PYTHON, [
+    scriptPath("install_stabilizer_package_cache.py"),
+    "--manifest",
+    item.manifestPath,
+  ]);
+  if (installation.status !== "ok") {
+    throw new Error(installation.error || "restore package install failed");
+  }
+  return { item, installation };
+}
+
 async function listAssets(sourcePath) {
   const resolved = expandPath(sourcePath);
   if (!resolved) throw new Error("sourcePath is required");
@@ -1273,6 +1409,17 @@ async function handleApi(req, res, pathname) {
     if (req.method === "POST" && pathname === "/api/select-cache-root") {
       return sendJson(res, 200, { status: "ok", ...(await selectCacheRoot()) });
     }
+    if (req.method === "POST" && pathname === "/api/select-restore-package") {
+      return sendJson(res, 200, { status: "ok", ...(await selectRestorePackage()) });
+    }
+    if (req.method === "POST" && pathname === "/api/restore-package-info") {
+      const body = await readJsonBody(req);
+      return sendJson(res, 200, { status: "ok", item: await restorePackageInfoForPath(body.packagePath) });
+    }
+    if (req.method === "POST" && pathname === "/api/install-restore-package") {
+      const body = await readJsonBody(req);
+      return sendJson(res, 200, { status: "ok", ...(await installRestorePackage(body.packagePath)) });
+    }
     if (req.method === "POST" && pathname === "/api/assets") {
       const body = await readJsonBody(req);
       return sendJson(res, 200, await listAssets(body.sourcePath));
@@ -1388,4 +1535,5 @@ module.exports = {
   processFailureDetails,
   processFailureMessage,
   readNativeAnalyzerCacheSchemaVersion,
+  restorePackageInfoForPath,
 };

@@ -15,6 +15,8 @@ const state = {
   importsOverride: "",
   currentJobId: "",
   lastResult: null,
+  restorePackage: null,
+  restoreInstallation: null,
 };
 
 const el = {
@@ -41,6 +43,15 @@ const el = {
   revealCacheButton: document.getElementById("revealCacheButton"),
   revealImportButton: document.getElementById("revealImportButton"),
   openImportButton: document.getElementById("openImportButton"),
+  restorePackagePathInput: document.getElementById("restorePackagePathInput"),
+  selectRestorePackageButton: document.getElementById("selectRestorePackageButton"),
+  loadRestorePackageButton: document.getElementById("loadRestorePackageButton"),
+  installRestorePackageButton: document.getElementById("installRestorePackageButton"),
+  restoreSummary: document.getElementById("restoreSummary"),
+  restoreStatusBox: document.getElementById("restoreStatusBox"),
+  revealRestorePackageButton: document.getElementById("revealRestorePackageButton"),
+  revealInstalledCacheButton: document.getElementById("revealInstalledCacheButton"),
+  openRestoreImportButton: document.getElementById("openRestoreImportButton"),
 };
 
 function renderAppVersion(version, config = {}) {
@@ -71,6 +82,11 @@ async function api(path, options = {}) {
 function setStatus(message, kind = "") {
   el.statusBox.className = `status-box ${kind}`.trim();
   el.statusBox.textContent = message;
+}
+
+function setRestoreStatus(message, kind = "") {
+  el.restoreStatusBox.className = `status-box compact-status ${kind}`.trim();
+  el.restoreStatusBox.textContent = message;
 }
 
 function formatProgress(progress) {
@@ -180,6 +196,50 @@ function renderBatchSummary(result) {
     }).join("\n");
     el.batchSummary.appendChild(failures);
   }
+}
+
+function renderRestoreSummary(item) {
+  el.restoreSummary.textContent = "";
+  if (!item) {
+    el.restoreSummary.classList.add("hidden");
+    return;
+  }
+  el.restoreSummary.classList.remove("hidden");
+  const rows = [
+    ["Clip", item.footageFileName || item.footageName || "-"],
+    ["Event", item.eventName || "-"],
+    ["Schema", item.cacheSchemaVersion ? `schema ${item.cacheSchemaVersion}` : "-"],
+    ["Sample", item.sampleWidth && item.sampleHeight ? `${item.sampleScalePercent || "?"}% | ${item.sampleWidth}x${item.sampleHeight}` : "-"],
+    ["Frames", item.frameCount ? `${item.frameCount}` : "-"],
+    ["Identity", item.cacheIdentityShort || "no short identity"],
+    ["Package", item.name || "-"],
+    ["Target Event", item.eventRoot || "-"],
+  ];
+  for (const [label, value] of rows) {
+    const row = document.createElement("div");
+    row.className = "restore-item";
+    row.innerHTML = "<strong></strong><span></span>";
+    row.querySelector("strong").textContent = label;
+    row.querySelector("span").textContent = value;
+    el.restoreSummary.appendChild(row);
+  }
+  if (Array.isArray(item.warnings) && item.warnings.length) {
+    const warning = document.createElement("div");
+    warning.className = "failure-list";
+    warning.textContent = item.warnings.join("\n");
+    el.restoreSummary.appendChild(warning);
+  }
+}
+
+function updateRestoreState() {
+  const item = state.restorePackage;
+  const installation = state.restoreInstallation;
+  if (item) el.restorePackagePathInput.value = item.packagePath;
+  el.installRestorePackageButton.disabled = !item;
+  el.revealRestorePackageButton.disabled = !item;
+  el.openRestoreImportButton.disabled = !item || !item.fcpxmldPath;
+  el.revealInstalledCacheButton.disabled = !installation || !installation.cacheRoot;
+  renderRestoreSummary(item);
 }
 
 function attachRunningJob(job) {
@@ -505,6 +565,8 @@ async function loadConfig() {
   renderExports([]);
   updateLastAnalysisState();
   updateRunState();
+  updateRestoreState();
+  setRestoreStatus("Select a saved per-clip package folder to restore its analysis cache.");
   await resumeLatestJob();
 }
 
@@ -664,6 +726,60 @@ async function selectCacheRoot() {
   setStatus(`Selected Imports: ${payload.item.path}`, "ok");
 }
 
+async function selectRestorePackage() {
+  setRestoreStatus("Selecting package folder...");
+  const payload = await api("/api/select-restore-package", { method: "POST" });
+  if (!payload.item) {
+    setRestoreStatus("No package folder selected.");
+    return;
+  }
+  state.restorePackage = payload.item;
+  state.restoreInstallation = null;
+  updateRestoreState();
+  const warningText = payload.item.warnings && payload.item.warnings.length ? `\n${payload.item.warnings.join("\n")}` : "";
+  setRestoreStatus(`Package ready: ${payload.item.footageFileName || payload.item.footageName || payload.item.name}${warningText}`, warningText ? "error" : "ok");
+}
+
+async function loadRestorePackagePath() {
+  const packagePath = el.restorePackagePathInput.value.trim();
+  if (!packagePath) {
+    setRestoreStatus("Enter or select a package folder path.", "error");
+    return;
+  }
+  setRestoreStatus("Reading package folder...");
+  const payload = await api("/api/restore-package-info", {
+    method: "POST",
+    body: { packagePath },
+  });
+  state.restorePackage = payload.item;
+  state.restoreInstallation = null;
+  updateRestoreState();
+  const warningText = payload.item.warnings && payload.item.warnings.length ? `\n${payload.item.warnings.join("\n")}` : "";
+  setRestoreStatus(`Package ready: ${payload.item.footageFileName || payload.item.footageName || payload.item.name}${warningText}`, warningText ? "error" : "ok");
+}
+
+async function installRestorePackage() {
+  if (!state.restorePackage) {
+    setRestoreStatus("Select a package folder first.", "error");
+    return;
+  }
+  el.installRestorePackageButton.disabled = true;
+  setRestoreStatus("Installing cache into the package's Event Analysis Files...");
+  try {
+    const payload = await api("/api/install-restore-package", {
+      method: "POST",
+      body: { packagePath: state.restorePackage.packagePath },
+    });
+    state.restorePackage = payload.item;
+    state.restoreInstallation = payload.installation;
+    updateRestoreState();
+    setRestoreStatus(`Installed cache: ${payload.installation.cacheRoot}`, "ok");
+  } catch (error) {
+    updateRestoreState();
+    setRestoreStatus(error.message, "error");
+  }
+}
+
 function runBody() {
   const sources = activeSources();
   const sourceJobs = [];
@@ -762,6 +878,10 @@ async function openPath(pathValue) {
   await api("/api/open", { method: "POST", body: { path: pathValue } });
 }
 
+function restoreInstalledCachePath() {
+  return state.restoreInstallation && state.restoreInstallation.cacheRoot ? state.restoreInstallation.cacheRoot : "";
+}
+
 function firstImportPath(result) {
   if (!result) return "";
   if (result.outputPackage) return result.outputPackage;
@@ -784,6 +904,9 @@ function firstCachePath(result) {
 el.selectExportFilesButton.addEventListener("click", () => selectExportFiles().catch((error) => setStatus(error.message, "error")));
 el.lastAnalysisButton.addEventListener("click", () => applyLastAnalysis().catch((error) => setStatus(error.message, "error")));
 el.selectCacheRootButton.addEventListener("click", () => selectCacheRoot().catch((error) => setStatus(error.message, "error")));
+el.selectRestorePackageButton.addEventListener("click", () => selectRestorePackage().catch((error) => setRestoreStatus(error.message, "error")));
+el.loadRestorePackageButton.addEventListener("click", () => loadRestorePackagePath().catch((error) => setRestoreStatus(error.message, "error")));
+el.installRestorePackageButton.addEventListener("click", () => installRestorePackage());
 el.loadAssetsButton.addEventListener("click", () => loadAssets().catch((error) => setStatus(error.message, "error")));
 el.sourcePathInput.addEventListener("input", () => {
   if (!state.sources.length) updateImportsInput();
@@ -799,11 +922,22 @@ el.clearSelectionButton.addEventListener("click", () => {
   renderAssets();
 });
 el.cacheRootInput.addEventListener("input", updateRunState);
+el.restorePackagePathInput.addEventListener("input", () => {
+  if (state.restorePackage && el.restorePackagePathInput.value.trim() !== state.restorePackage.packagePath) {
+    state.restorePackage = null;
+    state.restoreInstallation = null;
+    updateRestoreState();
+    setRestoreStatus("Load the package path before installing cache.");
+  }
+});
 el.runButton.addEventListener("click", () => runAnalysis().catch((error) => setStatus(error.message, "error")));
 el.cancelButton.addEventListener("click", () => cancelJob().catch((error) => setStatus(error.message, "error")));
 el.revealCacheButton.addEventListener("click", () => reveal(firstCachePath(state.lastResult)));
 el.revealImportButton.addEventListener("click", () => reveal(firstImportPath(state.lastResult)));
 el.openImportButton.addEventListener("click", () => openPath(firstImportPath(state.lastResult)));
+el.revealRestorePackageButton.addEventListener("click", () => reveal(state.restorePackage && state.restorePackage.packagePath));
+el.revealInstalledCacheButton.addEventListener("click", () => reveal(restoreInstalledCachePath()));
+el.openRestoreImportButton.addEventListener("click", () => openPath(state.restorePackage && state.restorePackage.fcpxmldPath));
 
 loadConfig()
   .catch((error) => setStatus(error.message, "error"));
