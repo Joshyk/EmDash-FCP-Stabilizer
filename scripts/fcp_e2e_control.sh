@@ -20,16 +20,18 @@ operations terminal-first through open(1) and osascript.
 Commands:
   status          Print FCP process/front-window state and selected case metadata.
   open-case       Open the case library in Final Cut Pro and wait for a standard window.
+  open-project    Open the case project via helper/menu/keyboard paths, without coordinate clicks.
   quit            Ask Final Cut Pro to quit through AppleScript and wait for exit.
   recover-case    Quit FCP, reopen the case library, then run harness prepare.
   clear-render-files
                   Move only the selected case Event's Render Files out of the FCP bundle.
   viewer-roi      Print the current FCP Viewer ROI as capture-pixel x,y,w,h.
   proxy-only      Set the current FCP Viewer media playback to Proxy Only.
+  green-channel   Set the current FCP Viewer channel display to Green.
   warmup-proxy    Warm a black/uninitialized Proxy Only Viewer and reassert recordability.
   patterns        Print canonical fixed-regression command patterns.
   prepare         Open/normalize the case through the existing E2E harness.
-  assert-prepared Verify Proxy Only, target project/effect, timecode, and Viewer ROI.
+  assert-prepared Verify Proxy Only, Green channel, Debug Overlay, target project/effect, timecode, and Viewer ROI.
   capture         Capture the FCP Viewer through the existing E2E harness.
   evaluate        Evaluate an existing recording through the existing E2E harness.
   assert-recording-progress
@@ -52,7 +54,8 @@ Options:
 
 Notes:
   - --case accepts full paths and aliases: p1000307, p1000304.
-  - Proxy Only is required by the checked-in E2E cases; Proxy Preferred is not accepted.
+  - Proxy Only, Viewer Green channel, and visible Debug Overlay are required by
+    the checked-in E2E cases; Proxy Preferred is not accepted.
   - Smoothness acceptance still requires the recorded FCP Preview video, full CSV/PTS
     diagnostics, and explicit visual review.
 USAGE
@@ -196,7 +199,7 @@ print_patterns() {
 	cat <<'PATTERN'
 # Canonical Tokyo Walking Stabilizer FCP Preview E2E patterns.
 # The wrapper defaults capture/run to avfoundation-roi to preserve 50/59.94fps cadence.
-# Keep Proxy Only and crop/Remove Black Edges enabled; do not use Proxy Preferred.
+# Keep Proxy Only, Viewer Green channel, and visible Debug Overlay; do not use Proxy Preferred.
 
 PATTERN
 	print_case_run_pattern p1000307 "$P1000307_CASE"
@@ -284,14 +287,290 @@ open_case_library() {
 	printf 'Opened FCP case library: %s\n' "$library"
 }
 
+handle_case_import_prompts() {
+	local library="$1"
+	if [[ ! -f "$FCP_HELPER" ]]; then
+		printf 'FCP helper unavailable for import-prompt handling: %s\n' "$FCP_HELPER" >&2
+		return 1
+	fi
+	timeout 12 /usr/bin/osascript "$FCP_HELPER" handle-e2e-import-prompts 6 "$library"
+}
+
+select_case_event_via_ax() {
+	local event_name="$1"
+	timeout 12 /usr/bin/osascript - "$event_name" <<'APPLESCRIPT'
+on run argv
+	set eventName to item 1 of argv
+	tell application "Final Cut Pro" to activate
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontmost to true
+			set frontWindow to my frontFinalCutProWindow()
+			set eventRow to my firstRowContainingExactText(frontWindow, eventName, 18)
+			if eventRow is missing value then error "visible Event sidebar row not found: " & eventName
+			try
+				set selected of eventRow to true
+			end try
+			try
+				perform action "AXPress" of eventRow
+			end try
+		end tell
+	end tell
+	return "selected"
+end run
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+on firstRowContainingExactText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+	end tell
+	if roleName is "AXRow" and my subtreeContainsExactText(rootElement, requiredText, 7) then return rootElement
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstRowContainingExactText(childElement, requiredText, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstRowContainingExactText
+
+on subtreeContainsExactText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return false
+	if my elementTextEquals(rootElement, requiredText) then return true
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return false
+		end try
+	end tell
+	repeat with childElement in childElements
+		if my subtreeContainsExactText(childElement, requiredText, remainingDepth - 1) then return true
+	end repeat
+	return false
+end subtreeContainsExactText
+
+on elementTextEquals(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) is requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementTextEquals
+APPLESCRIPT
+}
+
+open_case_project_via_helper() {
+	local project
+	local event_name
+	project="$(json_value "$case_file" project)"
+	event_name="$(case_event_name "$case_file")"
+	if [[ ! -f "$FCP_HELPER" ]]; then
+		printf 'FCP helper unavailable for project open: %s\n' "$FCP_HELPER" >&2
+		return 1
+	fi
+
+	printf 'Primary project open: selecting Event via local AX path: %s\n' "$event_name"
+	if ! select_case_event_via_ax "$event_name"; then
+		printf 'Primary project open: local AX path could not select Event %s; trying project open in current Browser state.\n' "$event_name" >&2
+	fi
+	printf 'Primary project open: using helper keyboard search + Clip menu for project: %s\n' "$project"
+	timeout 30 /usr/bin/osascript "$FCP_HELPER" open-project "$project"
+}
+
+fcp_project_visible_by_ax() {
+	local project="$1"
+	timeout 15 /usr/bin/osascript - "$project" <<'APPLESCRIPT' >/dev/null
+on run argv
+	set projectName to item 1 of argv
+	tell application "Final Cut Pro" to activate
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontWindow to my frontFinalCutProWindow()
+			set windowPosition to position of frontWindow
+			set windowSize to size of frontWindow
+			if my subtreeContainsProjectHeaderText(frontWindow, projectName, 12, windowPosition, windowSize) then return "visible"
+		end tell
+	end tell
+	error "Final Cut Pro project is not visible: " & projectName
+end run
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+on subtreeContainsProjectHeaderText(rootElement, requiredText, remainingDepth, windowPosition, windowSize)
+	if remainingDepth < 0 then return false
+	if my elementContainsText(rootElement, requiredText) and my elementLooksLikeProjectHeader(rootElement, windowPosition, windowSize) then return true
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return false
+		end try
+	end tell
+	repeat with childElement in childElements
+		if my subtreeContainsProjectHeaderText(childElement, requiredText, remainingDepth - 1, windowPosition, windowSize) then return true
+	end repeat
+	return false
+end subtreeContainsProjectHeaderText
+
+on elementLooksLikeProjectHeader(candidateElement, windowPosition, windowSize)
+	tell application "System Events"
+		try
+			set roleText to role of candidateElement as text
+			if roleText is not "AXStaticText" and roleText is not "AXButton" and roleText is not "AXMenuButton" and roleText is not "AXPopUpButton" and roleText is not "AXGroup" then return false
+			set elementPosition to position of candidateElement
+			set elementSize to size of candidateElement
+			set elementWidth to item 1 of elementSize
+			set elementHeight to item 2 of elementSize
+			if elementWidth < 20 or elementHeight < 8 then return false
+			set centerX to (item 1 of elementPosition) + (elementWidth / 2)
+			set centerY to (item 2 of elementPosition) + (elementHeight / 2)
+			set relativeCenterX to centerX - (item 1 of windowPosition)
+			set relativeCenterY to centerY - (item 2 of windowPosition)
+			set windowWidth to item 1 of windowSize
+			set windowHeight to item 2 of windowSize
+			if relativeCenterX < (windowWidth * 0.30) then return false
+			if relativeCenterX > (windowWidth * 0.92) then return false
+			if relativeCenterY < 130 then return true
+			if relativeCenterY > (windowHeight * 0.50) and relativeCenterY < (windowHeight * 0.88) then return true
+		end try
+	end tell
+	return false
+end elementLooksLikeProjectHeader
+
+on elementTextEquals(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) is requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementTextEquals
+
+on elementContainsText(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) contains requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementContainsText
+APPLESCRIPT
+}
+
+open_case_project_primary() {
+	local library
+	local project
+	library="$(json_value "$case_file" library)"
+	project="$(json_value "$case_file" project)"
+	open_case_library
+	handle_case_import_prompts "$library" \
+		|| printf 'Continuing after import-prompt helper failure; project open will still be verified by prepare.\n' >&2
+	wait_for_fcp_standard_window 60 \
+		|| fail "Final Cut Pro standard window was not readable before project open"
+
+	if open_case_project_via_helper && fcp_project_visible_by_ax "$project"; then
+		return 0
+	fi
+	printf 'Primary helper project open did not expose the target project; trying selected Browser project open via helper menu path.\n' >&2
+	if timeout 12 /usr/bin/osascript "$FCP_HELPER" wait-open-selected-project 3 "$project" && fcp_project_visible_by_ax "$project"; then
+		return 0
+	fi
+	printf 'Primary helper project open failed or did not make the target project visible; no coordinate fallback will run.\n' >&2
+	return 1
+}
+
 quit_fcp() {
 	if ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
 		printf 'Final Cut Pro: not running\n'
 		return 0
 	fi
-	/usr/bin/osascript <<'APPLESCRIPT'
+	local quit_status=0
+	set +e
+	timeout 8 /usr/bin/osascript <<'APPLESCRIPT'
 tell application "Final Cut Pro" to quit
 APPLESCRIPT
+	quit_status=$?
+	set -e
+	if [[ "$quit_status" != "0" && "$quit_status" != "124" ]]; then
+		fail "Final Cut Pro quit AppleScript failed with status ${quit_status}"
+	fi
+	if [[ "$quit_status" == "124" ]]; then
+		fail "Final Cut Pro quit AppleScript timed out; check for save/import dialogs before retrying"
+	fi
 	wait_for_fcp_exit 45 \
 		|| fail "Final Cut Pro did not quit within 45s; close save dialogs or quit it manually before retrying"
 	printf 'Final Cut Pro: quit\n'
@@ -400,7 +679,7 @@ run_harness() {
 	local command="$1"
 	shift
 	require_case_proxy_only
-	if [[ "$command" == "set-proxy-only" ]]; then
+	if [[ "$command" == "set-proxy-only" || "$command" == "set-green-channel" ]]; then
 		"$E2E_SCRIPT" "$command" "$@"
 		return
 	fi
@@ -475,6 +754,10 @@ case "$command_name" in
 		require_case_proxy_only
 		open_case_library
 		;;
+	open-project)
+		require_case_proxy_only
+		open_case_project_primary
+		;;
 	quit)
 		quit_fcp
 		;;
@@ -484,8 +767,14 @@ case "$command_name" in
 		if [[ "$clear_render_files" == "1" ]]; then
 			clear_case_render_files
 		fi
-		open_case_library
-		run_harness prepare
+		if open_case_project_primary; then
+			if run_harness prepare --assume-current-fcp-state; then
+				exit 0
+			fi
+			fail "Non-coordinate project open path did not pass prepare verification; refusing coordinate/browser fallback"
+		else
+			fail "Non-coordinate project open path failed; refusing coordinate/browser fallback"
+		fi
 		;;
 	clear-render-files)
 		require_case_proxy_only
@@ -496,6 +785,9 @@ case "$command_name" in
 		;;
 	proxy-only)
 		run_harness set-proxy-only
+		;;
+	green-channel)
+		run_harness set-green-channel
 		;;
 	warmup-proxy)
 		run_harness assert-prepared

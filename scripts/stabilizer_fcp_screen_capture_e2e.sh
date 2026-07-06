@@ -13,6 +13,8 @@ Usage: scripts/stabilizer_fcp_screen_capture_e2e.sh COMMAND [OPTIONS]
 Commands:
   set-proxy-only
              Set the current FCP Viewer media playback to Proxy Only.
+  set-green-channel
+             Set the current FCP Viewer channel display to Green.
   prepare    Open and normalize FCP UI state for the configured E2E case.
   assert-prepared
              Verify the current FCP UI state is recordable for the case.
@@ -36,7 +38,8 @@ Capture prerequisites:
   - FCP has Screen Recording and Accessibility permission for the invoking terminal.
   - The case library can be opened from disk.
   - The target project/clip has Tokyo Walking Stabilizer enabled.
-  - FCP Viewer media playback is Proxy Only, and Remove Black Edges / crop are enabled for the reported scenario.
+  - FCP Viewer media playback is Proxy Only, Viewer Channel is Green, Debug Overlay is visible,
+    and Remove Black Edges / crop are enabled for the reported scenario.
 USAGE
 }
 
@@ -1041,9 +1044,9 @@ tell application "Final Cut Pro" to activate
 tell application "System Events"
 	tell process "Final Cut Pro"
 		set frontmost to true
-		click menu item "Viewer" of menu 1 of menu item "Go To" of menu "Window" of menu bar 1
+		keystroke "3" using {command down}
 		delay 0.1
-		click menu item "Zoom to Fit" of menu "View" of menu bar 1
+		keystroke "z" using {shift down}
 	end tell
 end tell
 APPLESCRIPT
@@ -1051,106 +1054,703 @@ APPLESCRIPT
 	wait_for_ui_osascript "$osascript_pid" "viewer zoom to fit" 50 1
 }
 
-viewer_options_button_point() {
-	/usr/bin/osascript -e 'tell application "Final Cut Pro" to activate' >/dev/null 2>&1 || true
-	local window_rect
-	if ! window_rect="$(/usr/bin/osascript <<'APPLESCRIPT'
+set_fcp_viewer_channel_green() {
+	set_fcp_viewer_channel "Green" >/dev/null \
+		|| fail "could not set Final Cut Pro Viewer Channel Green"
+	printf 'FCP Viewer Channel set to: Green\n'
+}
+
+fcp_viewer_menu_setting() {
+	local action="$1"
+	local setting_kind="$2"
+	local target_value="$3"
+	[[ -n "$target_value" ]] || return 0
+	local output_file
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-viewer-menu-setting.XXXXXX")"
+	/usr/bin/osascript - "$action" "$setting_kind" "$target_value" >"$output_file" 2>&1 <<'APPLESCRIPT' &
+on run argv
+	set actionName to item 1 of argv
+	set settingKind to item 2 of argv
+	set targetValue to item 3 of argv
+	set menuPaths to my menuPathsFor(settingKind, targetValue)
+
+	tell application "Final Cut Pro" to activate
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontmost to true
+			key code 53
+		end tell
+	end tell
+	delay 0.1
+
+	if actionName is "set" then
+		set clickedPath to my clickFirstMenuPath(menuPaths)
+		delay 0.25
+		set checkedPath to my firstCheckedMenuPath(menuPaths)
+		return settingKind & "=" & targetValue & " set via " & clickedPath & "; verified checked via " & checkedPath
+	else if actionName is "verify" then
+		set checkedPath to my firstCheckedMenuPath(menuPaths)
+		return settingKind & "=" & targetValue & " verified checked via " & checkedPath
+	else
+		error "unsupported viewer menu setting action: " & actionName
+	end if
+end run
+
+on menuPathsFor(settingKind, targetValue)
+	if settingKind is "media-playback" then
+		return {{"View", "Media Playback", targetValue}, {"View", "Playback", targetValue}}
+	else if settingKind is "channel" then
+		return {{"View", "Channels", targetValue}, {"View", "Channel", targetValue}}
+	end if
+	error "unsupported viewer menu setting kind: " & settingKind
+end menuPathsFor
+
+on clickFirstMenuPath(menuPaths)
+	set triedPaths to {}
+	repeat with menuPathRef in menuPaths
+		set menuPath to contents of menuPathRef
+		try
+			my clickMenuPath(menuPath)
+			return my joinedMenuPath(menuPath)
+		on error menuError
+			set end of triedPaths to my joinedMenuPath(menuPath) & " (" & menuError & ")"
+			my closeMenus()
+		end try
+	end repeat
+	error "could not click any menu path. Tried: " & my joinTextList(triedPaths, "; ")
+end clickFirstMenuPath
+
+on firstCheckedMenuPath(menuPaths)
+	set triedPaths to {}
+	repeat with menuPathRef in menuPaths
+		set menuPath to contents of menuPathRef
+		try
+			if my menuPathIsChecked(menuPath) then
+				my closeMenus()
+				return my joinedMenuPath(menuPath)
+			end if
+			set end of triedPaths to my joinedMenuPath(menuPath) & " (not checked)"
+		on error menuError
+			set end of triedPaths to my joinedMenuPath(menuPath) & " (" & menuError & ")"
+		end try
+		my closeMenus()
+	end repeat
+	error "target menu item was not verified checked. Tried: " & my joinTextList(triedPaths, "; ")
+end firstCheckedMenuPath
+
+on clickMenuPath(menuPath)
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set currentMenu to menu (item 1 of menuPath) of menu bar 1
+			repeat with pathIndex from 2 to count of menuPath
+				set currentMenuItem to menu item (item pathIndex of menuPath) of currentMenu
+				if pathIndex is (count of menuPath) then
+					click currentMenuItem
+				else
+					set currentMenu to menu 1 of currentMenuItem
+				end if
+			end repeat
+		end tell
+	end tell
+end clickMenuPath
+
+on menuPathIsChecked(menuPath)
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set currentMenu to menu (item 1 of menuPath) of menu bar 1
+			repeat with pathIndex from 2 to count of menuPath
+				set currentMenuItem to menu item (item pathIndex of menuPath) of currentMenu
+				if pathIndex is (count of menuPath) then
+					return my menuItemLooksChecked(currentMenuItem)
+				else
+					set currentMenu to menu 1 of currentMenuItem
+				end if
+			end repeat
+		end tell
+	end tell
+	return false
+end menuPathIsChecked
+
+on menuItemLooksChecked(menuItemRef)
+	tell application "System Events"
+		try
+			set markValue to value of attribute "AXMenuItemMarkChar" of menuItemRef
+			if markValue is not missing value then
+				set markText to markValue as text
+				if markText is not "" then return true
+			end if
+		end try
+		try
+			set itemValue to value of menuItemRef
+			if itemValue is 1 then return true
+			if itemValue is "1" then return true
+			if itemValue is true then return true
+		end try
+		try
+			if selected of menuItemRef then return true
+		end try
+	end tell
+	return false
+end menuItemLooksChecked
+
+on closeMenus()
+	tell application "System Events"
+		try
+			tell process "Final Cut Pro" to key code 53
+		end try
+	end tell
+	delay 0.05
+end closeMenus
+
+on joinedMenuPath(menuPath)
+	return my joinTextList(menuPath, " > ")
+end joinedMenuPath
+
+on joinTextList(textItems, separatorText)
+	set previousDelimiters to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to separatorText
+	set joinedText to textItems as text
+	set AppleScript's text item delimiters to previousDelimiters
+	return joinedText
+end joinTextList
+APPLESCRIPT
+	local osascript_pid=$!
+	if wait_for_ui_osascript "$osascript_pid" "Viewer ${setting_kind} ${target_value} ${action}" 100 0; then
+		cat "$output_file"
+		rm -f "$output_file"
+		return 0
+	fi
+	cat "$output_file" >&2
+	rm -f "$output_file"
+	return 1
+}
+
+normalize_fcp_window_frame() {
+	timeout 6 /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1 || true
 tell application "Final Cut Pro" to activate
-delay 0.2
 tell application "System Events"
 	tell process "Final Cut Pro"
 		set frontmost to true
-		set bestArea to 0
-		set bestRect to missing value
+		set targetWindow to missing value
 		repeat with candidateWindow in windows
 			try
 				if subrole of candidateWindow is "AXStandardWindow" then
-					set windowPosition to position of candidateWindow
-					set windowSize to size of candidateWindow
-					set windowX to item 1 of windowPosition
-					set windowY to item 2 of windowPosition
-					set windowWidth to item 1 of windowSize
-					set windowHeight to item 2 of windowSize
-					set windowArea to windowWidth * windowHeight
-					if windowArea > bestArea then
-						set bestArea to windowArea
-						set bestRect to {windowX, windowY, windowWidth, windowHeight}
-					end if
+					set targetWindow to candidateWindow
+					exit repeat
 				end if
 			end try
 		end repeat
-		if bestRect is missing value then error "Final Cut Pro standard window not found"
-		set windowX to item 1 of bestRect
-		set windowY to item 2 of bestRect
-		set windowWidth to item 3 of bestRect
-		set windowHeight to item 4 of bestRect
-		return (windowX as text) & "," & (windowY as text) & "," & (windowWidth as text) & "," & (windowHeight as text)
+		if targetWindow is missing value then return
+		try
+			set position of targetWindow to {0, 46}
+		end try
+		try
+			set size of targetWindow to {1936, 1050}
+		end try
 	end tell
 end tell
 APPLESCRIPT
-)"; then
-		return 1
-	fi
-	WINDOW_RECT="$window_rect" python3 - <<'PY'
-import os
-
-values = [int(float(part.strip())) for part in os.environ["WINDOW_RECT"].split(",")]
-if len(values) != 4:
-    raise SystemExit("invalid Final Cut Pro window rectangle")
-window_x, window_y, window_width, _window_height = values
-
-# Final Cut Pro does not expose the Viewer Options popover as a normal AX menu,
-# and broad AX tree dumps can hang on the live Viewer. In the standard FCP
-# layout used by these E2E cases, the View Options button is fixed relative to
-# the main window and sits just above the Viewer. Keep this geometry localized
-# to the Proxy Only setup path.
-button_x = window_x + int(round(window_width * 0.759))
-button_y = window_y + 52
-print(f"{button_x},{button_y}")
-PY
 }
 
-fcp_viewer_media_playback_menu_offset_y() {
-	local playback_mode="$1"
-	case "$playback_mode" in
-		Optimized/Original)
-			printf '232\n'
-			;;
-		"Proxy Preferred")
-			printf '256\n'
-			;;
-		"Proxy Only")
-			printf '280\n'
-			;;
-		*)
-			fail "unsupported FCP Viewer media playback mode: $playback_mode"
-			;;
-	esac
+dismiss_fcp_menus() {
+	/usr/bin/osascript -e 'tell application "System Events" to tell process "Final Cut Pro" to key code 53' >/dev/null 2>&1 || true
+}
+
+set_fcp_viewer_option_via_view_options_ax() {
+	local target_value="$1"
+	local setting_kind="$2"
+	normalize_fcp_window_frame
+	timeout 12 /usr/bin/osascript - "$target_value" "$setting_kind" <<'APPLESCRIPT'
+on run argv
+	set targetValue to item 1 of argv
+	set settingKind to item 2 of argv
+	tell application "Final Cut Pro" to activate
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontmost to true
+			key code 53
+			delay 0.1
+			set optionsButton to my viewOptionsButton()
+			if optionsButton is missing value then error "View Options Menu Button not found"
+			set menuRef to my showViewOptionsMenu(optionsButton)
+			set targetElement to my firstMenuItemNamed(menuRef, targetValue)
+			if targetElement is missing value then error "View Options item not found: " & targetValue
+			click targetElement
+			delay 0.25
+			key code 53
+			delay 0.1
+			set verifyMenu to my showViewOptionsMenu(optionsButton)
+			set verifyElement to my firstMenuItemNamed(verifyMenu, targetValue)
+			if verifyElement is missing value then error "View Options verify item not found: " & targetValue
+			if not my menuItemLooksChecked(verifyElement) then error "View Options item did not become checked: " & targetValue
+			key code 53
+		end tell
+	end tell
+	return settingKind & "=" & targetValue & " set via View Options AX popover"
+end run
+
+on viewOptionsButton()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontWindow to my frontFinalCutProWindow()
+			set directButton to my viewOptionsButtonByKnownPath(frontWindow)
+			if directButton is not missing value then return directButton
+			return my firstMenuButtonByDescription(frontWindow, "View Options Menu Button", 14)
+		end tell
+	end tell
+end viewOptionsButton
+
+on viewOptionsButtonByKnownPath(rootElement)
+	tell application "System Events"
+		try
+			set currentElement to rootElement
+			repeat with childIndex in {1, 1, 1, 2, 1, 5, 2, 4}
+				set currentElement to UI element childIndex of currentElement
+			end repeat
+			if (role of currentElement as text) is "AXMenuButton" and (description of currentElement as text) is "View Options Menu Button" then return currentElement
+		end try
+	end tell
+	return missing value
+end viewOptionsButtonByKnownPath
+
+on showViewOptionsMenu(optionsButton)
+	tell application "System Events"
+		try
+			perform action "AXShowMenu" of optionsButton
+		on error
+			perform action "AXPress" of optionsButton
+		end try
+		delay 0.25
+		return menu 1 of optionsButton
+	end tell
+end showViewOptionsMenu
+
+on firstMenuItemNamed(menuRef, requiredName)
+	tell application "System Events"
+		repeat with itemRef in menu items of menuRef
+			try
+				if (name of itemRef as text) is requiredName then return itemRef
+			end try
+		end repeat
+	end tell
+	return missing value
+end firstMenuItemNamed
+
+on menuItemLooksChecked(menuItemRef)
+	tell application "System Events"
+		try
+			set markValue to value of attribute "AXMenuItemMarkChar" of menuItemRef
+			if markValue is not missing value then
+				set markText to markValue as text
+				if markText is not "" then return true
+			end if
+		end try
+		try
+			set itemValue to value of menuItemRef
+			if itemValue is 1 then return true
+			if itemValue is "1" then return true
+			if itemValue is true then return true
+		end try
+		try
+			if selected of menuItemRef then return true
+		end try
+	end tell
+	return false
+end menuItemLooksChecked
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+on pressElementOrAncestor(elementReference, labelText)
+	set currentElement to elementReference
+	repeat with attemptIndex from 1 to 5
+		try
+			tell application "System Events" to perform action "AXPress" of currentElement
+			return true
+		end try
+		try
+			tell application "System Events" to set currentElement to parent of currentElement
+		on error
+			exit repeat
+		end try
+	end repeat
+	error "could not press View Options item or ancestor: " & labelText
+end pressElementOrAncestor
+
+on firstMenuButtonByDescription(rootElement, wantedDescription, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			set candidateRole to role of rootElement as text
+			set candidateDescription to ""
+			try
+				set candidateDescription to description of rootElement as text
+			end try
+			if candidateRole is "AXMenuButton" and candidateDescription is wantedDescription then return rootElement
+		end try
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstMenuButtonByDescription(childElement, wantedDescription, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstMenuButtonByDescription
+
+on firstElementContainingText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	if my elementContainsText(rootElement, requiredText) then return rootElement
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstElementContainingText(childElement, requiredText, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstElementContainingText
+
+on elementContainsText(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) contains requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementContainsText
+APPLESCRIPT
 }
 
 set_fcp_viewer_media_playback() {
 	local playback_mode="$1"
 	[[ -n "$playback_mode" ]] || return 0
-	local button_point
-	button_point="$(viewer_options_button_point)" || return 1
-	[[ "$button_point" =~ ^[0-9]+,[0-9]+$ ]] || fail "Viewer Options button point was not usable: $button_point"
-	local button_x="${button_point%,*}"
-	local button_y="${button_point#*,}"
-	local row_offset_y
-	row_offset_y="$(fcp_viewer_media_playback_menu_offset_y "$playback_mode")"
-	local row_y=$((button_y + row_offset_y))
-	/usr/bin/osascript -e 'tell application "Final Cut Pro" to activate' \
-		-e 'tell application "System Events" to key code 53' >/dev/null 2>&1 || true
-	click_screen_point "$button_x" "$button_y"
-	sleep 0.6
-	click_screen_point "$button_x" "$row_y"
-	sleep 0.4
+	normalize_fcp_window_frame
+	if set_fcp_viewer_option_via_view_options_ax "$playback_mode" media-playback; then
+		return 0
+	fi
+	dismiss_fcp_menus
+	printf 'FCP Viewer media playback View Options AX popover did not confirm "%s"; refusing coordinate fallback.\n' "$playback_mode" >&2
+	return 1
 }
 
 set_fcp_proxy_only() {
 	set_fcp_viewer_media_playback "Proxy Only" >/dev/null \
 		|| fail "could not set FCP Viewer media playback mode to Proxy Only"
 	printf 'FCP Viewer media playback mode set to: Proxy Only\n'
+}
+
+set_fcp_viewer_channel() {
+	local channel_name="$1"
+	[[ -n "$channel_name" ]] || return 0
+	normalize_fcp_window_frame
+	if set_fcp_viewer_option_via_view_options_ax "$channel_name" channel; then
+		return 0
+	fi
+	dismiss_fcp_menus
+	printf 'FCP Viewer channel View Options AX popover did not confirm "%s"; refusing coordinate fallback.\n' "$channel_name" >&2
+	return 1
+}
+
+set_fcp_green_channel() {
+	set_fcp_viewer_channel_green >/dev/null \
+		|| fail "could not set FCP Viewer channel to Green"
+	printf 'FCP Viewer channel set to: Green\n'
+}
+
+debug_overlay_visible_now() {
+	local label="${1:-debug overlay precheck}"
+	local viewer_roi
+	local screenshot_path
+	if ! viewer_roi="$(current_fcp_viewer_roi 2>/dev/null)"; then
+		return 1
+	fi
+	mkdir -p "$ARTIFACT_ROOT"
+	screenshot_path="${ARTIFACT_ROOT}/fcp_debug_overlay_probe_$(date +%Y%m%d_%H%M%S).png"
+	/usr/sbin/screencapture -x "$screenshot_path" || return 1
+	assert_debug_overlay_visible_in_screenshot "$screenshot_path" "$viewer_roi" "$label"
+}
+
+set_fcp_debug_overlay_on_via_local_ax() {
+	/usr/bin/osascript > /dev/null <<'APPLESCRIPT' &
+tell application "Final Cut Pro" to activate
+tell application "System Events"
+	tell process "Final Cut Pro"
+		set frontmost to true
+		keystroke "4" using {command down}
+			delay 0.25
+			set frontWindow to my frontFinalCutProWindow()
+			set overlayCheckbox to my firstDebugOverlayCheckbox(frontWindow, 18)
+			if overlayCheckbox is missing value then set overlayCheckbox to my checkboxNearInspectorText(frontWindow, "Debug Overlay", 18)
+			if overlayCheckbox is missing value then error "Debug Overlay checkbox not found by local AX label/row search"
+			if not my checkboxIsOn(overlayCheckbox) then
+				my pressElement(overlayCheckbox)
+				delay 0.25
+			end if
+			if not my checkboxIsOn(overlayCheckbox) then error "Debug Overlay checkbox did not become enabled"
+	end tell
+end tell
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+on firstDebugOverlayCheckbox(rootElement, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			if (role of rootElement as text) is "AXCheckBox" then
+				if my elementContainsText(rootElement, "Debug Overlay") then return rootElement
+			end if
+		end try
+		try
+			if my elementContainsText(rootElement, "Debug Overlay") then
+				set rowCheckbox to my firstCheckbox(rootElement, 4)
+				if rowCheckbox is not missing value then return rowCheckbox
+			end if
+		end try
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstDebugOverlayCheckbox(childElement, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstDebugOverlayCheckbox
+
+on firstCheckbox(rootElement, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			if (role of rootElement as text) is "AXCheckBox" then return rootElement
+		end try
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstCheckbox(childElement, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstCheckbox
+
+on checkboxNearInspectorText(rootElement, labelText, remainingDepth)
+	set labelElement to my firstElementWithExactText(rootElement, labelText, remainingDepth)
+	if labelElement is missing value then return missing value
+	tell application "System Events"
+		try
+			set labelPosition to position of labelElement
+			set labelX to item 1 of labelPosition
+			set labelY to item 2 of labelPosition
+		on error
+			return missing value
+		end try
+	end tell
+	set checkboxPair to my nearestCheckboxNearY(rootElement, labelX, labelY, remainingDepth)
+	return item 1 of checkboxPair
+end checkboxNearInspectorText
+
+on firstElementWithExactText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	if my elementTextEquals(rootElement, requiredText) then return rootElement
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstElementWithExactText(childElement, requiredText, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstElementWithExactText
+
+on nearestCheckboxNearY(rootElement, labelX, labelY, remainingDepth)
+	set bestCheckbox to missing value
+	set bestScore to 999999
+	if remainingDepth < 0 then return {bestCheckbox, bestScore}
+	tell application "System Events"
+		try
+			if (role of rootElement as text) is "AXCheckBox" then
+				set elementPosition to position of rootElement
+				set elementSize to size of rootElement
+				set centerX to (item 1 of elementPosition) + ((item 1 of elementSize) / 2)
+				set centerY to (item 2 of elementPosition) + ((item 2 of elementSize) / 2)
+				set deltaY to centerY - labelY
+				if deltaY < 0 then set deltaY to -deltaY
+				set deltaX to centerX - labelX
+				if deltaX < 0 then set deltaX to -deltaX
+				set candidateScore to (deltaY * 100) + deltaX
+				if deltaY < 30 and centerX > labelX and candidateScore < bestScore then
+					set bestCheckbox to rootElement
+					set bestScore to candidateScore
+				end if
+			end if
+		end try
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return {bestCheckbox, bestScore}
+		end try
+	end tell
+	repeat with childElement in childElements
+		set candidatePair to my nearestCheckboxNearY(childElement, labelX, labelY, remainingDepth - 1)
+		if item 1 of candidatePair is not missing value and item 2 of candidatePair < bestScore then
+			set bestCheckbox to item 1 of candidatePair
+			set bestScore to item 2 of candidatePair
+		end if
+	end repeat
+	return {bestCheckbox, bestScore}
+end nearestCheckboxNearY
+
+on pressElement(elementReference)
+	tell application "System Events"
+		try
+			perform action "AXPress" of elementReference
+			return
+		end try
+	end tell
+	error "AXPress failed for target element"
+end pressElement
+
+on elementContainsText(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) contains requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementContainsText
+
+on elementTextEquals(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) is requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementTextEquals
+
+on checkboxIsOn(elementReference)
+	tell application "System Events"
+		try
+			set checkboxValue to value of elementReference
+			if checkboxValue is 1 then return true
+			if checkboxValue is "1" then return true
+			if checkboxValue is true then return true
+		end try
+	end tell
+	return false
+end checkboxIsOn
+APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "Debug Overlay local AX retry" 100 0
+}
+
+set_fcp_debug_overlay_on() {
+	[[ -f "$FCP_HELPER" ]] || fail "missing FCP helper: ${FCP_HELPER}"
+	if debug_overlay_visible_now "Debug Overlay precheck"; then
+		printf 'Tokyo Walking Stabilizer Debug Overlay already visible in Viewer.\n'
+		return 0
+	fi
+	local output_file
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-debug-overlay.XXXXXX")"
+	/usr/bin/osascript "$FCP_HELPER" set-debug-overlay on >"$output_file" 2>&1 &
+	local osascript_pid=$!
+	if ! wait_for_ui_osascript "$osascript_pid" "Debug Overlay on" 120 0; then
+		local result
+		result="$(cat "$output_file")"
+		rm -f "$output_file"
+		if debug_overlay_visible_now "Debug Overlay after helper failure"; then
+			printf 'Tokyo Walking Stabilizer Debug Overlay is visible despite Inspector checkbox failure.\n'
+			return 0
+		fi
+		printf 'Debug Overlay helper failed; retrying with local AX label/row checkbox search. Detail: %s\n' "$result" >&2
+		if set_fcp_debug_overlay_on_via_local_ax && debug_overlay_visible_now "Debug Overlay after local AX retry"; then
+			printf 'Tokyo Walking Stabilizer Debug Overlay set to: on via local AX retry.\n'
+			return 0
+		fi
+		fail "could not set Tokyo Walking Stabilizer Debug Overlay on: ${result}"
+	fi
+	cat "$output_file"
+	rm -f "$output_file"
+	if ! debug_overlay_visible_now "Debug Overlay after enabling"; then
+		fail "Tokyo Walking Stabilizer Debug Overlay was enabled in Inspector but is not visible in the Viewer"
+	fi
+	printf 'Tokyo Walking Stabilizer Debug Overlay set to: on\n'
 }
 
 warm_fcp_proxy_only_viewer_render() {
@@ -1163,10 +1763,11 @@ warm_fcp_proxy_only_viewer_render() {
 	sleep 0.4
 	set_fcp_viewer_media_playback "Proxy Only" >/dev/null
 	sleep 1.0
+	set_fcp_green_channel >/dev/null
 	press_stop_playback
 	seek_timecode "$timecode_entry"
 	sleep 0.4
-	printf 'Final Cut Pro Viewer media playback mode restored to: Proxy Only\n'
+	printf 'Final Cut Pro Viewer media playback mode restored to: Proxy Only; channel restored to: Green\n'
 }
 
 focus_timeline() {
@@ -1175,7 +1776,7 @@ tell application "Final Cut Pro" to activate
 tell application "System Events"
 	tell process "Final Cut Pro"
 		set frontmost to true
-		click menu item "Timeline" of menu 1 of menu item "Go To" of menu "Window" of menu bar 1
+		keystroke "2" using {command down}
 	end tell
 end tell
 APPLESCRIPT
@@ -1213,7 +1814,7 @@ on run argv
 							try
 								set currentValue to ((value of toolbarItemRef) as text) as integer
 								if currentValue is not desiredValue then
-									click toolbarItemRef
+									perform action "AXPress" of toolbarItemRef
 									delay 0.3
 								end if
 								set updatedValue to ((value of toolbarItemRef) as text) as integer
@@ -1274,7 +1875,7 @@ on run argv
 			if targetCheckbox is missing value then error "Could not find Final Cut Pro window checkbox: " & targetDescription
 			try
 				if (value of targetCheckbox as integer) is not desiredValue then
-					click targetCheckbox
+					perform action "AXPress" of targetCheckbox
 					delay 0.3
 				end if
 				if (value of targetCheckbox as integer) is not desiredValue then error "checkbox value did not change"
@@ -1333,6 +1934,7 @@ APPLESCRIPT
 
 normalize_fcp_layout() {
 	printf 'Normalizing FCP layout for screen-capture E2E...\n'
+	normalize_fcp_window_frame
 	local blocker_result
 	blocker_result="$(dismiss_known_screen_blockers)"
 	fail_if_known_screen_blocked "$blocker_result"
@@ -1470,13 +2072,179 @@ assert_inspector_contains_case_effect_if_readable() {
 	fi
 }
 
+assert_debug_overlay_visible_in_screenshot() {
+	local screenshot_path="$1"
+	local viewer_roi="$2"
+	local label="$3"
+	[[ -n "$screenshot_path" ]] || fail "debug overlay screenshot path is required"
+	[[ -n "$viewer_roi" ]] || fail "viewer ROI is required for Debug Overlay assertion"
+	python3 - "$screenshot_path" "$viewer_roi" "$label" <<'PY'
+from pathlib import Path
+import math
+import sys
+
+import cv2
+import numpy as np
+
+image_path = Path(sys.argv[1])
+roi_parts = [int(part) for part in sys.argv[2].split(",")]
+label = sys.argv[3]
+if len(roi_parts) != 4:
+    raise SystemExit("viewer ROI must be x,y,w,h")
+x, y, w, h = roi_parts
+image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+if image is None:
+    raise SystemExit(f"{label}: could not read Debug Overlay screenshot: {image_path}")
+height, width = image.shape[:2]
+if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > width or y + h > height:
+    raise SystemExit(f"{label}: viewer ROI {x},{y},{w},{h} is outside screenshot bounds {width}x{height}")
+viewer = image[y:y + h, x:x + w]
+gray = cv2.cvtColor(viewer, cv2.COLOR_BGR2GRAY)
+
+bits = {
+    "A": [0x2, 0x5, 0x7, 0x5, 0x5],
+    "B": [0x6, 0x5, 0x6, 0x5, 0x6],
+    "C": [0x7, 0x4, 0x4, 0x4, 0x7],
+    "D": [0x6, 0x5, 0x5, 0x5, 0x6],
+    "E": [0x7, 0x4, 0x6, 0x4, 0x7],
+    "F": [0x7, 0x4, 0x6, 0x4, 0x4],
+    "G": [0x7, 0x4, 0x5, 0x5, 0x7],
+    "H": [0x5, 0x5, 0x7, 0x5, 0x5],
+    "I": [0x7, 0x2, 0x2, 0x2, 0x7],
+    "J": [0x7, 0x1, 0x1, 0x1, 0x6],
+    "K": [0x5, 0x5, 0x6, 0x5, 0x5],
+    "L": [0x4, 0x4, 0x4, 0x4, 0x7],
+    "M": [0x5, 0x7, 0x7, 0x5, 0x5],
+    "N": [0x5, 0x7, 0x7, 0x7, 0x5],
+    "O": [0x7, 0x5, 0x5, 0x5, 0x7],
+    "P": [0x6, 0x5, 0x6, 0x4, 0x4],
+    "Q": [0x7, 0x5, 0x5, 0x7, 0x1],
+    "R": [0x6, 0x5, 0x6, 0x5, 0x5],
+    "S": [0x7, 0x4, 0x7, 0x1, 0x7],
+    "T": [0x7, 0x2, 0x2, 0x2, 0x2],
+    "U": [0x5, 0x5, 0x5, 0x5, 0x7],
+    "V": [0x5, 0x5, 0x5, 0x5, 0x2],
+    "W": [0x5, 0x5, 0x7, 0x7, 0x5],
+    "X": [0x5, 0x5, 0x2, 0x5, 0x5],
+    "Y": [0x5, 0x5, 0x2, 0x2, 0x2],
+    "Z": [0x7, 0x1, 0x2, 0x4, 0x7],
+    " ": [0x0, 0x0, 0x0, 0x0, 0x0],
+}
+labels = [
+    "X OFFSET",
+    "Y OFFSET",
+    "ROLL",
+    "FOOT STEP",
+    "STRIDE",
+    "FAR WARP",
+    "TURN",
+    "FOOT CONF",
+    "STRIDE CONF",
+    "WARP CONF",
+    "TURN CONF",
+    "SMOOTH",
+    "TRACK CONF",
+    "SHARPNESS",
+    "MATCH QUAL",
+    "EDGE SAFE",
+    "WALK CONF",
+    "CROP ZOOM",
+]
+
+overlay_scale = max(float(h) * 0.5 / (18.0 * 13.0), 0.25)
+panel_x = 16.0 * overlay_scale
+panel_y = 16.0 * overlay_scale
+label_width = 96.0 * overlay_scale
+label_gap = 2.0 * overlay_scale
+bar_width = 180.0 * overlay_scale
+row_height = 13.0 * overlay_scale
+panel_width = label_width + label_gap + bar_width
+panel_height = 19.0 * row_height
+if panel_x >= w or panel_y >= h:
+    raise SystemExit(f"{label}: predicted Debug Overlay panel origin is outside viewer ROI {w}x{h}")
+
+mask = np.zeros((h, w), dtype=np.uint8)
+area = np.zeros((h, w), dtype=np.uint8)
+
+def fill(target, x0, y0, x1, y1):
+    ix0 = max(0, int(math.floor(x0)))
+    iy0 = max(0, int(math.floor(y0)))
+    ix1 = min(w, int(math.ceil(x1)))
+    iy1 = min(h, int(math.ceil(y1)))
+    if ix1 > ix0 and iy1 > iy0:
+        target[iy0:iy1, ix0:ix1] = 1
+
+for row, text in enumerate(labels):
+    row_top = panel_y + (float(row) * row_height)
+    fill(area, panel_x, row_top, panel_x + label_width, row_top + row_height)
+    text_scale = 2.0 * overlay_scale
+    glyph_advance = 4.0 * text_scale
+    text_origin_x = panel_x + 6.0
+    text_origin_y = row_top + (1.5 * overlay_scale)
+    for index, char in enumerate(text[:12]):
+        row_bits = bits.get(char, bits[" "])
+        for glyph_y, row_mask in enumerate(row_bits):
+            for glyph_x in range(3):
+                if ((row_mask >> (2 - glyph_x)) & 0x1) == 0:
+                    continue
+                px0 = text_origin_x + (float(index) * glyph_advance) + (float(glyph_x) * text_scale)
+                py0 = text_origin_y + (float(glyph_y) * text_scale)
+                fill(mask, px0, py0, px0 + text_scale, py0 + text_scale)
+
+mask_count = int(np.count_nonzero(mask))
+if mask_count < 80:
+    raise SystemExit(f"{label}: predicted Debug Overlay label mask was too small for viewer ROI {w}x{h}")
+
+kernel_size = max(3, int(round(overlay_scale)))
+if kernel_size % 2 == 0:
+    kernel_size += 1
+kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+label_mask = cv2.dilate(mask, kernel)
+background_mask = (area > 0) & (cv2.dilate(mask, np.ones((max(5, kernel_size + 2), max(5, kernel_size + 2)), dtype=np.uint8)) == 0)
+label_values = gray[label_mask > 0]
+background_values = gray[background_mask]
+if label_values.size < 80 or background_values.size < 80:
+    raise SystemExit(
+        f"{label}: could not sample enough Debug Overlay label/background pixels "
+        f"(labels={label_values.size}, background={background_values.size}, screenshot={image_path})"
+    )
+
+label_p95 = float(np.percentile(label_values.astype(np.float32), 95))
+background_median = float(np.percentile(background_values.astype(np.float32), 50))
+contrast = label_p95 - background_median
+bright_threshold = max(78.0, background_median + 32.0)
+bright_ratio = float(np.count_nonzero(label_values >= bright_threshold)) / float(max(1, label_values.size))
+
+panel_x0 = max(0, int(math.floor(panel_x)))
+panel_y0 = max(0, int(math.floor(panel_y)))
+panel_x1 = min(w, int(math.ceil(panel_x + panel_width)))
+panel_y1 = min(h, int(math.ceil(panel_y + panel_height)))
+panel = gray[panel_y0:panel_y1, panel_x0:panel_x1]
+panel_dark_ratio = float(np.count_nonzero(panel < 80)) / float(max(1, panel.size))
+
+if label_p95 < 85.0 or contrast < 25.0 or bright_ratio < 0.025:
+    raise SystemExit(
+        f"{label}: Debug Overlay bars/labels are not visibly present in viewer ROI: "
+        f"labelP95={label_p95:.2f}, backgroundMedian={background_median:.2f}, "
+        f"contrast={contrast:.2f}, brightRatio={bright_ratio:.3f}, "
+        f"panelDarkRatio={panel_dark_ratio:.3f}, screenshot={image_path}"
+    )
+
+print(
+    f"{label}: Debug Overlay visible: labelP95={label_p95:.2f}, "
+    f"backgroundMedian={background_median:.2f}, contrast={contrast:.2f}, "
+    f"brightRatio={bright_ratio:.3f}, panelDarkRatio={panel_dark_ratio:.3f}, screenshot={image_path}"
+)
+PY
+}
+
 assert_viewer_roi_recordable() {
 	local viewer_roi="$1"
 	[[ -n "$viewer_roi" ]] || fail "viewer ROI is required for FCP prepare assertion"
 	local screenshot_path="${ARTIFACT_ROOT}/fcp_prepare_viewer_$(date +%Y%m%d_%H%M%S).png"
 	mkdir -p "$ARTIFACT_ROOT"
 	/usr/sbin/screencapture -x "$screenshot_path"
-	python3 - "$screenshot_path" "$viewer_roi" <<'PY'
+	if python3 - "$screenshot_path" "$viewer_roi" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1520,20 +2288,36 @@ if mean < 80.0 and placeholder_ratio > 0.55 and center_placeholder_ratio > 0.40:
         f"placeholderRatio={placeholder_ratio:.3f}, centerPlaceholderRatio={center_placeholder_ratio:.3f}, "
         f"mean={mean:.2f}, std={std:.2f}, screenshot={image_path}"
     )
-if colorful_ratio < 0.02:
+if colorful_ratio > 0.35:
     raise SystemExit(
-        f"viewer ROI appears checkerboard/uninitialized: colorRatio={colorful_ratio:.3f}, "
-        f"mean={mean:.2f}, std={std:.2f}, screenshot={image_path}"
+        "viewer ROI is not using Final Cut Pro Viewer Green channel: "
+        f"colorRatio={colorful_ratio:.3f}, mean={mean:.2f}, std={std:.2f}, screenshot={image_path}"
     )
 print(
     f"Viewer ROI ready: mean={mean:.2f}, std={std:.2f}, "
-    f"blackRatio={edge_ratio:.3f}, colorRatio={colorful_ratio:.3f}, screenshot={image_path}"
+    f"blackRatio={edge_ratio:.3f}, greenChannelColorRatio={colorful_ratio:.3f}, screenshot={image_path}"
 )
 PY
+	then
+		assert_debug_overlay_visible_in_screenshot "$screenshot_path" "$viewer_roi" "viewer ROI prepare"
+	else
+		return $?
+	fi
 }
 
 assert_fcp_viewer_not_nothing_loaded() {
 	local project_name="${1:-}"
+	local helper_output=""
+	if [[ -f "$FCP_HELPER" ]]; then
+		if helper_output="$(/usr/bin/osascript "$FCP_HELPER" assert-viewer-loaded 2>&1)"; then
+			printf 'FCP Viewer helper assertion passed: %s\n' "$helper_output"
+			return 0
+		fi
+		if printf '%s\n' "$helper_output" | /usr/bin/grep -qi "Nothing Loaded"; then
+			fail "Final Cut Pro Viewer is showing Nothing Loaded; refusing to record a static/unloaded E2E video"
+		fi
+		printf 'FCP Viewer helper assertion was inconclusive; falling back to bounded UI text snapshot: %s\n' "$(printf '%s' "$helper_output" | tr '\n' ' ' | cut -c 1-240)" >&2
+	fi
 	local snapshot
 	local snapshot_file
 	local error_file
@@ -1541,8 +2325,6 @@ assert_fcp_viewer_not_nothing_loaded() {
 	error_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer_fcp_ui_snapshot_error.XXXXXX")"
 	/usr/bin/osascript - "$project_name" >"$snapshot_file" 2>"$error_file" <<'APPLESCRIPT' &
 on run argv
-	set expectedProjectName to ""
-	if (count of argv) > 0 then set expectedProjectName to item 1 of argv
 	with timeout of 2 seconds
 		tell application "Final Cut Pro" to activate
 		tell application "System Events"
@@ -1550,12 +2332,10 @@ on run argv
 				set frontmost to true
 				set frontWindow to my frontFinalCutProWindow()
 				set nothingLoadedVisible to my subtreeContainsExactText(frontWindow, "Nothing Loaded", 6)
-				set projectVisible to false
-				if expectedProjectName is not "" then set projectVisible to my subtreeContainsExactText(frontWindow, expectedProjectName, 6)
 			end tell
 		end tell
 	end timeout
-	return "nothingLoaded=" & (nothingLoadedVisible as text) & linefeed & "projectVisible=" & (projectVisible as text)
+	return "nothingLoaded=" & (nothingLoadedVisible as text)
 end run
 
 on frontFinalCutProWindow()
@@ -1611,12 +2391,15 @@ end elementTextEquals
 APPLESCRIPT
 	local osascript_pid=$!
 	if ! wait_for_ui_osascript "$osascript_pid" "FCP viewer text snapshot" 35 0; then
-		local error_text=""
+		local reason="timeout or no readable AX text"
 		if [[ -s "$error_file" ]]; then
-			error_text=": $(tr '\n' ' ' <"$error_file" | cut -c 1-240)"
+			reason="AppleScript error: $(tr '\n' ' ' <"$error_file" | cut -c 1-240)"
+		fi
+		if [[ -s "$snapshot_file" ]]; then
+			reason="${reason}; partial stdout: $(tr '\n' ' ' <"$snapshot_file" | cut -c 1-160)"
 		fi
 		rm -f "$snapshot_file" "$error_file"
-		printf 'Final Cut Pro UI snapshot timed out while checking Viewer state%s; continuing after Viewer ROI/playback preflight.\n' "$error_text" >&2
+		printf 'Final Cut Pro UI text snapshot unavailable while checking Viewer state (%s). This is nonfatal; continuing because Viewer ROI, Proxy/Green setup, Debug Overlay, and playback-motion preflights remain authoritative.\n' "$reason" >&2
 		return 0
 	fi
 	snapshot="$(cat "$snapshot_file")"
@@ -1625,10 +2408,10 @@ APPLESCRIPT
 		fail "Final Cut Pro Viewer is showing Nothing Loaded; refusing to record a static/unloaded E2E video"
 	fi
 	if [[ -n "$project_name" ]]; then
-		if printf '%s\n' "$snapshot" | /usr/bin/grep -qi "projectVisible=true"; then
-			printf 'FCP UI text includes expected project: %s\n' "$project_name"
+		if fcp_project_visible "$project_name"; then
+			printf 'FCP active timeline/header exposes expected project: %s\n' "$project_name"
 		else
-			printf 'FCP UI text did not expose expected project name "%s"; continuing after clip/effect assertions.\n' "$project_name"
+			printf 'FCP active timeline/header did not expose expected project name "%s"; continuing after clip/effect assertions.\n' "$project_name"
 		fi
 	fi
 }
@@ -1731,7 +2514,12 @@ print(
 )
 PY
 		then
-			return 0
+			if assert_debug_overlay_visible_in_screenshot "$before_path" "$viewer_roi" "playback preflight before" \
+				&& assert_debug_overlay_visible_in_screenshot "$after_path" "$viewer_roi" "playback preflight after"
+			then
+				return 0
+			fi
+			last_status=$?
 		else
 			last_status=$?
 		fi
@@ -1753,7 +2541,7 @@ assert_current_viewer_roi_playback_motion() {
 	sleep "${STABILIZER_E2E_RECORDING_MOTION_GUARD_SECONDS:-0.45}"
 	assert_fcp_frontmost "${label} motion guard after screenshot"
 	/usr/sbin/screencapture -x "$after_path"
-	python3 - "$before_path" "$after_path" "$viewer_roi" "$label" <<'PY'
+	if python3 - "$before_path" "$after_path" "$viewer_roi" "$label" <<'PY'
 from pathlib import Path
 import os
 import sys
@@ -1802,7 +2590,7 @@ for state_label, state, path in (
     ("before", frame_state(before_color), before_path),
     ("after", frame_state(after_color), after_path),
 ):
-    if state["mean"] < 6.0 or state["std"] < 3.0 or state["color"] < 0.02:
+    if state["mean"] < 6.0 or state["std"] < 3.0:
         raise SystemExit(
             f"{label}: recording ROI is not a recordable FCP Viewer image in {state_label} screenshot: "
             f"mean={state['mean']:.2f}, std={state['std']:.2f}, colorRatio={state['color']:.3f}, screenshot={path}"
@@ -1830,6 +2618,12 @@ print(
     f"meanAbsDiff={mean_abs:.3f}, p95AbsDiff={p95_abs:.3f}, before={before_path}, after={after_path}"
 )
 PY
+	then
+		assert_debug_overlay_visible_in_screenshot "$before_path" "$viewer_roi" "${label} before" \
+			&& assert_debug_overlay_visible_in_screenshot "$after_path" "$viewer_roi" "${label} after"
+	else
+		return $?
+	fi
 }
 
 wait_for_viewer_roi_recordable() {
@@ -1902,144 +2696,10 @@ preflight_playback_alerts() {
 	press_stop_playback
 }
 
-double_click_screen_point() {
-	local point_x="$1"
-	local point_y="$2"
-	/usr/bin/swift - "$point_x" "$point_y" <<'SWIFT'
-import ApplicationServices
-import Foundation
-
-guard CommandLine.arguments.count == 3,
-      let x = Double(CommandLine.arguments[1]),
-      let y = Double(CommandLine.arguments[2]) else {
-    fputs("double_click_screen_point requires x and y\n", stderr)
-    exit(2)
-}
-
-let point = CGPoint(x: x, y: y)
-func post(_ type: CGEventType, clickCount: Int) {
-    guard let event = CGEvent(
-        mouseEventSource: nil,
-        mouseType: type,
-        mouseCursorPosition: point,
-        mouseButton: .left
-    ) else {
-        fputs("could not create CGEvent\n", stderr)
-        exit(2)
-    }
-    event.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
-    event.post(tap: .cghidEventTap)
-    usleep(60_000)
-}
-
-post(.mouseMoved, clickCount: 1)
-post(.leftMouseDown, clickCount: 1)
-post(.leftMouseUp, clickCount: 1)
-usleep(120_000)
-post(.leftMouseDown, clickCount: 2)
-post(.leftMouseUp, clickCount: 2)
-SWIFT
-}
-
-click_screen_point() {
-	local point_x="$1"
-	local point_y="$2"
-	/usr/bin/swift - "$point_x" "$point_y" <<'SWIFT'
-import ApplicationServices
-import Foundation
-
-guard CommandLine.arguments.count == 3,
-      let x = Double(CommandLine.arguments[1]),
-      let y = Double(CommandLine.arguments[2]) else {
-    fputs("click_screen_point requires x and y\n", stderr)
-    exit(2)
-}
-
-let point = CGPoint(x: x, y: y)
-for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
-    guard let event = CGEvent(
-        mouseEventSource: nil,
-        mouseType: type,
-        mouseCursorPosition: point,
-        mouseButton: .left
-    ) else {
-        fputs("could not create CGEvent\n", stderr)
-        exit(2)
-    }
-    event.post(tap: .cghidEventTap)
-    usleep(80_000)
-}
-SWIFT
-}
-
-move_cursor_outside_viewer_roi() {
-	local roi="$1"
-	[[ -n "$roi" ]] || return 0
-	/usr/bin/swift - "$roi" <<'SWIFT'
-import AppKit
-import ApplicationServices
-import Foundation
-
-guard CommandLine.arguments.count == 2 else {
-    fputs("move_cursor_outside_viewer_roi requires x,y,w,h\n", stderr)
-    exit(2)
-}
-
-let fields = CommandLine.arguments[1].split(separator: ",").compactMap { Double($0) }
-guard fields.count == 4 else {
-    fputs("viewer ROI must be x,y,w,h\n", stderr)
-    exit(2)
-}
-
-let roiX = fields[0]
-let roiY = fields[1]
-let roiW = fields[2]
-let roiH = fields[3]
-guard roiW > 0, roiH > 0 else {
-    fputs("viewer ROI width/height must be positive\n", stderr)
-    exit(2)
-}
-
-let screens = NSScreen.screens
-let mainScreen = NSScreen.main ?? screens.first
-let scale = max(1.0, mainScreen?.backingScaleFactor ?? 1.0)
-let screenFrame = mainScreen?.frame ?? CGRect(x: 0, y: 0, width: 1680, height: 1050)
-let paddingPoints = 36.0
-let roiLeft = roiX / scale
-let roiTop = roiY / scale
-let roiRight = (roiX + roiW) / scale
-let roiBottom = (roiY + roiH) / scale
-let roiMidY = (roiTop + roiBottom) * 0.5
-
-let minX = screenFrame.minX + paddingPoints
-let maxX = screenFrame.maxX - paddingPoints
-let minY = screenFrame.minY + paddingPoints
-let maxY = screenFrame.maxY - paddingPoints
-let candidateX: Double
-if roiRight + paddingPoints <= maxX {
-    candidateX = roiRight + paddingPoints
-} else if roiLeft - paddingPoints >= minX {
-    candidateX = roiLeft - paddingPoints
-} else {
-    candidateX = maxX
-}
-let candidateY = min(max(roiMidY, minY), maxY)
-let point = CGPoint(x: candidateX, y: candidateY)
-
-CGWarpMouseCursorPosition(point)
-CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
-if let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) {
-    event.post(tap: .cghidEventTap)
-}
-print(String(format: "Moved cursor outside FCP Viewer ROI to %.1f,%.1f", candidateX, candidateY))
-SWIFT
-}
-
 select_visible_sidebar_event_by_text() {
 	local event_name="$1"
-	local click_point
 	local output_file
-	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-event-point.XXXXXX")"
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-event-select.XXXXXX")"
 	/usr/bin/osascript - "$event_name" >"$output_file" 2>&1 <<'APPLESCRIPT' &
 on run argv
 	set eventName to item 1 of argv
@@ -2053,11 +2713,12 @@ on run argv
 			try
 				set selected of eventRow to true
 			end try
-			set rowPosition to position of eventRow
-			set rowSize to size of eventRow
+			try
+				perform action "AXPress" of eventRow
+			end try
 		end tell
 	end tell
-	return ((item 1 of rowPosition) + 90 as text) & "," & ((item 2 of rowPosition) + ((item 2 of rowSize) div 2) as text)
+	return "selected"
 end run
 
 on frontFinalCutProWindow()
@@ -2138,27 +2799,27 @@ end elementTextEquals
 APPLESCRIPT
 	local osascript_pid=$!
 	if ! wait_for_ui_osascript "$osascript_pid" "visible Event sidebar row ${event_name}" 100 0; then
-		click_point="$(cat "$output_file")"
+		local result
+		result="$(cat "$output_file")"
 		rm -f "$output_file"
-		printf 'visible Event sidebar row click point was not usable; continuing to project lookup: %s\n' "$click_point" >&2
+		printf 'visible Event sidebar row was not selectable through AX; continuing to project lookup: %s\n' "$result" >&2
 		return 1
 	fi
-	click_point="$(cat "$output_file")"
+	local result
+	result="$(cat "$output_file")"
 	rm -f "$output_file"
-	if [[ ! "$click_point" =~ ^[0-9]+,[0-9]+$ ]]; then
-		printf 'visible Event sidebar row click point was not usable; continuing to project lookup: %s\n' "$click_point" >&2
+	if [[ "$result" != "selected" ]]; then
+		printf 'visible Event sidebar row returned unexpected AX result; continuing to project lookup: %s\n' "$result" >&2
 		return 1
 	fi
-	click_screen_point "${click_point%,*}" "${click_point#*,}"
 	sleep 0.8
-	printf 'selected visible Final Cut Pro Event %s via CGEvent click at %s\n' "$event_name" "$click_point"
+	printf 'selected visible Final Cut Pro Event %s through AX.\n' "$event_name"
 }
 
 open_visible_browser_project_by_text() {
 	local project_name="$1"
-	local open_point
 	local output_file
-	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-project-point.XXXXXX")"
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-project-open.XXXXXX")"
 	/usr/bin/osascript - "$project_name" >"$output_file" 2>&1 <<'APPLESCRIPT' &
 on run argv
 	set projectName to item 1 of argv
@@ -2166,18 +2827,107 @@ on run argv
 	tell application "System Events"
 		tell process "Final Cut Pro"
 			set frontmost to true
+			keystroke "1" using {command down}
+			delay 0.2
 			set frontWindow to my frontFinalCutProWindow()
 			set openableElement to my firstBrowserRowContainingExactText(frontWindow, projectName, 18)
 			if openableElement is missing value then error "visible Browser row not found: " & projectName
 			try
 				set selected of openableElement to true
 			end try
+			try
+				set focused of openableElement to true
+			end try
 			delay 0.15
-			set openPoint to my preferredProjectOpenPoint(frontWindow, openableElement)
+			if my openWithAXAction(openableElement, "AXShowDefaultUI", projectName) then return "AXShowDefaultUI"
+			if my openWithAXAction(openableElement, "AXShowAlternateUI", projectName) then return "AXShowAlternateUI"
+			try
+				perform action "AXOpen" of openableElement
+				delay 0.7
+				if my activeProjectVisible(projectName) then return "AXOpen"
+				log "AXOpen ran for Browser project row, but active project is not " & projectName
+			on error axOpenError
+				log "AXOpen unavailable for Browser project row: " & axOpenError
+			end try
+			try
+				key code 36
+				delay 0.7
+				if my activeProjectVisible(projectName) then return "Return"
+				log "Return ran for Browser project row, but active project is not " & projectName
+			on error returnError
+				log "Return key project open failed: " & returnError
+			end try
+			try
+				click menu item "Open Clip" of menu "Clip" of menu bar 1
+				delay 0.7
+				if my activeProjectVisible(projectName) then return "Clip > Open Clip"
+				log "Clip > Open Clip ran for Browser project row, but active project is not " & projectName
+			on error openClipError
+				log "Clip > Open Clip failed: " & openClipError
+			end try
+			try
+				click menu item "Open in Timeline" of menu "Clip" of menu bar 1
+				delay 0.7
+				if my activeProjectVisible(projectName) then return "Clip > Open in Timeline"
+				log "Clip > Open in Timeline ran for Browser project row, but active project is not " & projectName
+			on error openTimelineError
+				log "Clip > Open in Timeline failed: " & openTimelineError
+			end try
 		end tell
 	end tell
-	return (item 1 of openPoint as text) & "," & (item 2 of openPoint as text)
+	error "non-coordinate Browser project open failed: " & projectName
 end run
+
+on openWithAXAction(elementReference, actionName, projectName)
+	tell application "System Events"
+		try
+			perform action actionName of elementReference
+			delay 0.8
+			if my activeProjectVisible(projectName) then return true
+			log actionName & " ran for Browser project row, but active project is not " & projectName
+		end try
+	end tell
+	return false
+end openWithAXAction
+
+on activeProjectVisible(projectName)
+	try
+		set frontWindow to my frontFinalCutProWindow()
+		return my subtreeContainsProjectHeaderText(frontWindow, projectName, 10)
+	on error
+		return false
+	end try
+end activeProjectVisible
+
+on subtreeContainsProjectHeaderText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return false
+	if my elementContainsText(rootElement, requiredText) and my elementLooksLikeProjectHeader(rootElement) then return true
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return false
+		end try
+	end tell
+	repeat with childElement in childElements
+		if my subtreeContainsProjectHeaderText(childElement, requiredText, remainingDepth - 1) then return true
+	end repeat
+	return false
+end subtreeContainsProjectHeaderText
+
+on elementLooksLikeProjectHeader(candidateElement)
+	tell application "System Events"
+		try
+			set elementPosition to position of candidateElement
+			set elementSize to size of candidateElement
+			set elementX to item 1 of elementPosition
+			set elementY to item 2 of elementPosition
+			if elementY < 260 and elementX > 450 and (item 1 of elementSize) > 20 then return true
+		end try
+	end tell
+	return false
+end elementLooksLikeProjectHeader
 
 on frontFinalCutProWindow()
 	tell application "System Events"
@@ -2255,25 +3005,26 @@ on elementTextEquals(candidateElement, requiredText)
 	return false
 end elementTextEquals
 
-on preferredProjectOpenPoint(frontWindow, rowElement)
-	set filmstripElement to my firstDescendantWithDescription(frontWindow, "Organizer filmstrip view", 18)
-	if filmstripElement is not missing value and my hasUsableBounds(filmstripElement) then
-		tell application "System Events"
-			set elementPosition to position of filmstripElement
-			set elementSize to size of filmstripElement
-		end tell
-		set targetX to (item 1 of elementPosition) + 80
-		set targetY to (item 2 of elementPosition) + 96
-		if targetX > (item 1 of elementPosition) + (item 1 of elementSize) - 8 then set targetX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
-		if targetY > (item 2 of elementPosition) + (item 2 of elementSize) - 8 then set targetY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
-		return {targetX, targetY}
-	end if
+on elementContainsText(candidateElement, requiredText)
+	set labelsToCheck to {}
 	tell application "System Events"
-		set rowPosition to position of rowElement
-		set rowSize to size of rowElement
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
 	end tell
-	return {(item 1 of rowPosition) + 80, (item 2 of rowPosition) + ((item 2 of rowSize) div 2)}
-end preferredProjectOpenPoint
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) contains requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementContainsText
 
 on firstBrowserRowContainingExactText(rootElement, requiredText, remainingDepth)
 	if remainingDepth < 0 then return missing value
@@ -2306,72 +3057,41 @@ on rowAppearsInsideBrowser(rowElement)
 			set rowPosition to position of rowElement
 			set rowSize to size of rowElement
 			if (item 1 of rowPosition) < 220 then return false
+			if (item 2 of rowPosition) < 180 then return false
 			if (item 1 of rowSize) < 80 then return false
 			return true
 		on error
 			return false
-		end try
+	end try
 	end tell
 end rowAppearsInsideBrowser
-
-on firstDescendantWithDescription(rootElement, requiredDescription, remainingDepth)
-	if remainingDepth < 0 then return missing value
-	tell application "System Events"
-		try
-			if (description of rootElement as text) is requiredDescription then return rootElement
-		end try
-		try
-			set childElements to UI elements of rootElement
-		on error
-			return missing value
-		end try
-	end tell
-	repeat with childElement in childElements
-		set foundElement to my firstDescendantWithDescription(childElement, requiredDescription, remainingDepth - 1)
-		if foundElement is not missing value then return foundElement
-	end repeat
-	return missing value
-end firstDescendantWithDescription
-
-on hasUsableBounds(elementReference)
-	tell application "System Events"
-		try
-			set elementPosition to position of elementReference
-			set elementSize to size of elementReference
-			if item 1 of elementPosition < 0 then return false
-			if item 2 of elementPosition < 0 then return false
-			if item 1 of elementSize < 12 then return false
-			if item 2 of elementSize < 12 then return false
-			return true
-		on error
-			return false
-		end try
-	end tell
-end hasUsableBounds
 APPLESCRIPT
 	local osascript_pid=$!
 	if ! wait_for_ui_osascript "$osascript_pid" "visible Browser project ${project_name}" 100 0; then
-		open_point="$(cat "$output_file")"
+		local result
+		result="$(cat "$output_file")"
 		rm -f "$output_file"
-		printf 'visible Browser project open point was not usable; trying next fallback: %s\n' "$open_point" >&2
+		printf 'visible Browser project was not openable without coordinates; trying next path: %s\n' "$result" >&2
 		return 1
 	fi
-	open_point="$(cat "$output_file")"
+	local result
+	result="$(cat "$output_file")"
 	rm -f "$output_file"
-	if [[ ! "$open_point" =~ ^[0-9]+,[0-9]+$ ]]; then
-		printf 'visible Browser project open point was not usable; trying next fallback: %s\n' "$open_point" >&2
-		return 1
-	fi
-	double_click_screen_point "${open_point%,*}" "${open_point#*,}"
-	sleep 0.8
-	printf 'opened visible Browser project %s via CGEvent double-click at %s\n' "$project_name" "$open_point"
+	for _ in {1..12}; do
+		if fcp_project_visible "$project_name"; then
+			printf 'opened visible Browser project %s via non-coordinate path: %s\n' "$project_name" "$result"
+			return 0
+		fi
+		sleep 0.25
+	done
+	printf 'non-coordinate Browser project open did not make expected project visible: %s (%s)\n' "$project_name" "$result" >&2
+	return 1
 }
 
 set_visible_browser_search_text() {
 	local search_text="$1"
-	local search_point
 	local output_file
-	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-search-point.XXXXXX")"
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-search-ax.XXXXXX")"
 	/usr/bin/osascript - "$search_text" >"$output_file" 2>&1 <<'APPLESCRIPT' &
 on run argv
 	set searchText to item 1 of argv
@@ -2379,14 +3099,27 @@ on run argv
 	tell application "System Events"
 		tell process "Final Cut Pro"
 			set frontmost to true
+			keystroke "1" using {command down}
+			delay 0.2
 			set frontWindow to my frontFinalCutProWindow()
 			set searchField to my firstSearchField(frontWindow, 18)
 			if searchField is missing value then error "visible Browser search field not found"
-			set fieldPosition to position of searchField
-			set fieldSize to size of searchField
+			try
+				set focused of searchField to true
+			end try
+			try
+				set value of searchField to searchText
+			on error valueError
+				try
+					perform action "AXPress" of searchField
+				end try
+				keystroke "a" using command down
+				keystroke searchText
+			end try
+			key code 36
 		end tell
 	end tell
-	return (((item 1 of fieldPosition) + ((item 1 of fieldSize) div 2)) as text) & "," & (((item 2 of fieldPosition) + ((item 2 of fieldSize) div 2)) as text)
+	return "search-set"
 end run
 
 on frontFinalCutProWindow()
@@ -2425,77 +3158,97 @@ end firstSearchField
 APPLESCRIPT
 	local osascript_pid=$!
 	if ! wait_for_ui_osascript "$osascript_pid" "visible Browser search field" 100 0; then
-		search_point="$(cat "$output_file")"
+		local result
+		result="$(cat "$output_file")"
 		rm -f "$output_file"
-		printf 'visible Browser search field was not usable: %s\n' "$search_point" >&2
+		printf 'visible Browser search field was not usable through AX: %s\n' "$result" >&2
 		return 1
 	fi
-	search_point="$(cat "$output_file")"
+	local result
+	result="$(cat "$output_file")"
 	rm -f "$output_file"
-	if [[ ! "$search_point" =~ ^[0-9]+,[0-9]+$ ]]; then
-		printf 'visible Browser search point was not usable: %s\n' "$search_point" >&2
+	if [[ "$result" != "search-set" ]]; then
+		printf 'visible Browser search returned unexpected AX result: %s\n' "$result" >&2
 		return 1
 	fi
-	click_screen_point "${search_point%,*}" "${search_point#*,}"
-	/usr/bin/osascript - "$search_text" <<'APPLESCRIPT'
+	sleep 0.8
+	printf 'Set visible Final Cut Pro Browser search text through AX: %s\n' "$search_text"
+}
+
+open_case_project_via_helper() {
+	local project_name="$1"
+	local event_name="$2"
+	[[ -f "$FCP_HELPER" ]] || return 1
+	printf 'Primary project open: selecting Event via local AX path: %s\n' "$event_name"
+	if ! select_visible_sidebar_event_by_text "$event_name"; then
+		printf 'Primary project open: local AX path could not select Event %s; trying project open in current Browser state.\n' "$event_name" >&2
+	fi
+	printf 'Primary project open: using helper keyboard search + Clip menu for project: %s\n' "$project_name"
+	timeout 30 /usr/bin/osascript "$FCP_HELPER" open-project "$project_name"
+}
+
+open_selected_browser_project_via_helper() {
+	local project_name="$1"
+	[[ -f "$FCP_HELPER" ]] || return 1
+	timeout 12 /usr/bin/osascript "$FCP_HELPER" wait-open-selected-project 3 "$project_name"
+}
+
+open_case_project_via_keyboard_menu() {
+	local project_name="$1"
+	timeout 15 /usr/bin/osascript - "$project_name" <<'APPLESCRIPT'
 on run argv
-	set searchText to item 1 of argv
+	set projectName to item 1 of argv
+	tell application "Final Cut Pro" to activate
 	tell application "System Events"
 		tell process "Final Cut Pro"
-			keystroke "a" using command down
-			keystroke searchText
+			set frontmost to true
+			keystroke "f" using {command down}
+			delay 0.15
+			keystroke "a" using {command down}
+			keystroke projectName
 			key code 36
+			delay 0.5
+			set frontWindow to my frontFinalCutProWindow()
+			set projectRow to my firstBrowserRowContainingExactText(frontWindow, projectName, 18)
+			if projectRow is missing value then error "project row not found after keyboard Browser search: " & projectName
+			try
+				set selected of projectRow to true
+			end try
+			try
+				perform action "AXOpen" of projectRow
+				delay 0.7
+				if my activeProjectVisible(projectName) then return "opened via AXOpen"
+				log "AXOpen ran for project row, but active project is not " & projectName
+			on error axOpenError
+				log "AXOpen was unavailable for project row: " & axOpenError
+			end try
+			try
+				key code 36
+				delay 0.7
+				if my activeProjectVisible(projectName) then return "opened via Return"
+				log "Return ran for project row, but active project is not " & projectName
+			on error returnError
+				log "Return key project open failed: " & returnError
+			end try
+			try
+				click menu item "Open Clip" of menu "Clip" of menu bar 1
+				delay 0.7
+				if my activeProjectVisible(projectName) then return "opened via Clip > Open Clip"
+				log "Clip > Open Clip ran for project row, but active project is not " & projectName
+			on error openClipError
+				log "Clip > Open Clip failed: " & openClipError
+			end try
+			try
+				click menu item "Open in Timeline" of menu "Clip" of menu bar 1
+				delay 0.7
+				if my activeProjectVisible(projectName) then return "opened via Clip > Open in Timeline"
+				log "Clip > Open in Timeline ran for project row, but active project is not " & projectName
+			on error openTimelineError
+				log "Clip > Open in Timeline failed: " & openTimelineError
+			end try
 		end tell
 	end tell
-end run
-APPLESCRIPT
-	sleep 0.8
-	printf 'Set visible Final Cut Pro Browser search text directly: %s\n' "$search_text"
-}
-
-open_known_e2e_project_tile() {
-	local project_name="$1"
-	local point_x=""
-	local point_y="294"
-	case "$project_name" in
-		"P1000304 Stabilized Review")
-			point_x="455"
-			;;
-		"P1000307 Stabilized Review")
-			point_x="455"
-			;;
-		*)
-			return 1
-			;;
-	esac
-	/usr/bin/osascript -e 'tell application "Final Cut Pro" to activate' >/dev/null 2>&1 || true
-	sleep 0.4
-	double_click_screen_point "$point_x" "$point_y"
-	sleep 1.0
-	if ! fcp_project_visible "$project_name"; then
-		printf 'fixed-regression Browser tile click did not open expected project: %s\n' "$project_name" >&2
-		return 1
-	fi
-	printf 'opened fixed-regression Browser project tile %s via CGEvent double-click at %s,%s\n' "$project_name" "$point_x" "$point_y"
-}
-
-fcp_project_visible() {
-	local project_name="$1"
-	local snapshot
-	snapshot="$(/usr/bin/osascript - "$project_name" <<'APPLESCRIPT'
-on run argv
-	set expectedProjectName to item 1 of argv
-	with timeout of 4 seconds
-		tell application "Final Cut Pro" to activate
-		tell application "System Events"
-			tell process "Final Cut Pro"
-				set frontmost to true
-				set frontWindow to my frontFinalCutProWindow()
-				set projectVisible to my subtreeContainsExactText(frontWindow, expectedProjectName, 8)
-			end tell
-		end tell
-	end timeout
-	return "projectVisible=" & (projectVisible as text)
+	error "non-coordinate project open methods failed for " & projectName
 end run
 
 on frontFinalCutProWindow()
@@ -2510,6 +3263,40 @@ on frontFinalCutProWindow()
 		end tell
 	end tell
 end frontFinalCutProWindow
+
+on firstBrowserRowContainingExactText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			if (role of rootElement as text) is "AXRow" then
+				if my rowAppearsInsideBrowser(rootElement) and my subtreeContainsExactText(rootElement, requiredText, 6) then return rootElement
+			end if
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstBrowserRowContainingExactText(childElement, requiredText, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstBrowserRowContainingExactText
+
+on rowAppearsInsideBrowser(rowElement)
+	tell application "System Events"
+		try
+			set rowPosition to position of rowElement
+			set rowSize to size of rowElement
+			if (item 1 of rowPosition) < 220 then return false
+			if (item 2 of rowPosition) < 180 then return false
+			if (item 1 of rowSize) < 80 then return false
+			return true
+		on error
+			return false
+		end try
+	end tell
+end rowAppearsInsideBrowser
 
 on subtreeContainsExactText(rootElement, requiredText, remainingDepth)
 	if remainingDepth < 0 then return false
@@ -2527,6 +3314,45 @@ on subtreeContainsExactText(rootElement, requiredText, remainingDepth)
 	end repeat
 	return false
 end subtreeContainsExactText
+
+on activeProjectVisible(projectName)
+	try
+		set frontWindow to my frontFinalCutProWindow()
+		return my subtreeContainsProjectHeaderText(frontWindow, projectName, 10)
+	on error
+		return false
+	end try
+end activeProjectVisible
+
+on subtreeContainsProjectHeaderText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return false
+	if my elementTextEquals(rootElement, requiredText) and my elementLooksLikeProjectHeader(rootElement) then return true
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return false
+		end try
+	end tell
+	repeat with childElement in childElements
+		if my subtreeContainsProjectHeaderText(childElement, requiredText, remainingDepth - 1) then return true
+	end repeat
+	return false
+end subtreeContainsProjectHeaderText
+
+on elementLooksLikeProjectHeader(candidateElement)
+	tell application "System Events"
+		try
+			set elementPosition to position of candidateElement
+			set elementSize to size of candidateElement
+			set elementX to item 1 of elementPosition
+			set elementY to item 2 of elementPosition
+			if elementY < 260 and elementX > 450 and (item 1 of elementSize) > 20 then return true
+		end try
+	end tell
+	return false
+end elementLooksLikeProjectHeader
 
 on elementTextEquals(candidateElement, requiredText)
 	set labelsToCheck to {}
@@ -2549,6 +3375,137 @@ on elementTextEquals(candidateElement, requiredText)
 	return false
 end elementTextEquals
 APPLESCRIPT
+}
+
+fcp_project_visible() {
+	local project_name="$1"
+	local snapshot
+	snapshot="$(/usr/bin/osascript - "$project_name" <<'APPLESCRIPT'
+on run argv
+	set expectedProjectName to item 1 of argv
+	with timeout of 12 seconds
+		tell application "Final Cut Pro" to activate
+		tell application "System Events"
+			tell process "Final Cut Pro"
+				set frontmost to true
+					set frontWindow to my frontFinalCutProWindow()
+					set windowPosition to position of frontWindow
+					set windowSize to size of frontWindow
+					set projectVisible to my subtreeContainsActiveTimelineHeaderText(frontWindow, expectedProjectName, 12, windowPosition, windowSize)
+				end tell
+			end tell
+		end timeout
+	return "projectVisible=" & (projectVisible as text)
+end run
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+		on subtreeContainsActiveTimelineHeaderText(rootElement, requiredText, remainingDepth, windowPosition, windowSize)
+			if remainingDepth < 0 then return false
+			if my elementContainsText(rootElement, requiredText) and my elementLooksLikeActiveTimelineHeader(rootElement, windowPosition, windowSize) then return true
+			set childElements to {}
+			tell application "System Events"
+				try
+				set childElements to UI elements of rootElement
+		on error
+			return false
+			end try
+			end tell
+			repeat with childElement in childElements
+				if my subtreeContainsActiveTimelineHeaderText(childElement, requiredText, remainingDepth - 1, windowPosition, windowSize) then return true
+			end repeat
+			return false
+		end subtreeContainsActiveTimelineHeaderText
+
+		on elementLooksLikeActiveTimelineHeader(candidateElement, windowPosition, windowSize)
+			tell application "System Events"
+				try
+					set roleText to role of candidateElement as text
+					if roleText is not "AXStaticText" and roleText is not "AXButton" and roleText is not "AXMenuButton" and roleText is not "AXPopUpButton" and roleText is not "AXGroup" then return false
+					try
+						if visible of candidateElement is false then return false
+					end try
+					try
+						set hiddenValue to value of attribute "AXHidden" of candidateElement
+						if hiddenValue is true then return false
+					end try
+					set elementPosition to position of candidateElement
+					set elementSize to size of candidateElement
+					set elementX to item 1 of elementPosition
+					set elementY to item 2 of elementPosition
+					set elementWidth to item 1 of elementSize
+					set elementHeight to item 2 of elementSize
+					if elementWidth < 20 or elementHeight < 8 then return false
+					set centerX to elementX + (elementWidth / 2)
+					set centerY to elementY + (elementHeight / 2)
+					set windowX to item 1 of windowPosition
+					set windowY to item 2 of windowPosition
+					set windowWidth to item 1 of windowSize
+					set windowHeight to item 2 of windowSize
+					set relativeCenterX to centerX - windowX
+					set relativeCenterY to centerY - windowY
+					if relativeCenterX < (windowWidth * 0.30) then return false
+					if relativeCenterX > (windowWidth * 0.92) then return false
+					if relativeCenterY < 130 then return true
+					if relativeCenterY > (windowHeight * 0.50) and relativeCenterY < (windowHeight * 0.88) then return true
+				end try
+			end tell
+			return false
+		end elementLooksLikeActiveTimelineHeader
+
+on elementTextEquals(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) is requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementTextEquals
+
+on elementContainsText(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) contains requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementContainsText
+APPLESCRIPT
 )" || return 1
 	printf '%s\n' "$snapshot" | /usr/bin/grep -qi "projectVisible=true"
 }
@@ -2556,8 +3513,8 @@ APPLESCRIPT
 assert_fcp_project_visible() {
 	local project_name="$1"
 	fcp_project_visible "$project_name" \
-		|| fail "Final Cut Pro did not expose expected project after open: ${project_name}"
-	printf 'FCP UI text includes expected project: %s\n' "$project_name"
+		|| fail "Final Cut Pro active timeline/header did not expose expected project after open: ${project_name}"
+	printf 'FCP active timeline/header exposes expected project: %s\n' "$project_name"
 }
 
 seek_timecode() {
@@ -2566,12 +3523,12 @@ seek_timecode() {
 on run argv
 	set timecodeEntry to item 1 of argv
 	tell application "Final Cut Pro" to activate
-	tell application "System Events"
-		tell process "Final Cut Pro"
-			set frontmost to true
-			click menu item "Timeline" of menu 1 of menu item "Go To" of menu "Window" of menu bar 1
-			delay 0.1
-			key code 35 using control down
+tell application "System Events"
+	tell process "Final Cut Pro"
+		set frontmost to true
+		keystroke "2" using {command down}
+		delay 0.1
+		key code 35 using control down
 			delay 0.1
 			keystroke timecodeEntry
 			key code 36
@@ -2615,32 +3572,37 @@ open_case_project() {
 		return
 	fi
 
-	if ! set_fcp_toolbar_checkbox "Show or hide the Browser" 1 >/dev/null; then
-		sleep 0.5
-		wait_for_fcp_standard_window 300 \
-			|| fail "Final Cut Pro standard window was not readable while enabling Browser"
-		set_fcp_toolbar_checkbox "Show or hide the Browser" 1 >/dev/null \
-			|| fail "could not enable Final Cut Pro Browser before opening project ${project}"
-	fi
-	sleep 0.8
-	if ! set_fcp_window_checkbox "Show or hide the Libraries sidebar" 1 >/dev/null; then
-		printf 'FCP Libraries sidebar toggle was not visible; continuing because Event selection is the authoritative preflight.\n'
-	fi
-	if select_visible_sidebar_event_by_text "$event_name"; then
+	if open_case_project_via_helper "$project" "$event_name" && fcp_project_visible "$project"; then
+		printf 'Opened Final Cut Pro project via helper primary path: %s\n' "$project"
+	elif open_selected_browser_project_via_helper "$project" && fcp_project_visible "$project"; then
+		printf 'Opened Final Cut Pro project via selected Browser helper menu path: %s\n' "$project"
+	elif open_case_project_via_keyboard_menu "$project" && fcp_project_visible "$project"; then
+		printf 'Opened Final Cut Pro project via non-coordinate keyboard/menu path: %s\n' "$project"
+	else
+		printf 'Primary project open paths failed; enabling Browser for explicit AX/menu project-open retry.\n' >&2
+		if ! set_fcp_toolbar_checkbox "Show or hide the Browser" 1 >/dev/null; then
+			sleep 0.5
+			wait_for_fcp_standard_window 300 \
+				|| fail "Final Cut Pro standard window was not readable while enabling Browser"
+			set_fcp_toolbar_checkbox "Show or hide the Browser" 1 >/dev/null \
+				|| fail "could not enable Final Cut Pro Browser before opening project ${project}"
+		fi
 		sleep 0.8
-	else
-		printf 'FCP Event row was not directly selectable; continuing with visible/current Browser project lookup for Event %s.\n' "$event_name"
-	fi
-	if set_visible_browser_search_text "$project" && open_visible_browser_project_by_text "$project"; then
-		printf 'Opened Final Cut Pro project via direct Browser search: %s\n' "$project"
-	elif timeout 12 "${ROOT_DIR}/scripts/fcp_ui_test.sh" open-project "$project"; then
-		:
-	elif open_visible_browser_project_by_text "$project"; then
-		printf 'Opened Final Cut Pro project via visible Browser fallback: %s\n' "$project"
-	elif open_known_e2e_project_tile "$project"; then
-		printf 'Opened Final Cut Pro project via fixed-regression tile fallback: %s\n' "$project"
-	else
-		fail "could not open Final Cut Pro project '${project}' by name; select it in FCP and retry with --assume-current-fcp-state"
+		if ! set_fcp_window_checkbox "Show or hide the Libraries sidebar" 1 >/dev/null; then
+			printf 'FCP Libraries sidebar toggle was not visible; continuing because Event selection is the authoritative preflight.\n'
+		fi
+		if select_visible_sidebar_event_by_text "$event_name"; then
+			sleep 0.8
+		else
+			printf 'FCP Event row was not directly selectable; continuing with visible/current Browser project lookup for Event %s.\n' "$event_name"
+		fi
+		if set_visible_browser_search_text "$project" && open_visible_browser_project_by_text "$project"; then
+			printf 'AX/menu project-open retry opened Final Cut Pro project via visible Browser search: %s\n' "$project"
+		elif open_visible_browser_project_by_text "$project"; then
+			printf 'AX/menu project-open retry opened Final Cut Pro project via visible Browser row: %s\n' "$project"
+		else
+			fail "could not open Final Cut Pro project '${project}' by name; select it in FCP and retry with --assume-current-fcp-state"
+		fi
 	fi
 	sleep 1
 	assert_fcp_project_visible "$project"
@@ -2667,13 +3629,26 @@ assert_case_prepared() {
 	assert_case_project_contains_effect "$case_file"
 	focus_timeline
 	set_fcp_proxy_only
+	set_fcp_green_channel
 	seek_timecode "$timecode_entry"
 	sleep 0.4
 	select_playhead_clip
 	sleep 0.4
 	ensure_selected_timeline_clip_enabled
 	sleep 0.4
+	if [[ -f "$FCP_HELPER" ]]; then
+		/usr/bin/osascript "$FCP_HELPER" assert-inspector-effects "$expected_effect" \
+			|| fail "selected timeline clip Inspector is not showing ${expected_effect}; refusing to toggle Debug Overlay on the wrong item"
+	fi
+	set_fcp_debug_overlay_on
 	assert_inspector_contains_case_effect_if_readable "$expected_effect" "$remove_black_edges"
+	normalize_fcp_layout
+	set_fcp_proxy_only
+	set_fcp_green_channel
+	seek_timecode "$timecode_entry"
+	sleep 0.4
+	viewer_roi="$(viewer_roi_for_current_fcp "$viewer_roi")"
+	recording_viewer_roi="$viewer_roi"
 	wait_for_viewer_roi_recordable "$case_file" "$viewer_roi" "$timecode_entry"
 	assert_fcp_viewer_not_nothing_loaded "$project"
 }
@@ -2738,9 +3713,23 @@ capture_case() {
 	blocker_result="$(dismiss_known_screen_blockers)"
 	fail_if_known_screen_blocked "$blocker_result"
 	printf 'Known screen-blocking dialog state before seek: %s\n' "$blocker_result"
+	set_fcp_proxy_only
+	set_fcp_green_channel
 	focus_timeline
 	seek_timecode "$timecode_entry"
 	sleep 0.6
+	select_playhead_clip
+	sleep 0.2
+	set_fcp_debug_overlay_on
+	normalize_fcp_layout
+	set_fcp_proxy_only
+	set_fcp_green_channel
+	viewer_roi="$(viewer_roi_for_current_fcp "$viewer_roi")"
+	recording_viewer_roi="$viewer_roi"
+	focus_timeline
+	seek_timecode "$timecode_entry"
+	sleep 0.4
+	wait_for_viewer_roi_recordable "$case_file" "$viewer_roi" "$timecode_entry"
 	preflight_playback_alerts "$timecode_entry"
 	assert_fcp_viewer_not_nothing_loaded_with_proxy_warmup "$(json_value "$case_file" project)" "$timecode_entry"
 	if ! assert_viewer_roi_playback_motion "$viewer_roi" "$timecode_entry"; then
@@ -2748,17 +3737,22 @@ capture_case() {
 	fi
 	wait_for_target_playback_plan_ready "$case_file" "$timecode_entry"
 	assert_fcp_viewer_not_nothing_loaded_with_proxy_warmup "$(json_value "$case_file" project)" "$timecode_entry"
+	set_fcp_debug_overlay_on
+	normalize_fcp_layout
+	set_fcp_proxy_only
+	set_fcp_green_channel
+	viewer_roi="$(viewer_roi_for_current_fcp "$viewer_roi")"
+	recording_viewer_roi="$viewer_roi"
 	press_stop_playback
 	focus_timeline
 	seek_timecode "$timecode_entry"
-		focus_timeline
-		sleep 0.2
-		assert_fcp_frontmost "before starting E2E recording playback"
-		if [[ -n "$viewer_roi" ]]; then
-			move_cursor_outside_viewer_roi "$viewer_roi"
-		fi
+	focus_timeline
+	sleep 0.2
+	wait_for_viewer_roi_recordable "$case_file" "$viewer_roi" "$timecode_entry"
+	assert_fcp_frontmost "before starting E2E recording playback"
+	printf 'Skipping CoreGraphics cursor movement; ROI recording backends hide the cursor, and UI state stays controlled by AppleScript/AX.\n'
 
-			printf 'Recording FCP Viewer E2E case %s for %ss via %s: %s (target duration %ss)\n' "$case_id" "$record_seconds" "$capture_backend" "$video_path" "$duration"
+	printf 'Recording FCP Viewer E2E case %s for %ss via %s: %s (target duration %ss)\n' "$case_id" "$record_seconds" "$capture_backend" "$video_path" "$duration"
 	case "$capture_backend" in
 		screencapture)
 			/usr/sbin/screencapture -v -V "$record_seconds" "$video_path" &
@@ -2866,6 +3860,14 @@ APPLESCRIPT
 	focus_timeline
 	recording_start_epoch="$(now_epoch_seconds)"
 	press_space
+	if [[ -n "$viewer_roi" ]]; then
+		if ! assert_current_viewer_roi_playback_motion "$viewer_roi" "recording-active"; then
+			kill -TERM "$capture_pid" 2>/dev/null || true
+			wait "$capture_pid" 2>/dev/null || true
+			press_stop_playback
+			fail "FCP Viewer recording motion/debug-overlay guard failed"
+		fi
+	fi
 	wait "$capture_pid"
 	recording_end_epoch="$(now_epoch_seconds)"
 	press_stop_playback
@@ -3057,6 +4059,14 @@ if [[ "$command_name" == "set-proxy-only" ]]; then
 		fail "set-proxy-only does not accept options"
 	fi
 	set_fcp_proxy_only
+	exit 0
+fi
+
+if [[ "$command_name" == "set-green-channel" ]]; then
+	if [[ $# -gt 0 ]]; then
+		fail "set-green-channel does not accept options"
+	fi
+	set_fcp_green_channel
 	exit 0
 fi
 
