@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.329"
+private let tokyoWalkingStabilizerVersion = "1.0.334"
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_318_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
@@ -108,9 +108,12 @@ private let stabilizerAutoCropPlaybackCapSafetyDelta: Float = 0.035
 private let stabilizerAutoCropPlaybackVisualScaleKnee: Float = 1.35
 private let stabilizerAutoCropPlaybackVisualScaleMaximum: Float = 1.85
 private let stabilizerAutoCropPlaybackVisualScaleCompression: Float = 0.55
-private let stabilizerAutoCropPlaybackStablePositionFloorMaxDelta: Float = 0.006
+private let stabilizerAutoCropPlaybackStablePositionFloorMaxDelta: Float = 0.003
 private let stabilizerAutoCropPlaybackScaleRateLimitPerSecond: Float = 0.012
-private let stabilizerAutoCropPlaybackScaleSmoothingRadiusSeconds = 1.60
+private let stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds = 1.60
+private let stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds = 2.40
+private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveStartDelta: Float = 0.060
+private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveFullDelta: Float = 0.090
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
@@ -3051,6 +3054,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             samplingProfile: samplingProfile
         )
         let continuousFloorSamples = autoCropPlaybackContinuousFloorSamples(repairedPlan.samples)
+        let smoothingRadiusSeconds = autoCropPlaybackScaleSmoothingRadiusSeconds(
+            peakScale: peakScale
+        )
         let rateLimitedSamples = autoCropPlaybackRateLimitedScaleSamples(
             autoCropPlaybackEnvelopeSamples(repairedPlan.samples),
             floorSamples: continuousFloorSamples
@@ -3058,7 +3064,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let preliminaryPlannedSamples = autoCropPlaybackRateLimitedScaleSamples(
             autoCropPlaybackSmoothedScaleSamples(
                 rateLimitedSamples,
-                floorSamples: continuousFloorSamples
+                floorSamples: continuousFloorSamples,
+                radiusSeconds: smoothingRadiusSeconds
             ),
             floorSamples: continuousFloorSamples
         )
@@ -3088,7 +3095,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             plannedSamples = autoCropPlaybackRateLimitedScaleSamples(
                 autoCropPlaybackSmoothedScaleSamples(
                     finalRateLimitedSamples,
-                    floorSamples: finalContinuousFloorSamples
+                    floorSamples: finalContinuousFloorSamples,
+                    radiusSeconds: smoothingRadiusSeconds
                 ),
                 floorSamples: finalContinuousFloorSamples
             )
@@ -3126,7 +3134,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let framingBounds = autoCropPlaybackFramingScaleBounds(framingSamples)
 
         os_log(
-            "Auto Crop playback scale plan | samples %d demandSamples %d isolatedDemandOutliers %d minimumClippedDemandSamples %d coverageFloorSamples %d coverageBudgetedPositions %d coverageBudgetedMax %.2f finalFloorSamples %d finalFloorMaxDelta %.5f step %.3f minClip %.4f envelopeRadius %.3f rateLimit %.3f peak %.3f peakScale %.4f minScale %.4f maxScale %.4f rawDemandMax %.4f protectedMax %.4f rawPlanMax %.4f repairedMax %.4f preliminaryMax %.4f finalFloorMax %.4f framingMax %.4f lead %.3f hold %.3f release %.3f capLead %.3f capHold %.3f capRelease %.3f positionDemandMax %.2f positionPlanMax %.2f positionFinalMax %.2f",
+            "Auto Crop playback scale plan | samples %d demandSamples %d isolatedDemandOutliers %d minimumClippedDemandSamples %d coverageFloorSamples %d coverageBudgetedPositions %d coverageBudgetedMax %.2f finalFloorSamples %d finalFloorMaxDelta %.5f step %.3f minClip %.4f envelopeRadius %.3f rateLimit %.3f smoothingRadius %.3f peak %.3f peakScale %.4f minScale %.4f maxScale %.4f rawDemandMax %.4f protectedMax %.4f rawPlanMax %.4f repairedMax %.4f preliminaryMax %.4f finalFloorMax %.4f framingMax %.4f lead %.3f hold %.3f release %.3f capLead %.3f capHold %.3f capRelease %.3f positionDemandMax %.2f positionPlanMax %.2f positionFinalMax %.2f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             samples.count,
@@ -3142,6 +3150,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             Float(1.0) + stabilizerAutoCropPlaybackMinimumClipScaleDelta,
             stabilizerAutoCropPlaybackEnvelopeRadiusSeconds,
             stabilizerAutoCropPlaybackScaleRateLimitPerSecond,
+            smoothingRadiusSeconds,
             peakSeconds ?? -1.0,
             peakScale,
             scaleBounds.minimum.isFinite ? scaleBounds.minimum : Float(1.0),
@@ -3975,9 +3984,28 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return backward
     }
 
+    private static func autoCropPlaybackScaleSmoothingRadiusSeconds(peakScale: Float) -> Double {
+        let minimumRadius = max(0.0, stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds)
+        let maximumRadius = max(minimumRadius, stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds)
+        guard maximumRadius > minimumRadius + 1e-6 else {
+            return minimumRadius
+        }
+        let safePeakScale = max(Float(1.0), peakScale.isFinite ? peakScale : Float(1.0))
+        let peakDelta = safePeakScale - Float(1.0)
+        let startDelta = max(Float(0.0), stabilizerAutoCropPlaybackScaleSmoothingAdaptiveStartDelta)
+        let fullDelta = max(startDelta + Float.ulpOfOne, stabilizerAutoCropPlaybackScaleSmoothingAdaptiveFullDelta)
+        guard peakDelta > startDelta else {
+            return minimumRadius
+        }
+        let progress = min(max((peakDelta - startDelta) / (fullDelta - startDelta), Float(0.0)), Float(1.0))
+        let easedProgress = Double(easeInOutRamp(progress))
+        return minimumRadius + ((maximumRadius - minimumRadius) * easedProgress)
+    }
+
     private static func autoCropPlaybackSmoothedScaleSamples(
         _ samples: [AutoCropPlaybackScaleSample],
-        floorSamples: [AutoCropPlaybackScaleSample]
+        floorSamples: [AutoCropPlaybackScaleSample],
+        radiusSeconds: Double
     ) -> [AutoCropPlaybackScaleSample] {
         guard samples.count == floorSamples.count,
               samples.count > 2
@@ -3985,7 +4013,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return samples
         }
 
-        let radiusSeconds = max(0.0, stabilizerAutoCropPlaybackScaleSmoothingRadiusSeconds)
+        let radiusSeconds = max(0.0, radiusSeconds.isFinite ? radiusSeconds : 0.0)
         guard radiusSeconds > 1e-6 else {
             return samples
         }
