@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.336"
+private let tokyoWalkingStabilizerVersion = "1.0.337"
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_318_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
@@ -7675,6 +7675,23 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     ""
                 )
             } else {
+                let cacheIdentitySelection = activeFinalCutLibraryCacheIdentityEventSelection(
+                    from: bundleCandidates,
+                    preferredCacheIdentity: preferredCacheIdentity
+                )
+                if let selection = cacheIdentitySelection.selection {
+                    for candidate in bundleCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
+                        candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+                    }
+                    return (
+                        FCPActiveLibraryEventResolution(
+                            bundleRoot: selection.candidate.bundleRoot,
+                            eventResolution: selection.eventResolution,
+                            securityScopedURL: selection.candidate.securityScopedURL
+                        ),
+                        ""
+                    )
+                }
                 let sidebarSelection = activeFinalCutLibrarySidebarEventSelection(from: bundleCandidates)
                 if let selection = sidebarSelection.selection {
                     for candidate in bundleCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
@@ -7694,7 +7711,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 }
                 return (
                     nil,
-                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(rangedSelection.rejectReason) \(sidebarSelection.rejectReason)"
+                    "Ambiguous active Final Cut libraries: \(bundleCandidates.map(\.bundleRoot.path).joined(separator: " | ")). \(rangedSelection.rejectReason) \(cacheIdentitySelection.rejectReason) \(sidebarSelection.rejectReason)"
                 )
             }
         }
@@ -8006,11 +8023,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     ) -> String? {
         let bundleRoot = candidate.bundleRoot.standardizedFileURL
         let libraryMarkerURL = bundleRoot.appendingPathComponent("CurrentVersion.flexolibrary", isDirectory: false)
-        do {
-            let handle = try FileHandle(forReadingFrom: libraryMarkerURL)
-            try? handle.close()
-        } catch {
-            return "bookmark \(index) active library marker unreadable at \(libraryMarkerURL.path): \(error.localizedDescription)"
+        var markerIsDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: libraryMarkerURL.path, isDirectory: &markerIsDirectory),
+              !markerIsDirectory.boolValue
+        else {
+            return "bookmark \(index) active library marker missing at \(libraryMarkerURL.path)"
         }
 
         let childURLs: [URL]
@@ -8096,6 +8113,61 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return (
             nil,
             "Multiple active library Events matched the Host Analysis range: \(rangeMatches.map { "\($0.candidate.bundleRoot.path) -> \($0.eventResolution.eventRoot.path)" }.joined(separator: " | "))"
+        )
+    }
+
+    private static func activeFinalCutLibraryCacheIdentityEventSelection(
+        from candidates: [FCPActiveLibraryBundleCandidate],
+        preferredCacheIdentity: String?
+    ) -> (selection: FCPActiveLibraryEventSelection?, rejectReason: String) {
+        guard let preferredCacheIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !preferredCacheIdentity.isEmpty
+        else {
+            return (nil, "No saved Tokyo Walking cache identity was available for active-library disambiguation.")
+        }
+
+        var matches: [FCPActiveLibraryEventSelection] = []
+        var inspectedBundles: [String] = []
+        for candidate in candidates {
+            let bundleRoot = candidate.bundleRoot
+            let eventRoots = topLevelEventRoots(in: bundleRoot)
+            let analysisFilesEventRoots = eventRootsWithExistingAnalysisFiles(from: eventRoots)
+            if let matchedEventRoot = eventRootMatchingTokyoWalkingCacheIdentity(
+                preferredCacheIdentity,
+                in: analysisFilesEventRoots
+            ) {
+                matches.append(FCPActiveLibraryEventSelection(
+                    candidate: candidate,
+                    eventResolution: FCPEventRootResolution(
+                        eventRoot: matchedEventRoot,
+                        sourceDescription: "active Final Cut libraries saved Tokyo Walking cache identity"
+                    )
+                ))
+                inspectedBundles.append("\(bundleRoot.path)(identityMatch:\(matchedEventRoot.lastPathComponent))")
+            } else {
+                inspectedBundles.append("\(bundleRoot.path)(identityMatch:none, analysisFiles:\(analysisFilesEventRoots.count))")
+            }
+        }
+
+        if matches.count == 1, let match = matches.first {
+            os_log(
+                "Active library resolver selected bundle %{public}@ Event %{public}@ by saved Tokyo Walking cache identity.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                match.candidate.bundleRoot.path,
+                match.eventResolution.eventRoot.path
+            )
+            return (match, "")
+        }
+        if matches.isEmpty {
+            return (
+                nil,
+                "No active library Event matched saved Tokyo Walking cache identity. inspected=\(inspectedBundles.joined(separator: " | "))"
+            )
+        }
+        return (
+            nil,
+            "Multiple active library Events matched saved Tokyo Walking cache identity: \(matches.map { "\($0.candidate.bundleRoot.path) -> \($0.eventResolution.eventRoot.path)" }.joined(separator: " | "))"
         )
     }
 

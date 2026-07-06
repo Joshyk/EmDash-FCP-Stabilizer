@@ -58,6 +58,15 @@ struct ActiveLibrarySidebarResolver {
         let sourceDescription: String
     }
 
+    struct EventCacheIdentityIndex: Codable {
+        let entries: [EventCacheIdentityIndexEntry]
+    }
+
+    struct EventCacheIdentityIndexEntry: Codable {
+        let cacheFileName: String
+        let cacheIdentity: String?
+    }
+
     enum ResolverError: Error, CustomStringConvertible {
         case rejected(String)
 
@@ -95,6 +104,7 @@ struct ActiveLibrarySidebarResolver {
     func resolveActiveLibraryEvent(
         candidates: [URL],
         rangeMatchedSelections: [EventSelection] = [],
+        preferredCacheIdentity: String? = nil,
         sidebarSelection: SidebarSelection
     ) throws -> EventSelection {
         if rangeMatchedSelections.count == 1, let selection = rangeMatchedSelections.first {
@@ -105,7 +115,122 @@ struct ActiveLibrarySidebarResolver {
                 "Multiple active library Events matched the Host Analysis range: \(rangeMatchedSelections.map { $0.eventRoot.path }.joined(separator: " | "))"
             )
         }
+        let cacheIdentitySelection = activeFinalCutLibraryCacheIdentityEventSelection(
+            from: candidates,
+            preferredCacheIdentity: preferredCacheIdentity
+        )
+        if let selection = cacheIdentitySelection.selection {
+            return selection
+        }
         return try activeFinalCutLibrarySidebarEventSelection(from: candidates, sidebarSelection: sidebarSelection)
+    }
+
+    private func activeFinalCutLibraryCacheIdentityEventSelection(
+        from candidates: [URL],
+        preferredCacheIdentity: String?
+    ) -> (selection: EventSelection?, rejectReason: String) {
+        guard let preferredCacheIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !preferredCacheIdentity.isEmpty
+        else {
+            return (nil, "No saved Tokyo Walking cache identity was available for active-library disambiguation.")
+        }
+
+        var matches: [EventSelection] = []
+        var inspectedBundles: [String] = []
+        for candidate in candidates {
+            let bundleRoot = candidate.standardizedFileURL
+            let eventRoots = topLevelEventRoots(in: bundleRoot)
+            let analysisFilesEventRoots = eventRootsWithExistingAnalysisFiles(from: eventRoots)
+            if let matchedEventRoot = eventRootMatchingTokyoWalkingCacheIdentity(
+                preferredCacheIdentity,
+                in: analysisFilesEventRoots
+            ) {
+                matches.append(EventSelection(
+                    bundleRoot: bundleRoot,
+                    eventRoot: matchedEventRoot,
+                    sourceDescription: "active Final Cut libraries saved Tokyo Walking cache identity"
+                ))
+                inspectedBundles.append("\(bundleRoot.path)(identityMatch:\(matchedEventRoot.lastPathComponent))")
+            } else {
+                inspectedBundles.append("\(bundleRoot.path)(identityMatch:none, analysisFiles:\(analysisFilesEventRoots.count))")
+            }
+        }
+
+        if matches.count == 1, let match = matches.first {
+            return (match, "")
+        }
+        if matches.isEmpty {
+            return (
+                nil,
+                "No active library Event matched saved Tokyo Walking cache identity. inspected=\(inspectedBundles.joined(separator: " | "))"
+            )
+        }
+        return (
+            nil,
+            "Multiple active library Events matched saved Tokyo Walking cache identity: \(matches.map { "\($0.bundleRoot.path) -> \($0.eventRoot.path)" }.joined(separator: " | "))"
+        )
+    }
+
+    private func eventRootMatchingTokyoWalkingCacheIdentity(
+        _ preferredCacheIdentity: String,
+        in eventRoots: [URL]
+    ) -> URL? {
+        var matches: [URL] = []
+        for eventRoot in eventRoots {
+            let cacheRoot = eventRoot
+                .appendingPathComponent("Analysis Files", isDirectory: true)
+                .appendingPathComponent("TokyoWalkingStabilizerHostAnalysis", isDirectory: true)
+            let indexURL = cacheRoot.appendingPathComponent("host-analysis-index-v2.json", isDirectory: false)
+            guard FileManager.default.fileExists(atPath: indexURL.path),
+                  let data = try? Data(contentsOf: indexURL),
+                  let index = try? JSONDecoder().decode(EventCacheIdentityIndex.self, from: data)
+            else {
+                continue
+            }
+            let storageURL = cacheRoot.appendingPathComponent("caches", isDirectory: true)
+            for entry in index.entries where entry.cacheIdentity == preferredCacheIdentity {
+                let cacheURL = storageURL.appendingPathComponent(entry.cacheFileName, isDirectory: false)
+                if FileManager.default.fileExists(atPath: cacheURL.path) {
+                    matches.append(eventRoot.standardizedFileURL)
+                }
+            }
+        }
+
+        var seen = Set<String>()
+        let uniqueMatches = matches.filter { match in
+            seen.insert(match.path).inserted
+        }
+        return uniqueMatches.count == 1 ? uniqueMatches[0] : nil
+    }
+
+    private func eventRootsWithExistingAnalysisFiles(from eventRoots: [URL]) -> [URL] {
+        eventRoots.filter { eventRoot in
+            let analysisFilesURL = eventRoot.appendingPathComponent("Analysis Files", isDirectory: true)
+            var isDirectory = ObjCBool(false)
+            return FileManager.default.fileExists(atPath: analysisFilesURL.path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        }
+    }
+
+    private func topLevelEventRoots(in bundleRoot: URL) -> [URL] {
+        guard let childURLs = try? FileManager.default.contentsOfDirectory(
+            at: bundleRoot.standardizedFileURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return childURLs
+            .filter { childURL in
+                let childIsDirectory = (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                guard childIsDirectory else {
+                    return false
+                }
+                let eventMarkerURL = childURL.appendingPathComponent("CurrentVersion.fcpevent", isDirectory: false)
+                return FileManager.default.fileExists(atPath: eventMarkerURL.path)
+            }
+            .map { $0.standardizedFileURL }
+            .sorted { $0.path < $1.path }
     }
 
     private func activeFinalCutLibrarySidebarEventSelection(
@@ -535,6 +660,32 @@ final class FixtureFactory {
         return preferenceURL
     }
 
+    func writeTokyoWalkingCacheIdentity(
+        bundleRoot: URL,
+        eventRelativePath: String,
+        cacheIdentity: String,
+        cacheFileName: String = "host-analysis-v2-P1000307-start0-end105105-sample5728x3024-n10500-fixture.json"
+    ) throws {
+        let cacheRoot = bundleRoot
+            .appendingPathComponent(eventRelativePath, isDirectory: true)
+            .appendingPathComponent("Analysis Files", isDirectory: true)
+            .appendingPathComponent("TokyoWalkingStabilizerHostAnalysis", isDirectory: true)
+        let cachesURL = cacheRoot.appendingPathComponent("caches", isDirectory: true)
+        try fileManager.createDirectory(at: cachesURL, withIntermediateDirectories: true)
+        let cacheURL = cachesURL.appendingPathComponent(cacheFileName, isDirectory: false)
+        try Data("fixture prepared analysis".utf8).write(to: cacheURL)
+        let index: [String: Any] = [
+            "entries": [
+                [
+                    "cacheFileName": cacheFileName,
+                    "cacheIdentity": cacheIdentity
+                ]
+            ]
+        ]
+        let indexData = try JSONSerialization.data(withJSONObject: index, options: [.prettyPrinted, .sortedKeys])
+        try indexData.write(to: cacheRoot.appendingPathComponent("host-analysis-index-v2.json", isDirectory: false))
+    }
+
     private func metadataArchive(_ dictionary: [String: String]) throws -> Data {
         try NSKeyedArchiver.archivedData(withRootObject: dictionary as NSDictionary, requiringSecureCoding: false)
     }
@@ -548,6 +699,7 @@ let staleImportTargetLibraryID = "55555555-5555-4555-8555-555555555555"
 let staleImportTargetEventID = "66666666-6666-4666-8666-666666666666"
 let duplicateLibraryID = "77777777-7777-4777-8777-777777777777"
 let duplicateEventID = "88888888-8888-4888-8888-888888888888"
+let p1000307CacheIdentity = "32:0:105105:10:5728:3024:10500:4ab8f9366f24e750:c0129a2d7f19e360:50cfe2ed9252aebe:end105105:P1000307"
 
 func sidebarRawSelection(libraryID: String, eventID: String) -> String {
     "FinalCutLibrarySidebar(selection: \(libraryID), event: \(eventID))"
@@ -678,6 +830,43 @@ func testIgnoresStaleFFImportTargetValuesAndUsesFFSidebarModuleLibrarySelection(
     try expectEqual(result.eventRoot.lastPathComponent, "Current Sidebar Event", "Current sidebar Event should win over stale import target Event")
 }
 
+func testSavedCacheIdentityDisambiguatesActiveLibrariesBeforeSidebarSelection() throws {
+    let cacheLibrary = try fixtures.makeLibrary(
+        name: "CacheIdentityLibrary",
+        libraryIdentifier: selectedLibraryID,
+        events: [
+            FakeEvent(identifier: selectedEventID, relativePath: "P1000307 Stabilized Review")
+        ]
+    )
+    try fixtures.writeTokyoWalkingCacheIdentity(
+        bundleRoot: cacheLibrary,
+        eventRelativePath: "P1000307 Stabilized Review",
+        cacheIdentity: p1000307CacheIdentity
+    )
+    let staleSidebarLibrary = try fixtures.makeLibrary(
+        name: "StaleSidebarLibrary",
+        libraryIdentifier: otherLibraryID,
+        events: [
+            FakeEvent(identifier: otherEventID, relativePath: "Sidebar Event")
+        ]
+    )
+
+    let staleSidebarSelection = ActiveLibrarySidebarResolver.SidebarSelection(
+        rawSelection: sidebarRawSelection(libraryID: otherLibraryID, eventID: otherEventID),
+        identifiers: [otherLibraryID, otherEventID]
+    )
+    let result = try resolver.resolveActiveLibraryEvent(
+        candidates: [staleSidebarLibrary, cacheLibrary],
+        rangeMatchedSelections: [],
+        preferredCacheIdentity: p1000307CacheIdentity,
+        sidebarSelection: staleSidebarSelection
+    )
+
+    try expectEqual(result.bundleRoot.path, cacheLibrary.path, "Saved cache identity should choose the active library containing the matching Event cache")
+    try expectEqual(result.eventRoot.lastPathComponent, "P1000307 Stabilized Review", "Cache identity should select the analyzed Event")
+    try expectEqual(result.sourceDescription, "active Final Cut libraries saved Tokyo Walking cache identity", "Cache identity selection source should be visible")
+}
+
 func testMultipleSidebarMatchesFailVisibly() throws {
     let firstLibrary = try fixtures.makeLibrary(
         name: "DuplicateOne",
@@ -750,6 +939,7 @@ let tests: [(String, () throws -> Void)] = [
     ("range match absent uses sidebar selection for a unique Event", testRangeMatchAbsentUsesSidebarSelectionForUniqueEvent),
     ("lowercase flexolibrary identifiers still match sidebar selection", testLowercaseFlexolibraryIdentifiersStillMatchSidebarSelection),
     ("ignores stale FFImportTarget values and uses FFSidebarModuleLibrary selection", testIgnoresStaleFFImportTargetValuesAndUsesFFSidebarModuleLibrarySelection),
+    ("saved cache identity disambiguates active libraries before sidebar selection", testSavedCacheIdentityDisambiguatesActiveLibrariesBeforeSidebarSelection),
     ("multiple sidebar matches fail visibly", testMultipleSidebarMatchesFailVisibly),
     ("missing Event folder fails visibly", testSidebarSelectionWithMissingEventFolderFailsVisibly),
     ("production source does not reintroduce FFImportTarget selection hints", testProductionSourceDoesNotReintroduceFFImportTargetSelectionHints)
