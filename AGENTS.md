@@ -300,6 +300,11 @@ effective render source through FxPlug runtime evidence, such as the Debug Overl
 row or Host Analysis logs reporting `proxy yes`; a capture that logs `proxy no` or
 otherwise cannot prove proxy playback is not valid evidence for that case and must be rerun
 after fixing the setup.
+For Stabilizer playback and FCP Preview E2E capture, set Final Cut Pro's Viewer channel to
+`Green` (`View > Channels > Green`) before playback/recording. Green-channel playback has
+shown better performance for this workflow and should be the default verification channel
+unless the task is explicitly checking full-color output, color handling, or channel-specific
+render correctness.
 If Final Cut Pro opens a proxy E2E case with a black/uninitialized Viewer, the harness may
 warm the Viewer by temporarily selecting `Optimized/Original`, but it must immediately
 restore `Proxy Only`, log that warmup explicitly, and record/evaluate only after Proxy Only
