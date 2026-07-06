@@ -47,10 +47,10 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.339"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 339.0
+private let tokyoWalkingStabilizerVersion = "1.0.371"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 371.0
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_319_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_330_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -114,8 +114,8 @@ private let stabilizerAutoCropPlaybackVisualScaleMaximum: Float = 1.85
 private let stabilizerAutoCropPlaybackVisualScaleCompression: Float = 0.55
 private let stabilizerAutoCropPlaybackStablePositionFloorMaxDelta: Float = 0.003
 private let stabilizerAutoCropPlaybackScaleRateLimitPerSecond: Float = 0.012
-private let stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds = 1.60
-private let stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds = 2.40
+private let stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds = 1.90
+private let stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds = 2.90
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveStartDelta: Float = 0.060
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveFullDelta: Float = 0.090
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
@@ -264,6 +264,14 @@ private struct AutoCropPlaybackFramingSample {
     let seconds: Double
     let scale: Float
     let positionPixels: vector_float2
+}
+
+private struct AutoCropPlaybackFramingBuildResult {
+    let samples: [AutoCropPlaybackFramingSample]
+    let repairFloorSamples: [AutoCropPlaybackScaleSample]
+    let repairCount: Int
+    let maxRepairDelta: Float
+    let maxRepairDeltaSeconds: Double
 }
 
 private struct AutoCropPlaybackScalePlan {
@@ -1053,6 +1061,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastRenderTimingLogWallTime: TimeInterval = 0.0
     private var lastRenderDiagnosticsLogWallTime: TimeInterval = 0.0
     private var lastRenderMotionDiagnosticLogWallTime: TimeInterval = 0.0
+    private var lastRenderDiagnosticStatusWallTime: TimeInterval = 0.0
     private var lastRenderMotionDiagnosticState: RenderMotionDiagnosticState?
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
@@ -3087,33 +3096,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             masterStrength: masterStrength,
             samplingProfile: samplingProfile
         )
-        let plannedSamples: [AutoCropPlaybackScaleSample]
+        var plannedSamples: [AutoCropPlaybackScaleSample]
+        var activeFloorSamples = repairedPlan.samples
         if finalFloorPlan.repairCount > 0 {
-            let finalFloorInputSamples = autoCropPlaybackMaximumScaleSamples(
-                preliminaryPlannedSamples,
-                finalFloorPlan.samples
-            )
-            let finalFloorSeeds = autoCropPlaybackMaximumScaleSamples(
+            activeFloorSamples = autoCropPlaybackMaximumScaleSamples(
                 repairedPlan.samples,
                 finalFloorPlan.samples
             )
-            let finalContinuousFloorSamples = autoCropPlaybackContinuousFloorSamples(finalFloorSeeds)
-            let finalRateLimitedSamples = autoCropPlaybackRateLimitedScaleSamples(
-                autoCropPlaybackEnvelopeSamples(finalFloorInputSamples),
-                floorSamples: finalContinuousFloorSamples
-            )
-            plannedSamples = autoCropPlaybackRateLimitedScaleSamples(
-                autoCropPlaybackSmoothedScaleSamples(
-                    finalRateLimitedSamples,
-                    floorSamples: finalContinuousFloorSamples,
-                    radiusSeconds: smoothingRadiusSeconds
-                ),
-                floorSamples: finalContinuousFloorSamples
+            plannedSamples = autoCropPlaybackScaleSamplesByApplyingFloor(
+                baseSamples: preliminaryPlannedSamples,
+                floorSamples: activeFloorSamples,
+                smoothingRadiusSeconds: smoothingRadiusSeconds
             )
         } else {
             plannedSamples = preliminaryPlannedSamples
         }
-        let framingSamples = autoCropPlaybackFinalFramingSamples(
+        var framingBuild = autoCropPlaybackFinalFramingSamples(
             scaleSamples: plannedSamples,
             positionSamples: positionSamples,
             demandSamples: samples,
@@ -3121,6 +3119,50 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             masterStrength: masterStrength,
             samplingProfile: samplingProfile
         )
+        var residualFramingRepairPasses = 0
+        var residualFramingRepairCount = 0
+        var residualFramingRepairMaxDelta = Float(0.0)
+        var residualFramingRepairMaxDeltaSeconds = -1.0
+        while framingBuild.repairCount > 0,
+              residualFramingRepairPasses < 2
+        {
+            residualFramingRepairPasses += 1
+            residualFramingRepairCount += framingBuild.repairCount
+            if framingBuild.maxRepairDelta > residualFramingRepairMaxDelta {
+                residualFramingRepairMaxDelta = framingBuild.maxRepairDelta
+                residualFramingRepairMaxDeltaSeconds = framingBuild.maxRepairDeltaSeconds
+            }
+            activeFloorSamples = autoCropPlaybackMaximumScaleSamples(
+                activeFloorSamples,
+                framingBuild.repairFloorSamples
+            )
+            plannedSamples = autoCropPlaybackScaleSamplesByApplyingFloor(
+                baseSamples: plannedSamples,
+                floorSamples: activeFloorSamples,
+                smoothingRadiusSeconds: smoothingRadiusSeconds
+            )
+            framingBuild = autoCropPlaybackFinalFramingSamples(
+                scaleSamples: plannedSamples,
+                positionSamples: positionSamples,
+                demandSamples: samples,
+                outputSize: outputSize,
+                masterStrength: masterStrength,
+                samplingProfile: samplingProfile
+            )
+        }
+        if residualFramingRepairPasses > 0 {
+            os_log(
+                "Auto Crop playback residual framing repair folded into scale plan | passes %d repaired %d maxDelta %.5f seconds %.3f unresolved %d",
+                log: stabilizerHostAnalysisLog,
+                type: framingBuild.repairCount > 0 ? .error : .default,
+                residualFramingRepairPasses,
+                residualFramingRepairCount,
+                residualFramingRepairMaxDelta,
+                residualFramingRepairMaxDeltaSeconds,
+                framingBuild.repairCount
+            )
+        }
+        let framingSamples = framingBuild.samples
         let scaleBounds = plannedSamples.reduce(
             (minimum: Float.greatestFiniteMagnitude, maximum: Float(1.0))
         ) { bounds, sample in
@@ -3636,6 +3678,36 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
+    private static func autoCropPlaybackScaleSamplesByApplyingFloor(
+        baseSamples: [AutoCropPlaybackScaleSample],
+        floorSamples: [AutoCropPlaybackScaleSample],
+        smoothingRadiusSeconds: Double
+    ) -> [AutoCropPlaybackScaleSample] {
+        guard baseSamples.count == floorSamples.count,
+              baseSamples.count > 1
+        else {
+            return baseSamples
+        }
+
+        let inputSamples = autoCropPlaybackMaximumScaleSamples(
+            baseSamples,
+            floorSamples
+        )
+        let continuousFloorSamples = autoCropPlaybackContinuousFloorSamples(floorSamples)
+        let rateLimitedSamples = autoCropPlaybackRateLimitedScaleSamples(
+            autoCropPlaybackEnvelopeSamples(inputSamples),
+            floorSamples: continuousFloorSamples
+        )
+        return autoCropPlaybackRateLimitedScaleSamples(
+            autoCropPlaybackSmoothedScaleSamples(
+                rateLimitedSamples,
+                floorSamples: continuousFloorSamples,
+                radiusSeconds: smoothingRadiusSeconds
+            ),
+            floorSamples: continuousFloorSamples
+        )
+    }
+
     private static func autoCropPlaybackScaleBounds(
         _ samples: [AutoCropPlaybackScaleSample]
     ) -> (minimum: Float, maximum: Float) {
@@ -3830,7 +3902,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         outputSize: vector_float2,
         masterStrength: Float,
         samplingProfile: AutoCropSamplingProfile
-    ) -> [AutoCropPlaybackFramingSample] {
+    ) -> AutoCropPlaybackFramingBuildResult {
         guard scaleSamples.count == positionSamples.count,
               scaleSamples.count == demandSamples.count,
               outputSize.x > 1.0,
@@ -3845,11 +3917,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 positionSamples.count,
                 demandSamples.count
             )
-            return []
+            return AutoCropPlaybackFramingBuildResult(
+                samples: [],
+                repairFloorSamples: [],
+                repairCount: 0,
+                maxRepairDelta: 0.0,
+                maxRepairDeltaSeconds: -1.0
+            )
         }
 
         var samples: [AutoCropPlaybackFramingSample] = []
         samples.reserveCapacity(scaleSamples.count)
+        var repairFloorSamples: [AutoCropPlaybackScaleSample] = []
+        repairFloorSamples.reserveCapacity(scaleSamples.count)
         var repairedCount = 0
         var maxRepairDelta = Float(0.0)
         var maxRepairDeltaSeconds = -1.0
@@ -3905,6 +3985,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     scale: finalScale,
                     samplingProfile: samplingProfile
                 )
+                repairFloorSamples.append(
+                    AutoCropPlaybackScaleSample(
+                        seconds: scaleSample.seconds,
+                        scale: autoCropPlaybackScaleInputForProtectedScale(finalScale)
+                    )
+                )
+            } else {
+                repairFloorSamples.append(
+                    AutoCropPlaybackScaleSample(
+                        seconds: scaleSample.seconds,
+                        scale: Float(1.0)
+                    )
+                )
             }
             samples.append(
                 AutoCropPlaybackFramingSample(
@@ -3915,18 +4008,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
 
-        if repairedCount > 0 {
-            os_log(
-                "Auto Crop playback final framing repair | samples %d repaired %d maxDelta %.5f seconds %.3f",
-                log: stabilizerHostAnalysisLog,
-                type: .error,
-                samples.count,
-                repairedCount,
-                maxRepairDelta,
-                maxRepairDeltaSeconds
-            )
-        }
-        return samples
+        return AutoCropPlaybackFramingBuildResult(
+            samples: samples,
+            repairFloorSamples: repairFloorSamples,
+            repairCount: repairedCount,
+            maxRepairDelta: maxRepairDelta,
+            maxRepairDeltaSeconds: maxRepairDeltaSeconds
+        )
     }
 
     private static func autoCropPlaybackRateLimitedScaleSamples(
@@ -6679,15 +6767,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let repeatedPreparedSample = normalCadence
             && sameIdentity
             && samplePosition <= (previous?.samplePosition ?? -1.0) + 0.05
-        let periodicSampleDue: Bool
-
-        renderDiagnosticsLogLock.lock()
-        periodicSampleDue = (now - lastRenderMotionDiagnosticLogWallTime) >= 0.5
-        if irregularRenderCadence
+        let motionAnomaly = irregularRenderCadence
             || catchUpAfterTinyStep
             || largeSingleStep
             || repeatedPreparedSample
-            || periodicSampleDue {
+        let periodicSampleDue: Bool
+        let shouldLogMotionDiagnostic: Bool
+
+        renderDiagnosticsLogLock.lock()
+        periodicSampleDue = (now - lastRenderMotionDiagnosticLogWallTime) >= 0.5
+        shouldLogMotionDiagnostic = periodicSampleDue
+            || (motionAnomaly && (now - lastRenderMotionDiagnosticLogWallTime) >= 0.25)
+        if shouldLogMotionDiagnostic {
             lastRenderMotionDiagnosticLogWallTime = now
         }
         lastRenderMotionDiagnosticState = RenderMotionDiagnosticState(
@@ -6723,6 +6814,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else if periodicSampleDue {
             reason = "sample"
         } else {
+            return
+        }
+        guard shouldLogMotionDiagnostic else {
             return
         }
         let lowerFingerprintForLog = String(lowerFingerprint.prefix(8))
@@ -8952,6 +9046,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         appliedPixelOffset: vector_float2,
         appliedRotationRadians: Float
     ) {
+        let now = Date.timeIntervalSinceReferenceDate
+        renderDiagnosticsLogLock.lock()
+        let shouldPublish = now - lastRenderDiagnosticStatusWallTime >= 0.5
+        if shouldPublish {
+            lastRenderDiagnosticStatusWallTime = now
+        }
+        renderDiagnosticsLogLock.unlock()
+        guard shouldPublish else {
+            return
+        }
+
         let cropTelemetry = autoCropFraming.telemetry
         let cropMergeSuffix = cropTelemetry.mergeBypassed ? " bypass" : ""
         let status = String(

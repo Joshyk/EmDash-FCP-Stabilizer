@@ -632,7 +632,7 @@ enum AutoStabilizationEstimator {
     private static let renderTurnTransitionDetectedCapStartPixels: Float = 180.0
     private static let renderTurnTransitionDetectedCapAllowancePixels: Float = 48.0
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
-    private static let renderFarFieldWarpSmoothingWindowSeconds = 0.36
+    private static let renderFarFieldWarpSmoothingWindowSeconds = 0.44
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
     private static let renderFootstepJitterSmoothingMaxBlend: Float = 0.50
     private static let renderFootstepJitterSmoothingPixelSimilarity: Float = 1.75
@@ -685,17 +685,25 @@ enum AutoStabilizationEstimator {
     private static let turnOwnershipStrideRollSuppression: Float = 0.50
     private static let turnOwnershipFarFieldWarpSuppression: Float = 0.10
     private static let turnOwnedWalkingXGateFloorMax: Float = 0.82
-    private static let turnOwnedStrideXGateFloorScale: Float = 1.0
+    private static let turnOwnedStrideXGateFloorScale: Float = 1.15
     private static let turnOwnedWalkingXGateFloorStartPixels: Float = 12.0
     private static let turnOwnedWalkingXGateFloorFullPixels: Float = 75.0
     private static let turnOwnedWalkingXMacroFadeStartPixels: Float = 48.0
     private static let turnOwnedWalkingXMacroFadeFullPixels: Float = 160.0
-    private static let turnOwnedFarFieldXConfidenceFloorMax: Float = 0.46
+    private static let turnOwnedFarFieldXConfidenceFloorMax: Float = 0.50
     private static let turnOwnedFarFieldXConfidenceFloorStartPixels: Float = 1.0
     private static let turnOwnedFarFieldXConfidenceFloorFullPixels: Float = 10.0
     private static let turnOwnedFarFieldXMacroGateFloorMax: Float = 1.0
     private static let turnOwnedFootstepXFineFadeStartPixels: Float = 28.0
     private static let turnOwnedFootstepXFineFadeFullPixels: Float = 72.0
+    private static let turnOwnedFootstepXRescueConfidenceFloorMax: Float = 0.34
+    private static let turnOwnedFootstepXRescueBandStartPixels: Float = 18.0
+    private static let turnOwnedFootstepXRescueBandFullPixels: Float = 58.0
+    private static let turnOwnedFootstepXRescueSupportStart: Float = 0.02
+    private static let turnOwnedFootstepXRescueSupportFull: Float = 0.12
+    private static let turnOwnedFootstepXRescueTurnEvidenceStart: Float = 0.48
+    private static let turnOwnedFootstepXRescueTurnEvidenceFull: Float = 0.68
+    private static let turnOwnedFootstepXRescueTurnEvidenceScale: Float = 0.85
     private static let turnMacroOwnershipBandStartPixels: Float = 16.0
     private static let turnMacroOwnershipBandFullPixels: Float = 96.0
     private static let turnMacroOwnershipTravelStartPixels: Float = 24.0
@@ -811,10 +819,11 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryLandingShockTurnSuppressionFull: Float = 0.88
     private static let playbackTrajectoryVelocityCollapseMinimumPixels: Float = 0.32
     private static let playbackTrajectoryVelocityCollapseMinimumPixelFraction: Float = 0.00024
-    private static let playbackTrajectoryVelocityCollapseMaximumCorrectionPixels: Float = 0.72
+    private static let playbackTrajectoryVelocityCollapseMinimumDeviationScale: Float = 0.32
+    private static let playbackTrajectoryVelocityCollapseMaximumCorrectionPixels: Float = 0.90
     private static let playbackTrajectoryVelocityCollapseMaximumCorrectionPixelFraction: Float = 0.00082
     private static let playbackTrajectoryVelocityCollapseMaximumStepRatio: Float = 0.34
-    private static let playbackTrajectoryVelocityCollapseMinimumFarFieldSupport: Float = 0.20
+    private static let playbackTrajectoryVelocityCollapseMinimumFarFieldSupport: Float = 0.15
     private static let playbackTrajectoryVelocityCollapseMaximumBlend: Float = 0.78
     private static let playbackTrajectoryFootstepPreservationStartPixels: Float = 0.38
     private static let playbackTrajectoryFootstepPreservationFullPixels: Float = 1.65
@@ -826,14 +835,14 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeInnerWindowSeconds = 0.12
     private static let playbackTrajectoryFarFieldMacroDespikeOuterWindowSeconds = 0.72
     private static let playbackTrajectoryFarFieldMacroDespikeLocalWindowSeconds = 0.36
-    private static let playbackTrajectoryFarFieldMacroDespikeMinimumPixels: Float = 0.55
+    private static let playbackTrajectoryFarFieldMacroDespikeMinimumPixels: Float = 0.42
     private static let playbackTrajectoryFarFieldMacroDespikeMinimumRotationDegrees: Float = 0.012
-    private static let playbackTrajectoryFarFieldMacroDespikeMadMultiplier: Float = 2.0
-    private static let playbackTrajectoryFarFieldMacroDespikeMaximumBlend: Float = 0.72
+    private static let playbackTrajectoryFarFieldMacroDespikeMadMultiplier: Float = 1.55
+    private static let playbackTrajectoryFarFieldMacroDespikeMaximumBlend: Float = 0.82
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 46
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 70
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -2604,10 +2613,19 @@ enum AutoStabilizationEstimator {
         )
         let farFieldFootstepXConfidenceFloor = max(
             turnOwnedFootstepXConfidenceFloor,
-            farFieldFootstepConfidenceFloor(
-                bandPixels: microBandX * xScale,
-                farFieldSupport: farFieldWalkingXSupport
-            ) * turnOwnedFootstepXFineGate
+            max(
+                farFieldFootstepConfidenceFloor(
+                    bandPixels: microBandX * xScale,
+                    farFieldSupport: farFieldWalkingXSupport
+                ) * turnOwnedFootstepXFineGate,
+                turnOwnedFootstepXRescueConfidenceFloor(
+                    bandPixels: microBandX * xScale,
+                    turnShakeSuppression: playbackTurnShakeSuppression,
+                    turnOwnership: playbackTurnOwnershipX,
+                    farFieldSupport: farFieldWalkingXSupport,
+                    fineGate: turnOwnedFootstepXFineGate
+                )
+            )
         )
         let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
             bandPixels: microBandY * yScale,
@@ -2683,7 +2701,7 @@ enum AutoStabilizationEstimator {
         let microPixelLimitY = max(2.0, outputSize.y * 0.055)
         let unattenuatedRawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
-            rawConfidence: rawFootstepXConfidence,
+            rawConfidence: max(rawFootstepXConfidence, farFieldFootstepXConfidenceFloor),
             correctionPixels: unattenuatedRawMicroPixelOffsetX,
             farFieldSupport: farFieldWalkingXSupport
         )
@@ -2704,6 +2722,7 @@ enum AutoStabilizationEstimator {
                 requestedStrength: strengths.microJitterX,
                 fullImpulseScale: footstepImpulseFullScalePixels,
                 confidenceScale: footstepXContinuityConfidenceScale,
+                confidenceFloor: farFieldFootstepXConfidenceFloor,
                 cache: cache
             )
             : FootstepContinuityLimitResult(limitedCorrection: rawMicroPixelOffsetX, limitedAmount: 0.0)
@@ -4429,7 +4448,7 @@ enum AutoStabilizationEstimator {
             let predicted = previous + (bridge * fraction)
             let deviation = current - predicted
             let deviationMagnitude = abs(deviation)
-            guard deviationMagnitude > minimumStep * 0.55 else {
+            guard deviationMagnitude > minimumStep * playbackTrajectoryVelocityCollapseMinimumDeviationScale else {
                 deviationRejectedFrameCount += 1
                 continue
             }
@@ -5686,10 +5705,19 @@ enum AutoStabilizationEstimator {
             )
             let farFieldFootstepXConfidenceFloor = max(
                 turnOwnedFootstepXConfidenceFloor,
-                farFieldFootstepConfidenceFloor(
-                    bandPixels: microBandX * xScale,
-                    farFieldSupport: farFieldWalkingXSupport
-                ) * turnOwnedFootstepXFineGate
+                max(
+                    farFieldFootstepConfidenceFloor(
+                        bandPixels: microBandX * xScale,
+                        farFieldSupport: farFieldWalkingXSupport
+                    ) * turnOwnedFootstepXFineGate,
+                    turnOwnedFootstepXRescueConfidenceFloor(
+                        bandPixels: microBandX * xScale,
+                        turnShakeSuppression: playbackTurnShakeSuppression,
+                        turnOwnership: playbackTurnOwnershipX,
+                        farFieldSupport: farFieldWalkingXSupport,
+                        fineGate: turnOwnedFootstepXFineGate
+                    )
+                )
             )
             let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
                 bandPixels: microBandY * yScale,
@@ -5764,7 +5792,7 @@ enum AutoStabilizationEstimator {
             let microPixelLimitY = max(2.0, outputSize.y * 0.055)
             let unattenuatedRawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
             let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
-                rawConfidence: rawFootstepXConfidence,
+                rawConfidence: max(rawFootstepXConfidence, farFieldFootstepXConfidenceFloor),
                 correctionPixels: unattenuatedRawMicroPixelOffsetX,
                 farFieldSupport: farFieldWalkingXSupport
             )
@@ -5785,6 +5813,7 @@ enum AutoStabilizationEstimator {
                     requestedStrength: strengths.microJitterX,
                     fullImpulseScale: footstepImpulseFullScalePixels,
                     confidenceScale: footstepXContinuityConfidenceScale,
+                    confidenceFloor: farFieldFootstepXConfidenceFloor,
                     cache: cache
                 )
                 : FootstepContinuityLimitResult(limitedCorrection: rawMicroPixelOffsetX, limitedAmount: 0.0)
@@ -7079,12 +7108,25 @@ enum AutoStabilizationEstimator {
         let strideXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
         let strideYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideYSuppression), min: 0.0, max: 1.0)
         let strideRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideRollSuppression), min: 0.0, max: 1.0)
-        let footstepXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
-            bandMagnitude: abs(footstepImpulseX),
-            turnShakeSuppression: turnShakeSuppression,
-            turnOwnership: turnOwnershipX,
-            turnMacroMagnitude: turnXMacroPixels,
-            farFieldSupport: farFieldTurnOwnedXSupport
+        let turnOwnedFootstepXFineGate = turnOwnedFootstepXFineBandGate(
+            bandPixels: footstepImpulseX * xScale,
+            turnOwnership: turnOwnershipX
+        )
+        let footstepXFarFieldConfidenceFloor = max(
+            turnOwnedFarFieldWalkingXConfidenceFloor(
+                bandMagnitude: abs(footstepImpulseX),
+                turnShakeSuppression: turnShakeSuppression,
+                turnOwnership: turnOwnershipX,
+                turnMacroMagnitude: turnXMacroPixels,
+                farFieldSupport: farFieldTurnOwnedXSupport
+            ),
+            turnOwnedFootstepXRescueConfidenceFloor(
+                bandPixels: footstepImpulseX * xScale,
+                turnShakeSuppression: turnShakeSuppression,
+                turnOwnership: turnOwnershipX,
+                farFieldSupport: farFieldTurnOwnedXSupport,
+                fineGate: turnOwnedFootstepXFineGate
+            )
         )
         let footstepRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
             bandDegrees: footstepPathRollAtRender - microImpulseBaselineRoll,
@@ -7157,7 +7199,7 @@ enum AutoStabilizationEstimator {
         )
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
-            rawConfidence: rawFootstepXConfidence,
+            rawConfidence: max(rawFootstepXConfidence, footstepXFarFieldConfidenceFloor),
             correctionPixels: unscaledRawMicroCompensationX,
             farFieldSupport: farFieldTurnOwnedXSupport
         )
@@ -7178,6 +7220,7 @@ enum AutoStabilizationEstimator {
                 requestedStrength: strengths.microJitterX,
                 fullImpulseScale: footstepImpulseFullScalePixels,
                 confidenceScale: footstepXContinuityConfidenceScale,
+                confidenceFloor: footstepXFarFieldConfidenceFloor,
                 cache: cache
             )
             : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationX, limitedAmount: 0.0)
@@ -7944,12 +7987,25 @@ enum AutoStabilizationEstimator {
         let strideXTurnGate = max(baseStrideXTurnGate, strideXTurnGateFloor)
         let strideYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideYSuppression), min: 0.0, max: 1.0)
         let strideRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideRollSuppression), min: 0.0, max: 1.0)
-        let footstepXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
-            bandMagnitude: abs(footstepImpulseX),
-            turnShakeSuppression: turnShakeSuppression,
-            turnOwnership: turnOwnershipX,
-            turnMacroMagnitude: turnXMacroPixels,
-            farFieldSupport: farFieldTurnOwnedXSupport
+        let turnOwnedFootstepXFineGate = turnOwnedFootstepXFineBandGate(
+            bandPixels: footstepImpulseX * xScale,
+            turnOwnership: turnOwnershipX
+        )
+        let footstepXFarFieldConfidenceFloor = max(
+            turnOwnedFarFieldWalkingXConfidenceFloor(
+                bandMagnitude: abs(footstepImpulseX),
+                turnShakeSuppression: turnShakeSuppression,
+                turnOwnership: turnOwnershipX,
+                turnMacroMagnitude: turnXMacroPixels,
+                farFieldSupport: farFieldTurnOwnedXSupport
+            ),
+            turnOwnedFootstepXRescueConfidenceFloor(
+                bandPixels: footstepImpulseX * xScale,
+                turnShakeSuppression: turnShakeSuppression,
+                turnOwnership: turnOwnershipX,
+                farFieldSupport: farFieldTurnOwnedXSupport,
+                fineGate: turnOwnedFootstepXFineGate
+            )
         )
         let footstepRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
             bandDegrees: footstepPathRollAtRender - microImpulseBaselineRoll,
@@ -8023,7 +8079,7 @@ enum AutoStabilizationEstimator {
         )
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
-            rawConfidence: rawFootstepXConfidence,
+            rawConfidence: max(rawFootstepXConfidence, footstepXFarFieldConfidenceFloor),
             correctionPixels: unscaledRawMicroCompensationX,
             farFieldSupport: farFieldTurnOwnedXSupport
         )
@@ -8044,6 +8100,7 @@ enum AutoStabilizationEstimator {
                 requestedStrength: strengths.microJitterX,
                 fullImpulseScale: footstepImpulseFullScalePixels,
                 confidenceScale: footstepXContinuityConfidenceScale,
+                confidenceFloor: footstepXFarFieldConfidenceFloor,
                 cache: cache
             )
             : FootstepContinuityLimitResult(limitedCorrection: rawMicroCompensationX, limitedAmount: 0.0)
@@ -11795,9 +11852,19 @@ enum AutoStabilizationEstimator {
         guard base > 0.0 else {
             return 0.0
         }
-        _ = trackingConfidence
-        _ = edgeQuality
-        return base
+        let trackingSupport = confidenceRamp(
+            trackingConfidence,
+            start: farFieldWarpTrackingGateStart,
+            full: farFieldWarpTrackingGateFull
+        )
+        let edgeSupport = confidenceRamp(
+            edgeQuality,
+            start: farFieldWarpEdgeQualityGateStart,
+            full: farFieldWarpEdgeQualityGateFull
+        )
+        let evidenceSupport = max(safeWarpGate, trackingSupport * edgeSupport)
+        let lifted = base + (base * (1.0 - base) * 0.85 * evidenceSupport)
+        return clamp(lifted, min: base, max: 1.0)
     }
 
     private static func stableFarFieldWarpTrackingConfidence(
@@ -12111,7 +12178,7 @@ enum AutoStabilizationEstimator {
         )
         let baseGate = 1.0 - macroOwnership
         let farFieldFloor = turnOwnedFarFieldXMacroGateFloorMax
-            * confidenceRamp(farFieldSupport, start: 0.22, full: 0.72)
+            * confidenceRamp(farFieldSupport, start: 0.12, full: 0.52)
             * macroOwnership
         return clamp(max(baseGate, farFieldFloor), min: 0.0, max: 1.0)
     }
@@ -12160,8 +12227,8 @@ enum AutoStabilizationEstimator {
         )
         let evidenceSupport = confidenceRamp(
             farFieldSupport,
-            start: 0.22,
-            full: 0.72
+            start: 0.12,
+            full: 0.52
         )
         let macroGate = turnOwnedFarFieldXMacroGate(
             turnMacroMagnitude,
@@ -12188,6 +12255,56 @@ enum AutoStabilizationEstimator {
             full: turnOwnedFootstepXFineFadeFullPixels
         )
         return clamp(1.0 - (turnSupport * largeBandFade), min: 0.0, max: 1.0)
+    }
+
+    private static func turnOwnedFootstepXRescueConfidenceFloor(
+        bandPixels: Float,
+        turnShakeSuppression: Float,
+        turnOwnership: Float,
+        farFieldSupport: Float,
+        fineGate: Float
+    ) -> Float {
+        guard bandPixels.isFinite,
+              turnShakeSuppression.isFinite,
+              turnOwnership.isFinite,
+              farFieldSupport.isFinite,
+              fineGate.isFinite
+        else {
+            return 0.0
+        }
+        let suppressedFineGate = 1.0 - clamp(fineGate, min: 0.0, max: 1.0)
+        guard suppressedFineGate > 0.0 else {
+            return 0.0
+        }
+        let turnSupport = max(
+            confidenceRamp(turnShakeSuppression, start: 0.18, full: 0.56),
+            confidenceRamp(turnOwnership, start: 0.18, full: 0.56)
+        )
+        let bandSupport = confidenceRamp(
+            abs(bandPixels),
+            start: turnOwnedFootstepXRescueBandStartPixels,
+            full: turnOwnedFootstepXRescueBandFullPixels
+        )
+        let farFieldEvidenceSupport = confidenceRamp(
+            farFieldSupport,
+            start: turnOwnedFootstepXRescueSupportStart,
+            full: turnOwnedFootstepXRescueSupportFull
+        )
+        let turnEvidenceSupport = confidenceRamp(
+            turnOwnership,
+            start: turnOwnedFootstepXRescueTurnEvidenceStart,
+            full: turnOwnedFootstepXRescueTurnEvidenceFull
+        ) * turnOwnedFootstepXRescueTurnEvidenceScale
+        let evidenceSupport = max(farFieldEvidenceSupport, turnEvidenceSupport)
+        return clamp(
+            turnOwnedFootstepXRescueConfidenceFloorMax
+                * suppressedFineGate
+                * turnSupport
+                * bandSupport
+                * evidenceSupport,
+            min: 0.0,
+            max: turnOwnedFootstepXRescueConfidenceFloorMax
+        )
     }
 
     private static func farFieldFootstepConfidenceFloor(
@@ -12551,6 +12668,7 @@ enum AutoStabilizationEstimator {
         requestedStrength: Double,
         fullImpulseScale: Float,
         confidenceScale: Float = 1.0,
+        confidenceFloor: Float = 0.0,
         cache: RenderEstimateCache
     ) -> FootstepContinuityLimitResult {
         guard rawCorrection.isFinite,
@@ -12616,7 +12734,10 @@ enum AutoStabilizationEstimator {
             )
             let correctionStrength = walkingConfidenceCompensatedCorrectionFactor(
                 requestedStrength,
-                confidence: confidence * clamp(confidenceScale, min: 0.0, max: 1.0),
+                confidence: max(
+                    confidence * clamp(confidenceScale, min: 0.0, max: 1.0),
+                    clamp(confidenceFloor, min: 0.0, max: 1.0)
+                ),
                 maxStrength: 10.0
             )
             let correction = -(values[index] - baselineValues[index]) * outputScale * correctionStrength

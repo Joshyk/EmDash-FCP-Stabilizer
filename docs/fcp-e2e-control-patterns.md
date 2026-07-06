@@ -13,7 +13,7 @@ terminal-first scripts instead of adding a second UI automation path.
 - The fixed cases are:
   - `p1000307`: `tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json`
   - `p1000304`: `tests/stabilizer_e2e_cases/p1000304_ridge_4m23_4m43.json`
-- Both cases target `/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle`
+- Both cases target `/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stabilizer_super_smoother.fcpbundle`
   and require `playbackMode: "Proxy Only"` plus `removeBlackEdges: true`.
 
 ## Fixed Regression Patterns

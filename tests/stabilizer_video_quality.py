@@ -1524,7 +1524,12 @@ def summarize_failures(
         row_quality_ok = bool(row.get("scaleQualityOk", row.get("trackingOk")))
         if previous_row is not None and row_quality_ok and bool(previous_row.get("scaleQualityOk", previous_row.get("trackingOk"))):
             if is_adjacent_sample:
-                cadence_pair = bool(row.get("cadenceHoldFrame")) or bool(previous_row.get("cadenceHoldFrame"))
+                cadence_pair = (
+                    bool(row.get("cadenceHoldFrame"))
+                    or bool(previous_row.get("cadenceHoldFrame"))
+                    or bool(row.get("captureHoldAffectedFrame"))
+                    or bool(previous_row.get("captureHoldAffectedFrame"))
+                )
                 pts_irregular_pair = bool(row.get("ptsCadenceAffectedFrame")) or bool(
                     previous_row.get("ptsCadenceAffectedFrame")
                 )
@@ -2026,6 +2031,9 @@ def main() -> int:
     duplicate_p95_threshold = float(quality.get("nearDuplicateP95AbsDiffThreshold", float("inf")))
     duplicate_displacement_limit = float(quality.get("nearDuplicateMaxDisplacementFraction", float("inf")))
     cadence_hold_mean_threshold = float(quality.get("cadenceHoldMeanAbsDiffThreshold", -1.0))
+    cadence_hold_loose_mean_threshold = float(
+        quality.get("cadenceHoldLooseMeanAbsDiffThreshold", cadence_hold_mean_threshold)
+    )
     cadence_hold_p95_threshold = float(quality.get("cadenceHoldP95AbsDiffThreshold", float("inf")))
     cadence_hold_displacement_limit = float(quality.get("cadenceHoldMaxDisplacementFraction", float("inf")))
     cadence_hold_scale_limit = float(quality.get("cadenceHoldMaxScalePercent", float("inf")))
@@ -2159,10 +2167,19 @@ def main() -> int:
                 near_duplicate_diff
                 and displacement_fraction <= duplicate_displacement_limit
             )
-            cadence_hold = (
+            cadence_hold_strict_diff = (
                 cadence_hold_mean_threshold >= 0.0
                 and frame_diff_mean <= cadence_hold_mean_threshold
                 and frame_diff_p95 <= cadence_hold_p95_threshold
+            )
+            cadence_hold_p95_tiny_motion = (
+                cadence_hold_loose_mean_threshold >= 0.0
+                and frame_diff_mean <= cadence_hold_loose_mean_threshold
+                and frame_diff_p95 <= cadence_hold_p95_threshold
+                and displacement_fraction <= cadence_hold_displacement_limit
+            )
+            cadence_hold = (
+                (cadence_hold_strict_diff or cadence_hold_p95_tiny_motion)
                 and displacement_fraction <= cadence_hold_displacement_limit
                 and abs(scale_percent) <= cadence_hold_scale_limit
                 and (bool(transform.get("ok")) or near_duplicate)
@@ -2636,6 +2653,7 @@ def main() -> int:
             "nearDuplicateP95AbsDiffThreshold": duplicate_p95_threshold,
             "nearDuplicateMaxDisplacementFraction": duplicate_displacement_limit,
             "cadenceHoldMeanAbsDiffThreshold": cadence_hold_mean_threshold,
+            "cadenceHoldLooseMeanAbsDiffThreshold": cadence_hold_loose_mean_threshold,
             "cadenceHoldP95AbsDiffThreshold": cadence_hold_p95_threshold,
             "cadenceHoldMaxDisplacementFraction": cadence_hold_displacement_limit,
             "cadenceHoldMaxScalePercent": cadence_hold_scale_limit,

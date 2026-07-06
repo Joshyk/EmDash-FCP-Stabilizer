@@ -279,7 +279,7 @@ For development changes that affect stabilization smoothness, Auto Crop / Remove
 Edges, turn smoothing, playback zoom, or proxy playback behavior, run the repo E2E
 screen-capture case for `P1000307.mov` before claiming the issue is fixed. The canonical
 case is `tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json`: open
-`/Users/justadev/Desktop/stabilizer_super_smoother.fcpbundle`, use the
+`/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stabilizer_super_smoother.fcpbundle`, use the
 `P1000307 Stabilized Review` project, play the `00:01:26` to `00:01:46` turn section in
 proxy with the Stabilizer effect and Remove Black Edges / crop enabled, record the Final Cut
 Pro Viewer, then evaluate the recording with `scripts/stabilizer_fcp_screen_capture_e2e.sh`.
@@ -506,7 +506,9 @@ must not apply Y or roll correction. Macro X turn correction should be soft-limi
 render so large detected pans do not create stretched-edge jumps in the preview. With
 `Remove Black Edges` / Auto Crop enabled, TURN may use a larger crop-aware output-edge
 budget so the zoomed margin is spent on making the turn move as a smoother, more uniform
-pan; with Auto Crop disabled, keep the stricter budget so exposed black edges remain a
+pan. Crop-on playback must spend that margin through precomputed, smoothed crop and
+prepared-turn plans; it must not rely on final frame-local scale repairs that create
+zoom/crop pulsing. With Auto Crop disabled, keep the stricter budget so exposed black edges remain a
 useful diagnostic. `Turn Detection Window` must use the Inspector UI value, and its UI
 minimum must be the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than
 SWOB. The turn band should be measured from the stride-smoothed path instead of the raw frame
