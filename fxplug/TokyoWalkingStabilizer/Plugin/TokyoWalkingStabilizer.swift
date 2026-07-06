@@ -47,7 +47,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.335"
+private let tokyoWalkingStabilizerVersion = "1.0.336"
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_318_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
@@ -9270,7 +9270,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             transformFinishedAt = analysisLookupFinishedAt
             autoTransform = .identity
         }
-        let debugOverlayActive = state.debugOverlay && transformEnabled && renderUsesPreparedAnalysis
+        let debugOverlayActive = state.debugOverlay
         if renderCacheIdentity == nil {
             renderCacheIdentity = storeSnapshot.activeCacheIdentity
         }
