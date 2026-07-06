@@ -143,13 +143,18 @@ static bool debugLabelPixel(uint code, uint x, uint y) {
     return ((bits >> (2 - x)) & 0x1) != 0;
 }
 
-static uint debugModeLabelChar(float debugMode, uint index) {
+static uint debugDigitChar(uint digit) {
+    return 48 + (digit % 10);
+}
+
+static uint debugModeLabelChar(float debugMode, float runtimeBuild, uint index) {
+    uint build = uint(clamp(runtimeBuild, 0.0, 999.0) + 0.5);
     if (index == 0) {
         return debugMode > 1.5 ? 80 : 82; // P or R
     }
-    if (index == 1) { return 53; } // 5
-    if (index == 2) { return 50; } // 2
-    if (index == 3) { return 49; } // 1
+    if (index == 1) { return debugDigitChar(build / 100); }
+    if (index == 2) { return debugDigitChar((build / 10) % 10); }
+    if (index == 3) { return debugDigitChar(build); }
     return 0;
 }
 
@@ -171,7 +176,7 @@ static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uin
     }
 }
 
-static uint debugLabelChar(uint row, uint index, float debugMode) {
+static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeBuild) {
     switch (row) {
         case 0:
             return debugLabelCharAt(index, 88, 0, 79, 70, 70, 83, 69, 84, 0, 0, 0, 0); // X OFFSET
@@ -204,19 +209,19 @@ static uint debugLabelChar(uint row, uint index, float debugMode) {
         case 14:
             return debugLabelCharAt(index, 77, 65, 84, 67, 72, 0, 81, 85, 65, 76, 0, 0); // MATCH QUAL
         case 15:
-            return debugLabelCharAt(index, 69, 68, 71, 69, 0, 72, 73, 84, 0, 0, 0, 0); // EDGE HIT
+            return debugLabelCharAt(index, 69, 68, 71, 69, 0, 83, 65, 70, 69, 0, 0, 0); // EDGE SAFE
         case 16:
             return debugLabelCharAt(index, 87, 65, 76, 75, 0, 67, 79, 78, 70, 0, 0, 0); // WALK CONF
         case 17:
             return debugLabelCharAt(index, 67, 82, 79, 80, 0, 90, 79, 79, 77, 0, 0, 0); // CROP ZOOM
         case 18:
-            return debugModeLabelChar(debugMode, index);
+            return debugModeLabelChar(debugMode, runtimeBuild, index);
         default:
             return 0;
     }
 }
 
-static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlayScale, float debugMode) {
+static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlayScale, float debugMode, float runtimeBuild) {
     float textScale = 2.0 * overlayScale;
     constexpr float glyphWidth = 3.0;
     constexpr float glyphHeight = 5.0;
@@ -240,7 +245,7 @@ static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlay
 
     uint glyphX = uint(floor(glyphLocalX / textScale));
     uint glyphY = uint(floor(textY / textScale));
-    return debugLabelPixel(debugLabelChar(row, index, debugMode), glyphX, glyphY);
+    return debugLabelPixel(debugLabelChar(row, index, debugMode, runtimeBuild), glyphX, glyphY);
 }
 
 fragment float4 fragmentShader(
@@ -344,7 +349,7 @@ fragment float4 fragmentShader(
                 color = float3(1.0, 0.65, 0.15);
             } else if (row == 15) {
                 fill = saturate(transform->diagnostic.w);
-                color = float3(1.0, 0.1, 0.1);
+                color = float3(0.2, 1.0, 0.55);
             } else if (row == 16) {
                 fill = saturate(transform->diagnostic5.x);
                 color = float3(0.2, 1.0, 0.75);
@@ -368,7 +373,7 @@ fragment float4 fragmentShader(
                 overlay = barX <= activeWidth ? color : background;
                 alpha = 0.78;
             }
-            if (debugLabelCoverage(panelX, rowY, row, overlayScale, transform->debugMode)) {
+            if (debugLabelCoverage(panelX, rowY, row, overlayScale, transform->debugMode, transform->debugRuntimeBuild)) {
                 overlay = float3(0.94, 0.96, 0.98);
                 alpha = 0.92;
             }

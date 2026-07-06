@@ -47,7 +47,8 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.337"
+private let tokyoWalkingStabilizerVersion = "1.0.338"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 338.0
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_318_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
@@ -9114,7 +9115,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFraming.telemetry.mergeBypassed ? "bypass" : "ok"
         )
         os_log(
-            "Debug Overlay bars quality | FxPlug %{public}@ | FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f MATCH QUAL %.3f EDGE HIT %.3f WALK CONF %.3f",
+            "Debug Overlay bars quality | FxPlug %{public}@ | FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f MATCH QUAL %.3f EDGE SAFE %.3f WALK CONF %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -9430,12 +9431,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let turnScaleX = max(1.0, Float(outputWidth) * 0.01)
             let turnScaleY = max(1.0, Float(outputHeight) * 0.01)
             let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.01)
-            let searchRadiusQuality: Float
+            let edgeSafetyQuality: Float
             if autoTransform.searchRadiusTotalCount > 0 {
                 let searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
-                searchRadiusQuality = 1.0 - searchRadiusHitRatio
+                edgeSafetyQuality = 1.0 - searchRadiusHitRatio
             } else {
-                searchRadiusQuality = 0.0
+                edgeSafetyQuality = 0.0
             }
             let fitQuality = Self.debugMatchQuality(
                 residual: autoTransform.residual,
@@ -9480,7 +9481,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
                 min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
                 rotationActivity,
-                searchRadiusQuality
+                edgeSafetyQuality
             )
             diagnostic2 = vector_float4(
                 turnActivity,
@@ -9612,6 +9613,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             edgeMode: Float(state.edgeDisplayMode),
             debugOverlay: debugOverlayActive ? 1.0 : 0.0,
             debugMode: renderSourceIsProxy ? 2.0 : 1.0,
+            debugRuntimeBuild: tokyoWalkingStabilizerDebugBuildNumber,
             debugOverlayScale: debugOverlayScale,
             autoCropScale: autoCropFraming.scale,
             autoCropPositionPixels: autoCropFraming.positionPixels
