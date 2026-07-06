@@ -434,6 +434,18 @@ and effective correction strength so low-confidence gating is visible. Far-field
 not use the full broad transform-smoothing window; keep it on a short in-range render-time
 smoothing window so ridge-line correction stays responsive while single-frame gate flicker is
 still damped.
+Auto Crop timing controls define the render-time zoom envelope around strong internal
+Auto Crop keypoints, including turn-driven crop demand. `Auto Crop Zoom-In Time` is the
+lead-in before the keypoint peak: a value of `10.0` means Auto Crop may begin zooming in up
+to 10 seconds before the peak. `Auto Crop Hold Time` is the maximum time to hold the peak
+scale after that peak: a value of `2.0` means hold the maximum zoom for up to 2 seconds.
+`Auto Crop Zoom-Out Time` is the release after the hold: a value of `10.0` means return
+toward `1.0x` over up to 10 seconds. Therefore the default `10.0 / 2.0 / 10.0` contract is
+start zoom-in 10 seconds before the crop/turn peak, hold maximum zoom for 2 seconds, then
+zoom back out toward `1.0x` over 10 seconds. Clip edges, overlapping keypoints, black-edge
+coverage repair, rate limiting, and smoothing may keep scale above `1.0x` longer or raise it
+slightly when needed to avoid visible black edges, but the parameter semantics must not be
+reversed or silently redefined.
 
 ## Walking Correction Stages
 
