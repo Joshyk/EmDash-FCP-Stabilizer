@@ -111,13 +111,15 @@ cache files are staged below that folder:
 ```text
 Exports/
 Exports/SomeLibrary.fcpbundle
-Exports/stablizer_analysis/SomeLibrary__Event_Name__P1000304__schema32__sample100__63720f__20260706-023015__8f4e2c1a/P1000304.fcpxmld/
+Exports/stablizer_analysis/SomeLibrary__Event_Name__P1000304__schema32__sample100__63720f/P1000304.fcpxmld/
 Exports/stablizer_analysis/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
 ```
 
 Per-footage package directories include the source bundle label, Event label,
-footage label, schema, sample size, frame count, analysis timestamp, and an
-8-character UUID suffix so repeated analyses from multiple Events or Final Cut
-Pro libraries can live under one Imports folder without overwriting each other.
+footage label, schema, sample size, and frame count. The path is deterministic:
+rerunning the same analysis updates the same package instead of creating duplicate
+timestamped folders. If an existing package with the same path contains a
+different cache identity, the build fails visibly rather than overwriting a
+different clip analysis.
 
 The tool never falls back to Application Support or any shared cache location.

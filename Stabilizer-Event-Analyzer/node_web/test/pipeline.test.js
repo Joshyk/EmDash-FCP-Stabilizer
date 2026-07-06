@@ -924,16 +924,11 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(payload.insertedFilters, 2);
   assert.equal(payload.packages.length, 1);
   const pkg = payload.packages[0];
-  assert.match(
-    path.basename(pkg.packageDirectory),
-    /^minimal-event__gh6__P1000307__schema19__sample10__300f__\d{8}-\d{6}__[0-9a-f]{8}$/
-  );
+  assert.equal(path.basename(pkg.packageDirectory), "minimal-event__gh6__P1000307__schema19__sample10__300f");
   assert.equal(pkg.packageDirectoryName, path.basename(pkg.packageDirectory));
   assert.equal(pkg.packageBundleLabel, "minimal-event");
   assert.equal(pkg.packageEventLabel, "gh6");
   assert.equal(pkg.packageFootageLabel, "P1000307");
-  assert.match(pkg.packageAnalysisTimestamp, /^\d{8}-\d{6}$/);
-  assert.match(pkg.packageShortUUID, /^[0-9a-f]{8}$/);
   assert.equal(path.basename(pkg.outputPackage), "P1000307.fcpxmld");
   assert.equal(path.basename(pkg.manifestPath), "P1000307.analysis-manifest.json");
   const info = fs.readFileSync(path.join(pkg.outputPackage, "Info.fcpxml"), "utf8");
@@ -952,8 +947,6 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(manifest.packageBundleLabel, "minimal-event");
   assert.equal(manifest.packageEventLabel, "gh6");
   assert.equal(manifest.packageFootageLabel, "P1000307");
-  assert.equal(manifest.packageAnalysisTimestamp, pkg.packageAnalysisTimestamp);
-  assert.equal(manifest.packageShortUUID, pkg.packageShortUUID);
   assert.equal(manifest.preparedMotionPath, true);
   assert.equal(manifest.sourceEffectStack.inheritedFilterCount, 0);
   assert.equal(fs.existsSync(path.join(pkg.packageDirectory, manifest.cachePayloadCacheFile)), true);
@@ -964,6 +957,97 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(packageLatest.frames.length, result.frameCount);
   assert.notEqual(packageLatest.clipLabel, stale.name);
   assert.equal(fs.existsSync(path.join(pkg.outputPackage, "Info.fcpxml")), true);
+});
+
+test("build_stabilizer_fcpxml_import reuses deterministic package directory for matching analysis", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-per-footage-reuse-test-"));
+  const eventRoot = path.join(tmp, "Minimal Library.fcpbundle", "gh6");
+  const cacheRoot = writeCachePayload(eventRoot);
+  const result = analysisResult();
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({
+      status: "ok",
+      cacheRoot,
+      results: [result],
+    }),
+    "utf8"
+  );
+  const args = [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ];
+  const first = run("python3", args);
+  const second = run("python3", args);
+  assert.equal(second.packages[0].packageDirectory, first.packages[0].packageDirectory);
+  assert.equal(
+    path.basename(second.packages[0].packageDirectory),
+    "minimal-event__gh6__P1000307__schema19__sample10__300f"
+  );
+  assert.equal(fs.existsSync(path.join(second.packages[0].outputPackage, "Info.fcpxml")), true);
+});
+
+test("build_stabilizer_fcpxml_import rejects deterministic package collision with different identity", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-per-footage-collision-test-"));
+  const eventRoot = path.join(tmp, "Minimal Library.fcpbundle", "gh6");
+  const result = analysisResult();
+  const cacheRoot = writeCachePayload(eventRoot, result);
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({
+      status: "ok",
+      cacheRoot,
+      results: [result],
+    }),
+    "utf8"
+  );
+  const args = [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ];
+  run("python3", args);
+
+  const changed = {
+    ...result,
+    cacheIdentity: "19:0:6006:20:1920:1080:300:ddd:eee:fff:end6006:P1000307",
+    cacheFileName: "host-analysis-v2-P1000307-different.json",
+    firstFingerprint: "ddd",
+    middleFingerprint: "eee",
+    lastFingerprint: "fff",
+    sourceMediaFingerprint: "ddd:eee:fff",
+  };
+  writeCachePayload(eventRoot, changed);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({
+      status: "ok",
+      cacheRoot,
+      results: [changed],
+    }),
+    "utf8"
+  );
+  const failed = spawnSync("python3", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr || failed.stdout, /different cache identity/);
 });
 
 test("build_stabilizer_fcpxml_import inherits source effects in per-footage packages", () => {

@@ -5,12 +5,10 @@ from __future__ import annotations
 
 import argparse
 import copy
-import datetime as dt
 import json
 import shutil
 import sys
 import xml.etree.ElementTree as ET
-import uuid
 import zlib
 from fractions import Fraction
 from pathlib import Path
@@ -816,8 +814,6 @@ def package_metadata(
     sample_label = f"sample{sample_percent:g}" if isinstance(sample_percent, (int, float)) else "sampleunknown"
     schema = result.get("cacheSchemaVersion", "unknown")
     frame_count = result.get("frameCount", "unknown")
-    timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    short_uuid = uuid.uuid4().hex[:8]
     components = [
         bundle_label_for_source(source_path, result),
         event_label,
@@ -825,8 +821,6 @@ def package_metadata(
         f"schema{schema}",
         sample_label,
         f"{frame_count}f",
-        timestamp,
-        short_uuid,
     ]
     directory_name = "__".join(components)
     return {
@@ -834,8 +828,6 @@ def package_metadata(
         "packageBundleLabel": components[0],
         "packageEventLabel": event_label,
         "packageFootageLabel": components[2],
-        "packageAnalysisTimestamp": timestamp,
-        "packageShortUUID": short_uuid,
     }
 
 
@@ -1012,8 +1004,6 @@ def analysis_manifest(
         "packageBundleLabel": (package_info or {}).get("packageBundleLabel"),
         "packageEventLabel": (package_info or {}).get("packageEventLabel"),
         "packageFootageLabel": (package_info or {}).get("packageFootageLabel"),
-        "packageAnalysisTimestamp": (package_info or {}).get("packageAnalysisTimestamp"),
-        "packageShortUUID": (package_info or {}).get("packageShortUUID"),
         "preparedMotionPath": prepared_fields,
         "sourceClip": {
             "start": source_clip.attrib.get("start") if source_clip is not None else None,
@@ -1036,6 +1026,41 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def existing_package_cache_identity(package_dir: Path) -> str | None:
+    manifest_paths = sorted(package_dir.glob("*.analysis-manifest.json"))
+    if not manifest_paths:
+        return None
+    if len(manifest_paths) > 1:
+        raise ValueError(f"package directory has multiple manifests: {package_dir}")
+    manifest = json.loads(manifest_paths[0].read_text(encoding="utf-8"))
+    identity = (manifest.get("cacheIdentity") or "").strip()
+    return identity or None
+
+
+def prepare_package_directory(package_dir: Path, footage: str, cache_identity: str) -> None:
+    if not package_dir.exists():
+        package_dir.mkdir(parents=True)
+        return
+    if not package_dir.is_dir():
+        raise FileExistsError(f"package path exists and is not a directory: {package_dir}")
+    existing_identity = existing_package_cache_identity(package_dir)
+    if existing_identity and existing_identity != cache_identity:
+        raise FileExistsError(
+            "package directory already exists with a different cache identity: "
+            f"{package_dir}"
+        )
+    for generated_path in [
+        package_dir / f"{footage}.fcpxmld",
+        package_dir / f"{footage}.analysis-cache",
+        package_dir / f"{footage}.analysis-manifest.json",
+        package_dir / f"{footage}.validation.json",
+    ]:
+        if generated_path.is_dir():
+            shutil.rmtree(generated_path)
+        elif generated_path.exists():
+            generated_path.unlink()
+
+
 def build_per_footage_packages(
     source_root: ET.Element,
     results: dict[str, dict],
@@ -1051,10 +1076,11 @@ def build_per_footage_packages(
     for asset_id, result in results.items():
         package_info = package_metadata(source_root, source_path, asset_id, result, target_event_name)
         package_dir = output_dir / package_info["packageDirectoryName"]
-        if package_dir.exists():
-            raise FileExistsError(f"package directory already exists: {package_dir}")
-        package_dir.mkdir(parents=True)
         footage = footage_stem(source_root, asset_id, result)
+        cache_identity = (result.get("cacheIdentity") or "").strip()
+        if not cache_identity:
+            raise ValueError(f"analysis result for {result.get('name') or asset_id} is missing cacheIdentity")
+        prepare_package_directory(package_dir, footage, cache_identity)
         fcpxmld_path = package_dir / f"{footage}.fcpxmld"
         fcpxmld_path.mkdir()
         info_path = fcpxmld_path / "Info.fcpxml"
@@ -1092,8 +1118,6 @@ def build_per_footage_packages(
             "packageBundleLabel": package_info["packageBundleLabel"],
             "packageEventLabel": package_info["packageEventLabel"],
             "packageFootageLabel": package_info["packageFootageLabel"],
-            "packageAnalysisTimestamp": package_info["packageAnalysisTimestamp"],
-            "packageShortUUID": package_info["packageShortUUID"],
             "outputPackage": str(fcpxmld_path),
             "infoPath": str(info_path),
             "manifestPath": str(manifest_path),

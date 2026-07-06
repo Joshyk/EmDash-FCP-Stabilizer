@@ -101,7 +101,7 @@ test("buildCacheRootFromAnalysis requires analyzer-normalized cache root", () =>
 
 test("restorePackageInfoForPath reads a per-clip restore package directory", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-restore-package-"));
-  const packageDir = path.join(tmp, "Library__Event__P1000307__schema32__sample100__10500f__20260706-010203__abc123ef");
+  const packageDir = path.join(tmp, "Library__Event__P1000307__schema32__sample100__10500f");
   const cacheDir = path.join(packageDir, "P1000307.analysis-cache");
   const cachesDir = path.join(cacheDir, "caches");
   fs.mkdirSync(cachesDir, { recursive: true });
@@ -126,8 +126,6 @@ test("restorePackageInfoForPath reads a per-clip restore package directory", asy
       cacheIdentityShort: "abc123ef",
       cachePayloadDirectory: "P1000307.analysis-cache",
       cachePayloadCacheFile: `P1000307.analysis-cache/caches/${cacheFile}`,
-      packageAnalysisTimestamp: "20260706-010203",
-      packageShortUUID: "abc123ef",
     }),
     "utf8"
   );
