@@ -924,7 +924,16 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(payload.insertedFilters, 2);
   assert.equal(payload.packages.length, 1);
   const pkg = payload.packages[0];
-  assert.match(path.basename(pkg.packageDirectory), /^P1000307__sample10__schema19__300f__/);
+  assert.match(
+    path.basename(pkg.packageDirectory),
+    /^minimal-event__gh6__P1000307__schema19__sample10__300f__\d{8}-\d{6}__[0-9a-f]{8}$/
+  );
+  assert.equal(pkg.packageDirectoryName, path.basename(pkg.packageDirectory));
+  assert.equal(pkg.packageBundleLabel, "minimal-event");
+  assert.equal(pkg.packageEventLabel, "gh6");
+  assert.equal(pkg.packageFootageLabel, "P1000307");
+  assert.match(pkg.packageAnalysisTimestamp, /^\d{8}-\d{6}$/);
+  assert.match(pkg.packageShortUUID, /^[0-9a-f]{8}$/);
   assert.equal(path.basename(pkg.outputPackage), "P1000307.fcpxmld");
   assert.equal(path.basename(pkg.manifestPath), "P1000307.analysis-manifest.json");
   const info = fs.readFileSync(path.join(pkg.outputPackage, "Info.fcpxml"), "utf8");
@@ -939,6 +948,12 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(manifest.eventName, "gh6");
   assert.equal(manifest.sourceMediaFingerprint, "aaa:bbb:ccc");
   assert.equal(manifest.cacheIdentity, analysisResult().cacheIdentity);
+  assert.equal(manifest.packageDirectoryName, path.basename(pkg.packageDirectory));
+  assert.equal(manifest.packageBundleLabel, "minimal-event");
+  assert.equal(manifest.packageEventLabel, "gh6");
+  assert.equal(manifest.packageFootageLabel, "P1000307");
+  assert.equal(manifest.packageAnalysisTimestamp, pkg.packageAnalysisTimestamp);
+  assert.equal(manifest.packageShortUUID, pkg.packageShortUUID);
   assert.equal(manifest.preparedMotionPath, true);
   assert.equal(manifest.sourceEffectStack.inheritedFilterCount, 0);
   assert.equal(fs.existsSync(path.join(pkg.packageDirectory, manifest.cachePayloadCacheFile)), true);

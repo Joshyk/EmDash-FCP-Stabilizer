@@ -10,6 +10,7 @@ import json
 import shutil
 import sys
 import xml.etree.ElementTree as ET
+import uuid
 import zlib
 from fractions import Fraction
 from pathlib import Path
@@ -778,14 +779,64 @@ def footage_stem(source_root: ET.Element, asset_id: str, result: dict) -> str:
     return safe_file_component(Path(str(name or asset_id)).stem)
 
 
-def package_directory_name(source_root: ET.Element, asset_id: str, result: dict) -> str:
+def package_label(value: str | None, fallback: str, max_length: int = 40) -> str:
+    label = safe_file_component(str(value or fallback))
+    return label[:max_length].strip("-._") or safe_file_component(fallback)
+
+
+def bundle_label_for_source(source_path: Path, result: dict) -> str:
+    media_path_value = result.get("mediaPath")
+    if media_path_value:
+        try:
+            media_path = Path(str(media_path_value)).expanduser().resolve(strict=False)
+            for parent in media_path.parents:
+                if parent.suffix == ".fcpbundle":
+                    return package_label(parent.stem, "bundle")
+        except OSError:
+            pass
+    source = source_path.expanduser()
+    if source.name == "Info.fcpxml" and source.parent.suffix == ".fcpxmld":
+        source = source.parent
+    if source.suffix == ".fcpbundle":
+        return package_label(source.stem, "bundle")
+    return package_label(source.stem, "source")
+
+
+def package_metadata(
+    source_root: ET.Element,
+    source_path: Path,
+    asset_id: str,
+    result: dict,
+    target_event_name: str | None = None,
+) -> dict:
+    source_events = event_name_by_asset_id(source_root)
     footage = footage_stem(source_root, asset_id, result)
+    event_label = package_label(target_event_name or source_events.get(asset_id), "event")
     sample_percent = result.get("sampleScalePercent")
     sample_label = f"sample{sample_percent:g}" if isinstance(sample_percent, (int, float)) else "sampleunknown"
     schema = result.get("cacheSchemaVersion", "unknown")
     frame_count = result.get("frameCount", "unknown")
-    date_label = dt.date.today().isoformat()
-    return safe_file_component(f"{footage}__{sample_label}__schema{schema}__{frame_count}f__{date_label}")
+    timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    short_uuid = uuid.uuid4().hex[:8]
+    components = [
+        bundle_label_for_source(source_path, result),
+        event_label,
+        package_label(footage, "clip", max_length=50),
+        f"schema{schema}",
+        sample_label,
+        f"{frame_count}f",
+        timestamp,
+        short_uuid,
+    ]
+    directory_name = "__".join(components)
+    return {
+        "packageDirectoryName": directory_name,
+        "packageBundleLabel": components[0],
+        "packageEventLabel": event_label,
+        "packageFootageLabel": components[2],
+        "packageAnalysisTimestamp": timestamp,
+        "packageShortUUID": short_uuid,
+    }
 
 
 def copy_cache_payload(package_dir: Path, footage: str, result: dict, cache_root: str | None) -> dict:
@@ -883,6 +934,7 @@ def analysis_manifest(
     cache_payload: dict | None = None,
     target_event_name: str | None = None,
     target_event_root: Path | None = None,
+    package_info: dict | None = None,
 ) -> dict:
     asset = resource_by_id(source_root, asset_id)
     manifest_asset = normalized_resource_copy(asset, target_event_root=target_event_root) if asset is not None else None
@@ -956,6 +1008,12 @@ def analysis_manifest(
         "cachePayloadDirectory": (cache_payload or {}).get("cachePayloadDirectory"),
         "cachePayloadFiles": (cache_payload or {}).get("cachePayloadFiles") or [],
         "cachePayloadCacheFile": (cache_payload or {}).get("cachePayloadCacheFile"),
+        "packageDirectoryName": (package_info or {}).get("packageDirectoryName"),
+        "packageBundleLabel": (package_info or {}).get("packageBundleLabel"),
+        "packageEventLabel": (package_info or {}).get("packageEventLabel"),
+        "packageFootageLabel": (package_info or {}).get("packageFootageLabel"),
+        "packageAnalysisTimestamp": (package_info or {}).get("packageAnalysisTimestamp"),
+        "packageShortUUID": (package_info or {}).get("packageShortUUID"),
         "preparedMotionPath": prepared_fields,
         "sourceClip": {
             "start": source_clip.attrib.get("start") if source_clip is not None else None,
@@ -991,9 +1049,10 @@ def build_per_footage_packages(
     packages = []
     output_dir.mkdir(parents=True, exist_ok=True)
     for asset_id, result in results.items():
-        package_dir = output_dir / package_directory_name(source_root, asset_id, result)
+        package_info = package_metadata(source_root, source_path, asset_id, result, target_event_name)
+        package_dir = output_dir / package_info["packageDirectoryName"]
         if package_dir.exists():
-            shutil.rmtree(package_dir)
+            raise FileExistsError(f"package directory already exists: {package_dir}")
         package_dir.mkdir(parents=True)
         footage = footage_stem(source_root, asset_id, result)
         fcpxmld_path = package_dir / f"{footage}.fcpxmld"
@@ -1020,6 +1079,7 @@ def build_per_footage_packages(
             cache_payload=cache_payload,
             target_event_name=target_event_name,
             target_event_root=target_event_root,
+            package_info=package_info,
         )
         write_json(manifest_path, manifest)
         packages.append({
@@ -1028,6 +1088,12 @@ def build_per_footage_packages(
             "sourceAssetResolution": result.get("sourceAssetResolution"),
             "footageName": manifest["footageName"],
             "packageDirectory": str(package_dir),
+            "packageDirectoryName": package_info["packageDirectoryName"],
+            "packageBundleLabel": package_info["packageBundleLabel"],
+            "packageEventLabel": package_info["packageEventLabel"],
+            "packageFootageLabel": package_info["packageFootageLabel"],
+            "packageAnalysisTimestamp": package_info["packageAnalysisTimestamp"],
+            "packageShortUUID": package_info["packageShortUUID"],
             "outputPackage": str(fcpxmld_path),
             "infoPath": str(info_path),
             "manifestPath": str(manifest_path),

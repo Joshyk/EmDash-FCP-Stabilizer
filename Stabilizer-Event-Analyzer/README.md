@@ -111,8 +111,13 @@ cache files are staged below that folder:
 ```text
 Exports/
 Exports/SomeLibrary.fcpbundle
-Exports/stablizer_analysis/P1000304__sample100__schema26__63720f__2026-06-22/P1000304.fcpxmld/
+Exports/stablizer_analysis/SomeLibrary__Event_Name__P1000304__schema32__sample100__63720f__20260706-023015__8f4e2c1a/P1000304.fcpxmld/
 Exports/stablizer_analysis/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
 ```
+
+Per-footage package directories include the source bundle label, Event label,
+footage label, schema, sample size, frame count, analysis timestamp, and an
+8-character UUID suffix so repeated analyses from multiple Events or Final Cut
+Pro libraries can live under one Imports folder without overwriting each other.
 
 The tool never falls back to Application Support or any shared cache location.
