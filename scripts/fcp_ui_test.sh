@@ -74,6 +74,32 @@ run_helper() {
 	/usr/bin/osascript "$FCP_HELPER" "$@"
 }
 
+wait_for_helper() {
+	local description="$1"
+	local max_attempts="$2"
+	local interval_seconds="$3"
+	shift 3
+
+	local attempt
+	for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+		if run_helper "$@"; then
+			if ((attempt > 1)); then
+				printf 'fcp_ui_test.sh: %s became available after %d attempt(s).\n' "$description" "$attempt" >&2
+			fi
+			return 0
+		fi
+		if ((attempt == max_attempts)); then
+			fail "timed out waiting for ${description}"
+		fi
+		printf 'fcp_ui_test.sh: waiting for %s (%d/%d)\n' "$description" "$attempt" "$max_attempts" >&2
+		sleep "$interval_seconds"
+	done
+}
+
+wait_for_stabilizer_inspector() {
+	wait_for_helper "Tokyo Walking Stabilizer Inspector evidence" 8 0.25 assert-inspector-effects "Tokyo Walking Stabilizer"
+}
+
 env_check() {
 	require_file "$FCP_HELPER"
 	require_file "$FCP_BATCH_HELPER"
@@ -157,15 +183,14 @@ queue_current_event_compounds() {
 
 analyze_selected() {
 	run_helper select-playhead-clip
-	sleep 0.2
-	enable_debug
-	sleep 0.2
-	run_helper start-analysis
+	wait_for_stabilizer_inspector
+	wait_for_helper "Debug Overlay control" 6 0.2 set-debug-overlay on
+	wait_for_helper "Start Host Analysis control" 6 0.2 start-analysis
 }
 
 apply_and_analyze_selected() {
 	apply_selected
-	sleep 0.8
+	wait_for_stabilizer_inspector
 	analyze_selected
 }
 
