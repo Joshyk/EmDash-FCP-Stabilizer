@@ -199,7 +199,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 ## Stabilization Model
 
 - `Footstep Jitter X Strength`: direct amount for horizontal frame-local footstep correction.
-  The default is `1.0`; values above `1.0` can compensate for weak frame confidence but are
+  The default is `4.0`; values above `1.0` can compensate for weak frame confidence but are
   clamped during render to avoid inverse shake. The maximum is `10.0`. The walking-band confidence response is more
   assertive than TURN and WARP for medium-confidence frame evidence, but zero confidence
   still produces zero correction.
@@ -215,7 +215,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   confidence-weighted neighborhood so multi-frame jitter is smoother while isolated landing
   impulses remain centered on the current frame.
 - `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
-  The default is `1.0`, and the maximum is `10.0`.
+  The default is `4.0`, and the maximum is `10.0`.
   Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
   `0.10` second shock region and predicts from outer samples up to `1.0` second away for
   X/Y/rotation, so landing shock is treated as a frame-level impulse instead of being
@@ -223,7 +223,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   a little sooner, while zero evidence and noisy unsupported frames still produce zero
   correction.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep correction. It
-  defaults to `0.5`. Values above `1.0` can
+  defaults to `1.0`. Values above `1.0` can
   compensate when frame-local confidence makes the detected impulse visibly under-corrected,
   but output remains clamped at full detected-impulse removal.
 - `Stride Wobble X/Y/Rotation Strength`: direct amount for medium-period walking wobble. The
@@ -231,7 +231,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
   not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
   worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale.
-  X and Y default to `1.0` and run up to `10.0`; the rotation default is `0.5`.
+  X and Y default to `4.0` and run up to `10.0`; the rotation default is `1.0`.
   The X band
   uses the same turn ownership gate as Footstep Jitter, and Y/roll are also reduced when
   TURN clearly owns the frame, so medium stride cleanup does not fight broad Turn Smoothing
@@ -253,7 +253,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,
   so long prepared caches do not require repeated full-cache scans during playback.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
-  It does not change Y or roll, defaults to `2.0`, runs up to `12.0`, and the macro
+  It does not change Y or roll, defaults to `12.0`, runs up to `12.0`, and the macro
   correction is soft-limited to a small output-edge budget. Render playback applies an
   additional `2.8` second zero-phase transition pass to the macro X correction so the start
   and end of walking turns do not step between corrections, even across short low-confidence

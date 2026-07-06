@@ -47,14 +47,17 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.334"
+private let tokyoWalkingStabilizerVersion = "1.0.335"
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_318_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
+private let stabilizerDefaultWalkingTranslationStrength = 4.0
+private let stabilizerDefaultWalkingRotationStrength = 1.0
+private let stabilizerDefaultFarFieldWarpStrength = 1.0
 private let stabilizerFixedStrideWobbleWindowSeconds = 2.0
 private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideWobbleWindowSeconds
 private let stabilizerDefaultTurnDetectionWindowSeconds = 6.0
-private let stabilizerDefaultTurnSmoothingStrength = 2.0
+private let stabilizerDefaultTurnSmoothingStrength = 12.0
 private let stabilizerMaximumTurnSmoothingStrength = 12.0
 private let stabilizerMaximumFarFieldWarpStrength = 12.0
 private let stabilizerDefaultAutoCropTransitionDuration = 10.0
@@ -1092,7 +1095,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Footstep Jitter X Strength",
             parameterID: ParameterID.xStrength.rawValue,
-            defaultValue: 1.0,
+            defaultValue: stabilizerDefaultWalkingTranslationStrength,
             parameterMin: 0.0,
             parameterMax: 10.0,
             sliderMin: 0.0,
@@ -1103,7 +1106,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Footstep Jitter Y Strength",
             parameterID: ParameterID.yStrength.rawValue,
-            defaultValue: 1.0,
+            defaultValue: stabilizerDefaultWalkingTranslationStrength,
             parameterMin: 0.0,
             parameterMax: 10.0,
             sliderMin: 0.0,
@@ -1114,7 +1117,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Footstep Jitter Rotation Strength",
             parameterID: ParameterID.rotationStrength.rawValue,
-            defaultValue: 0.5,
+            defaultValue: stabilizerDefaultWalkingRotationStrength,
             parameterMin: 0.0,
             parameterMax: 4.0,
             sliderMin: 0.0,
@@ -1125,7 +1128,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Stride Wobble X Strength",
             parameterID: ParameterID.strideWobbleXStrength.rawValue,
-            defaultValue: 1.0,
+            defaultValue: stabilizerDefaultWalkingTranslationStrength,
             parameterMin: 0.0,
             parameterMax: 10.0,
             sliderMin: 0.0,
@@ -1136,7 +1139,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Stride Wobble Y Strength",
             parameterID: ParameterID.strideWobbleYStrength.rawValue,
-            defaultValue: 1.0,
+            defaultValue: stabilizerDefaultWalkingTranslationStrength,
             parameterMin: 0.0,
             parameterMax: 10.0,
             sliderMin: 0.0,
@@ -1147,7 +1150,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Stride Wobble Rotation Strength",
             parameterID: ParameterID.strideWobbleRotationStrength.rawValue,
-            defaultValue: 0.5,
+            defaultValue: stabilizerDefaultWalkingRotationStrength,
             parameterMin: 0.0,
             parameterMax: 4.0,
             sliderMin: 0.0,
@@ -1158,7 +1161,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.addFloatSlider(
             withName: "Far-field Warp Strength",
             parameterID: ParameterID.farFieldWarpStrength.rawValue,
-            defaultValue: 0.5,
+            defaultValue: stabilizerDefaultFarFieldWarpStrength,
             parameterMin: 0.0,
             parameterMax: stabilizerMaximumFarFieldWarpStrength,
             sliderMin: 0.0,
@@ -1325,14 +1328,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         var state = StabilizerPluginState(
             strength: 1.0,
-            microJitterXStrength: 1.0,
-            microJitterYStrength: 1.0,
-            microJitterRotationStrength: 0.5,
-            strideWobbleXStrength: 1.0,
-            strideWobbleYStrength: 1.0,
-            strideWobbleRotationStrength: 0.5,
+            microJitterXStrength: stabilizerDefaultWalkingTranslationStrength,
+            microJitterYStrength: stabilizerDefaultWalkingTranslationStrength,
+            microJitterRotationStrength: stabilizerDefaultWalkingRotationStrength,
+            strideWobbleXStrength: stabilizerDefaultWalkingTranslationStrength,
+            strideWobbleYStrength: stabilizerDefaultWalkingTranslationStrength,
+            strideWobbleRotationStrength: stabilizerDefaultWalkingRotationStrength,
             panStabilizationStrength: stabilizerDefaultTurnSmoothingStrength,
-            farFieldWarpStrength: 0.5,
+            farFieldWarpStrength: stabilizerDefaultFarFieldWarpStrength,
             panSmoothSeconds: stabilizerDefaultTurnDetectionWindowSeconds,
             autoCropTransitionDuration: stabilizerDefaultAutoCropTransitionDuration,
             autoCropLeadTime: stabilizerDefaultAutoCropLeadTime,

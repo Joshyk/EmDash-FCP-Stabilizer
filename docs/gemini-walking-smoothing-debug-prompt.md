@@ -27,9 +27,11 @@ Repository context:
   - `Stride Wobble Rotation Strength`
   - `Far-field Warp Strength`
   - `Turn Smoothing Strength`
-  - `Footstep Jitter Rotation Strength` and `Stride Wobble Rotation Strength`
-    both default to `0.5`.
-  - `Far-field Warp Strength` defaults to `0.5`, keeps the previous `4.0`
+  - `Footstep Jitter X/Y Strength` and `Stride Wobble X/Y Strength`
+    default to `4.0`.
+  - `Footstep Jitter Rotation Strength`, `Stride Wobble Rotation Strength`, and
+    `Far-field Warp Strength` default to `1.0`.
+  - `Far-field Warp Strength` keeps the previous `4.0`
     response unchanged, and exposes up to `12.0`.
 - Do not add a Footstep Jitter window.
 - Do not recommend a separate post-stride Y-only bounce stage, Inspector control, or diagnostic band.

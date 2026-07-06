@@ -64,11 +64,11 @@ fallbacks.
 ## Controls
 
 - `Footstep Jitter X Strength`: direct amount for horizontal footstep-jitter correction. The
-  default is `1.0` and the maximum is `10.0`. Values above `1.0` can push through weak
+  default is `4.0` and the maximum is `10.0`. Values above `1.0` can push through weak
   frame evidence when the detected impulse is visibly under-corrected, but render output
   still clamps at full detected-impulse removal to avoid inverse shake.
 - `Footstep Jitter Y Strength`: direct amount for vertical footstep-jitter correction. The
-  default is `1.0` and the maximum is `10.0`. Footstep Jitter uses an outer-frame linear
+  default is `4.0` and the maximum is `10.0`. Footstep Jitter uses an outer-frame linear
   prediction with seconds-based windows: it skips the center `0.10` second shock region
   and predicts from outer samples up to `1.0` second away for X/Y/rotation, so footstep
   landing shock is treated as a frame-level impulse instead of being averaged back into the
@@ -94,15 +94,15 @@ fallbacks.
   ownership gate is applied before the footstep-cleaned X path feeds Stride Wobble, so
   Stride does not inherit turn motion already chopped by Footstep Jitter.
 - `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
-  default is `0.5` and the maximum is `4.0`. The default is intentionally conservative so
-  walking footage does not lose a stable horizon. Values above `1.0` can compensate when
+  default is `1.0` and the maximum is `4.0`. The default balances landing-shock correction
+  with preserving a stable horizon. Values above `1.0` can compensate when
   frame-local confidence makes the detected impulse visibly under-corrected, but render
   output still clamps at full detected-impulse removal to avoid inverse shake.
 - `Stride Wobble X Strength`: direct amount for medium-period horizontal walking wobble that
   is longer than Footstep Jitter but shorter than broad Turn Smoothing. The default is
-  `1.0` and the maximum is `10.0`.
+  `4.0` and the maximum is `10.0`.
 - `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
-  default is `1.0`, so medium vertical follow-through is handled by the stride stage.
+  default is `4.0`, so medium vertical follow-through is handled by the stride stage.
   Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
   user-facing Stride Wobble window. Its residual gate uses robust window percentiles instead
   of the single worst residual in the window, and its confidence reaches full response
@@ -110,7 +110,7 @@ fallbacks.
   same turn ownership gate suppresses stride correction during monotonic broad
   turns so the medium band does not fight Turn Smoothing.
 - `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
-  is `0.5` and the maximum is `4.0`. The correction is measured from the
+  is `1.0` and the maximum is `4.0`. The correction is measured from the
   footstep-cleaned baseline and clamped at full detected-band removal during render, so high
   values do not add inverse shake. It is not measured from the raw or jerk-limited broad path,
   so Footstep Jitter shock is not removed a second time.
@@ -127,7 +127,7 @@ fallbacks.
   uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
   trim after translation and roll are removed. Render uses only the current frame's local
   deviation from its own `0.10`/`1.0` second outer-frame linear warp baseline, so
-  accumulated drift does not turn into a fixed deskew. The default is `0.5`, the previous
+  accumulated drift does not turn into a fixed deskew. The default is `1.0`, the previous
   `4.0` strength response is unchanged, the maximum is `12.0`, and `0` fully disables warp.
   Render gates warp with walking-footage tracking
   quality and search-radius headroom. The tracking gate starts early enough for moderate
@@ -137,7 +137,7 @@ fallbacks.
   Pull this down if close grass, roads, water, or frame edges start to swim.
 - `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
   walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
-  correction is bypassed; the default is `2.0` and the maximum is `12.0`. Values above `1.0`
+  correction is bypassed; the default is `12.0` and the maximum is `12.0`. Values above `1.0`
   push through low-confidence gating when stop-and-go panning is still visible, but render
   output still clamps at full detected turn-band removal. The turn intent is a monotonic
   S-curve through the detection window instead of a straight-line fit. The X turn band
@@ -351,7 +351,7 @@ FxPlug.
   Stride input, keeping TURN as the owner of that broad motion through the whole walking-band chain.
   Footstep Jitter confidence is evaluated on the current render frame instead of inheriting
   the worst residual from the wider turn-detection window.
-- `Far-field Warp Strength` defaults to `0.5` and controls bundled deskew/shear, yaw/pitch
+- `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps keep the
   previous cap of shear `0.016`, yaw/pitch proxy `0.010`, and perspective `0.006`; values up
   to `12` extend the same slope for extra headroom. The applied value is the local warp band

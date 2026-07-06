@@ -36,15 +36,15 @@ PARAM_PREFIX = "9999/10013/10016/3/10036"
 FILTER_NAMES = {EFFECT_NAME, "Tokyo Walking Stabilizer copy"}
 LEGACY_FILTER_NAMES = {"Stabilizer Transform"}
 STABILIZER_VISIBLE_DEFAULT_PARAMS = [
-    ("Footstep Jitter X Strength", 7, "1"),
-    ("Footstep Jitter Y Strength", 18, "1"),
-    ("Footstep Jitter Rotation Strength", 8, "0.5"),
-    ("Stride Wobble X Strength", 29, "1"),
-    ("Stride Wobble Y Strength", 30, "1"),
-    ("Stride Wobble Rotation Strength", 31, "0.5"),
+    ("Footstep Jitter X Strength", 7, "4"),
+    ("Footstep Jitter Y Strength", 18, "4"),
+    ("Footstep Jitter Rotation Strength", 8, "1"),
+    ("Stride Wobble X Strength", 29, "4"),
+    ("Stride Wobble Y Strength", 30, "4"),
+    ("Stride Wobble Rotation Strength", 31, "1"),
     ("Overall Strength", 1, "1"),
-    ("Far-field Warp Strength", 45, "0.5"),
-    ("Turn Smoothing Strength", 23, "2"),
+    ("Far-field Warp Strength", 45, "1"),
+    ("Turn Smoothing Strength", 23, "12"),
     ("Turn Detection Window", 9, "6"),
     ("Remove Black Edges", 41, "1"),
     ("Auto Crop Zoom-Out Time", 42, "10"),

@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.334</string>
+	<string>1.0.335</string>
 	<key>CFBundleVersion</key>
 	<string>875</string>
 	<key>PlugInKit</key>
@@ -69,7 +69,7 @@
 			<key>uuid</key>
 			<string>BEB2015D-70A9-43B0-8D5E-04CEE7ADC49D</string>
 			<key>version</key>
-			<string>1.0.334</string>
+			<string>1.0.335</string>
 		</dict>
 	</array>
 	<key>XPCService</key>
