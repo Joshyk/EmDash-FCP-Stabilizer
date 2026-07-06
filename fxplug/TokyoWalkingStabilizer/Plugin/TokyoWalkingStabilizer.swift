@@ -47,10 +47,10 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.338"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 338.0
+private let tokyoWalkingStabilizerVersion = "1.0.339"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 339.0
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_318_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_319_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -585,6 +585,7 @@ private struct AutoCropZoomPlanCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+    let usesAutoCropTurnSpace: Bool
 }
 
 private struct AutoCropPlaybackScalePlanCacheKey: Hashable {
@@ -609,6 +610,7 @@ private struct AutoCropPlaybackScalePlanCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+    let usesAutoCropTurnSpace: Bool
 }
 
 private struct StabilizerAutoTransformCacheKey: Hashable {
@@ -635,6 +637,7 @@ private struct StabilizerAutoTransformCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+    let usesAutoCropTurnSpace: Bool
 }
 
 private struct RenderAnalysisDecisionSignature: Equatable {
@@ -2003,7 +2006,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleY: strengths.strideWobbleY.bitPattern,
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
-            farFieldWarp: strengths.farFieldWarp.bitPattern
+            farFieldWarp: strengths.farFieldWarp.bitPattern,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
 
         autoTransformCacheLock.lock()
@@ -2503,7 +2507,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleY: strengths.strideWobbleY.bitPattern,
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
-            farFieldWarp: strengths.farFieldWarp.bitPattern
+            farFieldWarp: strengths.farFieldWarp.bitPattern,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
 
         autoCropZoomPlanCacheLock.lock()
@@ -2576,7 +2581,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleY: strengths.strideWobbleY.bitPattern,
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
-            farFieldWarp: strengths.farFieldWarp.bitPattern
+            farFieldWarp: strengths.farFieldWarp.bitPattern,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
     }
 
@@ -9272,7 +9278,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleY: state.strideWobbleYStrength,
             strideWobbleRotation: state.strideWobbleRotationStrength,
             panStabilizationStrength: state.panStabilizationStrength,
-            farFieldWarp: state.farFieldWarpStrength
+            farFieldWarp: state.farFieldWarpStrength,
+            usesAutoCropTurnSpace: state.autoCropEnabled
         )
         let configuredProjectBundleCache = transformEnabled
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)

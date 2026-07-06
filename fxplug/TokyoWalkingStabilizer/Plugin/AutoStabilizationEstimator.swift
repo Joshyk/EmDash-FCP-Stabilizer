@@ -95,6 +95,7 @@ struct StabilizerCorrectionStrengths {
     let strideWobbleRotation: Double
     let panStabilizationStrength: Double
     let farFieldWarp: Double
+    let usesAutoCropTurnSpace: Bool
 
     static let defaultStrengths = StabilizerCorrectionStrengths(
         microJitterX: 1.0,
@@ -104,7 +105,8 @@ struct StabilizerCorrectionStrengths {
         strideWobbleY: 1.0,
         strideWobbleRotation: 0.5,
         panStabilizationStrength: 2.0,
-        farFieldWarp: 0.5
+        farFieldWarp: 0.5,
+        usesAutoCropTurnSpace: false
     )
 }
 
@@ -604,8 +606,10 @@ enum AutoStabilizationEstimator {
     private static let rotationGain: Float = 1.0
     private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
     private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
+    private static let autoCropTurnSmoothingOffsetLimitX: Float = 0.18
     private static let baseTurnSmoothingOffsetLimitY: Float = 0.055
     private static let extraTurnSmoothingOffsetLimitY: Float = 0.040
+    private static let autoCropTurnSmoothingOffsetLimitY: Float = 0.0
     private static let turnSmoothingFullScaleDegrees: Float = 0.16
     private static let baseTurnSmoothingRotationLimitDegrees: Float = 0.80
     private static let extraTurnSmoothingRotationLimitDegrees: Float = 0.55
@@ -879,6 +883,7 @@ enum AutoStabilizationEstimator {
         let strideWobbleRotation: UInt64
         let panStabilizationStrength: UInt64
         let farFieldWarp: UInt64
+        let usesAutoCropTurnSpace: Bool
         let limitFootstepContinuity: Bool
         let includeFarFieldWarp: Bool
     }
@@ -959,6 +964,7 @@ enum AutoStabilizationEstimator {
         let strideWobbleRotation: UInt64
         let panStabilizationStrength: UInt64
         let farFieldWarp: UInt64
+        let usesAutoCropTurnSpace: Bool
     }
 
     private static func combinePreparedPathHash(_ value: UInt64, into hash: inout UInt64) {
@@ -1188,6 +1194,7 @@ enum AutoStabilizationEstimator {
                 strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
                 panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
                 farFieldWarp: strengths.farFieldWarp.bitPattern,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                 limitFootstepContinuity: limitFootstepContinuity,
                 includeFarFieldWarp: includeFarFieldWarp
             )
@@ -2651,6 +2658,8 @@ enum AutoStabilizationEstimator {
                     outputPixels: outputSize.x,
                     baseFraction: baseTurnSmoothingOffsetLimitX,
                     extraFraction: extraTurnSmoothingOffsetLimitX,
+                    autoCropFraction: autoCropTurnSmoothingOffsetLimitX,
+                    usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                     strength: strengths.panStabilizationStrength
                 )
             ),
@@ -2660,6 +2669,8 @@ enum AutoStabilizationEstimator {
                     outputPixels: outputSize.y,
                     baseFraction: baseTurnSmoothingOffsetLimitY,
                     extraFraction: extraTurnSmoothingOffsetLimitY,
+                    autoCropFraction: autoCropTurnSmoothingOffsetLimitY,
+                    usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                     strength: strengths.panStabilizationStrength
                 )
             )
@@ -3823,7 +3834,8 @@ enum AutoStabilizationEstimator {
             strideWobbleY: strengths.strideWobbleY.bitPattern,
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
-            farFieldWarp: strengths.farFieldWarp.bitPattern
+            farFieldWarp: strengths.farFieldWarp.bitPattern,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
     }
 
@@ -5727,6 +5739,8 @@ enum AutoStabilizationEstimator {
                         outputPixels: outputSize.x,
                         baseFraction: baseTurnSmoothingOffsetLimitX,
                         extraFraction: extraTurnSmoothingOffsetLimitX,
+                        autoCropFraction: autoCropTurnSmoothingOffsetLimitX,
+                        usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                         strength: strengths.panStabilizationStrength
                     )
                 ),
@@ -5736,6 +5750,8 @@ enum AutoStabilizationEstimator {
                         outputPixels: outputSize.y,
                         baseFraction: baseTurnSmoothingOffsetLimitY,
                         extraFraction: extraTurnSmoothingOffsetLimitY,
+                        autoCropFraction: autoCropTurnSmoothingOffsetLimitY,
+                        usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                         strength: strengths.panStabilizationStrength
                     )
                 )
@@ -7119,6 +7135,8 @@ enum AutoStabilizationEstimator {
                 outputPixels: outputSize.x,
                 baseFraction: baseTurnSmoothingOffsetLimitX,
                 extraFraction: extraTurnSmoothingOffsetLimitX,
+                autoCropFraction: autoCropTurnSmoothingOffsetLimitX,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                 strength: strengths.panStabilizationStrength
             )
         )
@@ -7128,6 +7146,8 @@ enum AutoStabilizationEstimator {
                 outputPixels: outputSize.y,
                 baseFraction: baseTurnSmoothingOffsetLimitY,
                 extraFraction: extraTurnSmoothingOffsetLimitY,
+                autoCropFraction: autoCropTurnSmoothingOffsetLimitY,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                 strength: strengths.panStabilizationStrength
             )
         )
@@ -7981,6 +8001,8 @@ enum AutoStabilizationEstimator {
                 outputPixels: outputSize.x,
                 baseFraction: baseTurnSmoothingOffsetLimitX,
                 extraFraction: extraTurnSmoothingOffsetLimitX,
+                autoCropFraction: autoCropTurnSmoothingOffsetLimitX,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                 strength: strengths.panStabilizationStrength
             )
         )
@@ -7990,6 +8012,8 @@ enum AutoStabilizationEstimator {
                 outputPixels: outputSize.y,
                 baseFraction: baseTurnSmoothingOffsetLimitY,
                 extraFraction: extraTurnSmoothingOffsetLimitY,
+                autoCropFraction: autoCropTurnSmoothingOffsetLimitY,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
                 strength: strengths.panStabilizationStrength
             )
         )
@@ -10882,10 +10906,18 @@ enum AutoStabilizationEstimator {
         outputPixels: Float,
         baseFraction: Float,
         extraFraction: Float,
+        autoCropFraction: Float,
+        usesAutoCropTurnSpace: Bool,
         strength: Double
     ) -> Float {
         let extraStrength = clamp(Float(strength - 1.0), min: 0.0, max: 3.0)
-        let fraction = baseFraction + (extraFraction * extraStrength)
+        let cropSpaceStrength = clamp(
+            Float((strength - 1.0) / max(1.0, Double(maximumTurnSmoothingStrength - 1.0))),
+            min: 0.0,
+            max: 1.0
+        )
+        let cropSpaceFraction = usesAutoCropTurnSpace ? autoCropFraction * cropSpaceStrength : 0.0
+        let fraction = baseFraction + (extraFraction * extraStrength) + cropSpaceFraction
         return max(8.0, outputPixels * fraction)
     }
 

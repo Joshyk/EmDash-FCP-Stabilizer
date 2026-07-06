@@ -502,9 +502,12 @@ smoother monotonic S-curve turn intent instead of a straight-line fit. The defau
 the exposed maximum is `12.0`;
 values above `1.0` may compensate for low-confidence gating when turn correction is too
 weak, but applied correction must clamp at full detected turn-band removal. Turn smoothing
-must not apply Y or roll correction. Macro X turn correction should be soft-limited to a
-small output-edge budget during render so large detected pans do not create stretched-edge
-jumps in the preview. `Turn Detection Window` must use the Inspector UI value, and its UI
+must not apply Y or roll correction. Macro X turn correction should be soft-limited during
+render so large detected pans do not create stretched-edge jumps in the preview. With
+`Remove Black Edges` / Auto Crop enabled, TURN may use a larger crop-aware output-edge
+budget so the zoomed margin is spent on making the turn move as a smoother, more uniform
+pan; with Auto Crop disabled, keep the stricter budget so exposed black edges remain a
+useful diagnostic. `Turn Detection Window` must use the Inspector UI value, and its UI
 minimum must be the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than
 SWOB. The turn band should be measured from the stride-smoothed path instead of the raw frame
 path, and Y correction must stay Footstep Jitter first and Stride Wobble second so short
