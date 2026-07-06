@@ -6825,18 +6825,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
             return
         }
-        if let expectedRange,
-           let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
-            publishHostAnalysisCacheIdentity(nil, force: true)
-        }
         let loadedCache: Bool
         if let preferredIdentity = currentPreferredHostAnalysisCacheIdentity(),
-           (hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange)
-            || hostAnalysisStore.activatePersistentCache(matchingSourceIdentity: preferredIdentity, expectedRange: expectedRange)) {
+           (hostAnalysisStore.activatePersistentCache(identity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true)
+            || hostAnalysisStore.activatePersistentCache(matchingSourceIdentity: preferredIdentity, expectedRange: expectedRange, allowRangeMismatch: true)) {
             loadedCache = true
         } else {
-            loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange)
+            loadedCache = hostAnalysisStore.reloadPersistentCacheForConsumerIfNeeded(expectedRange: expectedRange, allowRangeMismatch: true)
         }
         guard loadedCache || hostAnalysisStore.hasCompletedAnalysis else {
             return
