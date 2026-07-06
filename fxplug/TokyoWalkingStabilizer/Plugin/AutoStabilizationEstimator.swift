@@ -631,6 +631,10 @@ enum AutoStabilizationEstimator {
     private static let renderTurnTransitionBridgeLowEdgeMacroFullPixels: Float = 120.0
     private static let renderTurnTransitionDetectedCapStartPixels: Float = 180.0
     private static let renderTurnTransitionDetectedCapAllowancePixels: Float = 48.0
+    private static let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
+    private static let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
+    private static let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
+    private static let adaptiveXTurnTransitionMaximumWindowSeconds = 6.0
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.44
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -842,7 +846,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 70
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 71
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -1134,6 +1138,12 @@ enum AutoStabilizationEstimator {
         let lowerFingerprint: String
         let upperFingerprint: String
         let transform: StabilizerAutoTransform
+    }
+
+    private struct AdaptiveXTurnTiming {
+        let travelPixels: Float
+        let windowSeconds: Double
+        let active: Bool
     }
 
     private struct EstimatedPath {
@@ -2387,12 +2397,27 @@ enum AutoStabilizationEstimator {
         let farFieldMediumX = interpolatedValue(farFieldStrideSmoothedXPath, using: interpolation)
         let farFieldMediumY = interpolatedValue(farFieldStrideSmoothedYPath, using: interpolation)
         let farFieldMediumRoll = interpolatedValue(farFieldStrideSmoothedRollPath, using: interpolation)
-        let broadX = playbackPreparedSmoothedValue(
+        let broadWindowSeconds = broadHalfWindow * 2.0
+        let broadWindowIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: renderSeconds,
+            radiusSeconds: broadHalfWindow
+        )
+        let broadActiveIndices = broadWindowIndices.isEmpty ? [centerIndex] : broadWindowIndices
+        let broadSampledIndices = uniqueSortedIndices(
+            broadActiveIndices + [centerIndex] + interpolation.indices,
+            validCount: frames.count
+        )
+        let broadX = adaptiveXTurnSmoothValue(
             turnStrideSmoothedXPath,
             frames: frames,
-            renderSeconds: renderSeconds,
-            halfWindow: broadHalfWindow,
-            sampleCount: 25
+            indices: broadSampledIndices,
+            centerTime: renderSeconds,
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            fallbackWindowSeconds: broadWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: xScale,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
         let broadY = playbackPreparedSmoothedValue(
             turnStrideSmoothedYPath,
@@ -2411,12 +2436,16 @@ enum AutoStabilizationEstimator {
         let farFieldX = interpolatedValue(analysis.farFieldPathX, using: interpolation)
         let farFieldY = interpolatedValue(analysis.farFieldPathY, using: interpolation)
         let farFieldRoll = interpolatedValue(analysis.farFieldPathRoll, using: interpolation)
-        let broadFarFieldX = playbackPreparedSmoothedValue(
-            analysis.farFieldPathX,
+        let broadFarFieldX = adaptiveXTurnSmoothValue(
+            EstimatedPath(values: analysis.farFieldPathX),
             frames: frames,
-            renderSeconds: renderSeconds,
-            halfWindow: broadHalfWindow,
-            sampleCount: 25
+            indices: broadSampledIndices,
+            centerTime: renderSeconds,
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            fallbackWindowSeconds: broadWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: xScale,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
         let broadFarFieldY = playbackPreparedSmoothedValue(
             analysis.farFieldPathY,
@@ -3393,11 +3422,18 @@ enum AutoStabilizationEstimator {
             else {
                 return [(centerTransform, 1.0)]
             }
-            let sampleCount = max(3, renderTurnTransitionSmoothingSampleCount)
+            let timing = adaptiveXTurnTiming(
+                travelPixels: abs(centerTransform.turnDetectedPixelOffset.x),
+                baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+                panSmoothSeconds: panSmoothSeconds,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            )
+            let transitionWindowSeconds = timing.windowSeconds
+            let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
             let centerSample = sampleCount / 2
-            let halfWindow = renderTurnTransitionSmoothingWindowSeconds * 0.5
+            let halfWindow = transitionWindowSeconds * 0.5
             let denominator = Double(max(1, sampleCount - 1))
-            let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
+            let sampleStep = transitionWindowSeconds / denominator
             let sigma = max(1e-6, halfWindow * 0.55)
             var rawSamples: [(transform: StabilizerAutoTransform, timeWeight: Float, isCenter: Bool)] = [(centerTransform, 1.0, true)]
             rawSamples.reserveCapacity(sampleCount)
@@ -3941,7 +3977,9 @@ enum AutoStabilizationEstimator {
             playbackTrajectorySmoothedTransform(
                 index: index,
                 frames: frames,
-                rawTransforms: rawTransforms
+                rawTransforms: rawTransforms,
+                panSmoothSeconds: panSmoothSeconds,
+                strengths: strengths
             )
         }
         let limitedTransforms = playbackTrajectoryZeroPhaseLimitedTransforms(
@@ -5222,12 +5260,18 @@ enum AutoStabilizationEstimator {
             windowSeconds: strideWobbleWindowSeconds
         )
         let broadWindowSeconds = broadHalfWindow * 2.0
-        let broadXPath = turnIntentPath(
+        let xScale = outputSize.x / Float(max(1, frames[0].sampleWidth))
+        let broadXBuild = adaptiveXTurnIntentPath(
             turnStrideSmoothedXPath,
             frames: frames,
             targetIndices: allIndices,
-            windowSeconds: broadWindowSeconds
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            fallbackWindowSeconds: broadWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: xScale,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
+        let broadXPath = broadXBuild.path
         let broadYPath = turnIntentPath(
             turnStrideSmoothedYPath,
             frames: frames,
@@ -5243,12 +5287,17 @@ enum AutoStabilizationEstimator {
         let rawFarFieldXPath = EstimatedPath(values: analysis.farFieldPathX)
         let rawFarFieldYPath = EstimatedPath(values: analysis.farFieldPathY)
         let rawFarFieldRollPath = EstimatedPath(values: analysis.farFieldPathRoll)
-        let broadFarFieldXPath = turnIntentPath(
+        let broadFarFieldXBuild = adaptiveXTurnIntentPath(
             rawFarFieldXPath,
             frames: frames,
             targetIndices: allIndices,
-            windowSeconds: broadWindowSeconds
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            fallbackWindowSeconds: broadWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: xScale,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
+        let broadFarFieldXPath = broadFarFieldXBuild.path
         let broadFarFieldYPath = turnIntentPath(
             rawFarFieldYPath,
             frames: frames,
@@ -5260,6 +5309,19 @@ enum AutoStabilizationEstimator {
             frames: frames,
             targetIndices: allIndices,
             windowSeconds: broadWindowSeconds
+        )
+        let adaptiveXTiming = broadXBuild.maxTiming.travelPixels >= broadFarFieldXBuild.maxTiming.travelPixels
+            ? broadXBuild.maxTiming
+            : broadFarFieldXBuild.maxTiming
+        os_log(
+            "Adaptive X turn timing | travel %.2f window %.3f active %{public}@ cropSpace %{public}@ pan %.3f",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            adaptiveXTiming.travelPixels,
+            adaptiveXTiming.windowSeconds,
+            adaptiveXTiming.active ? "yes" : "no",
+            strengths.usesAutoCropTurnSpace ? "yes" : "no",
+            panSmoothSeconds
         )
         let rawFarFieldPanBandXPath = frames.indices.map { index -> Float in
             guard analysis.farFieldPathX.indices.contains(index),
@@ -6345,7 +6407,9 @@ enum AutoStabilizationEstimator {
     private static func playbackTrajectorySmoothedTransform(
         index: Int,
         frames: [StabilizerAnalysisFrame],
-        rawTransforms: [StabilizerAutoTransform]
+        rawTransforms: [StabilizerAutoTransform],
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths
     ) -> StabilizerAutoTransform {
         guard frames.indices.contains(index),
               rawTransforms.indices.contains(index)
@@ -6371,7 +6435,9 @@ enum AutoStabilizationEstimator {
             centerTransform: centerTransform,
             centerTime: centerTime,
             frames: frames,
-            transforms: rawTransforms
+            transforms: rawTransforms,
+            panSmoothSeconds: panSmoothSeconds,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
         if !turnSamples.isEmpty {
             let smoothedTurnTransform = weightedAverageTransform(turnSamples)
@@ -6496,18 +6562,27 @@ enum AutoStabilizationEstimator {
         centerTransform: StabilizerAutoTransform,
         centerTime: Double,
         frames: [StabilizerAnalysisFrame],
-        transforms: [StabilizerAutoTransform]
+        transforms: [StabilizerAutoTransform],
+        panSmoothSeconds: Double,
+        usesAutoCropTurnSpace: Bool
     ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
         guard let firstTime = frames.first?.time,
               let lastTime = frames.last?.time
         else {
             return [(centerTransform, 1.0)]
         }
-        let sampleCount = max(3, renderTurnTransitionSmoothingSampleCount)
+        let timing = adaptiveXTurnTiming(
+            travelPixels: abs(centerTransform.turnDetectedPixelOffset.x),
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            usesAutoCropTurnSpace: usesAutoCropTurnSpace
+        )
+        let transitionWindowSeconds = timing.windowSeconds
+        let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
         let centerSample = sampleCount / 2
-        let halfWindow = renderTurnTransitionSmoothingWindowSeconds * 0.5
+        let halfWindow = transitionWindowSeconds * 0.5
         let denominator = Double(max(1, sampleCount - 1))
-        let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
+        let sampleStep = transitionWindowSeconds / denominator
         let sigma = max(1e-6, halfWindow * 0.55)
         var rawSamples: [(transform: StabilizerAutoTransform, timeWeight: Float, isCenter: Bool)] = [(centerTransform, 1.0, true)]
         rawSamples.reserveCapacity(sampleCount)
@@ -6892,20 +6967,17 @@ enum AutoStabilizationEstimator {
                 centerTime: renderSeconds,
                 windowSeconds: effectiveStrideWobbleWindowSeconds
             )
-        let turnSmoothX = timeWeightedLinearPrediction(
+        let turnSmoothX = adaptiveXTurnSmoothValue(
             pathX,
             frames: frames,
             indices: turnActiveIndices,
             centerTime: renderSeconds,
-            windowSeconds: smoothWindowSeconds
-        ) ??
-            timeWeightedAverage(
-                pathX,
-                frames: frames,
-                indices: turnActiveIndices,
-                centerTime: renderSeconds,
-                windowSeconds: smoothWindowSeconds
-            )
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            fallbackWindowSeconds: smoothWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: xScale,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+        )
         let turnSmoothY = timeWeightedLinearPrediction(
             pathY,
             frames: frames,
@@ -6920,20 +6992,17 @@ enum AutoStabilizationEstimator {
                 centerTime: renderSeconds,
                 windowSeconds: smoothWindowSeconds
             )
-        let farFieldTurnSmoothX = timeWeightedLinearPrediction(
+        let farFieldTurnSmoothX = adaptiveXTurnSmoothValue(
             farFieldPathX,
             frames: frames,
             indices: turnActiveIndices,
             centerTime: renderSeconds,
-            windowSeconds: smoothWindowSeconds
-        ) ??
-            timeWeightedAverage(
-                farFieldPathX,
-                frames: frames,
-                indices: turnActiveIndices,
-                centerTime: renderSeconds,
-                windowSeconds: smoothWindowSeconds
-            )
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            fallbackWindowSeconds: smoothWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: xScale,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+        )
         let farFieldTurnSmoothY = timeWeightedLinearPrediction(
             farFieldPathY,
             frames: frames,
@@ -7683,27 +7752,17 @@ enum AutoStabilizationEstimator {
             targetIndices: strideSampledIndices,
             windowSeconds: effectiveStrideWobbleWindowSeconds
         )
-        let turnSmoothX = timeWeightedLinearPrediction(
+        let turnSmoothX = adaptiveXTurnSmoothValue(
             turnStrideSmoothedXPath,
             frames: frames,
             indices: activeIndices,
             centerTime: renderSeconds,
-            windowSeconds: smoothWindowSeconds
-        ) ??
-            timeWeightedMonotonicSCurveValue(
-                turnStrideSmoothedXPath,
-                frames: frames,
-                indices: activeIndices,
-                centerTime: renderSeconds,
-                windowSeconds: smoothWindowSeconds
-            ) ??
-            timeWeightedAverage(
-                turnStrideSmoothedXPath,
-                frames: frames,
-                indices: activeIndices,
-                centerTime: renderSeconds,
-                windowSeconds: smoothWindowSeconds
-            )
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            fallbackWindowSeconds: smoothWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: xScale,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+        )
         let turnSmoothY = timeWeightedLinearPrediction(
             turnStrideSmoothedYPath,
             frames: frames,
@@ -7725,20 +7784,17 @@ enum AutoStabilizationEstimator {
                 centerTime: renderSeconds,
                 windowSeconds: smoothWindowSeconds
             )
-        let broadFarFieldX = timeWeightedLinearPrediction(
+        let broadFarFieldX = adaptiveXTurnSmoothValue(
             farFieldStrideSmoothedXPath,
             frames: frames,
             indices: activeIndices,
             centerTime: renderSeconds,
-            windowSeconds: smoothWindowSeconds
-        ) ??
-            timeWeightedAverage(
-                farFieldStrideSmoothedXPath,
-                frames: frames,
-                indices: activeIndices,
-                centerTime: renderSeconds,
-                windowSeconds: smoothWindowSeconds
-            )
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            fallbackWindowSeconds: smoothWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: xScale,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+        )
         let broadFarFieldY = timeWeightedLinearPrediction(
             farFieldStrideSmoothedYPath,
             frames: frames,
@@ -8630,11 +8686,18 @@ enum AutoStabilizationEstimator {
         else {
             return [(centerTransform, 1.0)]
         }
-        let sampleCount = max(3, renderTurnTransitionSmoothingSampleCount)
+        let timing = adaptiveXTurnTiming(
+            travelPixels: abs(centerTransform.turnDetectedPixelOffset.x),
+            baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+        )
+        let transitionWindowSeconds = timing.windowSeconds
+        let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
         let centerSample = sampleCount / 2
-        let halfWindow = renderTurnTransitionSmoothingWindowSeconds * 0.5
+        let halfWindow = transitionWindowSeconds * 0.5
         let denominator = Double(max(1, sampleCount - 1))
-        let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
+        let sampleStep = transitionWindowSeconds / denominator
         let sigma = max(1e-6, halfWindow * 0.55)
         var rawSamples: [(transform: StabilizerAutoTransform, timeWeight: Float, isCenter: Bool)] = [(centerTransform, 1.0, true)]
         rawSamples.reserveCapacity(sampleCount)
@@ -11498,6 +11561,182 @@ enum AutoStabilizationEstimator {
         return smoothedValues
     }
 
+    private static func monotonicDominantTravel(
+        _ values: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int]
+    ) -> Float {
+        let sortedIndices = (indicesAreStrictlyAscending(indices) ? indices : indices.sorted())
+            .filter { values.values.indices.contains($0) && frames.indices.contains($0) }
+        guard sortedIndices.count >= 2 else {
+            return 0.0
+        }
+
+        var positiveTravel: Float = 0.0
+        var negativeTravel: Float = 0.0
+        for position in 1..<sortedIndices.count {
+            let previousValue = values[sortedIndices[position - 1]]
+            let currentValue = values[sortedIndices[position]]
+            let delta = currentValue - previousValue
+            if delta >= 0.0 {
+                positiveTravel += delta
+            } else {
+                negativeTravel += -delta
+            }
+        }
+        return max(positiveTravel, negativeTravel)
+    }
+
+    private static func adaptiveXTurnTiming(
+        travelPixels: Float,
+        baseWindowSeconds: Double,
+        panSmoothSeconds: Double,
+        usesAutoCropTurnSpace: Bool
+    ) -> AdaptiveXTurnTiming {
+        let baseWindow = baseWindowSeconds.isFinite && baseWindowSeconds > 0.0
+            ? baseWindowSeconds
+            : renderTurnTransitionSmoothingWindowSeconds
+        guard travelPixels.isFinite, travelPixels > 0.0 else {
+            return AdaptiveXTurnTiming(travelPixels: 0.0, windowSeconds: baseWindow, active: false)
+        }
+        guard usesAutoCropTurnSpace else {
+            return AdaptiveXTurnTiming(travelPixels: travelPixels, windowSeconds: baseWindow, active: false)
+        }
+
+        let requestedWindow = panSmoothSeconds.isFinite && panSmoothSeconds > 0.0
+            ? panSmoothSeconds
+            : baseWindow
+        let maximumWindow = max(
+            baseWindow,
+            min(max(baseWindow, requestedWindow), adaptiveXTurnTransitionMaximumWindowSeconds)
+        )
+        let travelWindow = min(
+            maximumWindow,
+            max(baseWindow, Double(travelPixels / max(adaptiveXTurnTransitionTargetPixelRate, Float.ulpOfOne)))
+        )
+        let travelGate = confidenceRamp(
+            travelPixels,
+            start: adaptiveXTurnTransitionGateStartPixels,
+            full: adaptiveXTurnTransitionGateFullPixels
+        )
+        let effectiveWindow = baseWindow + ((travelWindow - baseWindow) * Double(travelGate))
+        return AdaptiveXTurnTiming(
+            travelPixels: travelPixels,
+            windowSeconds: effectiveWindow,
+            active: effectiveWindow > baseWindow + 0.01
+        )
+    }
+
+    private static func adaptiveXTurnTransitionSampleCount(windowSeconds: Double) -> Int {
+        let baseCount = max(3, renderTurnTransitionSmoothingSampleCount)
+        let baseWindow = max(renderTurnTransitionSmoothingWindowSeconds, 1e-6)
+        guard windowSeconds.isFinite, windowSeconds > baseWindow else {
+            return baseCount
+        }
+        var expandedCount = Int(ceil(Double(baseCount) * (windowSeconds / baseWindow)))
+        expandedCount = max(baseCount, expandedCount)
+        if expandedCount % 2 == 0 {
+            expandedCount += 1
+        }
+        return expandedCount
+    }
+
+    private static func adaptiveXTurnTiming(
+        _ values: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        baseWindowSeconds: Double,
+        panSmoothSeconds: Double,
+        outputScale: Float,
+        usesAutoCropTurnSpace: Bool
+    ) -> AdaptiveXTurnTiming {
+        let travelPixels = monotonicDominantTravel(values, frames: frames, indices: indices)
+            * max(0.0, outputScale.isFinite ? abs(outputScale) : 0.0)
+        return adaptiveXTurnTiming(
+            travelPixels: travelPixels,
+            baseWindowSeconds: baseWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            usesAutoCropTurnSpace: usesAutoCropTurnSpace
+        )
+    }
+
+    private static func adaptiveXTurnTiming(
+        _ paths: [EstimatedPath],
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        baseWindowSeconds: Double,
+        panSmoothSeconds: Double,
+        outputScale: Float,
+        usesAutoCropTurnSpace: Bool
+    ) -> AdaptiveXTurnTiming {
+        let safeOutputScale = max(0.0, outputScale.isFinite ? abs(outputScale) : 0.0)
+        let travelPixels = paths.reduce(Float(0.0)) { partial, path in
+            max(partial, monotonicDominantTravel(path, frames: frames, indices: indices) * safeOutputScale)
+        }
+        return adaptiveXTurnTiming(
+            travelPixels: travelPixels,
+            baseWindowSeconds: baseWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            usesAutoCropTurnSpace: usesAutoCropTurnSpace
+        )
+    }
+
+    private static func adaptiveXTurnSmoothValue(
+        _ values: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        indices: [Int],
+        centerTime: Double,
+        baseWindowSeconds: Double,
+        fallbackWindowSeconds: Double? = nil,
+        panSmoothSeconds: Double,
+        outputScale: Float,
+        usesAutoCropTurnSpace: Bool
+    ) -> Float {
+        let timing = adaptiveXTurnTiming(
+            values,
+            frames: frames,
+            indices: indices,
+            baseWindowSeconds: baseWindowSeconds,
+            panSmoothSeconds: panSmoothSeconds,
+            outputScale: outputScale,
+            usesAutoCropTurnSpace: usesAutoCropTurnSpace
+        )
+        let fallbackWindow = fallbackWindowSeconds ?? baseWindowSeconds
+        let activeWindow = timing.active ? max(fallbackWindow, timing.windowSeconds) : fallbackWindow
+        if timing.active,
+           let sCurveValue = timeWeightedMonotonicSCurveValue(
+            values,
+            frames: frames,
+            indices: indices,
+            centerTime: centerTime,
+            windowSeconds: activeWindow
+           )
+        {
+            return sCurveValue
+        }
+        return timeWeightedLinearPrediction(
+            values,
+            frames: frames,
+            indices: indices,
+            centerTime: centerTime,
+            windowSeconds: fallbackWindow
+        ) ??
+            timeWeightedMonotonicSCurveValue(
+                values,
+                frames: frames,
+                indices: indices,
+                centerTime: centerTime,
+                windowSeconds: fallbackWindow
+            ) ??
+            timeWeightedAverage(
+                values,
+                frames: frames,
+                indices: indices,
+                centerTime: centerTime,
+                windowSeconds: fallbackWindow
+            )
+    }
+
     private static func turnIntentPath(
         _ values: EstimatedPath,
         frames: [StabilizerAnalysisFrame],
@@ -11528,6 +11767,74 @@ enum AutoStabilizationEstimator {
             )
         }
         return EstimatedPath(values: intentValues)
+    }
+
+    private static func adaptiveXTurnIntentPath(
+        _ values: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        targetIndices: [Int],
+        baseWindowSeconds: Double,
+        fallbackWindowSeconds: Double? = nil,
+        panSmoothSeconds: Double,
+        outputScale: Float,
+        usesAutoCropTurnSpace: Bool
+    ) -> (path: EstimatedPath, maxTiming: AdaptiveXTurnTiming) {
+        guard !values.values.isEmpty else {
+            return (
+                values,
+                AdaptiveXTurnTiming(travelPixels: 0.0, windowSeconds: baseWindowSeconds, active: false)
+            )
+        }
+
+        var intentValues = values.values
+        var maxTiming = AdaptiveXTurnTiming(travelPixels: 0.0, windowSeconds: baseWindowSeconds, active: false)
+        let fallbackWindow = fallbackWindowSeconds ?? baseWindowSeconds
+        let baseHalfWindowSeconds = max(0.0, baseWindowSeconds * 0.5)
+        for index in targetIndices where values.values.indices.contains(index) && frames.indices.contains(index) {
+            let centerTime = frames[index].time
+            let localIndices = indicesWithinTimeRadius(
+                frames,
+                centerTime: centerTime,
+                radiusSeconds: baseHalfWindowSeconds
+            )
+            let activeIndices = localIndices.isEmpty ? [index] : localIndices
+            let timing = adaptiveXTurnTiming(
+                values,
+                frames: frames,
+                indices: activeIndices,
+                baseWindowSeconds: baseWindowSeconds,
+                panSmoothSeconds: panSmoothSeconds,
+                outputScale: outputScale,
+                usesAutoCropTurnSpace: usesAutoCropTurnSpace
+            )
+            if timing.travelPixels > maxTiming.travelPixels || timing.windowSeconds > maxTiming.windowSeconds {
+                maxTiming = timing
+            }
+            let activeWindow = timing.active ? max(fallbackWindow, timing.windowSeconds) : fallbackWindow
+            let activeHalfWindow = max(0.0, activeWindow * 0.5)
+            let timingIndices = abs(activeWindow - baseWindowSeconds) > 0.001
+                ? indicesWithinTimeRadius(
+                    frames,
+                    centerTime: centerTime,
+                    radiusSeconds: activeHalfWindow
+                )
+                : activeIndices
+            let effectiveIndices = timingIndices.isEmpty ? activeIndices : timingIndices
+            intentValues[index] = timeWeightedMonotonicSCurveValue(
+                values,
+                frames: frames,
+                indices: effectiveIndices,
+                centerTime: centerTime,
+                windowSeconds: activeWindow
+            ) ?? timeWeightedAverage(
+                values,
+                frames: frames,
+                indices: effectiveIndices,
+                centerTime: centerTime,
+                windowSeconds: activeWindow
+            )
+        }
+        return (EstimatedPath(values: intentValues), maxTiming)
     }
 
     private static func timeWeightedMonotonicSCurveValue(

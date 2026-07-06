@@ -290,6 +290,12 @@ private struct RenderTurnBridgeAssessment {
     let note: String
 }
 
+private struct AdaptiveXTurnTiming {
+    let travelPixels: Float
+    let windowSeconds: Double
+    let active: Bool
+}
+
 private struct FrameAssessment {
     let index: Int
     let absoluteTime: Double
@@ -574,6 +580,10 @@ private let renderTurnTransitionBridgeLowEdgeMacroStartPixels: Float = 48.0
 private let renderTurnTransitionBridgeLowEdgeMacroFullPixels: Float = 120.0
 private let renderTurnTransitionDetectedCapStartPixels: Float = 180.0
 private let renderTurnTransitionDetectedCapAllowancePixels: Float = 48.0
+private let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
+private let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
+private let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
+private let adaptiveXTurnTransitionMaximumWindowSeconds = 6.0
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -977,6 +987,119 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
     return nil
 }
 
+private func monotonicDominantTravel(_ values: [Float], indices: [Int]) -> Float {
+    let sortedIndices = indices.sorted().filter { values.indices.contains($0) }
+    guard sortedIndices.count >= 2 else {
+        return 0.0
+    }
+
+    var positiveTravel: Float = 0.0
+    var negativeTravel: Float = 0.0
+    for position in 1..<sortedIndices.count {
+        let currentValue = values[sortedIndices[position]]
+        let delta = currentValue - values[sortedIndices[position - 1]]
+        if delta >= 0.0 {
+            positiveTravel += delta
+        } else {
+            negativeTravel += -delta
+        }
+    }
+    return max(positiveTravel, negativeTravel)
+}
+
+private func adaptiveXTurnTiming(
+    travelPixels: Float,
+    baseWindowSeconds: Double,
+    turnWindowSeconds: Double,
+    usesAutoCropTurnSpace: Bool
+) -> AdaptiveXTurnTiming {
+    let baseWindow = baseWindowSeconds.isFinite && baseWindowSeconds > 0.0
+        ? baseWindowSeconds
+        : renderTurnTransitionSmoothingWindowSeconds
+    guard travelPixels.isFinite, travelPixels > 0.0 else {
+        return AdaptiveXTurnTiming(travelPixels: 0.0, windowSeconds: baseWindow, active: false)
+    }
+    guard usesAutoCropTurnSpace else {
+        return AdaptiveXTurnTiming(travelPixels: travelPixels, windowSeconds: baseWindow, active: false)
+    }
+
+    let requestedWindow = turnWindowSeconds.isFinite && turnWindowSeconds > 0.0
+        ? turnWindowSeconds
+        : baseWindow
+    let maximumWindow = max(
+        baseWindow,
+        min(max(baseWindow, requestedWindow), adaptiveXTurnTransitionMaximumWindowSeconds)
+    )
+    let travelWindow = min(
+        maximumWindow,
+        max(baseWindow, Double(travelPixels / max(adaptiveXTurnTransitionTargetPixelRate, Float.ulpOfOne)))
+    )
+    let travelGate = confidenceRamp(
+        travelPixels,
+        start: adaptiveXTurnTransitionGateStartPixels,
+        full: adaptiveXTurnTransitionGateFullPixels
+    )
+    let effectiveWindow = baseWindow + ((travelWindow - baseWindow) * Double(travelGate))
+    return AdaptiveXTurnTiming(
+        travelPixels: travelPixels,
+        windowSeconds: effectiveWindow,
+        active: effectiveWindow > baseWindow + 0.01
+    )
+}
+
+private func adaptiveXTurnTransitionSampleCount(windowSeconds: Double) -> Int {
+    let baseCount = max(3, renderTurnTransitionSmoothingSampleCount)
+    let baseWindow = max(renderTurnTransitionSmoothingWindowSeconds, 1e-6)
+    guard windowSeconds.isFinite, windowSeconds > baseWindow else {
+        return baseCount
+    }
+    var expandedCount = Int(ceil(Double(baseCount) * (windowSeconds / baseWindow)))
+    expandedCount = max(baseCount, expandedCount)
+    if expandedCount % 2 == 0 {
+        expandedCount += 1
+    }
+    return expandedCount
+}
+
+private func adaptiveXTurnSmoothValue(
+    _ values: [Float],
+    frames: [AnalysisFrame],
+    indices: [Int],
+    centerTime: Double,
+    baseWindowSeconds: Double,
+    fallbackWindowSeconds: Double,
+    turnWindowSeconds: Double,
+    outputScale: Float,
+    usesAutoCropTurnSpace: Bool
+) -> Float {
+    let travelPixels = monotonicDominantTravel(values, indices: indices)
+        * max(0.0, outputScale.isFinite ? abs(outputScale) : 0.0)
+    let timing = adaptiveXTurnTiming(
+        travelPixels: travelPixels,
+        baseWindowSeconds: baseWindowSeconds,
+        turnWindowSeconds: turnWindowSeconds,
+        usesAutoCropTurnSpace: usesAutoCropTurnSpace
+    )
+    let activeWindow = timing.active ? max(fallbackWindowSeconds, timing.windowSeconds) : fallbackWindowSeconds
+    let timingIndices = abs(activeWindow - fallbackWindowSeconds) > 0.001
+        ? activeIndices(frames, centerTime: centerTime, windowSeconds: activeWindow)
+        : indices
+    let effectiveIndices = timingIndices.isEmpty ? indices : timingIndices
+    return timeWeightedMonotonicSCurveValue(
+        values,
+        frames: frames,
+        indices: effectiveIndices,
+        centerTime: centerTime,
+        windowSeconds: activeWindow
+    ) ?? timeWeightedAverage(
+        values,
+        frames: frames,
+        indices: effectiveIndices,
+        centerTime: centerTime,
+        windowSeconds: activeWindow
+    )
+}
+
 private func turnCorrectionSample(for context: AssessmentContext, index: Int, options: Options) -> TurnCorrectionSample {
     let analysis = context.analysis
     guard analysis.frames.indices.contains(index),
@@ -1029,18 +1152,16 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
         multiplier: 0.9,
         qualityModel: analysis.qualityModel
     )
-    let turnSmoothX = timeWeightedMonotonicSCurveValue(
+    let turnSmoothX = adaptiveXTurnSmoothValue(
         context.turnStrideSmoothedXPath,
         frames: analysis.frames,
         indices: turnIndices,
         centerTime: frame.time,
-        windowSeconds: turnWindowSeconds
-    ) ?? timeWeightedAverage(
-        context.turnStrideSmoothedXPath,
-        frames: analysis.frames,
-        indices: turnIndices,
-        centerTime: frame.time,
-        windowSeconds: turnWindowSeconds
+        baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+        fallbackWindowSeconds: turnWindowSeconds,
+        turnWindowSeconds: turnWindowSeconds,
+        outputScale: xScale,
+        usesAutoCropTurnSpace: true
     )
     let turnBandX = context.turnStrideSmoothedXPath[index] - turnSmoothX
     let turnOwnershipX = turnOwnershipConfidence(
@@ -1119,11 +1240,18 @@ private func renderTurnBridgeAssessment(
         )
     }
 
-    let sampleCount = max(3, renderTurnTransitionSmoothingSampleCount)
+    let timing = adaptiveXTurnTiming(
+        travelPixels: centerSample.detected,
+        baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
+        turnWindowSeconds: options.turnWindowSeconds,
+        usesAutoCropTurnSpace: true
+    )
+    let transitionWindowSeconds = timing.windowSeconds
+    let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
     let centerSampleIndex = sampleCount / 2
-    let halfWindow = renderTurnTransitionSmoothingWindowSeconds * 0.5
+    let halfWindow = transitionWindowSeconds * 0.5
     let denominator = Double(max(1, sampleCount - 1))
-    let sampleStep = renderTurnTransitionSmoothingWindowSeconds / denominator
+    let sampleStep = transitionWindowSeconds / denominator
     let sigma = max(1e-6, halfWindow * 0.55)
     let renderSeconds = frames[index].time
     var rawSamples: [(sample: TurnCorrectionSample, timeWeight: Float, isCenter: Bool)] = [
@@ -1290,7 +1418,7 @@ private func renderTurnBridgeAssessment(
         sampleCount: acceptedSamples,
         rawApplied: centerSample.applied,
         delta: bridgedApplied - centerSample.applied,
-        note: String(format: "29-sample %.2fs bridge support %.3f blend %.2f centerKeep %.3f centerAnchor %.3f cap %.3f", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, bridgeBlend, abs(bridgedMacro - averagedMacro), abs(anchoredMacro - bridgedMacro), abs(uncappedBlendedMacro - blendedMacro))
+        note: String(format: "29-sample %.2fs bridge support %.3f adaptive %.2fs/%.1fpx blend %.2f centerKeep %.3f centerAnchor %.3f cap %.3f", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, transitionWindowSeconds, timing.travelPixels, bridgeBlend, abs(bridgedMacro - averagedMacro), abs(anchoredMacro - bridgedMacro), abs(uncappedBlendedMacro - blendedMacro))
     )
 }
 

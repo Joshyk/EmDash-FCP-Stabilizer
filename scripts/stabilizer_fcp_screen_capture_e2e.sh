@@ -2006,10 +2006,11 @@ on run argv
 	tell application "System Events"
 		tell process "Final Cut Pro"
 			set frontmost to true
+			my ensureInspectorVisible()
 			set frontWindow to my frontFinalCutProWindow()
-			set allText to my collectedElementText(frontWindow, 0, 12)
-			if allText does not contain expectedEffect then error "Expected effect is not visible in the Final Cut Pro Inspector: " & expectedEffect
-			if requireRemoveBlackEdges is "true" and allText does not contain "Remove Black Edges" then error "Remove Black Edges control is not visible in the Final Cut Pro Inspector."
+			set inspectorRoot to my inspectorPanelRoot(frontWindow)
+			if my firstElementContainingText(inspectorRoot, expectedEffect, 0, 14) is missing value then error "Expected effect is not visible in the Final Cut Pro Inspector: " & expectedEffect
+			if requireRemoveBlackEdges is "true" and my firstElementContainingText(inspectorRoot, "Remove Black Edges", 0, 14) is missing value then error "Remove Black Edges control is not visible in the Final Cut Pro Inspector."
 		end tell
 	end tell
 	return "inspector-ok"
@@ -2028,36 +2029,356 @@ on frontFinalCutProWindow()
 	end tell
 end frontFinalCutProWindow
 
-on collectedElementText(elementRef, currentDepth, maxDepth)
-	if currentDepth > maxDepth then return ""
-	set textParts to ""
+on ensureInspectorVisible()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			try
+				set inspectorToggle to first checkbox of toolbar 1 of my frontFinalCutProWindow() whose description is "Show or hide the Inspector"
+				if not my checkboxIsOn(inspectorToggle) then
+					my pressElement(inspectorToggle)
+					delay 0.25
+				end if
+			end try
+		end tell
+	end tell
+end ensureInspectorVisible
+
+on pressElement(elementReference)
+	tell application "System Events"
+		try
+			perform action "AXPress" of elementReference
+			return
+		end try
+	end tell
+	error "AXPress failed for target element"
+end pressElement
+
+on checkboxIsOn(elementReference)
+	tell application "System Events"
+		try
+			set checkboxValue to value of elementReference
+			if checkboxValue is 1 then return true
+			if checkboxValue is "1" then return true
+			if checkboxValue is true then return true
+		end try
+	end tell
+	return false
+end checkboxIsOn
+
+on inspectorPanelRoot(frontWindow)
+	tell application "System Events"
+		try
+			set candidateRoot to group 1 of splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
+			if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+		end try
+		try
+			set candidateRoot to group 2 of splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
+			if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+		end try
+	end tell
+	error "Could not resolve the Final Cut Pro Video Inspector panel."
+end inspectorPanelRoot
+
+on elementIsRightInspectorCandidate(elementRef, frontWindow)
+	tell application "System Events"
+		try
+			set rootPosition to position of frontWindow
+			set rootSize to size of frontWindow
+			set elementPosition to position of elementRef
+			set elementSize to size of elementRef
+			set rightPanelFloor to (item 1 of rootPosition) + ((item 1 of rootSize) * 0.55)
+			if (item 1 of elementPosition) >= rightPanelFloor and (item 1 of elementSize) >= 240 and (item 2 of elementSize) >= 300 then return true
+		end try
+	end tell
+	return false
+end elementIsRightInspectorCandidate
+
+on elementHasMinimumSize(elementRef, minWidth, minHeight)
+	tell application "System Events"
+		try
+			set sizeValues to size of elementRef
+			if (item 1 of sizeValues) >= minWidth and (item 2 of sizeValues) >= minHeight then return true
+		end try
+	end tell
+	return false
+end elementHasMinimumSize
+
+on firstElementContainingText(elementRef, targetText, currentDepth, maxDepth)
+	if currentDepth > maxDepth then return missing value
 	tell application "System Events"
 		try
 			set elementName to name of elementRef as text
-			if elementName is not "" then set textParts to textParts & linefeed & elementName
+			if elementName contains targetText then return elementRef
 		end try
 		try
 			set elementDescription to description of elementRef as text
-			if elementDescription is not "" then set textParts to textParts & linefeed & elementDescription
+			if elementDescription contains targetText then return elementRef
 		end try
 		try
 			set elementValue to value of elementRef as text
-			if elementValue is not "" then set textParts to textParts & linefeed & elementValue
+			if elementValue contains targetText then return elementRef
 		end try
 		try
 			set children to UI elements of elementRef
 		on error
-			return textParts
+			return missing value
 		end try
 	end tell
 	repeat with childElement in children
-		set textParts to textParts & my collectedElementText(childElement, currentDepth + 1, maxDepth)
+		set foundElement to my firstElementContainingText(childElement, targetText, currentDepth + 1, maxDepth)
+		if foundElement is not missing value then return foundElement
 	end repeat
-	return textParts
-end collectedElementText
+	return missing value
+end firstElementContainingText
 APPLESCRIPT
 	local osascript_pid=$!
-	wait_for_ui_osascript "$osascript_pid" "Inspector effect text" 80 0
+	wait_for_ui_osascript "$osascript_pid" "Inspector effect text" 300 0
+}
+
+set_fcp_remove_black_edges_on_via_local_ax() {
+	/usr/bin/osascript > /dev/null <<'APPLESCRIPT' &
+tell application "Final Cut Pro" to activate
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontmost to true
+			my ensureInspectorVisible()
+		set frontWindow to my frontFinalCutProWindow()
+		set inspectorRoot to my inspectorPanelRoot(frontWindow)
+		set cropCheckbox to my firstCheckboxContainingText(inspectorRoot, "Remove Black Edges", 18)
+		if cropCheckbox is missing value then set cropCheckbox to my checkboxNearInspectorText(inspectorRoot, "Remove Black Edges", 18)
+		if cropCheckbox is missing value then error "Remove Black Edges checkbox not found by local AX label/row search"
+		if not my checkboxIsOn(cropCheckbox) then
+			my pressElement(cropCheckbox)
+			delay 0.25
+		end if
+		if not my checkboxIsOn(cropCheckbox) then error "Remove Black Edges checkbox did not become enabled"
+	end tell
+end tell
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+on ensureInspectorVisible()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			try
+				set inspectorToggle to first checkbox of toolbar 1 of my frontFinalCutProWindow() whose description is "Show or hide the Inspector"
+				if not my checkboxIsOn(inspectorToggle) then
+					my pressElement(inspectorToggle)
+					delay 0.25
+				end if
+			end try
+		end tell
+	end tell
+end ensureInspectorVisible
+
+on inspectorPanelRoot(frontWindow)
+	tell application "System Events"
+		try
+			set candidateRoot to group 1 of splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
+			if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+		end try
+		try
+			set candidateRoot to group 2 of splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
+			if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+		end try
+	end tell
+	error "Could not resolve the Final Cut Pro Video Inspector panel."
+end inspectorPanelRoot
+
+on elementIsRightInspectorCandidate(elementRef, frontWindow)
+	tell application "System Events"
+		try
+			set rootPosition to position of frontWindow
+			set rootSize to size of frontWindow
+			set elementPosition to position of elementRef
+			set elementSize to size of elementRef
+			set rightPanelFloor to (item 1 of rootPosition) + ((item 1 of rootSize) * 0.55)
+			if (item 1 of elementPosition) >= rightPanelFloor and (item 1 of elementSize) >= 240 and (item 2 of elementSize) >= 300 then return true
+		end try
+	end tell
+	return false
+end elementIsRightInspectorCandidate
+
+on elementHasMinimumSize(elementRef, minWidth, minHeight)
+	tell application "System Events"
+		try
+			set sizeValues to size of elementRef
+			if (item 1 of sizeValues) >= minWidth and (item 2 of sizeValues) >= minHeight then return true
+		end try
+	end tell
+	return false
+end elementHasMinimumSize
+
+on firstCheckboxContainingText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			if (role of rootElement as text) is "AXCheckBox" then
+				if my elementContainsText(rootElement, requiredText) then return rootElement
+			end if
+		end try
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstCheckboxContainingText(childElement, requiredText, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstCheckboxContainingText
+
+on checkboxNearInspectorText(rootElement, labelText, remainingDepth)
+	set labelElement to my firstElementWithExactText(rootElement, labelText, remainingDepth)
+	if labelElement is missing value then return missing value
+	tell application "System Events"
+		try
+			set labelPosition to position of labelElement
+			set labelX to item 1 of labelPosition
+			set labelY to item 2 of labelPosition
+		on error
+			return missing value
+		end try
+	end tell
+	set checkboxPair to my nearestCheckboxNearY(rootElement, labelX, labelY, remainingDepth)
+	return item 1 of checkboxPair
+end checkboxNearInspectorText
+
+on firstElementWithExactText(rootElement, requiredText, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	if my elementTextEquals(rootElement, requiredText) then return rootElement
+	set childElements to {}
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstElementWithExactText(childElement, requiredText, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstElementWithExactText
+
+on nearestCheckboxNearY(rootElement, labelX, labelY, remainingDepth)
+	set bestCheckbox to missing value
+	set bestScore to 999999
+	if remainingDepth < 0 then return {bestCheckbox, bestScore}
+	tell application "System Events"
+		try
+			if (role of rootElement as text) is "AXCheckBox" then
+				set elementPosition to position of rootElement
+				set elementSize to size of rootElement
+				set centerX to (item 1 of elementPosition) + ((item 1 of elementSize) / 2)
+				set centerY to (item 2 of elementPosition) + ((item 2 of elementSize) / 2)
+				set deltaY to centerY - labelY
+				if deltaY < 0 then set deltaY to -deltaY
+				set deltaX to centerX - labelX
+				if deltaX < 0 then set deltaX to -deltaX
+				set candidateScore to (deltaY * 100) + deltaX
+				if deltaY < 30 and centerX > labelX and candidateScore < bestScore then
+					set bestCheckbox to rootElement
+					set bestScore to candidateScore
+				end if
+			end if
+		end try
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return {bestCheckbox, bestScore}
+		end try
+	end tell
+	repeat with childElement in childElements
+		set candidatePair to my nearestCheckboxNearY(childElement, labelX, labelY, remainingDepth - 1)
+		if item 1 of candidatePair is not missing value and item 2 of candidatePair < bestScore then
+			set bestCheckbox to item 1 of candidatePair
+			set bestScore to item 2 of candidatePair
+		end if
+	end repeat
+	return {bestCheckbox, bestScore}
+end nearestCheckboxNearY
+
+on pressElement(elementReference)
+	tell application "System Events"
+		try
+			perform action "AXPress" of elementReference
+			return
+		end try
+	end tell
+	error "AXPress failed for target element"
+end pressElement
+
+on elementContainsText(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) contains requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementContainsText
+
+on elementTextEquals(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) is requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementTextEquals
+
+on checkboxIsOn(elementReference)
+	tell application "System Events"
+		try
+			set checkboxValue to value of elementReference
+			if checkboxValue is 1 then return true
+			if checkboxValue is "1" then return true
+			if checkboxValue is true then return true
+		end try
+	end tell
+	return false
+end checkboxIsOn
+APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "Remove Black Edges on" 300 0
 }
 
 assert_inspector_contains_case_effect_if_readable() {
@@ -3636,9 +3957,15 @@ assert_case_prepared() {
 	sleep 0.4
 	ensure_selected_timeline_clip_enabled
 	sleep 0.4
-	if [[ -f "$FCP_HELPER" ]]; then
-		/usr/bin/osascript "$FCP_HELPER" assert-inspector-effects "$expected_effect" \
-			|| fail "selected timeline clip Inspector is not showing ${expected_effect}; refusing to toggle Debug Overlay on the wrong item"
+	if assert_inspector_contains_case_effect "$expected_effect" "$remove_black_edges"; then
+		printf 'Inspector shows expected Stabilizer controls.\n'
+	else
+		fail "selected timeline clip Inspector is not showing ${expected_effect}; refusing to toggle Debug Overlay on the wrong item"
+	fi
+	if [[ "$remove_black_edges" == "true" ]]; then
+		set_fcp_remove_black_edges_on_via_local_ax \
+			|| fail "case requires Remove Black Edges on, but the Inspector checkbox could not be enabled"
+		printf 'Remove Black Edges set to: on\n'
 	fi
 	set_fcp_debug_overlay_on
 	assert_inspector_contains_case_effect_if_readable "$expected_effect" "$remove_black_edges"

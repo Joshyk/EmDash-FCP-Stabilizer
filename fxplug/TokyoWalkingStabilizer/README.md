@@ -257,7 +257,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   correction is soft-limited to a small output-edge budget. Render playback applies an
   additional `2.8` second zero-phase transition pass to the macro X correction so the start
   and end of walking turns do not step between corrections, even across short low-confidence
-  tracking dropouts.
+  tracking dropouts. When Auto Crop is active, large X-turn travel automatically expands
+  that transition window toward the `Turn Detection Window` so the extra zoom margin is
+  spent on a slower, more even pan instead of a faster x-axis transition.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
   motion paths. The default is `6.0` seconds. The UI value is used as the TURN window,
   and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run
