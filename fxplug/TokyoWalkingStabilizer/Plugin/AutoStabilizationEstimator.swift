@@ -5221,62 +5221,45 @@ enum AutoStabilizationEstimator {
             targetIndices: allIndices,
             windowSeconds: strideWobbleWindowSeconds
         )
-        let broadXPath = cache.locallyTimeWeightedAveragePath(
-            .footstepX,
-            sourceRole: .footstepBroad,
-            sourceVariant: broadHalfWindow.bitPattern,
-            source: turnStrideSmoothedXPath,
-            analysis: analysis,
+        let broadWindowSeconds = broadHalfWindow * 2.0
+        let broadXPath = turnIntentPath(
+            turnStrideSmoothedXPath,
+            frames: frames,
             targetIndices: allIndices,
-            windowSeconds: broadHalfWindow * 2.0
+            windowSeconds: broadWindowSeconds
         )
-        let broadYPath = cache.locallyTimeWeightedAveragePath(
-            .footstepY,
-            sourceRole: .footstepBroad,
-            sourceVariant: broadHalfWindow.bitPattern,
-            source: turnStrideSmoothedYPath,
-            analysis: analysis,
+        let broadYPath = turnIntentPath(
+            turnStrideSmoothedYPath,
+            frames: frames,
             targetIndices: allIndices,
-            windowSeconds: broadHalfWindow * 2.0
+            windowSeconds: broadWindowSeconds
         )
-        let broadRollPath = cache.locallyTimeWeightedAveragePath(
-            .footstepRoll,
-            sourceRole: .footstepBroad,
-            sourceVariant: broadHalfWindow.bitPattern,
-            source: turnStrideSmoothedRollPath,
-            analysis: analysis,
+        let broadRollPath = turnIntentPath(
+            turnStrideSmoothedRollPath,
+            frames: frames,
             targetIndices: allIndices,
-            windowSeconds: broadHalfWindow * 2.0
+            windowSeconds: broadWindowSeconds
         )
         let rawFarFieldXPath = EstimatedPath(values: analysis.farFieldPathX)
         let rawFarFieldYPath = EstimatedPath(values: analysis.farFieldPathY)
         let rawFarFieldRollPath = EstimatedPath(values: analysis.farFieldPathRoll)
-        let broadFarFieldXPath = cache.locallyTimeWeightedAveragePath(
-            .farFieldX,
-            sourceRole: .footstepBroad,
-            sourceVariant: broadHalfWindow.bitPattern,
-            source: rawFarFieldXPath,
-            analysis: analysis,
+        let broadFarFieldXPath = turnIntentPath(
+            rawFarFieldXPath,
+            frames: frames,
             targetIndices: allIndices,
-            windowSeconds: broadHalfWindow * 2.0
+            windowSeconds: broadWindowSeconds
         )
-        let broadFarFieldYPath = cache.locallyTimeWeightedAveragePath(
-            .farFieldY,
-            sourceRole: .footstepBroad,
-            sourceVariant: broadHalfWindow.bitPattern,
-            source: rawFarFieldYPath,
-            analysis: analysis,
+        let broadFarFieldYPath = turnIntentPath(
+            rawFarFieldYPath,
+            frames: frames,
             targetIndices: allIndices,
-            windowSeconds: broadHalfWindow * 2.0
+            windowSeconds: broadWindowSeconds
         )
-        let broadFarFieldRollPath = cache.locallyTimeWeightedAveragePath(
-            .farFieldRoll,
-            sourceRole: .footstepBroad,
-            sourceVariant: broadHalfWindow.bitPattern,
-            source: rawFarFieldRollPath,
-            analysis: analysis,
+        let broadFarFieldRollPath = turnIntentPath(
+            rawFarFieldRollPath,
+            frames: frames,
             targetIndices: allIndices,
-            windowSeconds: broadHalfWindow * 2.0
+            windowSeconds: broadWindowSeconds
         )
         let rawFarFieldPanBandXPath = frames.indices.map { index -> Float in
             guard analysis.farFieldPathX.indices.contains(index),
@@ -11513,6 +11496,38 @@ enum AutoStabilizationEstimator {
             )
         }
         return smoothedValues
+    }
+
+    private static func turnIntentPath(
+        _ values: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        targetIndices: [Int],
+        windowSeconds: Double
+    ) -> EstimatedPath {
+        guard !values.values.isEmpty else {
+            return values
+        }
+        var intentValues = values.values
+        let halfWindowSeconds = max(0.0, windowSeconds * 0.5)
+        for index in targetIndices where values.values.indices.contains(index) && frames.indices.contains(index) {
+            let centerTime = frames[index].time
+            let localIndices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindowSeconds)
+            let activeIndices = localIndices.isEmpty ? [index] : localIndices
+            intentValues[index] = timeWeightedMonotonicSCurveValue(
+                values,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: centerTime,
+                windowSeconds: windowSeconds
+            ) ?? timeWeightedAverage(
+                values,
+                frames: frames,
+                indices: activeIndices,
+                centerTime: centerTime,
+                windowSeconds: windowSeconds
+            )
+        }
+        return EstimatedPath(values: intentValues)
     }
 
     private static func timeWeightedMonotonicSCurveValue(

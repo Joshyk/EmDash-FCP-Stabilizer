@@ -301,64 +301,45 @@ fragment float4 fragmentShader(
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
             float fill = 0.0;
-            float3 color = float3(1.0);
+            float3 color = float3(0.94, 0.96, 0.98);
             if (row == 0) {
                 fill = saturate(transform->diagnostic.x);
-                color = float3(1.0, 0.15, 0.12);
             } else if (row == 1) {
                 fill = saturate(transform->diagnostic.y);
-                color = float3(0.2, 0.9, 0.25);
             } else if (row == 2) {
                 fill = saturate(transform->diagnostic.z);
-                color = float3(1.0, 0.85, 0.15);
             } else if (row == 3) {
                 fill = saturate(transform->diagnostic2.y);
-                color = float3(1.0, 0.25, 0.95);
             } else if (row == 4) {
                 fill = saturate(transform->diagnostic2.z);
-                color = float3(0.2, 0.95, 1.0);
             } else if (row == 5) {
                 fill = saturate(transform->diagnostic2.w);
-                color = float3(0.2, 0.95, 1.0);
             } else if (row == 6) {
                 fill = saturate(transform->diagnostic2.x);
-                color = float3(0.1, 0.55, 1.0);
             } else if (row == 7) {
                 fill = saturate(transform->diagnostic3.y);
-                color = float3(0.55, 0.95, 0.25);
             } else if (row == 8) {
                 fill = saturate(transform->diagnostic3.z);
-                color = float3(0.2, 0.65, 1.0);
             } else if (row == 9) {
                 fill = saturate(transform->diagnostic3.w);
-                color = float3(1.0, 0.45, 0.25);
             } else if (row == 10) {
                 fill = saturate(transform->diagnostic4.x);
-                color = float3(0.1, 0.55, 1.0);
             } else if (row == 11) {
                 fill = saturate(transform->diagnostic3.x);
-                color = float3(0.95, 0.95, 0.95);
             } else if (row == 12) {
                 fill = saturate(transform->diagnostic4.y);
-                color = float3(0.2, 1.0, 0.55);
             } else if (row == 13) {
                 fill = saturate(transform->diagnostic4.z);
-                color = float3(0.75, 1.0, 0.25);
             } else if (row == 14) {
                 fill = saturate(transform->diagnostic4.w);
-                color = float3(1.0, 0.65, 0.15);
             } else if (row == 15) {
                 fill = saturate(transform->diagnostic.w);
-                color = float3(0.2, 1.0, 0.55);
             } else if (row == 16) {
                 fill = saturate(transform->diagnostic5.x);
-                color = float3(0.2, 1.0, 0.75);
             } else if (row == 17) {
                 fill = saturate(transform->diagnostic5.y);
-                color = float3(1.0, 0.75, 0.15);
             } else if (row == 18) {
                 fill = 1.0;
-                color = transform->debugMode > 1.5 ? float3(0.2, 0.95, 1.0) : float3(0.2, 1.0, 0.55);
             }
             float barX = panelX - labelWidth - labelGap;
             bool inBar = barX >= 0.0
