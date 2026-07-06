@@ -12,6 +12,11 @@ UI 操作が必要な場合に限る。
 Final Cut Pro の quit/open は、Computer Use より先に Terminal/SSH から
 `osascript` や `open -a "Final Cut Pro"` で実行する。Computer Use は、ユーザーが
 明示的に許可した quit/open 操作、または Terminal/SSH でできない UI 操作だけに使う。
+Final Cut Pro の E2E UI 操作は、座標クリックより AppleScript menu item、keyboard
+shortcut、AX direct access を優先する。UI 操作スクリプトが失敗した場合は、同じ
+失敗を再試行でごまかさず、subagent に該当スクリプトを読ませて primary path を
+AppleScript/shortcut 化できるか確認・修正させる。どうしても座標クリックが必要な
+場合だけ、最後の fallback として使い、その理由と fallback 使用をログへ明示する。
 ユーザーの FCP 操作や確認待ちで作業を止める場合は、チャットだけでなく
 Codex Stop hook と同じ iMessage 経路で通知する。送信先と送信方法は
 `/Users/justadev/.codex/hooks/imessage_stop.py` の設定を source of truth にし、
@@ -231,6 +236,9 @@ The overlay panel should scale proportionally to the current render output so Fi
 original/proxy playback presents one readable viewer footprint; high-resolution original
 frames must not make the bars tiny, and proxy output must not make them balloon over the
 preview.
+Debug Overlay active bars should use one neutral white color so the overlay remains readable
+in Viewer `Green` channel and does not encode state through changing colors. The row labels
+and fill lengths carry the diagnostic meaning.
 
 When verifying a Final Cut Pro-visible playback problem, especially zoom pulsing, wobble,
 crop breathing, turn smoothness, or proxy playback heaviness, do not rely only on still
@@ -263,7 +271,8 @@ video still shows clouds, ridgelines, horizon lines, zoom, crop edges, or cadenc
 moving unnaturally, treat the result as failed even when metrics report pass.
 Stabilizer smoothness acceptance must be video-first. Do not accept a change based on a
 few screenshots, a still contact sheet, Inspector text, or numeric pass/fail alone. Record
-the Final Cut Pro Viewer with the target project, target timecode range, and `Proxy Only`,
+the Final Cut Pro Viewer with the target project, target timecode range, `Proxy Only`,
+Viewer `Green` channel, and the Stabilizer `Debug Overlay` visibly enabled,
 then judge the result from the video, the full per-frame CSV, PTS/frame-interval evidence,
 and a visual review of the actual motion. Keep `Remove Black Edges` off for ordinary
 smoothness, turn, ridge, horizon, and proxy-playback review so exposed edges remain a useful
@@ -298,8 +307,9 @@ Near-ground grass, road, or water may move more than the far field, but distant 
 instability is a visible-quality failure.
 Every stabilization implementation iteration must also run a dedicated `Remove Black Edges`
 on regression pass before claiming the issue is fixed. Use the same fixed projects,
-timecode ranges, `Proxy Only`, and Viewer `Green` channel, but enable `Remove Black Edges`
-only for this crop/black-edge test. Treat zoom pulse, crop breathing, black-edge breathing,
+timecode ranges, `Proxy Only`, Viewer `Green` channel, and visible Stabilizer
+`Debug Overlay`, but enable `Remove Black Edges` only for this crop/black-edge test.
+Treat zoom pulse, crop breathing, black-edge breathing,
 or playback heaviness in that crop-on pass as blocking even if the ordinary crop-off
 baseline looks smooth.
 When an E2E case specifies proxy playback, such as `playbackMode: "Proxy Only"`,
