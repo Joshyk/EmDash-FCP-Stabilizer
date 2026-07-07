@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import datetime as dt
 import json
 import shutil
 import sys
@@ -784,14 +783,43 @@ def package_directory_name(source_root: ET.Element, asset_id: str, result: dict)
     sample_label = f"sample{sample_percent:g}" if isinstance(sample_percent, (int, float)) else "sampleunknown"
     schema = result.get("cacheSchemaVersion", "unknown")
     frame_count = result.get("frameCount", "unknown")
-    date_label = dt.date.today().isoformat()
-    return safe_file_component(f"{footage}__{sample_label}__schema{schema}__{frame_count}f__{date_label}")
+    identity = short_identity(result.get("cacheIdentity")) or "identityunknown"
+    return safe_file_component(f"{footage}__schema{schema}__{sample_label}__frames{frame_count}__{identity}")
+
+
+def package_event_name(source_root: ET.Element, asset_id: str, result: dict, target_event_name: str | None) -> str | None:
+    return target_event_name or result.get("eventName") or event_name_by_asset_id(source_root).get(asset_id)
+
+
+def package_parent_directory(
+    output_dir: Path,
+    source_path: Path,
+    source_root: ET.Element,
+    asset_id: str,
+    result: dict,
+    target_event_name: str | None,
+) -> Path:
+    if source_path.expanduser().suffix != ".fcpbundle":
+        return output_dir
+    event_name = package_event_name(source_root, asset_id, result, target_event_name)
+    if not str(event_name or "").strip():
+        raise ValueError(f"analysis result for {result.get('name') or asset_id} is missing Event name; refusing ambiguous retained package path")
+    if output_dir.name == source_path.name:
+        if output_dir.expanduser().resolve(strict=False) == source_path.expanduser().resolve(strict=False):
+            raise ValueError("retained package output for .fcpbundle sources must not be inside the source .fcpbundle; use a sibling analysis directory")
+        bundle_dir = output_dir
+    else:
+        bundle_dir = output_dir / source_path.name
+        if bundle_dir.expanduser().resolve(strict=False) == source_path.expanduser().resolve(strict=False):
+            raise ValueError("retained package output for .fcpbundle sources must not be inside the source .fcpbundle; use a sibling analysis directory")
+    return bundle_dir / safe_file_component(str(event_name))
 
 
 def copy_cache_payload(package_dir: Path, footage: str, result: dict, cache_root: str | None) -> dict:
-    if not cache_root:
+    effective_cache_root = result.get("cacheRoot") or cache_root
+    if not effective_cache_root:
         raise ValueError("cache root is required for per-footage packages")
-    cache_root_path = Path(cache_root).expanduser()
+    cache_root_path = Path(str(effective_cache_root)).expanduser()
     cache_file_name = result.get("cacheFileName")
     cache_identity = (result.get("cacheIdentity") or "").strip()
     if not cache_file_name:
@@ -991,7 +1019,15 @@ def build_per_footage_packages(
     packages = []
     output_dir.mkdir(parents=True, exist_ok=True)
     for asset_id, result in results.items():
-        package_dir = output_dir / package_directory_name(source_root, asset_id, result)
+        parent_dir = package_parent_directory(
+            output_dir,
+            source_path,
+            source_root,
+            asset_id,
+            result,
+            target_event_name,
+        )
+        package_dir = parent_dir / package_directory_name(source_root, asset_id, result)
         if package_dir.exists():
             shutil.rmtree(package_dir)
         package_dir.mkdir(parents=True)
@@ -1010,13 +1046,14 @@ def build_per_footage_packages(
         )
         tree.write(info_path, encoding="utf-8", xml_declaration=True)
         manifest_path = package_dir / f"{footage}.analysis-manifest.json"
+        result_cache_root = result.get("cacheRoot") or cache_root
         cache_payload = copy_cache_payload(package_dir, footage, result, cache_root)
         manifest = analysis_manifest(
             source_root,
             source_path,
             asset_id,
             result,
-            cache_root=cache_root,
+            cache_root=result_cache_root,
             cache_payload=cache_payload,
             target_event_name=target_event_name,
             target_event_root=target_event_root,

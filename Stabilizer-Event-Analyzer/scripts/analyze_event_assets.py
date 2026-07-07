@@ -14,7 +14,14 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
-from fcpxml_common import SCHEMA_VERSION, event_names, fraction_seconds, load_event_assets, resolve_info_path
+from fcpxml_common import (
+    SCHEMA_VERSION,
+    event_names,
+    fraction_seconds,
+    load_event_assets,
+    resolve_info_path,
+    safe_file_component,
+)
 import xml.etree.ElementTree as ET
 
 
@@ -42,6 +49,50 @@ def normalize_cache_root(path: Path) -> Path:
     if resolved.name == "Analysis Files":
         return resolved / CACHE_DIR_NAME
     return resolved / "Analysis Files" / CACHE_DIR_NAME
+
+
+def fcpbundle_source_path(package_path: Path | None) -> Path | None:
+    if package_path is None:
+        return None
+    resolved = package_path.expanduser().resolve()
+    if resolved.suffix == ".fcpbundle" and resolved.is_dir():
+        return resolved
+    return None
+
+
+def event_scoped_cache_root(base_root: Path, event_name: str | None) -> Path:
+    if not str(event_name or "").strip():
+        raise ValueError(".fcpbundle analysis asset is missing an Event name; refusing an ambiguous retained cache path")
+    event_label = safe_file_component(str(event_name))
+    return base_root / event_label / "Analysis Files" / CACHE_DIR_NAME
+
+
+def assign_asset_cache_roots(
+    assets: list[dict],
+    requested_cache_root: Path,
+    package_path: Path | None,
+) -> tuple[Path, list[Path]]:
+    bundle_path = fcpbundle_source_path(package_path)
+    if bundle_path is None:
+        cache_root = normalize_cache_root(requested_cache_root)
+        for asset in assets:
+            asset["cacheRoot"] = str(cache_root)
+        return cache_root, [cache_root]
+
+    requested_root = requested_cache_root.expanduser().resolve()
+    analysis_root = requested_root if requested_root.name == bundle_path.name else requested_root / bundle_path.name
+    if analysis_root.resolve(strict=False) == bundle_path.resolve(strict=False):
+        raise ValueError("retained analysis cache for .fcpbundle sources must not be inside the source .fcpbundle; use a sibling analysis directory")
+    cache_roots: list[Path] = []
+    seen: set[str] = set()
+    for asset in assets:
+        cache_root = event_scoped_cache_root(analysis_root, asset.get("eventName"))
+        asset["cacheRoot"] = str(cache_root)
+        cache_key = str(cache_root)
+        if cache_key not in seen:
+            seen.add(cache_key)
+            cache_roots.append(cache_root)
+    return analysis_root, cache_roots
 
 
 def native_source_mtime() -> float:
@@ -193,6 +244,7 @@ def selected_assets(fcpxml_path: Path, asset_ids: list[str], all_assets: bool) -
             {
                 "assetId": asset.id,
                 "name": asset.name,
+                "eventName": asset.event_name,
                 "mediaPath": str(asset.media_path),
                 "mediaKind": asset.media_kind,
                 "durationSeconds": fraction_seconds(asset.duration),
@@ -226,14 +278,15 @@ def main(argv: Iterable[str]) -> int:
             raise ValueError("select at least one --asset-id or pass --all")
         info_path, package_path, assets, skipped = selected_assets(args.fcpxml, args.asset_id, args.all)
         root = ET.parse(info_path).getroot()
-        cache_root = normalize_cache_root(args.cache_root)
-        cache_root.mkdir(parents=True, exist_ok=True)
+        analysis_root, cache_roots = assign_asset_cache_roots(assets, args.cache_root, package_path)
+        for cache_root in cache_roots:
+            cache_root.mkdir(parents=True, exist_ok=True)
         plan = {
             "schemaVersion": SCHEMA_VERSION,
             "sourcePath": str(args.fcpxml),
             "infoPath": str(info_path),
             "packagePath": str(package_path) if package_path else None,
-            "cacheRoot": str(cache_root),
+            "cacheRoot": str(analysis_root),
             "eventName": (event_names(root) or [None])[0],
             "sampleScalePercent": args.sample_scale_percent,
             "maxFrames": args.max_frames,
@@ -263,7 +316,8 @@ def main(argv: Iterable[str]) -> int:
         payload["sourcePath"] = str(args.fcpxml)
         payload["infoPath"] = str(info_path)
         payload["packagePath"] = str(package_path) if package_path else None
-        payload["cacheRoot"] = str(cache_root)
+        payload["cacheRoot"] = str(analysis_root)
+        payload["cacheRoots"] = [str(cache_root) for cache_root in cache_roots]
         payload["skipped"] = skipped
         return emit(payload)
     except Exception as exc:  # noqa: BLE001

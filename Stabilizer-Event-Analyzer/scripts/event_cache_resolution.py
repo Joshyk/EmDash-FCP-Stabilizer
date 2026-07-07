@@ -9,6 +9,8 @@ from pathlib import Path
 
 CACHE_DIR_NAME = "TokyoWalkingStabilizerHostAnalysis"
 INDEX_FILE_NAME = "host-analysis-index-v2.json"
+RETAINED_ANALYSIS_DIR_NAME = "_walking_stabilizer_analysis"
+LEGACY_RETAINED_ANALYSIS_DIR_NAME = "stablizer_analysis"
 
 
 def _path_identity(path: Path) -> str:
@@ -55,12 +57,24 @@ def _bundle_roots_from_manifest(manifest: dict, manifest_path: Path) -> tuple[li
 
     if not any(root.exists() and root.is_dir() for root in roots):
         for parent in [manifest_path.parent, *manifest_path.parents]:
-            if parent.name != "stablizer_analysis":
+            if parent.name == RETAINED_ANALYSIS_DIR_NAME:
+                sibling_root = parent.parent
+                try:
+                    relative_parts = manifest_path.relative_to(parent).parts
+                except ValueError:
+                    relative_parts = ()
+                if sibling_root.is_dir() and relative_parts and str(relative_parts[0]).endswith(".fcpbundle"):
+                    add(sibling_root / relative_parts[0], "retained analysis bundle name")
+                break
+
+    if not any(root.exists() and root.is_dir() for root in roots):
+        for parent in [manifest_path.parent, *manifest_path.parents]:
+            if parent.name != LEGACY_RETAINED_ANALYSIS_DIR_NAME:
                 continue
             sibling_root = parent.parent
             if sibling_root.is_dir():
                 for bundle in sorted(sibling_root.glob("*.fcpbundle"), key=lambda item: item.name.casefold()):
-                    add(bundle, "stablizer_analysis sibling bundle")
+                    add(bundle, "legacy stablizer_analysis sibling bundle")
             break
 
     return roots, sources
@@ -180,7 +194,7 @@ def resolve_event_root_from_manifest(
         media_file_name = Path(str(manifest["mediaPath"])).name
     media_matches: list[Path] = []
     for bundle_root, source in zip(bundle_roots, bundle_sources, strict=False):
-        if source == "stablizer_analysis sibling bundle":
+        if source == "legacy stablizer_analysis sibling bundle":
             continue
         for candidate_event in _candidate_event_roots(bundle_root):
             if _media_name_matches_event(candidate_event, str(media_file_name) if media_file_name else None):
