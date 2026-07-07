@@ -4,8 +4,9 @@
   "private": true,
   "description": "Local web UI for Tokyo Walking Stabilizer Event FCPXMLD analysis.",
   "scripts": {
+    "kill:3091": "STABILIZER_WEB_PORT=3091 node scripts/stop-server.js",
     "start": "node server.js",
-    "stop": "node scripts/stop-server.js",
+    "stop": "STABILIZER_WEB_PORT=3091 node scripts/stop-server.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {
