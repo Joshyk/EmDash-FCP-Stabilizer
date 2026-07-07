@@ -381,6 +381,12 @@ def main() -> None:
         "lensBandRidgeY",
         "lensBandMidX",
         "lensBandMidY",
+        "lensBandTopColumnX",
+        "lensBandTopColumnY",
+        "lensBandRidgeColumnX",
+        "lensBandRidgeColumnY",
+        "lensBandMidColumnX",
+        "lensBandMidColumnY",
         "lensBandWarpSupport",
         "lensBandWarpApplied",
         "lensBandRollingShutterScore",
@@ -516,7 +522,7 @@ def main() -> None:
 
     if args.require_band_warp and summary["focusLensBandWarpAppliedRows"] <= 0:
         raise SystemExit(
-            "lens band diagnostics failed: target focus window had no bandWarp application; "
+            "lens band diagnostics failed: target focus window had no rollingRowWarp band application; "
             f"summary={args.output_dir / 'lens_band_source_summary.json'} csv={csv_path}"
         )
     if args.forbid_global_lens and summary["focusGlobalLensAppliedRows"] > 0:

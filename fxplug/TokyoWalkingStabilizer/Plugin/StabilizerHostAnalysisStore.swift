@@ -58,10 +58,16 @@ private struct PersistedHostAnalysisCache: Codable {
     let farFieldConfidence: [Float]?
     let lensBandTopPathX: [Float]?
     let lensBandTopPathY: [Float]?
+    let lensBandTopColumnPathX: [Float]?
+    let lensBandTopColumnPathY: [Float]?
     let lensBandRidgePathX: [Float]?
     let lensBandRidgePathY: [Float]?
+    let lensBandRidgeColumnPathX: [Float]?
+    let lensBandRidgeColumnPathY: [Float]?
     let lensBandMidPathX: [Float]?
     let lensBandMidPathY: [Float]?
+    let lensBandMidColumnPathX: [Float]?
+    let lensBandMidColumnPathY: [Float]?
     let lensBandTopConfidence: [Float]?
     let lensBandRidgeConfidence: [Float]?
     let lensBandMidConfidence: [Float]?
@@ -225,8 +231,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 34
-    private static let supportedCacheSchemaVersions: Set<Int> = [34]
+    private static let cacheSchemaVersion = 35
+    private static let supportedCacheSchemaVersions: Set<Int> = [35]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1789,10 +1795,16 @@ final class StabilizerHostAnalysisStore {
             farFieldConfidence: prepared.farFieldConfidence,
             lensBandTopPathX: prepared.lensBandTopPathX,
             lensBandTopPathY: prepared.lensBandTopPathY,
+            lensBandTopColumnPathX: prepared.lensBandTopColumnPathX,
+            lensBandTopColumnPathY: prepared.lensBandTopColumnPathY,
             lensBandRidgePathX: prepared.lensBandRidgePathX,
             lensBandRidgePathY: prepared.lensBandRidgePathY,
+            lensBandRidgeColumnPathX: prepared.lensBandRidgeColumnPathX,
+            lensBandRidgeColumnPathY: prepared.lensBandRidgeColumnPathY,
             lensBandMidPathX: prepared.lensBandMidPathX,
             lensBandMidPathY: prepared.lensBandMidPathY,
+            lensBandMidColumnPathX: prepared.lensBandMidColumnPathX,
+            lensBandMidColumnPathY: prepared.lensBandMidColumnPathY,
             lensBandTopConfidence: prepared.lensBandTopConfidence,
             lensBandRidgeConfidence: prepared.lensBandRidgeConfidence,
             lensBandMidConfidence: prepared.lensBandMidConfidence,
@@ -1932,10 +1944,16 @@ final class StabilizerHostAnalysisStore {
                 pathPerspectiveY: analysis.pathPerspectiveY,
                 lensBandTopPathX: analysis.lensBandTopPathX,
                 lensBandTopPathY: analysis.lensBandTopPathY,
+                lensBandTopColumnPathX: analysis.lensBandTopColumnPathX,
+                lensBandTopColumnPathY: analysis.lensBandTopColumnPathY,
                 lensBandRidgePathX: analysis.lensBandRidgePathX,
                 lensBandRidgePathY: analysis.lensBandRidgePathY,
+                lensBandRidgeColumnPathX: analysis.lensBandRidgeColumnPathX,
+                lensBandRidgeColumnPathY: analysis.lensBandRidgeColumnPathY,
                 lensBandMidPathX: analysis.lensBandMidPathX,
                 lensBandMidPathY: analysis.lensBandMidPathY,
+                lensBandMidColumnPathX: analysis.lensBandMidColumnPathX,
+                lensBandMidColumnPathY: analysis.lensBandMidColumnPathY,
                 lensBandTopConfidence: analysis.lensBandTopConfidence,
                 lensBandRidgeConfidence: analysis.lensBandRidgeConfidence,
                 lensBandMidConfidence: analysis.lensBandMidConfidence,
@@ -2970,10 +2988,16 @@ final class StabilizerHostAnalysisStore {
             cache.farFieldConfidence,
             cache.lensBandTopPathX,
             cache.lensBandTopPathY,
+            cache.lensBandTopColumnPathX,
+            cache.lensBandTopColumnPathY,
             cache.lensBandRidgePathX,
             cache.lensBandRidgePathY,
+            cache.lensBandRidgeColumnPathX,
+            cache.lensBandRidgeColumnPathY,
             cache.lensBandMidPathX,
             cache.lensBandMidPathY,
+            cache.lensBandMidColumnPathX,
+            cache.lensBandMidColumnPathY,
             cache.lensBandTopConfidence,
             cache.lensBandRidgeConfidence,
             cache.lensBandMidConfidence,
@@ -3010,10 +3034,16 @@ final class StabilizerHostAnalysisStore {
            let persistedFarFieldConfidence = cache.farFieldConfidence,
            let lensBandTopPathX = cache.lensBandTopPathX,
            let lensBandTopPathY = cache.lensBandTopPathY,
+           let lensBandTopColumnPathX = cache.lensBandTopColumnPathX,
+           let lensBandTopColumnPathY = cache.lensBandTopColumnPathY,
            let lensBandRidgePathX = cache.lensBandRidgePathX,
            let lensBandRidgePathY = cache.lensBandRidgePathY,
+           let lensBandRidgeColumnPathX = cache.lensBandRidgeColumnPathX,
+           let lensBandRidgeColumnPathY = cache.lensBandRidgeColumnPathY,
            let lensBandMidPathX = cache.lensBandMidPathX,
            let lensBandMidPathY = cache.lensBandMidPathY,
+           let lensBandMidColumnPathX = cache.lensBandMidColumnPathX,
+           let lensBandMidColumnPathY = cache.lensBandMidColumnPathY,
            let lensBandTopConfidence = cache.lensBandTopConfidence,
            let lensBandRidgeConfidence = cache.lensBandRidgeConfidence,
            let lensBandMidConfidence = cache.lensBandMidConfidence,
@@ -3059,10 +3089,16 @@ final class StabilizerHostAnalysisStore {
                 pathPerspectiveY: pathPerspectiveY,
                 lensBandTopPathX: lensBandTopPathX,
                 lensBandTopPathY: lensBandTopPathY,
+                lensBandTopColumnPathX: lensBandTopColumnPathX,
+                lensBandTopColumnPathY: lensBandTopColumnPathY,
                 lensBandRidgePathX: lensBandRidgePathX,
                 lensBandRidgePathY: lensBandRidgePathY,
+                lensBandRidgeColumnPathX: lensBandRidgeColumnPathX,
+                lensBandRidgeColumnPathY: lensBandRidgeColumnPathY,
                 lensBandMidPathX: lensBandMidPathX,
                 lensBandMidPathY: lensBandMidPathY,
+                lensBandMidColumnPathX: lensBandMidColumnPathX,
+                lensBandMidColumnPathY: lensBandMidColumnPathY,
                 lensBandTopConfidence: lensBandTopConfidence,
                 lensBandRidgeConfidence: lensBandRidgeConfidence,
                 lensBandMidConfidence: lensBandMidConfidence,
@@ -3096,10 +3132,16 @@ final class StabilizerHostAnalysisStore {
             ("farFieldConfidence", cache.farFieldConfidence),
             ("lensBandTopPathX", cache.lensBandTopPathX),
             ("lensBandTopPathY", cache.lensBandTopPathY),
+            ("lensBandTopColumnPathX", cache.lensBandTopColumnPathX),
+            ("lensBandTopColumnPathY", cache.lensBandTopColumnPathY),
             ("lensBandRidgePathX", cache.lensBandRidgePathX),
             ("lensBandRidgePathY", cache.lensBandRidgePathY),
+            ("lensBandRidgeColumnPathX", cache.lensBandRidgeColumnPathX),
+            ("lensBandRidgeColumnPathY", cache.lensBandRidgeColumnPathY),
             ("lensBandMidPathX", cache.lensBandMidPathX),
             ("lensBandMidPathY", cache.lensBandMidPathY),
+            ("lensBandMidColumnPathX", cache.lensBandMidColumnPathX),
+            ("lensBandMidColumnPathY", cache.lensBandMidColumnPathY),
             ("lensBandTopConfidence", cache.lensBandTopConfidence),
             ("lensBandRidgeConfidence", cache.lensBandRidgeConfidence),
             ("lensBandMidConfidence", cache.lensBandMidConfidence),
@@ -3370,10 +3412,16 @@ final class StabilizerHostAnalysisStore {
                 farFieldConfidence: cache.farFieldConfidence,
                 lensBandTopPathX: cache.lensBandTopPathX,
                 lensBandTopPathY: cache.lensBandTopPathY,
+                lensBandTopColumnPathX: cache.lensBandTopColumnPathX,
+                lensBandTopColumnPathY: cache.lensBandTopColumnPathY,
                 lensBandRidgePathX: cache.lensBandRidgePathX,
                 lensBandRidgePathY: cache.lensBandRidgePathY,
+                lensBandRidgeColumnPathX: cache.lensBandRidgeColumnPathX,
+                lensBandRidgeColumnPathY: cache.lensBandRidgeColumnPathY,
                 lensBandMidPathX: cache.lensBandMidPathX,
                 lensBandMidPathY: cache.lensBandMidPathY,
+                lensBandMidColumnPathX: cache.lensBandMidColumnPathX,
+                lensBandMidColumnPathY: cache.lensBandMidColumnPathY,
                 lensBandTopConfidence: cache.lensBandTopConfidence,
                 lensBandRidgeConfidence: cache.lensBandRidgeConfidence,
                 lensBandMidConfidence: cache.lensBandMidConfidence,

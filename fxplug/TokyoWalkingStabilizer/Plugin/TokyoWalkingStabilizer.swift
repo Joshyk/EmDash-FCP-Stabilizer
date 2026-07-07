@@ -7052,7 +7052,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         case 5:
             return "rollingShutterCandidate"
         case 6:
-            return "bandWarp"
+            return "rollingRowWarp"
         default:
             return "off"
         }
@@ -7248,8 +7248,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensBandTopOffset = autoTransform.lensBandTopOffset * masterStrength
             let appliedLensBandRidgeOffset = autoTransform.lensBandRidgeOffset * masterStrength
             let appliedLensBandMidOffset = autoTransform.lensBandMidOffset * masterStrength
+            let appliedLensBandTopColumnOffset = autoTransform.lensBandTopColumnOffset * masterStrength
+            let appliedLensBandRidgeColumnOffset = autoTransform.lensBandRidgeColumnOffset * masterStrength
+            let appliedLensBandMidColumnOffset = autoTransform.lensBandMidColumnOffset * masterStrength
             let componentMessage = String(
-                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
                 analysisSeconds,
                 samplePosition,
                 lowerIndex,
@@ -7292,6 +7295,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 appliedLensBandRidgeOffset.y,
                 appliedLensBandMidOffset.x,
                 appliedLensBandMidOffset.y,
+                appliedLensBandTopColumnOffset.x,
+                appliedLensBandTopColumnOffset.y,
+                appliedLensBandRidgeColumnOffset.x,
+                appliedLensBandRidgeColumnOffset.y,
+                appliedLensBandMidColumnOffset.x,
+                appliedLensBandMidColumnOffset.y,
                 autoTransform.lensBandWarpSupport,
                 autoTransform.lensBandWarpApplied,
                 autoTransform.lensBandRollingShutterScore,
@@ -10364,6 +10373,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             lensBandTopOffset: renderedAutoTransform.lensBandTopOffset * masterStrength,
             lensBandRidgeOffset: renderedAutoTransform.lensBandRidgeOffset * masterStrength,
             lensBandMidOffset: renderedAutoTransform.lensBandMidOffset * masterStrength,
+            lensBandTopColumnOffset: renderedAutoTransform.lensBandTopColumnOffset * masterStrength,
+            lensBandRidgeColumnOffset: renderedAutoTransform.lensBandRidgeColumnOffset * masterStrength,
+            lensBandMidColumnOffset: renderedAutoTransform.lensBandMidColumnOffset * masterStrength,
             lensBandWarpSupport: renderedAutoTransform.lensBandWarpSupport,
             lensBandWarpApplied: renderedAutoTransform.lensBandWarpApplied
         )

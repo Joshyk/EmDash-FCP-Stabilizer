@@ -297,6 +297,14 @@ fragment float4 fragmentShader(
                 + (transform->lensBandRidgeOffset * ridgeWeight)
                 + (transform->lensBandMidOffset * midWeight)
             ) / totalWeight;
+            float sourceX = saturate((stabilizedPixels.x / transform->outputSize.x) + 0.5);
+            float columnPhase = clamp((sourceX - 0.5) * 2.0, -1.0, 1.0);
+            float2 columnOffset = (
+                (transform->lensBandTopColumnOffset * topWeight)
+                + (transform->lensBandRidgeColumnOffset * ridgeWeight)
+                + (transform->lensBandMidColumnOffset * midWeight)
+            ) / totalWeight;
+            bandOffset += columnOffset * columnPhase;
             stabilizedPixels -= bandOffset * lensBandSupport * farFieldFade * transform->strength;
         }
     }

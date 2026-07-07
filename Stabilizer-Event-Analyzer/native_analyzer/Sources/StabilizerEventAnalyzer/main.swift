@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 34
+private let cacheSchemaVersion = 35
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -180,10 +180,16 @@ struct PairMotion {
     let perspectiveY: Float
     let lensBandTopDx: Float
     let lensBandTopDy: Float
+    let lensBandTopColumnDx: Float
+    let lensBandTopColumnDy: Float
     let lensBandRidgeDx: Float
     let lensBandRidgeDy: Float
+    let lensBandRidgeColumnDx: Float
+    let lensBandRidgeColumnDy: Float
     let lensBandMidDx: Float
     let lensBandMidDy: Float
+    let lensBandMidColumnDx: Float
+    let lensBandMidColumnDy: Float
     let lensBandTopConfidence: Float
     let lensBandRidgeConfidence: Float
     let lensBandMidConfidence: Float
@@ -213,10 +219,16 @@ struct PairMotion {
         perspectiveY: 0.0,
         lensBandTopDx: 0.0,
         lensBandTopDy: 0.0,
+        lensBandTopColumnDx: 0.0,
+        lensBandTopColumnDy: 0.0,
         lensBandRidgeDx: 0.0,
         lensBandRidgeDy: 0.0,
+        lensBandRidgeColumnDx: 0.0,
+        lensBandRidgeColumnDy: 0.0,
         lensBandMidDx: 0.0,
         lensBandMidDy: 0.0,
+        lensBandMidColumnDx: 0.0,
+        lensBandMidColumnDy: 0.0,
         lensBandTopConfidence: 0.0,
         lensBandRidgeConfidence: 0.0,
         lensBandMidConfidence: 0.0,
@@ -659,10 +671,16 @@ struct PreparedAnalysis {
     let pathPerspectiveY: [Float]
     let lensBandTopPathX: [Float]
     let lensBandTopPathY: [Float]
+    let lensBandTopColumnPathX: [Float]
+    let lensBandTopColumnPathY: [Float]
     let lensBandRidgePathX: [Float]
     let lensBandRidgePathY: [Float]
+    let lensBandRidgeColumnPathX: [Float]
+    let lensBandRidgeColumnPathY: [Float]
     let lensBandMidPathX: [Float]
     let lensBandMidPathY: [Float]
+    let lensBandMidColumnPathX: [Float]
+    let lensBandMidColumnPathY: [Float]
     let lensBandTopConfidence: [Float]
     let lensBandRidgeConfidence: [Float]
     let lensBandMidConfidence: [Float]
@@ -708,10 +726,16 @@ struct PersistedHostAnalysisCache: Encodable {
     let pathPerspectiveY: [Float]?
     let lensBandTopPathX: [Float]?
     let lensBandTopPathY: [Float]?
+    let lensBandTopColumnPathX: [Float]?
+    let lensBandTopColumnPathY: [Float]?
     let lensBandRidgePathX: [Float]?
     let lensBandRidgePathY: [Float]?
+    let lensBandRidgeColumnPathX: [Float]?
+    let lensBandRidgeColumnPathY: [Float]?
     let lensBandMidPathX: [Float]?
     let lensBandMidPathY: [Float]?
+    let lensBandMidColumnPathX: [Float]?
+    let lensBandMidColumnPathY: [Float]?
     let lensBandTopConfidence: [Float]?
     let lensBandRidgeConfidence: [Float]?
     let lensBandMidConfidence: [Float]?
@@ -1755,23 +1779,32 @@ private final class MetalMotionWorkspace {
     ) -> (
         topDx: Float,
         topDy: Float,
+        topColumnDx: Float,
+        topColumnDy: Float,
         ridgeDx: Float,
         ridgeDy: Float,
+        ridgeColumnDx: Float,
+        ridgeColumnDy: Float,
         midDx: Float,
         midDy: Float,
+        midColumnDx: Float,
+        midColumnDy: Float,
         topConfidence: Float,
         ridgeConfidence: Float,
         midConfidence: Float,
         confidence: Float
     ) {
         guard shifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
-            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         }
-        func band(_ minY: Float, _ maxY: Float) -> (dx: Float, dy: Float, support: Float) {
+        func band(_ minY: Float, _ maxY: Float, minX: Float = 0.0, maxX: Float = 1.0) -> (dx: Float, dy: Float, support: Float) {
             let candidates = shifts.filter { shift in
                 let normalizedY = shift.block.centerY / Float(max(1, height))
+                let normalizedX = shift.block.centerX / Float(max(1, width))
                 return normalizedY >= minY
                     && normalizedY <= maxY
+                    && normalizedX >= minX
+                    && normalizedX <= maxX
                     && shift.block.farFieldWeight >= farFieldPlaneBroadThreshold
                     && shift.score.isFinite
                     && shift.dx.isFinite
@@ -1798,13 +1831,34 @@ private final class MetalMotionWorkspace {
         let top = band(0.04, 0.22)
         let ridge = band(0.14, 0.34)
         let mid = band(0.28, 0.50)
+        let topLeft = band(0.04, 0.22, minX: 0.00, maxX: 0.46)
+        let topRight = band(0.04, 0.22, minX: 0.54, maxX: 1.00)
+        let ridgeLeft = band(0.14, 0.34, minX: 0.00, maxX: 0.46)
+        let ridgeRight = band(0.14, 0.34, minX: 0.54, maxX: 1.00)
+        let midLeft = band(0.28, 0.50, minX: 0.00, maxX: 0.46)
+        let midRight = band(0.28, 0.50, minX: 0.54, maxX: 1.00)
+        func columnDelta(_ left: (dx: Float, dy: Float, support: Float), _ right: (dx: Float, dy: Float, support: Float)) -> (dx: Float, dy: Float) {
+            guard left.support > 0.0, right.support > 0.0 else {
+                return (0.0, 0.0)
+            }
+            return (right.dx - left.dx, right.dy - left.dy)
+        }
+        let topColumn = columnDelta(topLeft, topRight)
+        let ridgeColumn = columnDelta(ridgeLeft, ridgeRight)
+        let midColumn = columnDelta(midLeft, midRight)
         return (
             topDx: top.dx,
             topDy: top.dy,
+            topColumnDx: topColumn.dx,
+            topColumnDy: topColumn.dy,
             ridgeDx: ridge.dx,
             ridgeDy: ridge.dy,
+            ridgeColumnDx: ridgeColumn.dx,
+            ridgeColumnDy: ridgeColumn.dy,
             midDx: mid.dx,
             midDy: mid.dy,
+            midColumnDx: midColumn.dx,
+            midColumnDy: midColumn.dy,
             topConfidence: top.support,
             ridgeConfidence: ridge.support,
             midConfidence: mid.support,
@@ -2019,10 +2073,16 @@ private final class MetalMotionWorkspace {
             perspectiveY: warpMotion.perspectiveY,
             lensBandTopDx: lensBandMotion.topDx,
             lensBandTopDy: lensBandMotion.topDy,
+            lensBandTopColumnDx: lensBandMotion.topColumnDx,
+            lensBandTopColumnDy: lensBandMotion.topColumnDy,
             lensBandRidgeDx: lensBandMotion.ridgeDx,
             lensBandRidgeDy: lensBandMotion.ridgeDy,
+            lensBandRidgeColumnDx: lensBandMotion.ridgeColumnDx,
+            lensBandRidgeColumnDy: lensBandMotion.ridgeColumnDy,
             lensBandMidDx: lensBandMotion.midDx,
             lensBandMidDy: lensBandMotion.midDy,
+            lensBandMidColumnDx: lensBandMotion.midColumnDx,
+            lensBandMidColumnDy: lensBandMotion.midColumnDy,
             lensBandTopConfidence: lensBandMotion.topConfidence,
             lensBandRidgeConfidence: lensBandMotion.ridgeConfidence,
             lensBandMidConfidence: lensBandMotion.midConfidence,
@@ -2877,10 +2937,16 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var perspectiveY: [Float] = []
     var lensBandTopPathX: [Float] = []
     var lensBandTopPathY: [Float] = []
+    var lensBandTopColumnPathX: [Float] = []
+    var lensBandTopColumnPathY: [Float] = []
     var lensBandRidgePathX: [Float] = []
     var lensBandRidgePathY: [Float] = []
+    var lensBandRidgeColumnPathX: [Float] = []
+    var lensBandRidgeColumnPathY: [Float] = []
     var lensBandMidPathX: [Float] = []
     var lensBandMidPathY: [Float] = []
+    var lensBandMidColumnPathX: [Float] = []
+    var lensBandMidColumnPathY: [Float] = []
     var x: Float = 0
     var y: Float = 0
     var roll: Float = 0
@@ -2895,10 +2961,16 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var perspectiveYValue: Float = 0
     var lensBandTopX: Float = 0
     var lensBandTopY: Float = 0
+    var lensBandTopColumnX: Float = 0
+    var lensBandTopColumnY: Float = 0
     var lensBandRidgeX: Float = 0
     var lensBandRidgeY: Float = 0
+    var lensBandRidgeColumnX: Float = 0
+    var lensBandRidgeColumnY: Float = 0
     var lensBandMidX: Float = 0
     var lensBandMidY: Float = 0
+    var lensBandMidColumnX: Float = 0
+    var lensBandMidColumnY: Float = 0
     for motion in motions {
         x += motion.dx
         y += motion.dy
@@ -2914,10 +2986,16 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         perspectiveYValue += motion.perspectiveY
         lensBandTopX += motion.lensBandTopDx
         lensBandTopY += motion.lensBandTopDy
+        lensBandTopColumnX += motion.lensBandTopColumnDx
+        lensBandTopColumnY += motion.lensBandTopColumnDy
         lensBandRidgeX += motion.lensBandRidgeDx
         lensBandRidgeY += motion.lensBandRidgeDy
+        lensBandRidgeColumnX += motion.lensBandRidgeColumnDx
+        lensBandRidgeColumnY += motion.lensBandRidgeColumnDy
         lensBandMidX += motion.lensBandMidDx
         lensBandMidY += motion.lensBandMidDy
+        lensBandMidColumnX += motion.lensBandMidColumnDx
+        lensBandMidColumnY += motion.lensBandMidColumnDy
         pathX.append(x)
         pathY.append(y)
         rawRoll.append(roll)
@@ -2932,10 +3010,16 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         perspectiveY.append(perspectiveYValue)
         lensBandTopPathX.append(lensBandTopX)
         lensBandTopPathY.append(lensBandTopY)
+        lensBandTopColumnPathX.append(lensBandTopColumnX)
+        lensBandTopColumnPathY.append(lensBandTopColumnY)
         lensBandRidgePathX.append(lensBandRidgeX)
         lensBandRidgePathY.append(lensBandRidgeY)
+        lensBandRidgeColumnPathX.append(lensBandRidgeColumnX)
+        lensBandRidgeColumnPathY.append(lensBandRidgeColumnY)
         lensBandMidPathX.append(lensBandMidX)
         lensBandMidPathY.append(lensBandMidY)
+        lensBandMidColumnPathX.append(lensBandMidColumnX)
+        lensBandMidColumnPathY.append(lensBandMidColumnY)
     }
     return PreparedAnalysis(
         frames: frames,
@@ -2959,10 +3043,16 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         pathPerspectiveY: jerkLimitedMotionPath(perspectiveY, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
         lensBandTopPathX: lensBandTopPathX,
         lensBandTopPathY: lensBandTopPathY,
+        lensBandTopColumnPathX: lensBandTopColumnPathX,
+        lensBandTopColumnPathY: lensBandTopColumnPathY,
         lensBandRidgePathX: lensBandRidgePathX,
         lensBandRidgePathY: lensBandRidgePathY,
+        lensBandRidgeColumnPathX: lensBandRidgeColumnPathX,
+        lensBandRidgeColumnPathY: lensBandRidgeColumnPathY,
         lensBandMidPathX: lensBandMidPathX,
         lensBandMidPathY: lensBandMidPathY,
+        lensBandMidColumnPathX: lensBandMidColumnPathX,
+        lensBandMidColumnPathY: lensBandMidColumnPathY,
         lensBandTopConfidence: motions.map(\.lensBandTopConfidence),
         lensBandRidgeConfidence: motions.map(\.lensBandRidgeConfidence),
         lensBandMidConfidence: motions.map(\.lensBandMidConfidence),
@@ -3711,10 +3801,16 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         pathPerspectiveY: prepared.pathPerspectiveY,
         lensBandTopPathX: prepared.lensBandTopPathX,
         lensBandTopPathY: prepared.lensBandTopPathY,
+        lensBandTopColumnPathX: prepared.lensBandTopColumnPathX,
+        lensBandTopColumnPathY: prepared.lensBandTopColumnPathY,
         lensBandRidgePathX: prepared.lensBandRidgePathX,
         lensBandRidgePathY: prepared.lensBandRidgePathY,
+        lensBandRidgeColumnPathX: prepared.lensBandRidgeColumnPathX,
+        lensBandRidgeColumnPathY: prepared.lensBandRidgeColumnPathY,
         lensBandMidPathX: prepared.lensBandMidPathX,
         lensBandMidPathY: prepared.lensBandMidPathY,
+        lensBandMidColumnPathX: prepared.lensBandMidColumnPathX,
+        lensBandMidColumnPathY: prepared.lensBandMidColumnPathY,
         lensBandTopConfidence: prepared.lensBandTopConfidence,
         lensBandRidgeConfidence: prepared.lensBandRidgeConfidence,
         lensBandMidConfidence: prepared.lensBandMidConfidence,
@@ -3972,10 +4068,16 @@ private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationU
         try writeOptionalFloatArrayField("pathPerspectiveY", cache.pathPerspectiveY)
         try writeOptionalFloatArrayField("lensBandTopPathX", cache.lensBandTopPathX)
         try writeOptionalFloatArrayField("lensBandTopPathY", cache.lensBandTopPathY)
+        try writeOptionalFloatArrayField("lensBandTopColumnPathX", cache.lensBandTopColumnPathX)
+        try writeOptionalFloatArrayField("lensBandTopColumnPathY", cache.lensBandTopColumnPathY)
         try writeOptionalFloatArrayField("lensBandRidgePathX", cache.lensBandRidgePathX)
         try writeOptionalFloatArrayField("lensBandRidgePathY", cache.lensBandRidgePathY)
+        try writeOptionalFloatArrayField("lensBandRidgeColumnPathX", cache.lensBandRidgeColumnPathX)
+        try writeOptionalFloatArrayField("lensBandRidgeColumnPathY", cache.lensBandRidgeColumnPathY)
         try writeOptionalFloatArrayField("lensBandMidPathX", cache.lensBandMidPathX)
         try writeOptionalFloatArrayField("lensBandMidPathY", cache.lensBandMidPathY)
+        try writeOptionalFloatArrayField("lensBandMidColumnPathX", cache.lensBandMidColumnPathX)
+        try writeOptionalFloatArrayField("lensBandMidColumnPathY", cache.lensBandMidColumnPathY)
         try writeOptionalFloatArrayField("lensBandTopConfidence", cache.lensBandTopConfidence)
         try writeOptionalFloatArrayField("lensBandRidgeConfidence", cache.lensBandRidgeConfidence)
         try writeOptionalFloatArrayField("lensBandMidConfidence", cache.lensBandMidConfidence)

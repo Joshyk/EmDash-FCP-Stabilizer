@@ -361,12 +361,13 @@ FxPlug.
   for moderate 25% Host Analysis evidence, stabilizes that gate with short local tracking
   support, applies only short render-time smoothing, and drops tiny warp deltas through a
   deadband to avoid wave-like image distortion while tuning micro jitter.
-- Host Analysis cache schema `34` stores the original-size-percentage sample path with the
+- Host Analysis cache schema `35` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, band-specific far-field lens paths
-  and confidence, accepted-block counts, blur values, and search-radius edge-hit counts.
-  Schema 34 is required for the source-space lens/camera local band correction; older
-  schemas are rejected so playback cannot silently run without the required band evidence.
+  and confidence, left/right lens-band column paths, accepted-block counts, blur values,
+  and search-radius edge-hit counts. Schema 35 is required for the source-space lens/camera
+  local band and column correction; older schemas are rejected so playback cannot silently
+  run without the required local evidence.
 - Persisted cache state changes update a hidden render revision parameter. Viewer-side
   instances also monitor saved cache changes so Final Cut Pro invalidates cached preview
   frames and redraws from the prepared motion path after the local analyzer writes a
