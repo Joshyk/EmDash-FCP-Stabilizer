@@ -108,6 +108,7 @@ typedef struct TokyoWalkingStabilizerTransformUniforms {
     float debugOverlay;
     float debugMode;
     float debugRuntimeBuild;
+    vector_float4 debugRuntimeVersion;
     float debugOverlayScale;
     float autoCropScale;
     vector_float2 autoCropPositionPixels;
