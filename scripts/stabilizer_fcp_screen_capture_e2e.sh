@@ -2068,12 +2068,10 @@ end checkboxIsOn
 on inspectorPanelRoot(frontWindow)
 	tell application "System Events"
 		try
-			set candidateRoot to group 1 of splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
-			if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
-		end try
-		try
-			set candidateRoot to group 2 of splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
-			if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+			set contentSplit to splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
+			repeat with candidateRoot in groups of contentSplit
+				if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+			end repeat
 		end try
 	end tell
 	error "Could not resolve the Final Cut Pro Video Inspector panel."
@@ -2185,12 +2183,10 @@ end ensureInspectorVisible
 on inspectorPanelRoot(frontWindow)
 	tell application "System Events"
 		try
-			set candidateRoot to group 1 of splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
-			if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
-		end try
-		try
-			set candidateRoot to group 2 of splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
-			if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+			set contentSplit to splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
+			repeat with candidateRoot in groups of contentSplit
+				if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+			end repeat
 		end try
 	end tell
 	error "Could not resolve the Final Cut Pro Video Inspector panel."

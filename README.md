@@ -129,6 +129,11 @@ output-edge budget during render.
 `Turn Detection Window` defaults to `6.0` seconds and comes from the Inspector UI
 value. Its UI minimum is the fixed `2.0` second Stride Wobble window, so TURN
 cannot run shorter than SWOB.
+`Turn Smoothing Zoom` defaults to `1.0`. With `Remove Black Edges` enabled, large
+crop-aware X turns add a smooth Auto Crop scale floor before the existing zoom
+keypoint smoothing and rate limiting. This spends more crop margin during big
+walking turns so the X turn can be slowed more aggressively without making a new
+frame-by-frame zoom pulse. Lower it to `0.0` to keep the old crop budget.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 

@@ -95,6 +95,7 @@ struct StabilizerCorrectionStrengths {
     let strideWobbleRotation: Double
     let panStabilizationStrength: Double
     let farFieldWarp: Double
+    let turnSmoothingZoom: Double
     let usesAutoCropTurnSpace: Bool
 
     static let defaultStrengths = StabilizerCorrectionStrengths(
@@ -106,6 +107,7 @@ struct StabilizerCorrectionStrengths {
         strideWobbleRotation: 0.5,
         panStabilizationStrength: 2.0,
         farFieldWarp: 0.5,
+        turnSmoothingZoom: 0.0,
         usesAutoCropTurnSpace: false
     )
 }

@@ -40,6 +40,7 @@ private enum ParameterID: UInt32 {
     case autoCropLeadTime = 43
     case autoCropHoldTime = 44
     case farFieldWarpStrength = 45
+    case turnSmoothingZoom = 46
 }
 
 private struct StabilizerInfoFields {
@@ -47,10 +48,10 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.373"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 373.0
+private let tokyoWalkingStabilizerVersion = "1.0.374"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 374.0
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_331_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_332_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -60,6 +61,8 @@ private let stabilizerMinimumTurnDetectionWindowSeconds = stabilizerFixedStrideW
 private let stabilizerDefaultTurnDetectionWindowSeconds = 6.0
 private let stabilizerDefaultTurnSmoothingStrength = 12.0
 private let stabilizerMaximumTurnSmoothingStrength = 12.0
+private let stabilizerDefaultTurnSmoothingZoom = 1.0
+private let stabilizerMaximumTurnSmoothingZoom = 2.0
 private let stabilizerMaximumFarFieldWarpStrength = 12.0
 private let stabilizerDefaultAutoCropTransitionDuration = 10.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
@@ -113,11 +116,16 @@ private let stabilizerAutoCropPlaybackVisualScaleKnee: Float = 1.35
 private let stabilizerAutoCropPlaybackVisualScaleMaximum: Float = 1.85
 private let stabilizerAutoCropPlaybackVisualScaleCompression: Float = 0.55
 private let stabilizerAutoCropPlaybackStablePositionFloorMaxDelta: Float = 0.003
-private let stabilizerAutoCropPlaybackScaleRateLimitPerSecond: Float = 0.012
+private let stabilizerAutoCropPlaybackScaleRateLimitPerSecond: Float = 0.010
 private let stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds = 1.90
 private let stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds = 2.90
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveStartDelta: Float = 0.060
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveFullDelta: Float = 0.090
+private let stabilizerAutoCropTurnSmoothingZoomDeltaPerUnit: Float = 0.14
+private let stabilizerAutoCropTurnSmoothingZoomStartPixels: Float = 48.0
+private let stabilizerAutoCropTurnSmoothingZoomFullPixels: Float = 220.0
+private let stabilizerAutoCropTurnSmoothingZoomConfidenceStart: Float = 0.12
+private let stabilizerAutoCropTurnSmoothingZoomConfidenceFull: Float = 0.55
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
@@ -233,6 +241,7 @@ private struct AutoCropZoomDemandSample {
     let positionPixels: vector_float2
     let neutralScale: Float
     let neutralPositionPixels: vector_float2
+    let turnZoomScale: Float
     let transform: StabilizerAutoTransform
 }
 
@@ -542,6 +551,7 @@ private struct AutoCropFramingCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+    let turnSmoothingZoom: UInt64
     let currentTransform: AutoCropTransformSignature
 }
 
@@ -568,6 +578,7 @@ private struct AutoCropScaleDemandCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+    let turnSmoothingZoom: UInt64
     let centerTransform: AutoCropTransformSignature
 }
 
@@ -593,6 +604,7 @@ private struct AutoCropZoomPlanCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+    let turnSmoothingZoom: UInt64
     let usesAutoCropTurnSpace: Bool
 }
 
@@ -618,6 +630,7 @@ private struct AutoCropPlaybackScalePlanCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+    let turnSmoothingZoom: UInt64
     let usesAutoCropTurnSpace: Bool
 }
 
@@ -645,6 +658,7 @@ private struct StabilizerAutoTransformCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let panStabilizationStrength: UInt64
     let farFieldWarp: UInt64
+    let turnSmoothingZoom: UInt64
     let usesAutoCropTurnSpace: Bool
 }
 
@@ -674,6 +688,7 @@ private struct StabilizerPluginState {
     var strideWobbleRotationStrength: Double
     var panStabilizationStrength: Double
     var farFieldWarpStrength: Double
+    var turnSmoothingZoom: Double
     var panSmoothSeconds: Double
     var autoCropTransitionDuration: Double
     var autoCropLeadTime: Double
@@ -1204,6 +1219,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             delta: 0.25,
             parameterFlags: flags
         )
+        paramAPI.addFloatSlider(
+            withName: "Turn Smoothing Zoom",
+            parameterID: ParameterID.turnSmoothingZoom.rawValue,
+            defaultValue: stabilizerDefaultTurnSmoothingZoom,
+            parameterMin: 0.0,
+            parameterMax: stabilizerMaximumTurnSmoothingZoom,
+            sliderMin: 0.0,
+            sliderMax: stabilizerMaximumTurnSmoothingZoom,
+            delta: 0.01,
+            parameterFlags: flags
+        )
         paramAPI.addToggleButton(
             withName: "Remove Black Edges",
             parameterID: ParameterID.autoCropEnabled.rawValue,
@@ -1349,6 +1375,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotationStrength: stabilizerDefaultWalkingRotationStrength,
             panStabilizationStrength: stabilizerDefaultTurnSmoothingStrength,
             farFieldWarpStrength: stabilizerDefaultFarFieldWarpStrength,
+            turnSmoothingZoom: stabilizerDefaultTurnSmoothingZoom,
             panSmoothSeconds: stabilizerDefaultTurnDetectionWindowSeconds,
             autoCropTransitionDuration: stabilizerDefaultAutoCropTransitionDuration,
             autoCropLeadTime: stabilizerDefaultAutoCropLeadTime,
@@ -1374,6 +1401,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.getFloatValue(&state.strideWobbleRotationStrength, fromParameter: ParameterID.strideWobbleRotationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panStabilizationStrength, fromParameter: ParameterID.panStabilizationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.farFieldWarpStrength, fromParameter: ParameterID.farFieldWarpStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.turnSmoothingZoom, fromParameter: ParameterID.turnSmoothingZoom.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.panSmoothSeconds, fromParameter: ParameterID.panSmoothSeconds.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.autoCropTransitionDuration, fromParameter: ParameterID.autoCropTransitionDuration.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.autoCropLeadTime, fromParameter: ParameterID.autoCropLeadTime.rawValue, at: renderTime)
@@ -2016,6 +2044,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
             usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
 
@@ -2164,6 +2193,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
             currentTransform: AutoCropTransformSignature(framingTransform)
         )
 
@@ -2365,6 +2395,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         min(max(progress, 0.0), 1.0)
     }
 
+    private static func thresholdRamp(_ value: Float, start: Float, full: Float) -> Float {
+        guard value.isFinite,
+              start.isFinite,
+              full.isFinite,
+              full > start + Float.ulpOfOne
+        else {
+            return 0.0
+        }
+        return linearRamp((value - start) / (full - start))
+    }
+
     private static func easeInOutRamp(_ progress: Float) -> Float {
         let t = linearRamp(progress)
         return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
@@ -2409,6 +2450,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
             centerTransform: AutoCropTransformSignature(centerTransform)
         )
 
@@ -2517,6 +2559,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
             usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
 
@@ -2591,6 +2634,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
             usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
         )
     }
@@ -3184,9 +3228,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let preliminaryBounds = autoCropPlaybackScaleBounds(preliminaryPlannedSamples)
         let finalFloorBounds = autoCropPlaybackScaleBounds(finalFloorPlan.samples)
         let framingBounds = autoCropPlaybackFramingScaleBounds(framingSamples)
+        let turnZoomSampleCount = samples.reduce(0) { count, sample in
+            count + (sample.turnZoomScale > Float(1.0001) ? 1 : 0)
+        }
+        let turnZoomMaxScale = samples.reduce(Float(1.0)) { partial, sample in
+            max(partial, sample.turnZoomScale.isFinite ? sample.turnZoomScale : Float(1.0))
+        }
 
         os_log(
-            "Auto Crop playback scale plan | samples %d demandSamples %d isolatedDemandOutliers %d minimumClippedDemandSamples %d coverageFloorSamples %d coverageBudgetedPositions %d coverageBudgetedMax %.2f finalFloorSamples %d finalFloorMaxDelta %.5f step %.3f minClip %.4f envelopeRadius %.3f rateLimit %.3f smoothingRadius %.3f peak %.3f peakScale %.4f minScale %.4f maxScale %.4f rawDemandMax %.4f protectedMax %.4f rawPlanMax %.4f repairedMax %.4f preliminaryMax %.4f finalFloorMax %.4f framingMax %.4f lead %.3f hold %.3f release %.3f capLead %.3f capHold %.3f capRelease %.3f positionDemandMax %.2f positionPlanMax %.2f positionFinalMax %.2f",
+            "Auto Crop playback scale plan | samples %d demandSamples %d isolatedDemandOutliers %d minimumClippedDemandSamples %d coverageFloorSamples %d coverageBudgetedPositions %d coverageBudgetedMax %.2f finalFloorSamples %d finalFloorMaxDelta %.5f turnZoomStrength %.2f turnZoomSamples %d turnZoomMax %.4f step %.3f minClip %.4f envelopeRadius %.3f rateLimit %.3f smoothingRadius %.3f peak %.3f peakScale %.4f minScale %.4f maxScale %.4f rawDemandMax %.4f protectedMax %.4f rawPlanMax %.4f repairedMax %.4f preliminaryMax %.4f finalFloorMax %.4f framingMax %.4f lead %.3f hold %.3f release %.3f capLead %.3f capHold %.3f capRelease %.3f positionDemandMax %.2f positionPlanMax %.2f positionFinalMax %.2f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             samples.count,
@@ -3198,6 +3248,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             repairedPlan.maxBudgetedPositionPixels,
             finalFloorPlan.repairCount,
             finalFloorPlan.maxRepairDelta,
+            strengths.turnSmoothingZoom,
+            turnZoomSampleCount,
+            turnZoomMaxScale,
             planStepSeconds,
             Float(1.0) + stabilizerAutoCropPlaybackMinimumClipScaleDelta,
             stabilizerAutoCropPlaybackEnvelopeRadiusSeconds,
@@ -3288,6 +3341,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let clampedFraction = min(max(fraction, 0.0), 1.0)
             let interpolatedScale = previous.scale + ((next.scale - previous.scale) * clampedFraction)
             let interpolatedNeutralScale = previous.neutralScale + ((next.neutralScale - previous.neutralScale) * clampedFraction)
+            let interpolatedTurnZoomScale = previous.turnZoomScale + ((next.turnZoomScale - previous.turnZoomScale) * clampedFraction)
             let interpolatedPosition = previous.positionPixels
                 + ((next.positionPixels - previous.positionPixels) * clampedFraction)
             let interpolatedNeutralPosition = previous.neutralPositionPixels
@@ -3319,6 +3373,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 positionPixels: positionSpike ? interpolatedPosition : current.positionPixels,
                 neutralScale: neutralScaleSpike ? interpolatedNeutralScale : current.neutralScale,
                 neutralPositionPixels: neutralPositionSpike ? interpolatedNeutralPosition : current.neutralPositionPixels,
+                turnZoomScale: scaleSpike ? interpolatedTurnZoomScale : current.turnZoomScale,
                 transform: replacementTransform
             )
             replacedCount += 1
@@ -5025,6 +5080,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 positionPixels: vector_float2(0.0, 0.0),
                 neutralScale: 1.0,
                 neutralPositionPixels: vector_float2(0.0, 0.0),
+                turnZoomScale: 1.0,
                 transform: .identity
             )
         }
@@ -5044,6 +5100,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             positionPixels: strongest.positionPixels,
             neutralScale: strongest.neutralScale,
             neutralPositionPixels: strongest.neutralPositionPixels,
+            turnZoomScale: strongest.turnZoomScale,
             transform: strongest.transform
         )
     }
@@ -5205,6 +5262,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     transform: transform,
                     outputSize: outputSize,
                     masterStrength: masterStrength,
+                    strengths: strengths,
                     samplingProfile: samplingProfile
                 ) {
                     samples.append(sample)
@@ -5320,8 +5378,52 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             transform: transform,
             outputSize: outputSize,
             masterStrength: masterStrength,
+            strengths: strengths,
             samplingProfile: samplingProfile
         )
+    }
+
+    private static func autoCropTurnSmoothingZoomScale(
+        transform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float,
+        strengths: StabilizerCorrectionStrengths
+    ) -> Float {
+        guard strengths.usesAutoCropTurnSpace,
+              outputSize.x > 1.0,
+              outputSize.y > 1.0,
+              masterStrength.isFinite,
+              masterStrength > Float.ulpOfOne
+        else {
+            return 1.0
+        }
+        let zoomStrength = min(
+            max(Float(strengths.turnSmoothingZoom), 0.0),
+            Float(stabilizerMaximumTurnSmoothingZoom)
+        )
+        guard zoomStrength > Float.ulpOfOne else {
+            return 1.0
+        }
+        let turnPixels = max(
+            abs(transform.turnDetectedPixelOffset.x),
+            abs(transform.macroPixelOffset.x)
+        ) * max(0.0, masterStrength)
+        let travelSupport = thresholdRamp(
+            turnPixels,
+            start: stabilizerAutoCropTurnSmoothingZoomStartPixels,
+            full: stabilizerAutoCropTurnSmoothingZoomFullPixels
+        )
+        guard travelSupport > Float.ulpOfOne else {
+            return 1.0
+        }
+        let turnConfidenceSupport = thresholdRamp(
+            min(max(transform.turnConfidence, 0.0), 1.0),
+            start: stabilizerAutoCropTurnSmoothingZoomConfidenceStart,
+            full: stabilizerAutoCropTurnSmoothingZoomConfidenceFull
+        )
+        let support = travelSupport * (0.35 + (turnConfidenceSupport * 0.65))
+        let delta = zoomStrength * stabilizerAutoCropTurnSmoothingZoomDeltaPerUnit * support
+        return max(1.0, 1.0 + delta)
     }
 
     private static func autoCropZoomDemandSample(
@@ -5329,6 +5431,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         transform: StabilizerAutoTransform,
         outputSize: vector_float2,
         masterStrength: Float,
+        strengths: StabilizerCorrectionStrengths,
         samplingProfile: AutoCropSamplingProfile
     ) -> AutoCropZoomDemandSample? {
         guard seconds.isFinite,
@@ -5354,6 +5457,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sampleSteps: samplingProfile.scaleSearchSampleSteps,
             iterations: samplingProfile.scaleSearchIterations
         )
+        let turnZoomScale = autoCropTurnSmoothingZoomScale(
+            transform: transform,
+            outputSize: outputSize,
+            masterStrength: masterStrength,
+            strengths: strengths
+        )
         let neutralPositionPixels = blackSafeAutoCropPosition(
             preferredPositionPixels: vector_float2(0.0, 0.0),
             context: context,
@@ -5367,10 +5476,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         return AutoCropZoomDemandSample(
             seconds: seconds,
-            scale: scale,
+            scale: max(scale, turnZoomScale),
             positionPixels: positionPixels,
             neutralScale: neutralScale,
             neutralPositionPixels: neutralPositionPixels,
+            turnZoomScale: turnZoomScale,
             transform: transform
         )
     }
@@ -5863,6 +5973,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 transform: currentTransform,
                 outputSize: outputSize,
                 masterStrength: masterStrength,
+                strengths: strengths,
                 samplingProfile: samplingProfile
             ) {
                 let protectedScale = autoCropPlaybackMinimumClippedScale(
@@ -9384,6 +9495,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: state.strideWobbleRotationStrength,
             panStabilizationStrength: state.panStabilizationStrength,
             farFieldWarp: state.farFieldWarpStrength,
+            turnSmoothingZoom: state.turnSmoothingZoom,
             usesAutoCropTurnSpace: state.autoCropEnabled
         )
         let configuredProjectBundleCache = transformEnabled

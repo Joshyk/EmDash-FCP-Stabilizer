@@ -125,7 +125,8 @@ estimators, or Transform-keyframe writers back into this target.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, optional small-clamp Far-field Warp, and dynamic Auto Crop scale when
-  `Remove Black Edges` is enabled.
+  `Remove Black Edges` is enabled. `Turn Smoothing Zoom` can add extra smooth crop
+  margin for large crop-aware X turns.
 - Includes a minimal wrapper app source/resource set under `WrapperApp/`.
 
 The current effect implementation reads current render frames as Metal textures, validates
