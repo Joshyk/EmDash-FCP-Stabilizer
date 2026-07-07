@@ -1,6 +1,6 @@
 {
-  "caseId": "p1000304_ridge_4m23_4m43",
-  "description": "Final Cut Pro Viewer screen-capture E2E for P1000304.mov far-field ridge-line fine shake around 00:04:28;32.",
+  "caseId": "p1000304_ridge_4m23_4m43_crop_off",
+  "description": "Final Cut Pro Viewer screen-capture E2E for P1000304.mov far-field ridge-line vertical and horizontal fine shake with Remove Black Edges off.",
   "library": "/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stabilizer_super_smoother.fcpbundle",
   "project": "P1000304 Stabilized Review",
   "sourceClip": "P1000304.mov",
@@ -19,7 +19,7 @@
     }
   },
   "playbackMode": "Proxy Only",
-  "removeBlackEdges": true,
+  "removeBlackEdges": false,
   "expectedEffect": "Tokyo Walking Stabilizer",
   "source": {
     "width": 5728,
@@ -65,7 +65,6 @@
       "mountain ridge-line horizontal micro-shake",
       "cloud shimmer",
       "horizon stepping",
-      "crop/black-edge breathing",
       "near-duplicate or frozen playback cadence"
     ],
     "minCapturedFpsRatio": 0.85,

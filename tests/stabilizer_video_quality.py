@@ -626,6 +626,7 @@ def summarize_ridge_motion(
     max_vector_limit = float(quality.get("maxRidgeHighFrequencyResidualPixels", float("inf")))
     p95_vector_limit = float(quality.get("maxRidgeHighFrequencyResidualP95Pixels", float("inf")))
     p95_vertical_limit = float(quality.get("maxRidgeVerticalResidualP95Pixels", float("inf")))
+    p95_horizontal_limit = float(quality.get("maxRidgeHorizontalResidualP95Pixels", float("inf")))
     p95_line_vertical_limit = float(quality.get("maxRidgeLineVerticalResidualP95Pixels", float("inf")))
     p95_line_jerk_limit = float(quality.get("maxRidgeLineVerticalJerkP95PixelsPerFrame", float("inf")))
     p95_reference_vertical_delta_limit = float(quality.get("maxRidgeMinusReferenceVerticalP95Pixels", float("inf")))
@@ -666,6 +667,8 @@ def summarize_ridge_motion(
         failures.append(f"ridge high-frequency residual p95 {p95_vector:.3f}px exceeds {p95_vector_limit:.3f}px")
     if p95_vertical > p95_vertical_limit:
         failures.append(f"ridge vertical residual p95 {p95_vertical:.3f}px exceeds {p95_vertical_limit:.3f}px")
+    if p95_horizontal > p95_horizontal_limit:
+        failures.append(f"ridge horizontal residual p95 {p95_horizontal:.3f}px exceeds {p95_horizontal_limit:.3f}px")
     if p95_ridge_line_vertical > p95_line_vertical_limit:
         failures.append(
             f"ridge line vertical residual p95 {p95_ridge_line_vertical:.3f}px exceeds {p95_line_vertical_limit:.3f}px"
@@ -703,11 +706,29 @@ def summarize_ridge_motion(
         "maxRidgeVerticalResidualP95SourceRatio",
     )
     add_source_ratio_failure(
+        "ridge horizontal residual p95",
+        p95_horizontal,
+        "horizontalResidualP95Pixels",
+        "maxRidgeHorizontalResidualP95SourceRatio",
+    )
+    add_source_ratio_failure(
         "ridge line vertical jerk p95",
         p95_ridge_line_jerk,
         "lineVerticalJerkP95PixelsPerFrame",
         "maxRidgeLineVerticalJerkSourceRatio",
         unit="px/frame",
+    )
+    add_source_ratio_failure(
+        "ridge minus reference vertical p95",
+        p95_reference_vertical_delta,
+        "minusReferenceVerticalP95Pixels",
+        "maxRidgeMinusReferenceVerticalP95SourceRatio",
+    )
+    add_source_ratio_failure(
+        "ridge minus reference horizontal p95",
+        p95_reference_horizontal_delta,
+        "minusReferenceHorizontalP95Pixels",
+        "maxRidgeMinusReferenceHorizontalP95SourceRatio",
     )
 
     summary = {
@@ -749,6 +770,7 @@ def summarize_ridge_motion(
             "maxRidgeHighFrequencyResidualPixels": max_vector_limit,
             "maxRidgeHighFrequencyResidualP95Pixels": p95_vector_limit,
             "maxRidgeVerticalResidualP95Pixels": p95_vertical_limit,
+            "maxRidgeHorizontalResidualP95Pixels": p95_horizontal_limit,
             "maxRidgeLineVerticalResidualP95Pixels": p95_line_vertical_limit,
             "maxRidgeLineVerticalJerkP95PixelsPerFrame": p95_line_jerk_limit,
             "maxRidgeMinusReferenceVerticalP95Pixels": p95_reference_vertical_delta_limit,
@@ -758,7 +780,10 @@ def summarize_ridge_motion(
             "maxRidgeHighFrequencyResidualSourceRatio": quality.get("maxRidgeHighFrequencyResidualSourceRatio"),
             "maxRidgeHighFrequencyResidualP95SourceRatio": quality.get("maxRidgeHighFrequencyResidualP95SourceRatio"),
             "maxRidgeVerticalResidualP95SourceRatio": quality.get("maxRidgeVerticalResidualP95SourceRatio"),
+            "maxRidgeHorizontalResidualP95SourceRatio": quality.get("maxRidgeHorizontalResidualP95SourceRatio"),
             "maxRidgeLineVerticalJerkSourceRatio": quality.get("maxRidgeLineVerticalJerkSourceRatio"),
+            "maxRidgeMinusReferenceVerticalP95SourceRatio": quality.get("maxRidgeMinusReferenceVerticalP95SourceRatio"),
+            "maxRidgeMinusReferenceHorizontalP95SourceRatio": quality.get("maxRidgeMinusReferenceHorizontalP95SourceRatio"),
             "excludeCaptureHoldFromRidgeMotion": exclude_capture_hold_from_ridge,
             "excludePtsIrregularFromRidgeMotion": exclude_pts_irregular_from_ridge,
         },
