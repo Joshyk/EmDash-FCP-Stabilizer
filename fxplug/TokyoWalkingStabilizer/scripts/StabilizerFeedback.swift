@@ -316,11 +316,40 @@ private struct Analysis {
         lensBandTopConfidence = try requireFloatArray(cache.lensBandTopConfidence, "lensBandTopConfidence")
         lensBandRidgeConfidence = try requireFloatArray(cache.lensBandRidgeConfidence, "lensBandRidgeConfidence")
         lensBandMidConfidence = try requireFloatArray(cache.lensBandMidConfidence, "lensBandMidConfidence")
-        farFieldRigidShakePathX = try requireFloatArray(cache.farFieldRigidShakePathX, "farFieldRigidShakePathX")
-        farFieldRigidShakePathY = try requireFloatArray(cache.farFieldRigidShakePathY, "farFieldRigidShakePathY")
-        farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport")
-        farFieldRigidShakeShapeConsistency = try requireFloatArray(cache.farFieldRigidShakeShapeConsistency, "farFieldRigidShakeShapeConsistency")
-        farFieldRigidShakeForwardBackwardConsistency = try requireFloatArray(cache.farFieldRigidShakeForwardBackwardConsistency, "farFieldRigidShakeForwardBackwardConsistency")
+        if let cachedFarFieldRigidShakePathX = cache.farFieldRigidShakePathX,
+           let cachedFarFieldRigidShakePathY = cache.farFieldRigidShakePathY,
+           let cachedFarFieldRigidShakeSupport = cache.farFieldRigidShakeSupport,
+           let cachedFarFieldRigidShakeShapeConsistency = cache.farFieldRigidShakeShapeConsistency,
+           let cachedFarFieldRigidShakeForwardBackwardConsistency = cache.farFieldRigidShakeForwardBackwardConsistency {
+            farFieldRigidShakePathX = cachedFarFieldRigidShakePathX
+            farFieldRigidShakePathY = cachedFarFieldRigidShakePathY
+            farFieldRigidShakeSupport = cachedFarFieldRigidShakeSupport
+            farFieldRigidShakeShapeConsistency = cachedFarFieldRigidShakeShapeConsistency
+            farFieldRigidShakeForwardBackwardConsistency = cachedFarFieldRigidShakeForwardBackwardConsistency
+        } else if cache.schemaVersion == 41 {
+            let synthesized = synthesizeFarFieldRigidShakePaths(
+                topX: lensBandTopPathX,
+                topY: lensBandTopPathY,
+                ridgeX: lensBandRidgePathX,
+                ridgeY: lensBandRidgePathY,
+                midX: lensBandMidPathX,
+                midY: lensBandMidPathY,
+                topConfidence: lensBandTopConfidence,
+                ridgeConfidence: lensBandRidgeConfidence,
+                midConfidence: lensBandMidConfidence
+            )
+            farFieldRigidShakePathX = synthesized.pathX
+            farFieldRigidShakePathY = synthesized.pathY
+            farFieldRigidShakeSupport = synthesized.support
+            farFieldRigidShakeShapeConsistency = synthesized.shapeConsistency
+            farFieldRigidShakeForwardBackwardConsistency = synthesized.forwardBackwardConsistency
+        } else {
+            farFieldRigidShakePathX = try requireFloatArray(cache.farFieldRigidShakePathX, "farFieldRigidShakePathX")
+            farFieldRigidShakePathY = try requireFloatArray(cache.farFieldRigidShakePathY, "farFieldRigidShakePathY")
+            farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport")
+            farFieldRigidShakeShapeConsistency = try requireFloatArray(cache.farFieldRigidShakeShapeConsistency, "farFieldRigidShakeShapeConsistency")
+            farFieldRigidShakeForwardBackwardConsistency = try requireFloatArray(cache.farFieldRigidShakeForwardBackwardConsistency, "farFieldRigidShakeForwardBackwardConsistency")
+        }
         sourceLensShakeRidgePathY = try requireFloatArray(cache.sourceLensShakeRidgePathY, "sourceLensShakeRidgePathY")
         sourceLensShakeRidgeSupport = try requireFloatArray(cache.sourceLensShakeRidgeSupport, "sourceLensShakeRidgeSupport")
         sourceLensShakeRidgeLinePathY = try requireFloatArray(cache.sourceLensShakeRidgeLinePathY, "sourceLensShakeRidgeLinePathY")
@@ -769,8 +798,120 @@ private let expectedSourceLensShakeLocalBinCount = 9
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [42]
+private let supportedCacheSchemaVersions: Set<Int> = [41, 42]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
+private let farFieldRigidShakeTwoWayRadiusFrames = 5
+private let farFieldRigidShakeShapeStartPixels: Float = 0.10
+private let farFieldRigidShakeShapeFullPixels: Float = 1.15
+private let farFieldRigidShakeForwardBackwardStartPixels: Float = 0.08
+private let farFieldRigidShakeForwardBackwardFullPixels: Float = 1.00
+private let farFieldRigidShakeResidualStartPixels: Float = 0.08
+private let farFieldRigidShakeResidualFullPixels: Float = 0.70
+
+private struct FarFieldRigidShakePreparedPaths {
+    let pathX: [Float]
+    let pathY: [Float]
+    let support: [Float]
+    let shapeConsistency: [Float]
+    let forwardBackwardConsistency: [Float]
+}
+
+private func synthesizeFarFieldRigidShakePaths(
+    topX: [Float],
+    topY: [Float],
+    ridgeX: [Float],
+    ridgeY: [Float],
+    midX: [Float],
+    midY: [Float],
+    topConfidence: [Float],
+    ridgeConfidence: [Float],
+    midConfidence: [Float]
+) -> FarFieldRigidShakePreparedPaths {
+    let frameCount = [
+        topX.count, topY.count, ridgeX.count, ridgeY.count, midX.count, midY.count,
+        topConfidence.count, ridgeConfidence.count, midConfidence.count
+    ].min() ?? 0
+    guard frameCount > 0 else {
+        return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], support: [], shapeConsistency: [], forwardBackwardConsistency: [])
+    }
+
+    var pathX = Array(repeating: Float(0.0), count: frameCount)
+    var pathY = Array(repeating: Float(0.0), count: frameCount)
+    var support = Array(repeating: Float(0.0), count: frameCount)
+    var shapeConsistency = Array(repeating: Float(0.0), count: frameCount)
+    var forwardBackwardConsistency = Array(repeating: Float(0.0), count: frameCount)
+
+    for index in 0..<frameCount {
+        let commonX = (topX[index] * 0.25) + (ridgeX[index] * 0.50) + (midX[index] * 0.25)
+        let commonY = (topY[index] * 0.25) + (ridgeY[index] * 0.50) + (midY[index] * 0.25)
+        pathX[index] = commonX
+        pathY[index] = commonY
+
+        let topDelta = hypotf(topX[index] - commonX, topY[index] - commonY)
+        let ridgeDelta = hypotf(ridgeX[index] - commonX, ridgeY[index] - commonY)
+        let midDelta = hypotf(midX[index] - commonX, midY[index] - commonY)
+        let shapeDisagreement = max(topDelta, max(ridgeDelta, midDelta))
+        shapeConsistency[index] = clamp(
+            1.0 - confidenceRamp(
+                shapeDisagreement,
+                start: farFieldRigidShakeShapeStartPixels,
+                full: farFieldRigidShakeShapeFullPixels
+            ),
+            min: 0.0,
+            max: 1.0
+        )
+    }
+
+    let radius = farFieldRigidShakeTwoWayRadiusFrames
+    guard frameCount > radius * 2 else {
+        return FarFieldRigidShakePreparedPaths(
+            pathX: pathX,
+            pathY: pathY,
+            support: support,
+            shapeConsistency: shapeConsistency,
+            forwardBackwardConsistency: forwardBackwardConsistency
+        )
+    }
+
+    for index in radius..<(frameCount - radius) {
+        let forwardX = pathX[index] - ((2.0 * pathX[index - 1]) - pathX[index - 2])
+        let forwardY = pathY[index] - ((2.0 * pathY[index - 1]) - pathY[index - 2])
+        let backwardX = pathX[index] - ((2.0 * pathX[index + 1]) - pathX[index + 2])
+        let backwardY = pathY[index] - ((2.0 * pathY[index + 1]) - pathY[index + 2])
+        let residualMagnitude = (hypotf(forwardX, forwardY) + hypotf(backwardX, backwardY)) * 0.5
+        let residualMismatch = hypotf(forwardX - backwardX, forwardY - backwardY)
+        forwardBackwardConsistency[index] = clamp(
+            1.0 - confidenceRamp(
+                residualMismatch,
+                start: farFieldRigidShakeForwardBackwardStartPixels,
+                full: farFieldRigidShakeForwardBackwardFullPixels
+            ),
+            min: 0.0,
+            max: 1.0
+        )
+        let confidence = min(topConfidence[index], min(ridgeConfidence[index], midConfidence[index]))
+        support[index] = clamp(
+            confidenceRamp(confidence, start: 0.08, full: 0.36)
+                * shapeConsistency[index]
+                * forwardBackwardConsistency[index]
+                * confidenceRamp(
+                    residualMagnitude,
+                    start: farFieldRigidShakeResidualStartPixels,
+                    full: farFieldRigidShakeResidualFullPixels
+                ),
+            min: 0.0,
+            max: 1.0
+        )
+    }
+
+    return FarFieldRigidShakePreparedPaths(
+        pathX: pathX,
+        pathY: pathY,
+        support: support,
+        shapeConsistency: shapeConsistency,
+        forwardBackwardConsistency: forwardBackwardConsistency
+    )
+}
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
     if cache.schemaVersion >= 18 {
@@ -1148,7 +1289,7 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
     }
 
     let frameCount = frames.count
-    let floatArrays: [(String, [Float]?)] = [
+    var floatArrays: [(String, [Float]?)] = [
         ("residuals", cache.residuals),
         ("rollMotion", cache.rollMotion),
         ("pathX", cache.pathX),
@@ -1183,11 +1324,6 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         ("lensBandRidgeConfidence", cache.lensBandRidgeConfidence),
         ("lensBandMidConfidence", cache.lensBandMidConfidence),
         ("lensBandConfidence", cache.lensBandConfidence),
-        ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
-        ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
-        ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
-        ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
-        ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency),
         ("sourceLensShakeRidgePathY", cache.sourceLensShakeRidgePathY),
         ("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport),
         ("sourceLensShakeRidgeLinePathY", cache.sourceLensShakeRidgeLinePathY),
@@ -1205,6 +1341,15 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         ("warpConfidence", cache.warpConfidence),
         ("blurAmounts", cache.blurAmounts)
     ]
+    if cache.schemaVersion >= 42 {
+        floatArrays.append(contentsOf: [
+            ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
+            ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
+            ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
+            ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
+            ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
+        ])
+    }
     let intArrays: [(String, [Int32]?)] = [
         ("acceptedBlockCounts", cache.acceptedBlockCounts),
         ("totalBlockCounts", cache.totalBlockCounts),

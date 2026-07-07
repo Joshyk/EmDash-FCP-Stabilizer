@@ -367,9 +367,10 @@ FxPlug.
   Footstep Jitter X/Y/roll impulse paths, warp paths, band-specific far-field lens paths
   and confidence, left/right lens-band column paths, two-way far-field rigid shake paths,
   accepted-block counts, blur values, and search-radius edge-hit counts. Schema 42 is
-  required so playback can prefer rigid far-field correction and suppress older local
-  band-warp production paths; older schemas are rejected so playback cannot silently run
-  without the required evidence.
+  the current write format so playback can prefer rigid far-field correction and suppress
+  older local band-warp production paths. Schema 41 is accepted with an explicit
+  in-memory rigid-path compatibility upgrade for existing timelines; older schemas are
+  rejected so playback cannot silently run without the required evidence.
 - Persisted cache state changes update a hidden render revision parameter. Viewer-side
   instances also monitor saved cache changes so Final Cut Pro invalidates cached preview
   frames and redraws from the prepared motion path after the local analyzer writes a

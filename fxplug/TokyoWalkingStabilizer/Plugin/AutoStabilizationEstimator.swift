@@ -2034,7 +2034,7 @@ enum AutoStabilizationEstimator {
         return Array(values[start..<end])
     }
 
-    private struct FarFieldRigidShakePreparedPaths {
+    struct FarFieldRigidShakePreparedPaths {
         let pathX: [Float]
         let pathY: [Float]
         let support: [Float]
@@ -2042,7 +2042,7 @@ enum AutoStabilizationEstimator {
         let forwardBackwardConsistency: [Float]
     }
 
-    private static func farFieldRigidShakePreparedPaths(
+    static func farFieldRigidShakePreparedPaths(
         topX: [Float],
         topY: [Float],
         ridgeX: [Float],

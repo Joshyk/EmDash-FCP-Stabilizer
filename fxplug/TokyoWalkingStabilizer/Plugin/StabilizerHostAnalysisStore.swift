@@ -254,7 +254,7 @@ final class StabilizerHostAnalysisStore {
     }
 
     private static let cacheSchemaVersion = 42
-    private static let supportedCacheSchemaVersions: Set<Int> = [42]
+    private static let supportedCacheSchemaVersions: Set<Int> = [41, 42]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -3077,11 +3077,6 @@ final class StabilizerHostAnalysisStore {
             cache.lensBandRidgeConfidence,
             cache.lensBandMidConfidence,
             cache.lensBandConfidence,
-            cache.farFieldRigidShakePathX,
-            cache.farFieldRigidShakePathY,
-            cache.farFieldRigidShakeSupport,
-            cache.farFieldRigidShakeShapeConsistency,
-            cache.farFieldRigidShakeForwardBackwardConsistency,
             cache.sourceLensShakeRidgePathY,
             cache.sourceLensShakeRidgeSupport,
             cache.sourceLensShakeRidgeLinePathY,
@@ -3111,9 +3106,16 @@ final class StabilizerHostAnalysisStore {
             && cache.sourceLensShakeLocalPathX?.count == localPathCount
             && cache.sourceLensShakeLocalPathY?.count == localPathCount
             && cache.sourceLensShakeLocalSupport?.count == localPathCount
+        let hasCompletePersistedFarFieldRigidShake = cache.farFieldRigidShakePathX?.count == frames.count
+            && cache.farFieldRigidShakePathY?.count == frames.count
+            && cache.farFieldRigidShakeSupport?.count == frames.count
+            && cache.farFieldRigidShakeShapeConsistency?.count == frames.count
+            && cache.farFieldRigidShakeForwardBackwardConsistency?.count == frames.count
+        let canSynthesizeFarFieldRigidShake = cache.schemaVersion == 41
         if floatArrays.allSatisfy({ $0?.count == frames.count }),
            countArrays.allSatisfy({ $0?.count == frames.count }),
            hasCompleteLocalLensShake,
+           (hasCompletePersistedFarFieldRigidShake || canSynthesizeFarFieldRigidShake),
            let residuals = cache.residuals,
            let rollMotion = cache.rollMotion,
            let pathX = cache.pathX,
@@ -3148,11 +3150,6 @@ final class StabilizerHostAnalysisStore {
            let lensBandRidgeConfidence = cache.lensBandRidgeConfidence,
            let lensBandMidConfidence = cache.lensBandMidConfidence,
            let lensBandConfidence = cache.lensBandConfidence,
-           let farFieldRigidShakePathX = cache.farFieldRigidShakePathX,
-           let farFieldRigidShakePathY = cache.farFieldRigidShakePathY,
-           let farFieldRigidShakeSupport = cache.farFieldRigidShakeSupport,
-           let farFieldRigidShakeShapeConsistency = cache.farFieldRigidShakeShapeConsistency,
-           let farFieldRigidShakeForwardBackwardConsistency = cache.farFieldRigidShakeForwardBackwardConsistency,
            let sourceLensShakeRidgePathY = cache.sourceLensShakeRidgePathY,
            let sourceLensShakeRidgeSupport = cache.sourceLensShakeRidgeSupport,
            let sourceLensShakeRidgeLinePathY = cache.sourceLensShakeRidgeLinePathY,
@@ -3176,6 +3173,55 @@ final class StabilizerHostAnalysisStore {
            let blurAmounts = cache.blurAmounts,
            let searchRadiusHitCounts = cache.searchRadiusHitCounts,
            let searchRadiusTotalCounts = cache.searchRadiusTotalCounts {
+            let farFieldRigidShake: AutoStabilizationEstimator.FarFieldRigidShakePreparedPaths
+            if let farFieldRigidShakePathX = cache.farFieldRigidShakePathX,
+               let farFieldRigidShakePathY = cache.farFieldRigidShakePathY,
+               let farFieldRigidShakeSupport = cache.farFieldRigidShakeSupport,
+               let farFieldRigidShakeShapeConsistency = cache.farFieldRigidShakeShapeConsistency,
+               let farFieldRigidShakeForwardBackwardConsistency = cache.farFieldRigidShakeForwardBackwardConsistency,
+               farFieldRigidShakePathX.count == frames.count,
+               farFieldRigidShakePathY.count == frames.count,
+               farFieldRigidShakeSupport.count == frames.count,
+               farFieldRigidShakeShapeConsistency.count == frames.count,
+               farFieldRigidShakeForwardBackwardConsistency.count == frames.count {
+                farFieldRigidShake = AutoStabilizationEstimator.FarFieldRigidShakePreparedPaths(
+                    pathX: farFieldRigidShakePathX,
+                    pathY: farFieldRigidShakePathY,
+                    support: farFieldRigidShakeSupport,
+                    shapeConsistency: farFieldRigidShakeShapeConsistency,
+                    forwardBackwardConsistency: farFieldRigidShakeForwardBackwardConsistency
+                )
+            } else if cache.schemaVersion == 41 {
+                farFieldRigidShake = AutoStabilizationEstimator.farFieldRigidShakePreparedPaths(
+                    topX: lensBandTopPathX,
+                    topY: lensBandTopPathY,
+                    ridgeX: lensBandRidgePathX,
+                    ridgeY: lensBandRidgePathY,
+                    midX: lensBandMidPathX,
+                    midY: lensBandMidPathY,
+                    topConfidence: lensBandTopConfidence,
+                    ridgeConfidence: lensBandRidgeConfidence,
+                    midConfidence: lensBandMidConfidence
+                )
+                guard farFieldRigidShake.pathX.count == frames.count,
+                      farFieldRigidShake.pathY.count == frames.count,
+                      farFieldRigidShake.support.count == frames.count,
+                      farFieldRigidShake.shapeConsistency.count == frames.count,
+                      farFieldRigidShake.forwardBackwardConsistency.count == frames.count else {
+                    throw NSError(
+                        domain: "com.justadev.TokyoWalkingStabilizer",
+                        code: Int(kFxError_AnalysisError),
+                        userInfo: [NSLocalizedDescriptionKey: "schema 41 Host Analysis cache could not synthesize complete schema 42 far-field rigid shake paths"]
+                    )
+                }
+                NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache schema 41 with in-memory schema 42 far-field rigid shake compatibility paths; rerun Event Analyzer to persist schema 42.")
+            } else {
+                throw NSError(
+                    domain: "com.justadev.TokyoWalkingStabilizer",
+                    code: Int(kFxError_AnalysisError),
+                    userInfo: [NSLocalizedDescriptionKey: "persisted Host Analysis cache was missing schema 42 far-field rigid shake paths"]
+                )
+            }
             let qualityModel = persistentQualityModel(for: cache)
             NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache schema \(cache.schemaVersion) using \(qualityModelDescription(qualityModel)) quality model.")
             return StabilizerPreparedAnalysis(
@@ -3224,11 +3270,11 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgeConfidence: lensBandRidgeConfidence,
                 lensBandMidConfidence: lensBandMidConfidence,
                 lensBandConfidence: lensBandConfidence,
-                farFieldRigidShakePathX: farFieldRigidShakePathX,
-                farFieldRigidShakePathY: farFieldRigidShakePathY,
-                farFieldRigidShakeSupport: farFieldRigidShakeSupport,
-                farFieldRigidShakeShapeConsistency: farFieldRigidShakeShapeConsistency,
-                farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShakeForwardBackwardConsistency,
+                farFieldRigidShakePathX: farFieldRigidShake.pathX,
+                farFieldRigidShakePathY: farFieldRigidShake.pathY,
+                farFieldRigidShakeSupport: farFieldRigidShake.support,
+                farFieldRigidShakeShapeConsistency: farFieldRigidShake.shapeConsistency,
+                farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShake.forwardBackwardConsistency,
                 sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: sourceLensShakeRidgeSupport,
                 sourceLensShakeRidgeLinePathY: sourceLensShakeRidgeLinePathY,
@@ -3254,7 +3300,7 @@ final class StabilizerHostAnalysisStore {
     }
 
     private static func preparedPathArrayMismatchReason(for cache: PersistedHostAnalysisCache, frameCount: Int) -> String? {
-        let floatArrays: [(String, [Float]?)] = [
+        var floatArrays: [(String, [Float]?)] = [
             ("residuals", cache.residuals),
             ("rollMotion", cache.rollMotion),
             ("pathX", cache.pathX),
@@ -3289,11 +3335,6 @@ final class StabilizerHostAnalysisStore {
             ("lensBandRidgeConfidence", cache.lensBandRidgeConfidence),
             ("lensBandMidConfidence", cache.lensBandMidConfidence),
             ("lensBandConfidence", cache.lensBandConfidence),
-            ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
-            ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
-            ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
-            ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
-            ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency),
             ("sourceLensShakeRidgePathY", cache.sourceLensShakeRidgePathY),
             ("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport),
             ("sourceLensShakeRidgeLinePathY", cache.sourceLensShakeRidgeLinePathY),
@@ -3311,6 +3352,15 @@ final class StabilizerHostAnalysisStore {
             ("warpConfidence", cache.warpConfidence),
             ("blurAmounts", cache.blurAmounts)
         ]
+        if cache.schemaVersion >= 42 {
+            floatArrays.append(contentsOf: [
+                ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
+                ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
+                ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
+                ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
+                ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
+            ])
+        }
         let countArrays: [(String, [Int32]?)] = [
             ("acceptedBlockCounts", cache.acceptedBlockCounts),
             ("totalBlockCounts", cache.totalBlockCounts),

@@ -53,7 +53,9 @@ into Metal-compatible native YUV pixel buffers, preserving 10-bit luma for
 fingerprints, and frame-to-frame block motion search run through Metal compute
 kernels. Schema 42 analysis persists two-way far-field rigid shake paths in
 addition to the lens-band evidence, so the FxPlug render path can prefer one
-coherent upper-frame plane and avoid local mountain/cloud pulsing. Earlier
+coherent upper-frame plane and avoid local mountain/cloud pulsing. Runtime can
+read schema 41 caches by synthesizing those rigid paths in memory, but new
+analysis writes schema 42. Earlier
 schema 24 analysis uses upper-row far-field detail blocks, denser
 high far-field vertical detail blocks, central attitude-detail blocks for
 yaw/pitch/roll evidence, denser in-block sample density for high far-field
