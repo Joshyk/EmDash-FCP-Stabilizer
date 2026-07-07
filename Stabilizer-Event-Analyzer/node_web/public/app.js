@@ -2,7 +2,7 @@
 
 const LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v2";
 const LEGACY_LAST_ANALYSIS_STORAGE_KEY = "tokyoWalkingStabilizer.eventAnalyzer.lastAnalysis.v1";
-const DEFAULT_ANALYSIS_DIR_NAME = "stablizer_analysis";
+const DEFAULT_ANALYSIS_DIR_NAME = "_walking_stabilizer_analysis";
 const HIDDEN_CLIP_NAME_TOKEN = "(fcp1)";
 
 const state = {
@@ -355,6 +355,9 @@ function defaultImportsDirForSource(sourcePath) {
   if (!sourcePath) return "";
   const name = exportNameForPath(sourcePath);
   const parent = dirname(sourcePath);
+  if (isFcpbundlePath(sourcePath)) {
+    return joinPath(joinPath(parent, DEFAULT_ANALYSIS_DIR_NAME), name);
+  }
   if (name === "Info.fcpxml" && exportNameForPath(parent).endsWith(".fcpxmld")) {
     return joinPath(dirname(parent), DEFAULT_ANALYSIS_DIR_NAME);
   }

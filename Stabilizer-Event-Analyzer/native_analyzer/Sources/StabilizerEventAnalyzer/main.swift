@@ -78,6 +78,8 @@ struct AnalysisPlan: Decodable {
 struct AssetPlan: Decodable {
     let assetId: String
     let name: String
+    let eventName: String?
+    let cacheRoot: String
     let mediaPath: String
     let mediaKind: String?
     let durationSeconds: Double
@@ -90,9 +92,11 @@ struct AssetPlan: Decodable {
 struct AnalysisResult: Encodable {
     let assetId: String
     let name: String
+    let eventName: String?
     let footageFileName: String
     let mediaPath: String
     let mediaKind: String?
+    let cacheRoot: String
     let sourceMediaFingerprint: String
     let cacheFileName: String
     let cacheIdentity: String
@@ -3855,9 +3859,11 @@ func writeCache(cacheRoot: URL, asset: AssetPlan, prepared: PreparedAnalysis, ca
     return AnalysisResult(
         assetId: asset.assetId,
         name: asset.name,
+        eventName: asset.eventName,
         footageFileName: URL(fileURLWithPath: asset.mediaPath).lastPathComponent,
         mediaPath: asset.mediaPath,
         mediaKind: asset.mediaKind,
+        cacheRoot: cacheRoot.path,
         sourceMediaFingerprint: "\(fp.first):\(fp.middle):\(fp.last)",
         cacheFileName: fileName,
         cacheIdentity: identity,
@@ -3883,8 +3889,6 @@ func run() throws {
     try validateAnalyzerResourceEnvironment()
     let planData = try Data(contentsOf: arguments.planPath)
     let plan = try JSONDecoder().decode(AnalysisPlan.self, from: planData)
-    let cacheRoot = URL(fileURLWithPath: plan.cacheRoot, isDirectory: true)
-    try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
     let metalContext = try MetalAnalysisContext()
     progress(arguments.progress, "using Metal analyzer device: \(metalContext.deviceName)")
     progress(
@@ -3907,13 +3911,15 @@ func run() throws {
         let buildCacheStart = timingNowSeconds()
         let cache = buildCache(
             asset: asset,
-            eventName: plan.eventName,
+            eventName: asset.eventName ?? plan.eventName,
             prepared: prepared,
             sampleScalePercent: plan.sampleScalePercent,
             maxFrames: plan.maxFrames
         )
         let buildCacheSeconds = timingNowSeconds() - buildCacheStart
         let writeCacheStart = timingNowSeconds()
+        let cacheRoot = URL(fileURLWithPath: asset.cacheRoot, isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
         var result = try writeCache(
             cacheRoot: cacheRoot,
             asset: asset,

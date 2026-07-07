@@ -24,7 +24,7 @@ const NATIVE_ANALYZER_SOURCE = path.join(REPO_ROOT, "native_analyzer", "Sources"
 const CACHE_SCHEMA_VERSION = readNativeAnalyzerCacheSchemaVersion();
 const SAMPLE_SCALE_PERCENT_CHOICES = [100, 75, 50, 25, 10];
 const DEFAULT_SAMPLE_SCALE_PERCENT = 100;
-const DEFAULT_ANALYSIS_DIR_NAME = "stablizer_analysis";
+const DEFAULT_ANALYSIS_DIR_NAME = "_walking_stabilizer_analysis";
 const jobs = new Map();
 let serverRef = null;
 
@@ -407,6 +407,9 @@ async function ensureDirs() {
 function defaultImportsDirForSource(sourcePath) {
   const resolved = expandPath(sourcePath);
   if (!resolved) return "";
+  if (isFcpBundleSource(resolved)) {
+    return path.join(path.dirname(resolved), DEFAULT_ANALYSIS_DIR_NAME, path.basename(resolved));
+  }
   if (path.basename(resolved) === "Info.fcpxml" && path.basename(path.dirname(resolved)).endsWith(".fcpxmld")) {
     return path.join(path.dirname(path.dirname(resolved)), DEFAULT_ANALYSIS_DIR_NAME);
   }

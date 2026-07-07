@@ -10,9 +10,11 @@ The workflow is:
 3. Choose an export from the selected file list, then select one or more Event
    media assets.
 4. Use `Imports` for the generated import package and analysis staging cache.
-   It defaults to a `stablizer_analysis` folder next to the selected Final Cut
-   Pro bundle, FCPXMLD package, or `Info.fcpxml` export. Use `Select Imports`
-   only when you want a different folder.
+   It defaults to `_walking_stabilizer_analysis` next to the selected Final Cut
+   Pro source. Direct `.fcpbundle` sources retain artifacts under a bundle-name
+   subdirectory, then Event and clip metadata subdirectories. Use
+   `Select Imports` only when you want a different folder for non-`.fcpbundle`
+   exports.
 5. Run serial analysis for the full media duration of each selected asset. When
    multiple assets are selected, the native analyzer finishes one asset before
    starting the next.
@@ -103,16 +105,18 @@ shared fallback cache.
 
 ## Imports
 
-`Imports` defaults to a sibling `stablizer_analysis` folder next to the selected
-`.fcpbundle`, `.fcpxmld` package, or `Info.fcpxml` export. The generated import
-packages are compact analyzed-footage-only packages written there, and analysis
-cache files are staged below that folder:
+`Imports` defaults to a sibling `_walking_stabilizer_analysis` folder next to the
+selected source. Direct `.fcpbundle` sources are always retained under the
+bundle name first, then the Event name, then a clip directory that includes the
+cache schema, sample percentage, frame count, and cache identity. The generated
+import packages are compact analyzed-footage-only packages written there, and
+analysis cache files are staged below the matching Event folder:
 
 ```text
 Exports/
 Exports/SomeLibrary.fcpbundle
-Exports/stablizer_analysis/SomeLibrary__Event_Name__P1000304__schema32__sample100__63720f/P1000304.fcpxmld/
-Exports/stablizer_analysis/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
+Exports/_walking_stabilizer_analysis/SomeLibrary.fcpbundle/Event-A/P1000304__schema32__sample100__frames63720__bc4218bd/P1000304.fcpxmld/
+Exports/_walking_stabilizer_analysis/SomeLibrary.fcpbundle/Event-A/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
 ```
 
 Per-footage package directories include the source bundle label, Event label,

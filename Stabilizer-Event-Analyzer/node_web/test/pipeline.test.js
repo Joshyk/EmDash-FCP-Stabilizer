@@ -24,6 +24,15 @@ function run(command, args) {
   return JSON.parse(result.stdout);
 }
 
+function runPythonSnippet(source) {
+  const result = spawnSync("python3", ["-c", source], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout);
+}
+
 function analysisResult(assetId = "r2", name = "P1000307") {
   return {
     assetId,
@@ -204,6 +213,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   const cacheRoot = writeCachePayload(tmp, analysis);
   const analysisPath = path.join(tmp, "analysis.json");
   fs.writeFileSync(analysisPath, JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }), "utf8");
+  const retainedRoot = path.join(tmp, "_walking_stabilizer_analysis");
   const build = run("python3", [
     "scripts/build_stabilizer_fcpxml_import.py",
     "--source-fcpxml",
@@ -211,14 +221,50 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
     "--analysis-json",
     analysisPath,
     "--output-dir",
-    tmp,
+    retainedRoot,
     "--only-analyzed-assets",
     "--per-footage-packages",
   ]);
   const pkg = build.packages[0];
+  assert.equal(
+    pkg.packageDirectory,
+    path.join(retainedRoot, "Library.fcpbundle", "Event-A", path.basename(pkg.packageDirectory))
+  );
+  assert.match(path.basename(pkg.packageDirectory), /^LibraryClip__schema19__sample10__frames300__[0-9a-f]{8}$/);
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
   assert.equal(manifest.eventName, "Event A");
   assert.equal(manifest.eventRoot, fs.realpathSync(path.join(bundle, "Event A")));
+});
+
+test("analyze_event_assets scopes fcpbundle retained cache roots per Event", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-retained-root-test-"));
+  const payload = runPythonSnippet(`
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, "scripts")
+from analyze_event_assets import assign_asset_cache_roots
+
+bundle = Path(${JSON.stringify(path.join(tmp, "Library.fcpbundle"))})
+bundle.mkdir(parents=True)
+assets = [
+    {"assetId": "r1", "name": "Clip A", "eventName": "Event A"},
+    {"assetId": "r2", "name": "Clip B", "eventName": "Event B"},
+]
+analysis_root, cache_roots = assign_asset_cache_roots(assets, Path(${JSON.stringify(path.join(tmp, "_walking_stabilizer_analysis"))}), bundle)
+print(json.dumps({
+    "analysisRoot": str(analysis_root),
+    "cacheRoots": [str(root) for root in cache_roots],
+    "assets": assets,
+}))
+`);
+  const resolvedTmp = fs.realpathSync(tmp);
+  assert.equal(payload.analysisRoot, path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library.fcpbundle"));
+  assert.deepEqual(payload.cacheRoots, [
+    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library.fcpbundle", "Event-A", "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
+    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library.fcpbundle", "Event-B", "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
+  ]);
+  assert.deepEqual(payload.assets.map((asset) => asset.cacheRoot), payload.cacheRoots);
 });
 
 test("list_event_assets loads broken original media links as unselectable FCP library assets", { skip: !(hasCommand("ffmpeg") && hasCommand("ffprobe")) }, () => {
@@ -924,7 +970,7 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(payload.insertedFilters, 2);
   assert.equal(payload.packages.length, 1);
   const pkg = payload.packages[0];
-  assert.equal(path.basename(pkg.packageDirectory), "minimal-event__gh6__P1000307__schema19__sample10__300f");
+  assert.match(path.basename(pkg.packageDirectory), /^P1000307__schema19__sample10__frames300__[0-9a-f]{8}$/);
   assert.equal(pkg.packageDirectoryName, path.basename(pkg.packageDirectory));
   assert.equal(pkg.packageBundleLabel, "minimal-event");
   assert.equal(pkg.packageEventLabel, "gh6");
@@ -988,14 +1034,11 @@ test("build_stabilizer_fcpxml_import reuses deterministic package directory for 
   const first = run("python3", args);
   const second = run("python3", args);
   assert.equal(second.packages[0].packageDirectory, first.packages[0].packageDirectory);
-  assert.equal(
-    path.basename(second.packages[0].packageDirectory),
-    "minimal-event__gh6__P1000307__schema19__sample10__300f"
-  );
+  assert.match(path.basename(second.packages[0].packageDirectory), /^P1000307__schema19__sample10__frames300__[0-9a-f]{8}$/);
   assert.equal(fs.existsSync(path.join(second.packages[0].outputPackage, "Info.fcpxml")), true);
 });
 
-test("build_stabilizer_fcpxml_import rejects deterministic package collision with different identity", () => {
+test("build_stabilizer_fcpxml_import separates deterministic package directories by identity", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-per-footage-collision-test-"));
   const eventRoot = path.join(tmp, "Minimal Library.fcpbundle", "gh6");
   const result = analysisResult();
@@ -1021,7 +1064,7 @@ test("build_stabilizer_fcpxml_import rejects deterministic package collision wit
     "--only-analyzed-assets",
     "--per-footage-packages",
   ];
-  run("python3", args);
+  const first = run("python3", args);
 
   const changed = {
     ...result,
@@ -1042,12 +1085,11 @@ test("build_stabilizer_fcpxml_import rejects deterministic package collision wit
     }),
     "utf8"
   );
-  const failed = spawnSync("python3", args, {
-    cwd: repoRoot,
-    encoding: "utf8",
-  });
-  assert.notEqual(failed.status, 0);
-  assert.match(failed.stderr || failed.stdout, /different cache identity/);
+  const second = run("python3", args);
+  assert.notEqual(second.packages[0].packageDirectory, first.packages[0].packageDirectory);
+  assert.match(path.basename(second.packages[0].packageDirectory), /^P1000307__schema19__sample10__frames300__[0-9a-f]{8}$/);
+  assert.equal(fs.existsSync(path.join(first.packages[0].outputPackage, "Info.fcpxml")), true);
+  assert.equal(fs.existsSync(path.join(second.packages[0].outputPackage, "Info.fcpxml")), true);
 });
 
 test("build_stabilizer_fcpxml_import inherits source effects in per-footage packages", () => {
@@ -1622,6 +1664,60 @@ test("install_stabilizer_package_cache resolves renamed Event by cache identity"
   assert.equal(install.eventRootResolution.source, "cache-identity-in-current-bundle");
   assert.equal(install.cacheRoot, path.join(resolvedEventRoot, "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"));
   assert.equal(fs.existsSync(path.join(install.cacheRoot, "caches", analysis.cacheFileName)), true);
+});
+
+test("install_stabilizer_package_cache resolves Event from retained analysis bundle directory", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-retained-layout-test-"));
+  const analysisPath = path.join(tmp, "analysis.json");
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }),
+    "utf8"
+  );
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const retainedPackageDir = path.join(
+    tmp,
+    "_walking_stabilizer_analysis",
+    "Library.fcpbundle",
+    "Old-Event",
+    path.basename(pkg.packageDirectory)
+  );
+  fs.mkdirSync(path.dirname(retainedPackageDir), { recursive: true });
+  fs.renameSync(pkg.packageDirectory, retainedPackageDir);
+  const manifestPath = path.join(retainedPackageDir, path.basename(pkg.manifestPath));
+  const renamedEventRoot = path.join(tmp, "Library.fcpbundle", "Renamed Event");
+  fs.mkdirSync(path.join(renamedEventRoot, "Original Media"), { recursive: true });
+  writeCachePayload(renamedEventRoot, analysis);
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.mediaPath = "/Volumes/External Media/P1000307.mov";
+  manifest.eventName = "Old Event";
+  manifest.eventRoot = path.join(tmp, "Old Event");
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+  const install = run("python3", [
+    "scripts/install_stabilizer_package_cache.py",
+    "--manifest",
+    manifestPath,
+  ]);
+  const resolvedEventRoot = fs.realpathSync(renamedEventRoot);
+  assert.equal(install.status, "ok");
+  assert.equal(install.eventRoot, resolvedEventRoot);
+  assert.equal(install.eventRootResolution.source, "cache-identity-in-current-bundle");
+  assert.deepEqual(install.eventRootResolution.bundleRootSources, ["retained analysis bundle name"]);
 });
 
 test("validate_stabilizer_fcpxml_import fails cache identity mismatch before FCP import", () => {
