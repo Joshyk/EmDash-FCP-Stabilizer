@@ -5671,6 +5671,24 @@ enum AutoStabilizationEstimator {
             )
         }
         let zeroPlaybackMicroBandYBaseline = EstimatedPath(values: Array(repeating: Float(0.0), count: frames.count))
+        let footstepXConfidenceEvidence = footstepConfidenceEvidenceSeries(
+            values: analysis.footstepPathX,
+            baselineValues: footstepBaselineXPath,
+            frames: frames,
+            fullImpulseScale: footstepImpulseFullScalePixels
+        )
+        let footstepYConfidenceEvidence = footstepConfidenceEvidenceSeries(
+            values: playbackMicroBandYPath,
+            baselineValues: zeroPlaybackMicroBandYBaseline,
+            frames: frames,
+            fullImpulseScale: footstepImpulseFullScalePixels
+        )
+        let footstepRollConfidenceEvidence = footstepConfidenceEvidenceSeries(
+            values: analysis.footstepPathRoll,
+            baselineValues: footstepBaselineRollPath,
+            frames: frames,
+            fullImpulseScale: footstepImpulseFullScaleDegrees
+        )
 
         let transforms = frames.indices.map { index in
             let frame = frames[index]
@@ -5894,32 +5912,20 @@ enum AutoStabilizationEstimator {
                 min: 0.0,
                 max: 1.0
             )
-            let rawFootstepXConfidenceBase = cache.footstepFrameConfidence(
-                kind: .footstepX,
-                values: analysis.footstepPathX,
-                baselineValues: footstepBaselineXPath,
-                frames: frames,
-                index: index,
+            let rawFootstepXConfidenceBase = footstepConfidence(
                 trackingConfidence: walkingTrackingConfidence,
-                fullImpulseScale: footstepImpulseFullScalePixels
+                evidence: footstepXConfidenceEvidence.instant,
+                index: index
             )
-            let rawFootstepYConfidenceBase = cache.footstepFrameConfidence(
-                kind: .footstepY,
-                values: playbackMicroBandYPath,
-                baselineValues: zeroPlaybackMicroBandYBaseline,
-                frames: frames,
-                index: index,
+            let rawFootstepYConfidenceBase = footstepConfidence(
                 trackingConfidence: walkingTrackingConfidence,
-                fullImpulseScale: footstepImpulseFullScalePixels
+                evidence: footstepYConfidenceEvidence.instant,
+                index: index
             )
-            let rawFootstepRollConfidenceBase = cache.footstepFrameConfidence(
-                kind: .footstepRoll,
-                values: analysis.footstepPathRoll,
-                baselineValues: footstepBaselineRollPath,
-                frames: frames,
-                index: index,
+            let rawFootstepRollConfidenceBase = footstepConfidence(
                 trackingConfidence: walkingTrackingConfidence,
-                fullImpulseScale: footstepImpulseFullScaleDegrees
+                evidence: footstepRollConfidenceEvidence.instant,
+                index: index
             )
             let rawFootstepXConfidence = rawFootstepXConfidenceBase
             let rawFootstepYConfidence = rawFootstepYConfidenceBase
@@ -6069,6 +6075,8 @@ enum AutoStabilizationEstimator {
                     fullImpulseScale: footstepImpulseFullScalePixels,
                     confidenceScale: footstepXContinuityConfidenceScale,
                     confidenceFloor: farFieldFootstepXConfidenceFloor,
+                    trackingConfidences: walkingTrackingConfidences,
+                    stableConfidenceEvidence: footstepXConfidenceEvidence.stable,
                     cache: cache
                 )
                 : FootstepContinuityLimitResult(limitedCorrection: rawMicroPixelOffsetX, limitedAmount: 0.0)
@@ -6084,6 +6092,8 @@ enum AutoStabilizationEstimator {
                     requestedStrength: strengths.microJitterY,
                     fullImpulseScale: footstepImpulseFullScalePixels,
                     confidenceScale: footstepYContinuityConfidenceScale,
+                    trackingConfidences: walkingTrackingConfidences,
+                    stableConfidenceEvidence: footstepYConfidenceEvidence.stable,
                     cache: cache
                 )
                 : FootstepContinuityLimitResult(limitedCorrection: rawMicroPixelOffsetY, limitedAmount: 0.0)
@@ -13385,6 +13395,91 @@ enum AutoStabilizationEstimator {
         let limitedAmount: Float
     }
 
+    private struct FootstepConfidenceEvidenceSeries {
+        let instant: [Float]
+        let stable: [Float]
+    }
+
+    private static func footstepConfidenceEvidenceSeries(
+        values: [Float],
+        baselineValues: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        fullImpulseScale: Float
+    ) -> FootstepConfidenceEvidenceSeries {
+        guard !values.isEmpty, !frames.isEmpty else {
+            return FootstepConfidenceEvidenceSeries(instant: [], stable: [])
+        }
+        let instant = frames.indices.map { index -> Float in
+            footstepFrameConfidenceEvidenceAtIndex(
+                values: values,
+                baselineValues: baselineValues,
+                frames: frames,
+                index: index,
+                fullImpulseScale: fullImpulseScale
+            )
+        }
+        return FootstepConfidenceEvidenceSeries(
+            instant: instant,
+            stable: stableFootstepConfidenceEvidencePath(
+                instantEvidence: instant,
+                frames: frames
+            )
+        )
+    }
+
+    private static func stableFootstepConfidenceEvidencePath(
+        instantEvidence: [Float],
+        frames: [StabilizerAnalysisFrame]
+    ) -> [Float] {
+        guard !instantEvidence.isEmpty, !frames.isEmpty else {
+            return instantEvidence
+        }
+        let halfWindow = max(0.0, footstepConfidenceStabilityWindowSeconds * 0.5)
+        let sigma = max(1e-6, halfWindow * 0.55)
+        let centerBlend = clamp(footstepConfidenceCenterBlend, min: 0.0, max: 1.0)
+        return frames.indices.map { centerIndex -> Float in
+            guard instantEvidence.indices.contains(centerIndex) else {
+                return 0.0
+            }
+            let centerTime = frames[centerIndex].time
+            let indices = indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: halfWindow)
+            guard !indices.isEmpty else {
+                return instantEvidence[centerIndex]
+            }
+            var weightedTotal: Float = 0.0
+            var totalWeight: Float = 0.0
+            for index in indices where instantEvidence.indices.contains(index) {
+                let offset = (frames[index].time - centerTime) / sigma
+                let weight = Float(Darwin.exp(-0.5 * offset * offset))
+                guard weight > 0.0001 else {
+                    continue
+                }
+                weightedTotal += instantEvidence[index] * weight
+                totalWeight += weight
+            }
+            guard totalWeight > Float.ulpOfOne else {
+                return instantEvidence[centerIndex]
+            }
+            let localEvidence = weightedTotal / totalWeight
+            return clamp(
+                (instantEvidence[centerIndex] * centerBlend) + (localEvidence * (1.0 - centerBlend)),
+                min: 0.0,
+                max: 1.0
+            )
+        }
+    }
+
+    private static func footstepConfidence(
+        trackingConfidence: Float,
+        evidence: [Float],
+        index: Int
+    ) -> Float {
+        guard evidence.indices.contains(index) else {
+            return 0.0
+        }
+        return clamp(trackingConfidence * evidence[index], min: 0.0, max: 1.0)
+    }
+
     private static func footstepContinuityLimitedCorrection(
         _ kind: MotionPathKind,
         values: [Float],
@@ -13397,6 +13492,8 @@ enum AutoStabilizationEstimator {
         fullImpulseScale: Float,
         confidenceScale: Float = 1.0,
         confidenceFloor: Float = 0.0,
+        trackingConfidences: [Float]? = nil,
+        stableConfidenceEvidence: [Float]? = nil,
         cache: RenderEstimateCache
     ) -> FootstepContinuityLimitResult {
         guard rawCorrection.isFinite,
@@ -13442,24 +13539,36 @@ enum AutoStabilizationEstimator {
             guard weight > 0.0001 else {
                 continue
             }
-            let trackingConfidence = walkingBandTrackingConfidence(
-                motionConfidence: analysis.analysisConfidence[index],
-                residual: analysis.residuals[index],
-                blurAmount: analysis.blurAmounts[index],
-                acceptedBlockCount: analysis.acceptedBlockCounts[index],
-                totalBlockCount: analysis.totalBlockCounts[index],
-                qualityModel: analysis.qualityModel
-            )
-            let confidence = footstepFrameConfidence(
-                kind,
-                values: values,
-                baselineValues: baselineValues,
-                frames: analysis.frames,
-                interpolation: FrameInterpolation(lowerIndex: index, upperIndex: index, fraction: 0.0),
-                trackingConfidence: trackingConfidence,
-                fullImpulseScale: fullImpulseScale,
-                cache: cache
-            )
+            let trackingConfidence = trackingConfidences?.indices.contains(index) == true
+                ? trackingConfidences![index]
+                : walkingBandTrackingConfidence(
+                    motionConfidence: analysis.analysisConfidence[index],
+                    residual: analysis.residuals[index],
+                    blurAmount: analysis.blurAmounts[index],
+                    acceptedBlockCount: analysis.acceptedBlockCounts[index],
+                    totalBlockCount: analysis.totalBlockCounts[index],
+                    qualityModel: analysis.qualityModel
+                )
+            let confidence: Float
+            if let stableConfidenceEvidence,
+               stableConfidenceEvidence.indices.contains(index) {
+                confidence = footstepConfidence(
+                    trackingConfidence: trackingConfidence,
+                    evidence: stableConfidenceEvidence,
+                    index: index
+                )
+            } else {
+                confidence = footstepFrameConfidence(
+                    kind,
+                    values: values,
+                    baselineValues: baselineValues,
+                    frames: analysis.frames,
+                    interpolation: FrameInterpolation(lowerIndex: index, upperIndex: index, fraction: 0.0),
+                    trackingConfidence: trackingConfidence,
+                    fullImpulseScale: fullImpulseScale,
+                    cache: cache
+                )
+            }
             let correctionStrength = walkingConfidenceCompensatedCorrectionFactor(
                 requestedStrength,
                 confidence: max(
@@ -13647,6 +13756,26 @@ enum AutoStabilizationEstimator {
         trackingConfidence: Float,
         fullImpulseScale: Float
     ) -> Float {
+        clamp(
+            trackingConfidence * footstepFrameConfidenceEvidenceAtIndex(
+                values: values,
+                baselineValues: baselineValues,
+                frames: frames,
+                index: index,
+                fullImpulseScale: fullImpulseScale
+            ),
+            min: 0.0,
+            max: 1.0
+        )
+    }
+
+    private static func footstepFrameConfidenceEvidenceAtIndex(
+        values: [Float],
+        baselineValues: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        index: Int,
+        fullImpulseScale: Float
+    ) -> Float {
         guard values.indices.contains(index), baselineValues.values.indices.contains(index) else {
             return 0.0
         }
@@ -13686,7 +13815,7 @@ enum AutoStabilizationEstimator {
             impulse: values[index] - baselineValues[index],
             fullImpulseScale: fullImpulseScale
         )
-        return clamp(trackingConfidence * supportQuality * impulseQuality * isolationQuality, min: 0.0, max: 1.0)
+        return clamp(supportQuality * impulseQuality * isolationQuality, min: 0.0, max: 1.0)
     }
 
     private static func footstepImpulseIsolationQuality(
