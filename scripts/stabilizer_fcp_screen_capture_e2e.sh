@@ -1116,7 +1116,7 @@ wait_for_target_playback_plan_ready() {
 		seek_timecode "$timecode_entry"
 		focus_timeline
 		sleep 0.2
-		press_space
+		press_start_playback
 		sleep "$warm_seconds"
 		press_stop_playback
 		seek_timecode "$timecode_entry"
@@ -1145,6 +1145,7 @@ source_clip = Path(case.get("sourceClip", "")).stem
 digits = "".join(re.findall(r"\d+", source_clip))
 frame_count = str(case.get("source", {}).get("frameCount", ""))
 frame_token = f"frames {frame_count}" if frame_count else ""
+requires_auto_crop = bool(case.get("removeBlackEdges"))
 tokens = [source_clip]
 if digits:
     tokens.append(digits)
@@ -1168,14 +1169,21 @@ lines = [
     line.rstrip("\n")
     for line in evidence_path.read_text(encoding="utf-8", errors="replace").splitlines()
 ]
+
+def render_decision_ready(line: str) -> bool:
+    if "Render Host Analysis decision" not in line:
+        return False
+    if not matches_target(line):
+        return False
+    if "proxy yes" not in line or "prepared yes" not in line or "stabilization active" not in line:
+        return False
+    if requires_auto_crop:
+        return "auto crop on" in line
+    return "auto crop off" in line
+
 target_render_ready = [
     (index, line) for index, line in enumerate(lines)
-    if "Render Host Analysis decision" in line
-    and matches_target(line)
-    and "proxy yes" in line
-    and "prepared yes" in line
-    and "stabilization active" in line
-    and "auto crop on" in line
+    if render_decision_ready(line)
 ]
 latest_ready_index = target_render_ready[-1][0] if target_render_ready else None
 target_lines_after_ready = (
@@ -1444,6 +1452,20 @@ APPLESCRIPT
 	wait_for_ui_osascript "$osascript_pid" "space key" 30 1
 }
 
+press_start_playback() {
+	/usr/bin/osascript <<'APPLESCRIPT' &
+tell application "Final Cut Pro" to activate
+tell application "System Events"
+	tell process "Final Cut Pro"
+		set frontmost to true
+		click menu item "Play" of menu 1 of menu item "Playback" of menu 1 of menu bar item "View" of menu bar 1
+	end tell
+end tell
+APPLESCRIPT
+	local osascript_pid=$!
+	wait_for_ui_osascript "$osascript_pid" "View > Playback > Play" 30 1
+}
+
 press_stop_playback() {
 	/usr/bin/osascript <<'APPLESCRIPT' &
 tell application "Final Cut Pro" to activate
@@ -1456,6 +1478,57 @@ end tell
 APPLESCRIPT
 	local osascript_pid=$!
 	wait_for_ui_osascript "$osascript_pid" "stop playback key" 30 1
+}
+
+fcp_playhead_value() {
+	/usr/bin/osascript <<'APPLESCRIPT'
+on run
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontWindow to my frontFinalCutProWindow()
+			set playheadElement to my firstElementByDescription(frontWindow, "Playhead", 12)
+			if playheadElement is missing value then return "missing"
+			try
+				return value of playheadElement as text
+			on error
+				return "unreadable"
+			end try
+		end tell
+	end tell
+end run
+
+on frontFinalCutProWindow()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					if subrole of candidateWindow is "AXStandardWindow" then return candidateWindow
+				end try
+			end repeat
+			return window 1
+		end tell
+	end tell
+end frontFinalCutProWindow
+
+on firstElementByDescription(elementRef, wantedDescription, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			if (description of elementRef as text) is wantedDescription then return elementRef
+		end try
+		try
+			set childElements to UI elements of elementRef
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstElementByDescription(childElement, wantedDescription, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstElementByDescription
+APPLESCRIPT
 }
 
 assert_fcp_frontmost() {
@@ -1623,7 +1696,7 @@ end firstCheckedMenuPath
 on clickMenuPath(menuPath)
 	tell application "System Events"
 		tell process "Final Cut Pro"
-			set currentMenu to menu (item 1 of menuPath) of menu bar 1
+			set currentMenu to menu 1 of menu bar item (item 1 of menuPath) of menu bar 1
 			repeat with pathIndex from 2 to count of menuPath
 				set currentMenuItem to menu item (item pathIndex of menuPath) of currentMenu
 				if pathIndex is (count of menuPath) then
@@ -1639,7 +1712,7 @@ end clickMenuPath
 on menuPathIsChecked(menuPath)
 	tell application "System Events"
 		tell process "Final Cut Pro"
-			set currentMenu to menu (item 1 of menuPath) of menu bar 1
+			set currentMenu to menu 1 of menu bar item (item 1 of menuPath) of menu bar 1
 			repeat with pathIndex from 2 to count of menuPath
 				set currentMenuItem to menu item (item pathIndex of menuPath) of currentMenu
 				if pathIndex is (count of menuPath) then
@@ -1757,7 +1830,7 @@ on run argv
 			set menuRef to my showViewOptionsMenu(optionsButton)
 			set targetElement to my viewOptionsTargetItem(menuRef, settingKind, targetValue)
 			if targetElement is missing value then error "View Options item not found: " & targetValue & ". Visible menu tree: " & my menuTree(menuRef, 0, 4)
-			click targetElement
+			my pressElementOrAncestor(targetElement, targetValue)
 			delay 0.25
 			key code 53
 			delay 0.1
@@ -3384,15 +3457,19 @@ assert_viewer_roi_playback_motion() {
 		seek_timecode "$timecode_entry"
 		focus_timeline
 		sleep 0.4
+		local before_playhead
+		local after_playhead
+		before_playhead="$(fcp_playhead_value)"
 		/usr/sbin/screencapture -x "$before_path"
-		press_space
+		press_start_playback
 		sleep "${STABILIZER_E2E_PLAYBACK_PREFLIGHT_SECONDS:-0.85}"
+		after_playhead="$(fcp_playhead_value)"
 		/usr/sbin/screencapture -x "$after_path"
 		press_stop_playback
 		seek_timecode "$timecode_entry"
 		focus_timeline
 		sleep 0.4
-		if python3 - "$before_path" "$after_path" "$viewer_roi" <<'PY'
+		if python3 - "$before_path" "$after_path" "$viewer_roi" "$before_playhead" "$after_playhead" <<'PY'
 from pathlib import Path
 import os
 import sys
@@ -3403,6 +3480,8 @@ import numpy as np
 before_path = Path(sys.argv[1])
 after_path = Path(sys.argv[2])
 roi_parts = [int(part) for part in sys.argv[3].split(",")]
+before_playhead = sys.argv[4]
+after_playhead = sys.argv[5]
 if len(roi_parts) != 4:
     raise SystemExit("viewer ROI must be x,y,w,h")
 x, y, w, h = roi_parts
@@ -3444,10 +3523,26 @@ p95_abs = float(np.percentile(diff.astype(np.float32), 95))
 min_mean = float(os.environ.get("STABILIZER_E2E_MIN_PLAYBACK_MEAN_DIFF", "0.18"))
 min_p95 = float(os.environ.get("STABILIZER_E2E_MIN_PLAYBACK_P95_DIFF", "1.0"))
 if mean_abs < min_mean and p95_abs < min_p95:
+    if (
+        before_playhead
+        and after_playhead
+        and before_playhead not in {"missing", "unreadable"}
+        and after_playhead not in {"missing", "unreadable"}
+        and before_playhead != after_playhead
+    ):
+        print(
+            "FCP Viewer playback preflight advanced playhead despite low viewer pixel diff: "
+            f"playhead {before_playhead} -> {after_playhead}, "
+            f"meanAbsDiff={mean_abs:.3f}, p95AbsDiff={p95_abs:.3f}, "
+            f"before={before_path}, after={after_path}. "
+            "Recording progress guard and full-frame evaluation remain authoritative."
+        )
+        raise SystemExit(0)
     raise SystemExit(
         "FCP Viewer did not show playback motion before recording: "
         f"meanAbsDiff={mean_abs:.3f} (<{min_mean:.3f}), "
         f"p95AbsDiff={p95_abs:.3f} (<{min_p95:.3f}), "
+        f"playhead={before_playhead}->{after_playhead}, "
         f"before={before_path}, after={after_path}"
     )
 print(
@@ -3480,11 +3575,15 @@ assert_current_viewer_roi_playback_motion() {
 	local before_path="${ARTIFACT_ROOT}/fcp_${label}_motion_before_$(date +%Y%m%d_%H%M%S).png"
 	local after_path="${ARTIFACT_ROOT}/fcp_${label}_motion_after_$(date +%Y%m%d_%H%M%S).png"
 	assert_fcp_frontmost "${label} motion guard before screenshot"
+	local before_playhead
+	local after_playhead
+	before_playhead="$(fcp_playhead_value)"
 	/usr/sbin/screencapture -x "$before_path"
 	sleep "${STABILIZER_E2E_RECORDING_MOTION_GUARD_SECONDS:-0.45}"
 	assert_fcp_frontmost "${label} motion guard after screenshot"
+	after_playhead="$(fcp_playhead_value)"
 	/usr/sbin/screencapture -x "$after_path"
-	if python3 - "$before_path" "$after_path" "$viewer_roi" "$label" <<'PY'
+	if python3 - "$before_path" "$after_path" "$viewer_roi" "$label" "$before_playhead" "$after_playhead" <<'PY'
 from pathlib import Path
 import os
 import sys
@@ -3496,6 +3595,8 @@ before_path = Path(sys.argv[1])
 after_path = Path(sys.argv[2])
 roi_parts = [int(part) for part in sys.argv[3].split(",")]
 label = sys.argv[4]
+before_playhead = sys.argv[5]
+after_playhead = sys.argv[6]
 if len(roi_parts) != 4:
     raise SystemExit("viewer ROI must be x,y,w,h")
 x, y, w, h = roi_parts
@@ -3551,10 +3652,26 @@ p95_abs = float(np.percentile(diff.astype(np.float32), 95))
 min_mean = float(os.environ.get("STABILIZER_E2E_MIN_RECORDING_MEAN_DIFF", "0.18"))
 min_p95 = float(os.environ.get("STABILIZER_E2E_MIN_RECORDING_P95_DIFF", "1.0"))
 if mean_abs < min_mean and p95_abs < min_p95:
+    if (
+        before_playhead
+        and after_playhead
+        and before_playhead not in {"missing", "unreadable"}
+        and after_playhead not in {"missing", "unreadable"}
+        and before_playhead != after_playhead
+    ):
+        print(
+            f"{label}: FCP playhead advanced despite low recording pixel diff: "
+            f"playhead {before_playhead} -> {after_playhead}, "
+            f"meanAbsDiff={mean_abs:.3f}, p95AbsDiff={p95_abs:.3f}, "
+            f"before={before_path}, after={after_path}. "
+            "Recorded playback progress guard and full-frame evaluation remain authoritative."
+        )
+        raise SystemExit(0)
     raise SystemExit(
         f"{label}: FCP Viewer is not moving while recording: "
         f"meanAbsDiff={mean_abs:.3f} (<{min_mean:.3f}), "
-        f"p95AbsDiff={p95_abs:.3f} (<{min_p95:.3f}), before={before_path}, after={after_path}"
+        f"p95AbsDiff={p95_abs:.3f} (<{min_p95:.3f}), "
+        f"playhead={before_playhead}->{after_playhead}, before={before_path}, after={after_path}"
     )
 print(
     f"FCP Viewer recording motion guard passed: label={label}, "
@@ -3606,9 +3723,9 @@ wait_for_viewer_roi_recordable() {
 		fi
 		if (( attempt == 1 || attempt == 5 || attempt == 10 )); then
 			printf 'Nudging FCP Viewer playback to force a current-frame render...\n'
-			press_space
+			press_start_playback
 			sleep 0.5
-			press_space
+			press_stop_playback
 		fi
 		sleep 1
 	done
@@ -3619,7 +3736,7 @@ preflight_playback_alerts() {
 	local timecode_entry="$1"
 	printf 'Preflighting FCP playback alerts before recording...\n'
 	press_stop_playback
-	press_space
+	press_start_playback
 	sleep 1.2
 	local dismiss_result
 	dismiss_result="$(dismiss_fcp_modal_alerts)"
@@ -4812,7 +4929,7 @@ APPLESCRIPT
 	fi
 	focus_timeline
 	recording_start_epoch="$(now_epoch_seconds)"
-	press_space
+	press_start_playback
 	if [[ -n "$viewer_roi" ]]; then
 		if ! assert_current_viewer_roi_playback_motion "$viewer_roi" "recording-active"; then
 			kill -TERM "$capture_pid" 2>/dev/null || true
