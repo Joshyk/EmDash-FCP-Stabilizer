@@ -13453,10 +13453,7 @@ enum AutoStabilizationEstimator {
             let localBinSupport = localSupports.max() ?? 0.0
             let localBinMagnitude = localResiduals.map { simd_length($0) }.max() ?? 0.0
             _ = localPreparedSupports
-            let sourceRidgeLineBandEvidenceSupport = max(
-                max(ridgeSupport, max(ridgeColumnSupport, ridgeRowSupport)),
-                localBinSupport
-            )
+            let sourceRidgeLineBandEvidenceSupport = max(ridgeSupport, max(ridgeColumnSupport, ridgeRowSupport))
             let sourceRidgeLineBandSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
                 * confidenceRamp(sourceRidgeLineBandEvidenceSupport, start: 0.08, full: 0.36)
                 * qualitySupport

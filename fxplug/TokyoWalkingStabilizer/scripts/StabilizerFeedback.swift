@@ -3601,10 +3601,7 @@ private func sourceSpaceLensShakeBand(
         sourceLocalMagnitude = max(sourceLocalMagnitude, localMagnitude)
         sourceLocalSupport = max(sourceLocalSupport, localSupport)
     }
-    let sourceRidgeLineBandEvidenceSupport = max(
-        max(ridgeSupport, max(ridgeColumnSupport, ridgeRowSupport)),
-        sourceLocalSupport
-    )
+    let sourceRidgeLineBandEvidenceSupport = max(ridgeSupport, max(ridgeColumnSupport, ridgeRowSupport))
     let sourceRidgeLineBandSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
         * confidenceRamp(sourceRidgeLineBandEvidenceSupport, start: 0.08, full: 0.36)
         * qualitySupport
