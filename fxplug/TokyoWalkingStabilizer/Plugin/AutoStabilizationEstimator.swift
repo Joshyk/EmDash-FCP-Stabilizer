@@ -30,6 +30,7 @@ struct StabilizerAutoTransform {
     var lensBandMidOffset: vector_float2
     var lensBandWarpSupport: Float
     var lensBandWarpApplied: Float
+    var lensBandRollingShutterScore: Float
     var footstepJitterRotationDegrees: Float
     var strideWobbleRotationDegrees: Float
     var rotationDegrees: Float
@@ -86,6 +87,7 @@ struct StabilizerAutoTransform {
         lensBandMidOffset: vector_float2(0.0, 0.0),
         lensBandWarpSupport: 0.0,
         lensBandWarpApplied: 0.0,
+        lensBandRollingShutterScore: 0.0,
         footstepJitterRotationDegrees: 0.0,
         strideWobbleRotationDegrees: 0.0,
         rotationDegrees: 0.0,
@@ -1032,6 +1034,7 @@ enum AutoStabilizationEstimator {
         var bandMidOffset: vector_float2 = vector_float2(0.0, 0.0)
         var bandWarpSupport: Float = 0.0
         var bandWarpApplied: Float = 0.0
+        var bandRollingShutterScore: Float = 0.0
     }
 
     private struct ResidualPercentileCacheKey: Hashable {
@@ -3177,6 +3180,7 @@ enum AutoStabilizationEstimator {
             lensBandMidOffset: lensShake.bandMidOffset,
             lensBandWarpSupport: lensShake.bandWarpSupport,
             lensBandWarpApplied: lensShake.bandWarpApplied,
+            lensBandRollingShutterScore: lensShake.bandRollingShutterScore,
             footstepJitterRotationDegrees: macroRotation + microRotation,
             strideWobbleRotationDegrees: strideRotation,
             rotationDegrees: rotation,
@@ -6669,6 +6673,7 @@ enum AutoStabilizationEstimator {
                 lensBandMidOffset: lensShake.bandMidOffset,
                 lensBandWarpSupport: lensShake.bandWarpSupport,
                 lensBandWarpApplied: lensShake.bandWarpApplied,
+                lensBandRollingShutterScore: lensShake.bandRollingShutterScore,
                 footstepJitterRotationDegrees: macroRotation + microRotation,
                 strideWobbleRotationDegrees: strideRotation,
                 rotationDegrees: rotation,
@@ -6845,6 +6850,7 @@ enum AutoStabilizationEstimator {
         target.lensBandMidOffset = source.lensBandMidOffset
         target.lensBandWarpSupport = source.lensBandWarpSupport
         target.lensBandWarpApplied = source.lensBandWarpApplied
+        target.lensBandRollingShutterScore = source.lensBandRollingShutterScore
     }
 
     private static func playbackTrajectoryLimitedTransform(
@@ -8237,6 +8243,7 @@ enum AutoStabilizationEstimator {
             lensBandMidOffset: lensShake.bandMidOffset,
             lensBandWarpSupport: lensShake.bandWarpSupport,
             lensBandWarpApplied: lensShake.bandWarpApplied,
+            lensBandRollingShutterScore: lensShake.bandRollingShutterScore,
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation + lensShake.rotationDegrees,
@@ -9251,6 +9258,7 @@ enum AutoStabilizationEstimator {
             lensBandMidOffset: lensShake.bandMidOffset,
             lensBandWarpSupport: lensShake.bandWarpSupport,
             lensBandWarpApplied: lensShake.bandWarpApplied,
+            lensBandRollingShutterScore: lensShake.bandRollingShutterScore,
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation + lensShake.rotationDegrees,
@@ -10038,6 +10046,7 @@ enum AutoStabilizationEstimator {
         var lensBandMidOffset = vector_float2(0.0, 0.0)
         var lensBandWarpSupport: Float = 0.0
         var lensBandWarpApplied: Float = 0.0
+        var lensBandRollingShutterScore: Float = 0.0
         var footstepJitterRotationDegrees: Float = 0.0
         var strideWobbleRotationDegrees: Float = 0.0
         var rotationDegrees: Float = 0.0
@@ -10096,6 +10105,7 @@ enum AutoStabilizationEstimator {
             lensBandMidOffset += transform.lensBandMidOffset * weight
             lensBandWarpSupport += transform.lensBandWarpSupport * weight
             lensBandWarpApplied += transform.lensBandWarpApplied * weight
+            lensBandRollingShutterScore += transform.lensBandRollingShutterScore * weight
             footstepJitterRotationDegrees += transform.footstepJitterRotationDegrees * weight
             strideWobbleRotationDegrees += transform.strideWobbleRotationDegrees * weight
             rotationDegrees += transform.rotationDegrees * weight
@@ -10165,6 +10175,7 @@ enum AutoStabilizationEstimator {
             lensBandMidOffset: lensBandMidOffset / totalWeight,
             lensBandWarpSupport: lensBandWarpSupport / totalWeight,
             lensBandWarpApplied: lensBandWarpApplied / totalWeight,
+            lensBandRollingShutterScore: lensBandRollingShutterScore / totalWeight,
             footstepJitterRotationDegrees: footstepJitterRotationDegrees / totalWeight,
             strideWobbleRotationDegrees: strideWobbleRotationDegrees / totalWeight,
             rotationDegrees: rotationDegrees / totalWeight,
@@ -12511,6 +12522,7 @@ enum AutoStabilizationEstimator {
             confidenceRamp(affineSupport, start: 0.20, full: 0.55)
         ) * 0.75
         result.rollingShutterCandidate = max(dominantProjectiveCandidate, mixedProjectiveCandidate)
+        result.bandRollingShutterScore = result.rollingShutterCandidate
         result.score = max(affineSupport, projectiveSupport)
         if supportX >= lensShakeMinimumSupport { result.axisMask |= 1 }
         if supportY >= lensShakeMinimumSupport { result.axisMask |= 2 }
@@ -12547,6 +12559,13 @@ enum AutoStabilizationEstimator {
                 simd_length(topResidual),
                 max(simd_length(ridgeResidual), simd_length(midResidual))
             )
+            let bandDisagreement = max(
+                simd_length(topResidual - ridgeResidual),
+                max(
+                    simd_length(topResidual - midResidual),
+                    simd_length(ridgeResidual - midResidual)
+                )
+            )
             func bandSupport(residual: vector_float2, confidenceValues: [Float]) -> Float {
                 let confidence = interpolatedValue(confidenceValues, using: interpolation)
                 return confidenceRamp(simd_length(residual), start: 0.08, full: 0.65)
@@ -12558,6 +12577,9 @@ enum AutoStabilizationEstimator {
             let ridgeSupport = bandSupport(residual: ridgeResidual, confidenceValues: analysis.lensBandRidgeConfidence)
             let midSupport = bandSupport(residual: midResidual, confidenceValues: analysis.lensBandMidConfidence)
             let bandSupport = max(topSupport, max(ridgeSupport, midSupport))
+            let bandDisagreementSupport = confidenceRamp(bandDisagreement, start: 0.20, full: 1.50)
+                * confidenceRamp(max(topSupport, max(ridgeSupport, midSupport)), start: 0.04, full: 0.20)
+            result.bandRollingShutterScore = max(result.rollingShutterCandidate, bandDisagreementSupport)
             _ = bandMagnitude
             func supportedOffset(_ residual: vector_float2, support: Float) -> vector_float2 {
                 let supportRatio = bandSupport > 0.0 ? clamp(support / bandSupport, min: 0.0, max: 1.0) : 0.0

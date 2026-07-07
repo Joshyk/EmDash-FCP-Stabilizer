@@ -26,6 +26,15 @@ BANDS = {
     "near_ground": (0.58, 0.82),
 }
 
+FAR_FIELD_BANDS = ("cloud_top", "ridge_horizon", "mountain_mid")
+REGIONS = {
+    "left": (0.00, 0.38, 0.00, 1.00),
+    "center": (0.28, 0.72, 0.00, 1.00),
+    "right": (0.62, 1.00, 0.00, 1.00),
+    "upper": (0.00, 1.00, 0.00, 0.58),
+    "lower": (0.00, 1.00, 0.42, 1.00),
+}
+
 
 def finite_float(raw: Any, default: float = 0.0) -> float:
     try:
@@ -54,14 +63,23 @@ def parse_render_log(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def crop_band(gray: np.ndarray, y0: float, y1: float) -> tuple[np.ndarray, int]:
+def crop_region(
+    gray: np.ndarray,
+    y0: float,
+    y1: float,
+    x0: float = 0.0,
+    x1: float = 1.0,
+) -> np.ndarray:
     height = gray.shape[0]
+    width = gray.shape[1]
     top = max(0, min(height - 1, int(round(height * y0))))
     bottom = max(top + 8, min(height, int(round(height * y1))))
-    return gray[top:bottom, :], top
+    left = max(0, min(width - 1, int(round(width * x0))))
+    right = max(left + 8, min(width, int(round(width * x1))))
+    return gray[top:bottom, left:right]
 
 
-def estimate_flow(previous: np.ndarray, current: np.ndarray, y_offset: int) -> dict[str, float]:
+def estimate_flow(previous: np.ndarray, current: np.ndarray) -> dict[str, float]:
     points = cv2.goodFeaturesToTrack(
         previous,
         maxCorners=180,
@@ -155,6 +173,33 @@ def residual_window(values: list[float], index: int, radius: int) -> float:
     return float(values[index] - ((slope * index) + intercept))
 
 
+def add_region_phase_metrics(row: dict[str, float], band_name: str) -> None:
+    left_dx = finite_float(row.get(f"{band_name}.left.dx"))
+    right_dx = finite_float(row.get(f"{band_name}.right.dx"))
+    left_dy = finite_float(row.get(f"{band_name}.left.dy"))
+    right_dy = finite_float(row.get(f"{band_name}.right.dy"))
+    upper_dx = finite_float(row.get(f"{band_name}.upper.dx"))
+    lower_dx = finite_float(row.get(f"{band_name}.lower.dx"))
+    upper_dy = finite_float(row.get(f"{band_name}.upper.dy"))
+    lower_dy = finite_float(row.get(f"{band_name}.lower.dy"))
+    row_dx = upper_dx - lower_dx
+    row_dy = upper_dy - lower_dy
+    col_dx = left_dx - right_dx
+    col_dy = left_dy - right_dy
+    row["%s.rowPhaseDx" % band_name] = row_dx
+    row["%s.rowPhaseDy" % band_name] = row_dy
+    row["%s.rowPhaseMagnitude" % band_name] = math.hypot(row_dx, row_dy)
+    row["%s.colPhaseDx" % band_name] = col_dx
+    row["%s.colPhaseDy" % band_name] = col_dy
+    row["%s.colPhaseMagnitude" % band_name] = math.hypot(col_dx, col_dy)
+    rolls = [finite_float(row.get(f"{band_name}.{region}.roll")) for region in REGIONS]
+    row["%s.localRollSpread" % band_name] = max(rolls) - min(rolls) if rolls else 0.0
+    center_points = finite_float(row.get(f"{band_name}.center.points"))
+    upper_points = finite_float(row.get(f"{band_name}.upper.points"))
+    lower_points = finite_float(row.get(f"{band_name}.lower.points"))
+    row["%s.localSupport" % band_name] = min(center_points, max(upper_points, lower_points))
+
+
 def analyze_video(video_path: Path, window_frames: int) -> tuple[list[dict[str, float]], dict[str, Any]]:
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -172,11 +217,54 @@ def analyze_video(video_path: Path, window_frames: int) -> tuple[list[dict[str, 
         row: dict[str, float] = {"frame": float(frame_index), "time": float(frame_index / fps)}
         if previous_gray is not None:
             for name, bounds in BANDS.items():
-                previous_band, y_offset = crop_band(previous_gray, *bounds)
-                current_band, _ = crop_band(gray, *bounds)
-                metrics = estimate_flow(previous_band, current_band, y_offset)
+                previous_band = crop_region(previous_gray, *bounds)
+                current_band = crop_region(gray, *bounds)
+                metrics = estimate_flow(previous_band, current_band)
                 for key, value in metrics.items():
                     row[f"{name}.{key}"] = value
+                y0, y1 = bounds
+                for region_name, (x0, x1, local_y0, local_y1) in REGIONS.items():
+                    region_previous = crop_region(
+                        previous_gray,
+                        y0 + ((y1 - y0) * local_y0),
+                        y0 + ((y1 - y0) * local_y1),
+                        x0,
+                        x1,
+                    )
+                    region_current = crop_region(
+                        gray,
+                        y0 + ((y1 - y0) * local_y0),
+                        y0 + ((y1 - y0) * local_y1),
+                        x0,
+                        x1,
+                    )
+                    region_metrics = estimate_flow(region_previous, region_current)
+                    for key, value in region_metrics.items():
+                        row[f"{name}.{region_name}.{key}"] = value
+                add_region_phase_metrics(row, name)
+            far_row_phase = [
+                finite_float(row.get(f"{band_name}.rowPhaseMagnitude"))
+                for band_name in FAR_FIELD_BANDS
+            ]
+            far_col_phase = [
+                finite_float(row.get(f"{band_name}.colPhaseMagnitude"))
+                for band_name in FAR_FIELD_BANDS
+            ]
+            far_roll_spread = [
+                abs(finite_float(row.get(f"{band_name}.localRollSpread")))
+                for band_name in FAR_FIELD_BANDS
+            ]
+            cloud_ridge_delta = math.hypot(
+                finite_float(row.get("cloud_top.dx")) - finite_float(row.get("ridge_horizon.dx")),
+                finite_float(row.get("cloud_top.dy")) - finite_float(row.get("ridge_horizon.dy")),
+            )
+            row["lensBandRollingShutterRowScore"] = max(far_row_phase)
+            row["lensBandRollingShutterColScore"] = max(far_col_phase)
+            row["lensBandRollingShutterRollScore"] = max(far_roll_spread)
+            row["lensBandRollingShutterInterBandScore"] = cloud_ridge_delta
+            row["lensBandRollingShutterScore"] = max(
+                far_row_phase + far_col_phase + far_roll_spread + [cloud_ridge_delta]
+            )
         rows.append(row)
         previous_gray = gray
     cap.release()
@@ -188,6 +276,21 @@ def analyze_video(video_path: Path, window_frames: int) -> tuple[list[dict[str, 
             values = [finite_float(row.get(key)) for row in rows]
             for index, row in enumerate(rows):
                 row[f"{key}HF{window_frames}"] = residual_window(values, index, radius)
+        for key in ("rowPhaseMagnitude", "colPhaseMagnitude", "localRollSpread"):
+            full_key = f"{band_name}.{key}"
+            values = [finite_float(row.get(full_key)) for row in rows]
+            for index, row in enumerate(rows):
+                row[f"{full_key}HF{window_frames}"] = residual_window(values, index, radius)
+    for key in (
+        "lensBandRollingShutterScore",
+        "lensBandRollingShutterRowScore",
+        "lensBandRollingShutterColScore",
+        "lensBandRollingShutterRollScore",
+        "lensBandRollingShutterInterBandScore",
+    ):
+        rolling_values = [finite_float(row.get(key)) for row in rows]
+        for index, row in enumerate(rows):
+            row[f"{key}HF{window_frames}"] = residual_window(rolling_values, index, radius)
 
     focus_start = 4.25
     focus_end = 6.75
@@ -204,7 +307,25 @@ def analyze_video(video_path: Path, window_frames: int) -> tuple[list[dict[str, 
             values = [abs(finite_float(row.get(f"{band_name}.{axis}HF{window_frames}"))) for row in focus_rows]
             band_summary[f"{axis}HF{window_frames}P95"] = float(np.percentile(values, 95)) if values else 0.0
             band_summary[f"{axis}HF{window_frames}Max"] = max(values) if values else 0.0
+        for key in ("rowPhaseMagnitude", "colPhaseMagnitude", "localRollSpread"):
+            values = [abs(finite_float(row.get(f"{band_name}.{key}HF{window_frames}"))) for row in focus_rows]
+            band_summary[f"{key}HF{window_frames}P95"] = float(np.percentile(values, 95)) if values else 0.0
+            band_summary[f"{key}HF{window_frames}Max"] = max(values) if values else 0.0
         summary[band_name] = band_summary
+    rolling_focus = [abs(finite_float(row.get(f"lensBandRollingShutterScoreHF{window_frames}"))) for row in focus_rows]
+    summary[f"lensBandRollingShutterScoreHF{window_frames}P95"] = (
+        float(np.percentile(rolling_focus, 95)) if rolling_focus else 0.0
+    )
+    summary[f"lensBandRollingShutterScoreHF{window_frames}Max"] = max(rolling_focus) if rolling_focus else 0.0
+    for key in (
+        "lensBandRollingShutterRowScore",
+        "lensBandRollingShutterColScore",
+        "lensBandRollingShutterRollScore",
+        "lensBandRollingShutterInterBandScore",
+    ):
+        values = [abs(finite_float(row.get(f"{key}HF{window_frames}"))) for row in focus_rows]
+        summary[f"{key}HF{window_frames}P95"] = float(np.percentile(values, 95)) if values else 0.0
+        summary[f"{key}HF{window_frames}Max"] = max(values) if values else 0.0
     if focus_rows:
         cloud = [finite_float(row.get(f"cloud_top.dyHF{window_frames}")) for row in focus_rows]
         ridge = [finite_float(row.get(f"ridge_horizon.dyHF{window_frames}")) for row in focus_rows]
@@ -262,6 +383,7 @@ def main() -> None:
         "lensBandMidY",
         "lensBandWarpSupport",
         "lensBandWarpApplied",
+        "lensBandRollingShutterScore",
     ]
     band_columns: list[str] = []
     for band_name in BANDS:
@@ -275,12 +397,52 @@ def main() -> None:
                 f"{band_name}.inlierRatio",
                 f"{band_name}.dxHF{args.window_frames}",
                 f"{band_name}.dyHF{args.window_frames}",
+                f"{band_name}.rowPhaseDx",
+                f"{band_name}.rowPhaseDy",
+                f"{band_name}.rowPhaseMagnitude",
+                f"{band_name}.rowPhaseMagnitudeHF{args.window_frames}",
+                f"{band_name}.colPhaseDx",
+                f"{band_name}.colPhaseDy",
+                f"{band_name}.colPhaseMagnitude",
+                f"{band_name}.colPhaseMagnitudeHF{args.window_frames}",
+                f"{band_name}.localRollSpread",
+                f"{band_name}.localRollSpreadHF{args.window_frames}",
+                f"{band_name}.localSupport",
             ]
         )
+        for region_name in REGIONS:
+            band_columns.extend(
+                [
+                    f"{band_name}.{region_name}.dx",
+                    f"{band_name}.{region_name}.dy",
+                    f"{band_name}.{region_name}.roll",
+                    f"{band_name}.{region_name}.scale",
+                    f"{band_name}.{region_name}.points",
+                    f"{band_name}.{region_name}.inlierRatio",
+                ]
+            )
+    derived_columns = [
+        "lensBandSupport",
+        "lensBandRollingShutterScore",
+        "lensBandRollingShutterRowScore",
+        "lensBandRollingShutterColScore",
+        "lensBandRollingShutterRollScore",
+        "lensBandRollingShutterInterBandScore",
+        f"lensBandRollingShutterScoreHF{args.window_frames}",
+        f"lensBandRollingShutterRowScoreHF{args.window_frames}",
+        f"lensBandRollingShutterColScoreHF{args.window_frames}",
+        f"lensBandRollingShutterRollScoreHF{args.window_frames}",
+        f"lensBandRollingShutterInterBandScoreHF{args.window_frames}",
+    ]
     csv_path = args.output_dir / "lens_band_source_joined.csv"
     joined_rows: list[dict[str, Any]] = []
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        fieldnames = ["frame", "time", "renderRow", "renderRelativeTime", "renderTimeError"] + runtime_columns + band_columns
+        fieldnames = (
+            ["frame", "time", "renderRow", "renderRelativeTime", "renderTimeError"]
+            + runtime_columns
+            + derived_columns
+            + band_columns
+        )
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for index, video_row in enumerate(video_rows):
@@ -296,6 +458,12 @@ def main() -> None:
             }
             for column in runtime_columns:
                 row[column] = render_row.get(column, "")
+            row["lensBandSupport"] = render_row.get("lensBandWarpSupport", "")
+            for column in derived_columns:
+                if column == "lensBandSupport":
+                    continue
+                value = video_row.get(column, "")
+                row[column] = f"{value:.6f}" if isinstance(value, float) else value
             for column in band_columns:
                 value = video_row.get(column, "")
                 row[column] = f"{value:.6f}" if isinstance(value, float) else value
@@ -319,9 +487,32 @@ def main() -> None:
     summary["focusMaxAbsRenderTimeError"] = max(
         [abs(finite_float(row.get("renderTimeError"))) for row in focus_joined] or [0.0]
     )
+    focus_rolling = [abs(finite_float(row.get(f"lensBandRollingShutterScoreHF{args.window_frames}"))) for row in focus_joined]
+    summary[f"focusLensBandRollingShutterScoreHF{args.window_frames}P95"] = (
+        float(np.percentile(focus_rolling, 95)) if focus_rolling else 0.0
+    )
+    summary[f"focusLensBandRollingShutterScoreHF{args.window_frames}Max"] = max(focus_rolling) if focus_rolling else 0.0
+    focus_components: dict[str, float] = {}
+    for key in (
+        "lensBandRollingShutterRowScore",
+        "lensBandRollingShutterColScore",
+        "lensBandRollingShutterRollScore",
+        "lensBandRollingShutterInterBandScore",
+    ):
+        values = [abs(finite_float(row.get(f"{key}HF{args.window_frames}"))) for row in focus_joined]
+        p95 = float(np.percentile(values, 95)) if values else 0.0
+        focus_components[key] = p95
+        summary[f"focus{key[0].upper()}{key[1:]}HF{args.window_frames}P95"] = p95
+    if focus_components:
+        summary["focusLensBandRollingShutterDominantComponent"] = max(
+            focus_components,
+            key=lambda key: focus_components[key],
+        )
     for band_name in ("cloud_top", "ridge_horizon", "mountain_mid"):
         points = [finite_float(row.get(f"{band_name}.points")) for row in focus_joined]
         summary[f"{band_name}FocusPointsP50"] = float(np.percentile(points, 50)) if points else 0.0
+        local_support = [finite_float(row.get(f"{band_name}.localSupport")) for row in focus_joined]
+        summary[f"{band_name}FocusLocalSupportP50"] = float(np.percentile(local_support, 50)) if local_support else 0.0
 
     if args.require_band_warp and summary["focusLensBandWarpAppliedRows"] <= 0:
         raise SystemExit(
