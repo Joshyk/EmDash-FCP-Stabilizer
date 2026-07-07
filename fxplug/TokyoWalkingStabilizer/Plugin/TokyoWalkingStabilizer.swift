@@ -7244,13 +7244,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensShakeShear = autoTransform.lensShakeShear * masterStrength
             let appliedLensShakePerspective = autoTransform.lensShakePerspective * masterStrength
             let componentMessage = String(
-                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@ proxy=%@ crop=%@ identity=%@",
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
                 analysisSeconds,
                 samplePosition,
                 lowerIndex,
                 upperIndex,
                 fraction,
                 frames.count,
+                renderSourceIsProxy ? "yes" : "no",
+                autoCropEnabled ? "yes" : "no",
+                cacheIdentityShort,
                 appliedPixelOffset.x,
                 appliedPixelOffset.y,
                 appliedMacroPixelOffset.x,
@@ -7308,10 +7311,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 sameIdentity ? deltaSeconds : 0.0,
                 sameIdentity ? sampleDelta : 0.0,
                 previewWarmupDecision.active ? "yes" : "no",
-                previewWarmupDecision.reason,
-                renderSourceIsProxy ? "yes" : "no",
-                autoCropEnabled ? "yes" : "no",
-                cacheIdentityShort
+                previewWarmupDecision.reason
             )
             os_log(
                 "%{public}@",
