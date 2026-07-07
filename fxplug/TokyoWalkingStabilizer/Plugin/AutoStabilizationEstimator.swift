@@ -12,6 +12,8 @@ struct StabilizerAutoTransform {
     var macroPixelOffset: vector_float2
     var microPixelOffset: vector_float2
     var strideWobblePixelOffset: vector_float2
+    var trajectoryMicroJitterPixelOffset: vector_float2
+    var trajectoryContinuityPixelOffset: vector_float2
     var footstepJitterRotationDegrees: Float
     var strideWobbleRotationDegrees: Float
     var rotationDegrees: Float
@@ -50,6 +52,8 @@ struct StabilizerAutoTransform {
         macroPixelOffset: vector_float2(0.0, 0.0),
         microPixelOffset: vector_float2(0.0, 0.0),
         strideWobblePixelOffset: vector_float2(0.0, 0.0),
+        trajectoryMicroJitterPixelOffset: vector_float2(0.0, 0.0),
+        trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
         footstepJitterRotationDegrees: 0.0,
         strideWobbleRotationDegrees: 0.0,
         rotationDegrees: 0.0,
@@ -831,12 +835,13 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryVelocityCollapseMaximumStepRatio: Float = 0.34
     private static let playbackTrajectoryVelocityCollapseMinimumFarFieldSupport: Float = 0.15
     private static let playbackTrajectoryVelocityCollapseMaximumBlend: Float = 0.78
-    private static let playbackTrajectoryVerticalMicroJitterHalfWindowSeconds = 0.18
-    private static let playbackTrajectoryVerticalMicroJitterMinimumPixels: Float = 0.08
-    private static let playbackTrajectoryVerticalMicroJitterFullPixels: Float = 0.45
-    private static let playbackTrajectoryVerticalMicroJitterMaximumBlend: Float = 0.65
-    private static let playbackTrajectoryVerticalMicroJitterMaximumCorrectionPixels: Float = 0.85
-    private static let playbackTrajectoryVerticalMicroJitterMaximumCorrectionPixelFraction: Float = 0.00085
+    private static let playbackTrajectoryMicroJitterHalfWindowSeconds = 0.18
+    private static let playbackTrajectoryMicroJitterMinimumPixels: Float = 0.08
+    private static let playbackTrajectoryMicroJitterFullPixels: Float = 0.45
+    private static let playbackTrajectoryMicroJitterMaximumBlend: Float = 0.65
+    private static let playbackTrajectoryMicroJitterMaximumCorrectionPixels: Float = 0.85
+    private static let playbackTrajectoryMicroJitterMaximumCorrectionPixelFraction: Float = 0.00085
+    private static let playbackTrajectoryHorizontalMicroJitterTurnHardGateConfidence: Float = 0.05
     private static let playbackTrajectoryFootstepPreservationStartPixels: Float = 0.38
     private static let playbackTrajectoryFootstepPreservationFullPixels: Float = 1.65
     private static let playbackTrajectoryFootstepRotationPreservationStartDegrees: Float = 0.020
@@ -854,7 +859,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 72
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 74
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -2917,13 +2922,19 @@ enum AutoStabilizationEstimator {
             )
         )
 
-        let pixelOffset = macroPixelOffset + microPixelOffset + stridePixelOffset
+        let trajectoryMicroJitterPixelOffset = vector_float2(0.0, 0.0)
+        let pixelOffset = macroPixelOffset
+            + microPixelOffset
+            + stridePixelOffset
+            + trajectoryMicroJitterPixelOffset
         let rotation = macroRotation + microRotation + strideRotation
         return StabilizerAutoTransform(
             pixelOffset: pixelOffset,
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: stridePixelOffset,
+            trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
+            trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
             footstepJitterRotationDegrees: macroRotation + microRotation,
             strideWobbleRotationDegrees: strideRotation,
             rotationDegrees: rotation,
@@ -3279,6 +3290,8 @@ enum AutoStabilizationEstimator {
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
             + smoothedTransform.microPixelOffset
             + smoothedTransform.strideWobblePixelOffset
+            + smoothedTransform.trajectoryMicroJitterPixelOffset
+            + smoothedTransform.trajectoryContinuityPixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
         smoothedTransform.turnDetectedPixelOffset = centerTransform.turnDetectedPixelOffset
@@ -3680,6 +3693,8 @@ enum AutoStabilizationEstimator {
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
             + smoothedTransform.microPixelOffset
             + smoothedTransform.strideWobblePixelOffset
+            + smoothedTransform.trajectoryMicroJitterPixelOffset
+            + smoothedTransform.trajectoryContinuityPixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
@@ -3968,6 +3983,8 @@ enum AutoStabilizationEstimator {
         scaled.macroPixelOffset = scalePixelVector(transform.macroPixelOffset, xScale: xScale, yScale: yScale)
         scaled.microPixelOffset = scalePixelVector(transform.microPixelOffset, xScale: xScale, yScale: yScale)
         scaled.strideWobblePixelOffset = scalePixelVector(transform.strideWobblePixelOffset, xScale: xScale, yScale: yScale)
+        scaled.trajectoryMicroJitterPixelOffset = scalePixelVector(transform.trajectoryMicroJitterPixelOffset, xScale: xScale, yScale: yScale)
+        scaled.trajectoryContinuityPixelOffset = scalePixelVector(transform.trajectoryContinuityPixelOffset, xScale: xScale, yScale: yScale)
         scaled.turnDetectedPixelOffset = scalePixelVector(transform.turnDetectedPixelOffset, xScale: xScale, yScale: yScale)
         scaled.rawPixelOffset = scalePixelVector(transform.rawPixelOffset, xScale: xScale, yScale: yScale)
         scaled.temporalSmoothingPixelDelta = scalePixelVector(transform.temporalSmoothingPixelDelta, xScale: xScale, yScale: yScale)
@@ -4066,23 +4083,23 @@ enum AutoStabilizationEstimator {
                 velocityCollapseGuarded.maximumPixelDeviation
             )
         }
-        let verticalMicroJitterSuppressed = playbackTrajectoryVerticalMicroJitterSuppressedTransforms(
+        let microJitterSuppressed = playbackTrajectoryMicroJitterSuppressedTransforms(
             frames: frames,
             transforms: velocityCollapseGuarded.transforms,
             outputSize: outputSize
         )
-        if verticalMicroJitterSuppressed.pixelFrameCount > 0 {
+        if microJitterSuppressed.pixelFrameCount > 0 {
             os_log(
-                "Playback trajectory vertical micro-jitter suppression | pixelFrames %d maxPixel %.3f",
+                "Playback trajectory micro-jitter suppression | pixelFrames %d maxPixel %.3f",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
-                verticalMicroJitterSuppressed.pixelFrameCount,
-                verticalMicroJitterSuppressed.maximumPixelDeviation
+                microJitterSuppressed.pixelFrameCount,
+                microJitterSuppressed.maximumPixelDeviation
             )
         }
         let postShockLimitedTransforms = playbackTrajectoryZeroPhaseLimitedTransforms(
             frames: frames,
-            rawTransforms: verticalMicroJitterSuppressed.transforms,
+            rawTransforms: microJitterSuppressed.transforms,
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
@@ -4598,7 +4615,25 @@ enum AutoStabilizationEstimator {
         )
     }
 
-    private static func playbackTrajectoryVerticalMicroJitterSuppressedTransforms(
+    private enum PlaybackMicroJitterAxis {
+        case x
+        case y
+    }
+
+    private struct PlaybackMicroJitterAxisStats {
+        var candidateFrameCount = 0
+        var appliedFrameCount = 0
+        var supportRejectedFrameCount = 0
+        var blendRejectedFrameCount = 0
+        var turnRejectedFrameCount = 0
+        var maximumHighFrequency = Float(0.0)
+        var maximumCandidateHighFrequency = Float(0.0)
+        var maximumCorrectionMagnitude = Float(0.0)
+        var maximumTurnOwnership = Float(0.0)
+        var minimumCandidateSupport = Float.greatestFiniteMagnitude
+    }
+
+    private static func playbackTrajectoryMicroJitterSuppressedTransforms(
         frames: [StabilizerAnalysisFrame],
         transforms: [StabilizerAutoTransform],
         outputSize: vector_float2
@@ -4617,146 +4652,196 @@ enum AutoStabilizationEstimator {
 
         let outputReference = max(Float(1.0), min(outputSize.x, outputSize.y))
         let maximumCorrection = max(
-            playbackTrajectoryVerticalMicroJitterMaximumCorrectionPixels,
-            outputReference * playbackTrajectoryVerticalMicroJitterMaximumCorrectionPixelFraction
+            playbackTrajectoryMicroJitterMaximumCorrectionPixels,
+            outputReference * playbackTrajectoryMicroJitterMaximumCorrectionPixelFraction
         )
         let halfWindowSeconds = max(
-            playbackTrajectoryVerticalMicroJitterHalfWindowSeconds,
+            playbackTrajectoryMicroJitterHalfWindowSeconds,
             localFrameStepSeconds(frames: frames, centerIndex: frames.count / 2) * 3.0
         )
         let sigma = max(halfWindowSeconds * 0.5, 1e-6)
-        let finalY = transforms.map(\.pixelOffset.y)
-        var lowFrequencyY = finalY
-
-        for index in transforms.indices {
-            let centerTime = frames[index].time
-            var weightedSum = Float(0.0)
-            var totalWeight = Float(0.0)
-
-            func accumulate(_ sampleIndex: Int) -> Bool {
-                let offset = frames[sampleIndex].time - centerTime
-                guard offset.isFinite,
-                      abs(offset) <= halfWindowSeconds
-                else {
-                    return false
-                }
-                let normalizedDistance = Float(offset / sigma)
-                let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
-                weightedSum += finalY[sampleIndex] * weight
-                totalWeight += weight
-                return true
-            }
-
-            _ = accumulate(index)
-            if index > transforms.startIndex {
-                for sampleIndex in stride(from: index - 1, through: transforms.startIndex, by: -1) {
-                    guard accumulate(sampleIndex) else {
-                        break
-                    }
-                }
-            }
-            if index < transforms.endIndex - 1 {
-                for sampleIndex in (index + 1)..<transforms.endIndex {
-                    guard accumulate(sampleIndex) else {
-                        break
-                    }
-                }
-            }
-            if totalWeight > Float.ulpOfOne {
-                lowFrequencyY[index] = weightedSum / totalWeight
-            }
-        }
 
         var result = transforms
-        var pixelFrameCount = 0
-        var candidateFrameCount = 0
-        var supportRejectedFrameCount = 0
-        var blendRejectedFrameCount = 0
-        var maximumHighFrequency = Float(0.0)
-        var maximumCandidateHighFrequency = Float(0.0)
-        var maximumCorrectionMagnitude = Float(0.0)
-        var minimumCandidateSupport = Float.greatestFiniteMagnitude
 
-        for index in transforms.indices {
-            let transform = transforms[index]
-            let highFrequency = finalY[index] - lowFrequencyY[index]
-            let highFrequencyMagnitude = abs(highFrequency)
-            maximumHighFrequency = max(maximumHighFrequency, highFrequencyMagnitude)
-            guard highFrequencyMagnitude >= playbackTrajectoryVerticalMicroJitterMinimumPixels else {
-                continue
+        func lowFrequencyPath(_ values: [Float]) -> [Float] {
+            var lowFrequency = values
+            for index in transforms.indices {
+                let centerTime = frames[index].time
+                var weightedSum = Float(0.0)
+                var totalWeight = Float(0.0)
+
+                func accumulate(_ sampleIndex: Int) -> Bool {
+                    let offset = frames[sampleIndex].time - centerTime
+                    guard offset.isFinite,
+                          abs(offset) <= halfWindowSeconds
+                    else {
+                        return false
+                    }
+                    let normalizedDistance = Float(offset / sigma)
+                    let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+                    weightedSum += values[sampleIndex] * weight
+                    totalWeight += weight
+                    return true
+                }
+
+                _ = accumulate(index)
+                if index > transforms.startIndex {
+                    for sampleIndex in stride(from: index - 1, through: transforms.startIndex, by: -1) {
+                        guard accumulate(sampleIndex) else {
+                            break
+                        }
+                    }
+                }
+                if index < transforms.endIndex - 1 {
+                    for sampleIndex in (index + 1)..<transforms.endIndex {
+                        guard accumulate(sampleIndex) else {
+                            break
+                        }
+                    }
+                }
+                if totalWeight > Float.ulpOfOne {
+                    lowFrequency[index] = weightedSum / totalWeight
+                }
             }
-            candidateFrameCount += 1
-            maximumCandidateHighFrequency = max(maximumCandidateHighFrequency, highFrequencyMagnitude)
-
-            let trackingSupport = confidenceRamp(
-                max(transform.walkingTrackingConfidence, transform.trackingConfidence),
-                start: 0.16,
-                full: 0.58
-            )
-            let microSupport = confidenceRamp(
-                abs(transform.microPixelOffset.y),
-                start: playbackTrajectoryVerticalMicroJitterMinimumPixels,
-                full: playbackTrajectoryVerticalMicroJitterFullPixels * 2.0
-            )
-            let evidenceSupport = max(
-                confidenceRamp(
-                    highFrequencyMagnitude,
-                    start: playbackTrajectoryVerticalMicroJitterMinimumPixels,
-                    full: playbackTrajectoryVerticalMicroJitterFullPixels
-                ),
-                microSupport * 0.75
-            )
-            let support = trackingSupport * evidenceSupport
-            minimumCandidateSupport = min(minimumCandidateSupport, support)
-            guard support > 0.04 else {
-                supportRejectedFrameCount += 1
-                continue
-            }
-
-            let blend = clamp(
-                support * playbackTrajectoryVerticalMicroJitterMaximumBlend,
-                min: 0.0,
-                max: playbackTrajectoryVerticalMicroJitterMaximumBlend
-            )
-            guard blend > 0.02 else {
-                blendRejectedFrameCount += 1
-                continue
-            }
-
-            let correction = clamp(
-                -highFrequency * blend,
-                min: -maximumCorrection,
-                max: maximumCorrection
-            )
-            guard abs(correction) > Float.ulpOfOne else {
-                continue
-            }
-
-            result[index].pixelOffset.y += correction
-            result[index].microPixelOffset.y += correction
-            result[index].limitedFootstepCorrection.y += correction
-            result[index].temporalSmoothingPixelDelta.y += correction
-            maximumCorrectionMagnitude = max(maximumCorrectionMagnitude, abs(correction))
-            pixelFrameCount += 1
+            return lowFrequency
         }
 
-        if candidateFrameCount > 0 || maximumHighFrequency > playbackTrajectoryVerticalMicroJitterMinimumPixels {
-            let minimumSupportForLog = minimumCandidateSupport == Float.greatestFiniteMagnitude
+        func axisValue(_ vector: vector_float2, axis: PlaybackMicroJitterAxis) -> Float {
+            switch axis {
+            case .x: return vector.x
+            case .y: return vector.y
+            }
+        }
+
+        func applyAxisCorrection(index: Int, axis: PlaybackMicroJitterAxis, correction: Float) {
+            switch axis {
+            case .x:
+                result[index].trajectoryMicroJitterPixelOffset.x += correction
+                result[index].pixelOffset.x += correction
+            case .y:
+                result[index].trajectoryMicroJitterPixelOffset.y += correction
+                result[index].pixelOffset.y += correction
+            }
+        }
+
+        func suppressAxis(
+            _ axis: PlaybackMicroJitterAxis,
+            finalValues: [Float],
+            lowFrequencyValues: [Float]
+        ) -> PlaybackMicroJitterAxisStats {
+            var stats = PlaybackMicroJitterAxisStats()
+            for index in transforms.indices {
+                let transform = transforms[index]
+                let highFrequency = finalValues[index] - lowFrequencyValues[index]
+                let highFrequencyMagnitude = abs(highFrequency)
+                stats.maximumHighFrequency = max(stats.maximumHighFrequency, highFrequencyMagnitude)
+                guard highFrequencyMagnitude >= playbackTrajectoryMicroJitterMinimumPixels else {
+                    continue
+                }
+                stats.candidateFrameCount += 1
+                stats.maximumCandidateHighFrequency = max(stats.maximumCandidateHighFrequency, highFrequencyMagnitude)
+                if axis == .x {
+                    let turnConfidence = clamp(transform.turnConfidence, min: 0.0, max: 1.0)
+                    let turnOwnership = confidenceRamp(
+                        abs(transform.turnDetectedPixelOffset.x),
+                        start: turnMacroOwnershipBandStartPixels,
+                        full: turnMacroOwnershipBandFullPixels
+                    ) * turnConfidence
+                    stats.maximumTurnOwnership = max(stats.maximumTurnOwnership, turnOwnership)
+                    if turnConfidence >= playbackTrajectoryHorizontalMicroJitterTurnHardGateConfidence,
+                       abs(transform.turnDetectedPixelOffset.x) >= turnMacroOwnershipBandStartPixels {
+                        stats.turnRejectedFrameCount += 1
+                        continue
+                    }
+                }
+
+                let trackingSupport = confidenceRamp(
+                    max(transform.walkingTrackingConfidence, transform.trackingConfidence),
+                    start: 0.16,
+                    full: 0.58
+                )
+                let microSupport = confidenceRamp(
+                    abs(axisValue(transform.microPixelOffset, axis: axis)),
+                    start: playbackTrajectoryMicroJitterMinimumPixels,
+                    full: playbackTrajectoryMicroJitterFullPixels * 2.0
+                )
+                let evidenceSupport = max(
+                    confidenceRamp(
+                        highFrequencyMagnitude,
+                        start: playbackTrajectoryMicroJitterMinimumPixels,
+                        full: playbackTrajectoryMicroJitterFullPixels
+                    ),
+                    microSupport * 0.75
+                )
+                let support = trackingSupport * evidenceSupport
+                stats.minimumCandidateSupport = min(stats.minimumCandidateSupport, support)
+                guard support > 0.04 else {
+                    stats.supportRejectedFrameCount += 1
+                    continue
+                }
+
+                let blend = clamp(
+                    support * playbackTrajectoryMicroJitterMaximumBlend,
+                    min: 0.0,
+                    max: playbackTrajectoryMicroJitterMaximumBlend
+                )
+                guard blend > 0.02 else {
+                    stats.blendRejectedFrameCount += 1
+                    continue
+                }
+
+                let correction = clamp(
+                    -highFrequency * blend,
+                    min: -maximumCorrection,
+                    max: maximumCorrection
+                )
+                guard abs(correction) > Float.ulpOfOne else {
+                    continue
+                }
+
+                applyAxisCorrection(index: index, axis: axis, correction: correction)
+                stats.maximumCorrectionMagnitude = max(stats.maximumCorrectionMagnitude, abs(correction))
+                stats.appliedFrameCount += 1
+            }
+            return stats
+        }
+
+        let finalX = transforms.map(\.pixelOffset.x)
+        let finalY = transforms.map(\.pixelOffset.y)
+        let xStats = suppressAxis(.x, finalValues: finalX, lowFrequencyValues: lowFrequencyPath(finalX))
+        let yStats = suppressAxis(.y, finalValues: finalY, lowFrequencyValues: lowFrequencyPath(finalY))
+        let candidateFrameCount = xStats.candidateFrameCount + yStats.candidateFrameCount
+        let pixelFrameCount = xStats.appliedFrameCount + yStats.appliedFrameCount
+        let maximumHighFrequency = max(xStats.maximumHighFrequency, yStats.maximumHighFrequency)
+        let maximumCorrectionMagnitude = max(xStats.maximumCorrectionMagnitude, yStats.maximumCorrectionMagnitude)
+
+        if candidateFrameCount > 0 || maximumHighFrequency > playbackTrajectoryMicroJitterMinimumPixels {
+            let minimumXSupportForLog = xStats.minimumCandidateSupport == Float.greatestFiniteMagnitude
                 ? Float(0.0)
-                : minimumCandidateSupport
+                : xStats.minimumCandidateSupport
+            let minimumYSupportForLog = yStats.minimumCandidateSupport == Float.greatestFiniteMagnitude
+                ? Float(0.0)
+                : yStats.minimumCandidateSupport
             os_log(
-                "Playback trajectory vertical micro-jitter scan | candidates %d applied %d supportReject %d blendReject %d window %.3f maxHighFreq %.3f maxCandidateHighFreq %.3f minCandidateSupport %.3f maxCorrection %.3f",
+                "Playback trajectory micro-jitter scan | xCandidates %d xApplied %d xReject %d xTurnReject %d yCandidates %d yApplied %d yReject %d window %.3f maxHighFreq %.3f maxCandidateX %.3f maxCandidateY %.3f minXSupport %.3f minYSupport %.3f maxCorrectionX %.3f maxCorrectionY %.3f maxTurnOwnership %.3f",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
-                candidateFrameCount,
-                pixelFrameCount,
-                supportRejectedFrameCount,
-                blendRejectedFrameCount,
+                xStats.candidateFrameCount,
+                xStats.appliedFrameCount,
+                xStats.supportRejectedFrameCount + xStats.blendRejectedFrameCount,
+                xStats.turnRejectedFrameCount,
+                yStats.candidateFrameCount,
+                yStats.appliedFrameCount,
+                yStats.supportRejectedFrameCount + yStats.blendRejectedFrameCount,
                 halfWindowSeconds,
                 maximumHighFrequency,
-                maximumCandidateHighFrequency,
-                minimumSupportForLog,
-                maximumCorrectionMagnitude
+                xStats.maximumCandidateHighFrequency,
+                yStats.maximumCandidateHighFrequency,
+                minimumXSupportForLog,
+                minimumYSupportForLog,
+                xStats.maximumCorrectionMagnitude,
+                yStats.maximumCorrectionMagnitude,
+                xStats.maximumTurnOwnership
             )
         }
 
@@ -6219,13 +6304,19 @@ enum AutoStabilizationEstimator {
                 )
             )
 
-            let pixelOffset = macroPixelOffset + microPixelOffset + stridePixelOffset
+            let trajectoryMicroJitterPixelOffset = vector_float2(0.0, 0.0)
+            let pixelOffset = macroPixelOffset
+                + microPixelOffset
+                + stridePixelOffset
+                + trajectoryMicroJitterPixelOffset
             let rotation = macroRotation + microRotation + strideRotation
             return StabilizerAutoTransform(
                 pixelOffset: pixelOffset,
                 macroPixelOffset: macroPixelOffset,
                 microPixelOffset: microPixelOffset,
                 strideWobblePixelOffset: stridePixelOffset,
+                trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
+                trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
                 footstepJitterRotationDegrees: macroRotation + microRotation,
                 strideWobbleRotationDegrees: strideRotation,
                 rotationDegrees: rotation,
@@ -6368,6 +6459,14 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    private static func playbackTrajectoryComposedPixelOffset(_ transform: StabilizerAutoTransform) -> vector_float2 {
+        transform.macroPixelOffset
+            + transform.microPixelOffset
+            + transform.strideWobblePixelOffset
+            + transform.trajectoryMicroJitterPixelOffset
+            + transform.trajectoryContinuityPixelOffset
+    }
+
     private static func playbackTrajectoryLimitedTransform(
         _ current: StabilizerAutoTransform,
         previous: StabilizerAutoTransform,
@@ -6413,6 +6512,7 @@ enum AutoStabilizationEstimator {
         let microRotationLimitScale = 0.60 + (playbackTrajectoryFootstepStepScale * microRotationAuthority)
         let finalRotationLimitScale = 1.0 + (playbackTrajectoryFootstepStepScale * microRotationAuthority)
         var limited = current
+        limited.trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
 
         limited.macroPixelOffset = playbackTrajectoryLimitedVector(
             current.macroPixelOffset,
@@ -6432,13 +6532,14 @@ enum AutoStabilizationEstimator {
         let componentPixelOffset = limited.macroPixelOffset
             + limited.microPixelOffset
             + limited.strideWobblePixelOffset
+            + limited.trajectoryMicroJitterPixelOffset
         let finalPixelOffset = playbackTrajectoryLimitedVector(
             componentPixelOffset,
             previous: previous.pixelOffset,
             limit: pixelLimit * finalPixelLimitScale
         )
-        limited.macroPixelOffset += finalPixelOffset - componentPixelOffset
-        limited.pixelOffset = finalPixelOffset
+        limited.trajectoryContinuityPixelOffset = finalPixelOffset - componentPixelOffset
+        limited.pixelOffset = playbackTrajectoryComposedPixelOffset(limited)
 
         limited.footstepJitterRotationDegrees = playbackTrajectoryLimitedScalar(
             current.footstepJitterRotationDegrees,
@@ -6514,6 +6615,8 @@ enum AutoStabilizationEstimator {
         transform.pixelOffset = transform.macroPixelOffset
             + transform.microPixelOffset
             + transform.strideWobblePixelOffset
+            + transform.trajectoryMicroJitterPixelOffset
+            + transform.trajectoryContinuityPixelOffset
         transform.rotationDegrees = transform.footstepJitterRotationDegrees
             + transform.strideWobbleRotationDegrees
         return playbackTrajectoryTransformWithDiagnosticMetadata(
@@ -6733,6 +6836,8 @@ enum AutoStabilizationEstimator {
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
             + smoothedTransform.microPixelOffset
             + smoothedTransform.strideWobblePixelOffset
+            + smoothedTransform.trajectoryMicroJitterPixelOffset
+            + smoothedTransform.trajectoryContinuityPixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
         smoothedTransform.rawPixelOffset = centerTransform.pixelOffset
@@ -7648,6 +7753,8 @@ enum AutoStabilizationEstimator {
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
+            trajectoryMicroJitterPixelOffset: vector_float2(0.0, 0.0),
+            trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation,
@@ -8560,6 +8667,8 @@ enum AutoStabilizationEstimator {
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
+            trajectoryMicroJitterPixelOffset: vector_float2(0.0, 0.0),
+            trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation,
@@ -8794,6 +8903,8 @@ enum AutoStabilizationEstimator {
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
             + smoothedTransform.microPixelOffset
             + smoothedTransform.strideWobblePixelOffset
+            + smoothedTransform.trajectoryMicroJitterPixelOffset
+            + smoothedTransform.trajectoryContinuityPixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
@@ -9321,10 +9432,11 @@ enum AutoStabilizationEstimator {
         _ samples: [(transform: StabilizerAutoTransform, weight: Float)]
     ) -> StabilizerAutoTransform {
         var totalWeight: Float = 0.0
-        var pixelOffset = vector_float2(0.0, 0.0)
         var macroPixelOffset = vector_float2(0.0, 0.0)
         var microPixelOffset = vector_float2(0.0, 0.0)
         var strideWobblePixelOffset = vector_float2(0.0, 0.0)
+        var trajectoryMicroJitterPixelOffset = vector_float2(0.0, 0.0)
+        var trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
         var footstepJitterRotationDegrees: Float = 0.0
         var strideWobbleRotationDegrees: Float = 0.0
         var rotationDegrees: Float = 0.0
@@ -9360,10 +9472,11 @@ enum AutoStabilizationEstimator {
             let transform = sample.transform
             let weight = sample.weight
             totalWeight += weight
-            pixelOffset += transform.pixelOffset * weight
             macroPixelOffset += transform.macroPixelOffset * weight
             microPixelOffset += transform.microPixelOffset * weight
             strideWobblePixelOffset += transform.strideWobblePixelOffset * weight
+            trajectoryMicroJitterPixelOffset += transform.trajectoryMicroJitterPixelOffset * weight
+            trajectoryContinuityPixelOffset += transform.trajectoryContinuityPixelOffset * weight
             footstepJitterRotationDegrees += transform.footstepJitterRotationDegrees * weight
             strideWobbleRotationDegrees += transform.strideWobbleRotationDegrees * weight
             rotationDegrees += transform.rotationDegrees * weight
@@ -9398,12 +9511,23 @@ enum AutoStabilizationEstimator {
         guard totalWeight > 0.0 else {
             return .identity
         }
+        let averagedMacroPixelOffset = macroPixelOffset / totalWeight
+        let averagedMicroPixelOffset = microPixelOffset / totalWeight
+        let averagedStrideWobblePixelOffset = strideWobblePixelOffset / totalWeight
+        let averagedTrajectoryMicroJitterPixelOffset = trajectoryMicroJitterPixelOffset / totalWeight
+        let averagedTrajectoryContinuityPixelOffset = trajectoryContinuityPixelOffset / totalWeight
 
         return StabilizerAutoTransform(
-            pixelOffset: pixelOffset / totalWeight,
-            macroPixelOffset: macroPixelOffset / totalWeight,
-            microPixelOffset: microPixelOffset / totalWeight,
-            strideWobblePixelOffset: strideWobblePixelOffset / totalWeight,
+            pixelOffset: averagedMacroPixelOffset
+                + averagedMicroPixelOffset
+                + averagedStrideWobblePixelOffset
+                + averagedTrajectoryMicroJitterPixelOffset
+                + averagedTrajectoryContinuityPixelOffset,
+            macroPixelOffset: averagedMacroPixelOffset,
+            microPixelOffset: averagedMicroPixelOffset,
+            strideWobblePixelOffset: averagedStrideWobblePixelOffset,
+            trajectoryMicroJitterPixelOffset: averagedTrajectoryMicroJitterPixelOffset,
+            trajectoryContinuityPixelOffset: averagedTrajectoryContinuityPixelOffset,
             footstepJitterRotationDegrees: footstepJitterRotationDegrees / totalWeight,
             strideWobbleRotationDegrees: strideWobbleRotationDegrees / totalWeight,
             rotationDegrees: rotationDegrees / totalWeight,

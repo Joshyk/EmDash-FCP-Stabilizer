@@ -48,10 +48,10 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.377"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 377.0
+private let tokyoWalkingStabilizerVersion = "1.0.379"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 379.0
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_335_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_337_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -6104,7 +6104,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         var transform = currentTransform
         transform.macroPixelOffset = currentTransform.macroPixelOffset - macroDelta
-        transform.pixelOffset = transform.macroPixelOffset + transform.microPixelOffset + transform.strideWobblePixelOffset
+        transform.pixelOffset = transform.macroPixelOffset
+            + transform.microPixelOffset
+            + transform.strideWobblePixelOffset
+            + transform.trajectoryMicroJitterPixelOffset
+            + transform.trajectoryContinuityPixelOffset
         transform.rawPixelOffset = transform.pixelOffset
         let rollDelta = targetSample.pathRoll - currentSample.pathRoll
         transform.rotationDegrees = currentTransform.rotationDegrees - rollDelta
@@ -6886,10 +6890,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedMacroPixelOffset = autoTransform.macroPixelOffset * masterStrength
             let appliedMicroPixelOffset = autoTransform.microPixelOffset * masterStrength
             let appliedStrideWobblePixelOffset = autoTransform.strideWobblePixelOffset * masterStrength
+            let appliedTrajectoryMicroJitterPixelOffset = autoTransform.trajectoryMicroJitterPixelOffset * masterStrength
+            let appliedTrajectoryContinuityPixelOffset = autoTransform.trajectoryContinuityPixelOffset * masterStrength
             let appliedTurnDetectedPixelOffset = autoTransform.turnDetectedPixelOffset * masterStrength
+            let componentPixelOffset = appliedMacroPixelOffset
+                + appliedMicroPixelOffset
+                + appliedStrideWobblePixelOffset
+                + appliedTrajectoryMicroJitterPixelOffset
+                + appliedTrajectoryContinuityPixelOffset
+            let componentResidualPixelOffset = appliedPixelOffset - componentPixelOffset
             let appliedTransformDelta = sameIdentity ? transformDelta * masterStrength : vector_float2(0.0, 0.0)
             let componentMessage = String(
-                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f turnX=%.5f turnY=%.5f cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f proxy=%@ crop=%@ identity=%@",
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f proxy=%@ crop=%@ identity=%@",
                 analysisSeconds,
                 samplePosition,
                 lowerIndex,
@@ -6904,6 +6916,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 appliedMicroPixelOffset.y,
                 appliedStrideWobblePixelOffset.x,
                 appliedStrideWobblePixelOffset.y,
+                appliedTrajectoryMicroJitterPixelOffset.x,
+                appliedTrajectoryMicroJitterPixelOffset.y,
+                appliedTrajectoryContinuityPixelOffset.x,
+                appliedTrajectoryContinuityPixelOffset.y,
+                componentResidualPixelOffset.x,
+                componentResidualPixelOffset.y,
                 appliedTurnDetectedPixelOffset.x,
                 appliedTurnDetectedPixelOffset.y,
                 autoCropFraming.positionPixels.x,
@@ -9219,7 +9237,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let cropTelemetry = autoCropFraming.telemetry
         let cropMergeSuffix = cropTelemetry.mergeBypassed ? " bypass" : ""
         let status = String(
-            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f | crop z %.3f miss %d worst %.4f/%.4f@%.1f merge %d/%d%@",
+            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f | traj micro %.2f %.2f cont %.2f %.2f | crop z %.3f miss %d worst %.4f/%.4f@%.1f merge %d/%d%@",
             frameCount,
             tokyoWalkingStabilizerVersion,
             autoTransform.warpConfidence,
@@ -9266,6 +9284,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform.strideWobblePixelOffset.x,
             autoTransform.microPixelOffset.y,
             autoTransform.strideWobblePixelOffset.y,
+            autoTransform.trajectoryMicroJitterPixelOffset.x,
+            autoTransform.trajectoryMicroJitterPixelOffset.y,
+            autoTransform.trajectoryContinuityPixelOffset.x,
+            autoTransform.trajectoryContinuityPixelOffset.y,
             autoCropFraming.scale,
             cropTelemetry.missCount,
             cropTelemetry.worstPlannedScale,

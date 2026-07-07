@@ -864,6 +864,12 @@ columns = [
     "microPixelOffset.y",
     "strideWobblePixelOffset.x",
     "strideWobblePixelOffset.y",
+    "trajectoryMicroJitterPixelOffset.x",
+    "trajectoryMicroJitterPixelOffset.y",
+    "trajectoryContinuityPixelOffset.x",
+    "trajectoryContinuityPixelOffset.y",
+    "componentResidual.x",
+    "componentResidual.y",
     "turnDetectedPixelOffset.x",
     "turnDetectedPixelOffset.y",
     "cropPosition.x",
@@ -888,6 +894,12 @@ source_keys = {
     "microPixelOffset.y": "microY",
     "strideWobblePixelOffset.x": "strideX",
     "strideWobblePixelOffset.y": "strideY",
+    "trajectoryMicroJitterPixelOffset.x": "trajectoryMicroX",
+    "trajectoryMicroJitterPixelOffset.y": "trajectoryMicroY",
+    "trajectoryContinuityPixelOffset.x": "trajectoryContinuityX",
+    "trajectoryContinuityPixelOffset.y": "trajectoryContinuityY",
+    "componentResidual.x": "componentResidualX",
+    "componentResidual.y": "componentResidualY",
     "turnDetectedPixelOffset.x": "turnX",
     "turnDetectedPixelOffset.y": "turnY",
     "cropPosition.x": "cropX",
@@ -942,6 +954,24 @@ if has_focus_contract:
             "Render component diagnostics focus window has multiple cache identities: "
             f"{sorted(identities)} log={log_path}"
         )
+
+component_residual_rows = focus_rows if focus_rows else rows
+max_component_residual = 0.0
+component_residual_count = 0
+for row in component_residual_rows:
+    residual_x = float_value(row, "componentResidualX")
+    residual_y = float_value(row, "componentResidualY")
+    if math.isfinite(residual_x) and math.isfinite(residual_y):
+        max_component_residual = max(max_component_residual, math.hypot(residual_x, residual_y))
+        component_residual_count += 1
+if component_residual_count > 0:
+    max_allowed_component_residual = float(diagnostic_contract.get("maxComponentResidualPixels", 0.02))
+    if max_component_residual > max_allowed_component_residual:
+        raise SystemExit(
+            "Render component diagnostics component residual failed: "
+            f"maxResidual={max_component_residual:.5f}px "
+            f"limit={max_allowed_component_residual:.5f}px rows={component_residual_count} log={log_path}"
+        )
 write_csv(csv_path, rows)
 write_csv(focus_path, focus_rows)
 
@@ -969,6 +999,7 @@ with points_path.open("w", newline="", encoding="utf-8") as handle:
 print(
     "Render component diagnostics: "
     f"rows={len(rows)} focusRows={len(focus_rows)} "
+    f"componentResidualMax={max_component_residual:.5f}px "
     f"csv={csv_path} focus={focus_path} points={points_path}"
 )
 PY
@@ -1998,17 +2029,27 @@ set_fcp_green_channel() {
 
 debug_overlay_visible_now() {
 	local label="${1:-debug overlay precheck}"
+	local provided_viewer_roi="${2:-}"
 	local viewer_roi
 	local screenshot_path
-	if ! viewer_roi="$(current_fcp_viewer_roi 2>/dev/null)"; then
-		return 1
+	if [[ -n "$provided_viewer_roi" ]]; then
+		viewer_roi="$provided_viewer_roi"
+		printf 'Debug Overlay probe: using prepared Viewer ROI (%s): %s\n' "$label" "$viewer_roi"
+	else
+		printf 'Debug Overlay probe: current Viewer ROI (%s)\n' "$label"
+		if ! viewer_roi="$(current_fcp_viewer_roi 2>/dev/null)"; then
+			printf 'Debug Overlay probe: could not read current Viewer ROI (%s)\n' "$label" >&2
+			return 1
+		fi
 	fi
 	mkdir -p "$ARTIFACT_ROOT"
 	screenshot_path="${ARTIFACT_ROOT}/fcp_debug_overlay_probe_$(date +%Y%m%d_%H%M%S).png"
+	printf 'Debug Overlay probe: screenshot (%s)\n' "$label"
 	/usr/sbin/screencapture -x "$screenshot_path" || return 1
 	if ! viewer_roi="$(clamp_viewer_roi_to_screenshot_bounds "$viewer_roi" "$screenshot_path")"; then
 		return 1
 	fi
+	printf 'Debug Overlay probe: image assertion (%s)\n' "$label"
 	assert_debug_overlay_visible_in_screenshot "$screenshot_path" "$viewer_roi" "$label"
 }
 
@@ -2232,8 +2273,9 @@ APPLESCRIPT
 }
 
 set_fcp_debug_overlay_on() {
+	local viewer_roi="${1:-}"
 	[[ -f "$FCP_HELPER" ]] || fail "missing FCP helper: ${FCP_HELPER}"
-	if debug_overlay_visible_now "Debug Overlay precheck"; then
+	if debug_overlay_visible_now "Debug Overlay precheck" "$viewer_roi"; then
 		printf 'Tokyo Walking Stabilizer Debug Overlay already visible in Viewer.\n'
 		return 0
 	fi
@@ -2245,12 +2287,12 @@ set_fcp_debug_overlay_on() {
 		local result
 		result="$(cat "$output_file")"
 		rm -f "$output_file"
-		if debug_overlay_visible_now "Debug Overlay after helper failure"; then
+		if debug_overlay_visible_now "Debug Overlay after helper failure" "$viewer_roi"; then
 			printf 'Tokyo Walking Stabilizer Debug Overlay is visible despite Inspector checkbox failure.\n'
 			return 0
 		fi
 		printf 'Debug Overlay helper failed; retrying with local AX label/row checkbox search. Detail: %s\n' "$result" >&2
-		if set_fcp_debug_overlay_on_via_local_ax && debug_overlay_visible_now "Debug Overlay after local AX retry"; then
+		if set_fcp_debug_overlay_on_via_local_ax && debug_overlay_visible_now "Debug Overlay after local AX retry" "$viewer_roi"; then
 			printf 'Tokyo Walking Stabilizer Debug Overlay set to: on via local AX retry.\n'
 			return 0
 		fi
@@ -2258,7 +2300,7 @@ set_fcp_debug_overlay_on() {
 	fi
 	cat "$output_file"
 	rm -f "$output_file"
-	if ! debug_overlay_visible_now "Debug Overlay after enabling"; then
+	if ! debug_overlay_visible_now "Debug Overlay after enabling" "$viewer_roi"; then
 		fail "Tokyo Walking Stabilizer Debug Overlay was enabled in Inspector but is not visible in the Viewer"
 	fi
 	printf 'Tokyo Walking Stabilizer Debug Overlay set to: on\n'
@@ -2445,14 +2487,23 @@ APPLESCRIPT
 
 normalize_fcp_layout() {
 	printf 'Normalizing FCP layout for screen-capture E2E...\n'
+	printf 'FCP layout normalize: window frame\n'
 	normalize_fcp_window_frame
 	local blocker_result
 	blocker_result="$(dismiss_known_screen_blockers)"
 	fail_if_known_screen_blocked "$blocker_result"
 	printf 'Known screen-blocking dialog state before layout normalize: %s\n' "$blocker_result"
-	set_fcp_toolbar_checkbox "Show or hide the Browser" 0 >/dev/null
-	set_fcp_toolbar_checkbox "Show or hide the Inspector" 0 >/dev/null
+	printf 'FCP layout normalize: hide Browser\n'
+	if ! set_fcp_toolbar_checkbox "Show or hide the Browser" 0 >/dev/null; then
+		printf 'FCP layout normalize: Browser toolbar checkbox was not set; continuing because Viewer ROI/effect preflights remain authoritative.\n' >&2
+	fi
+	printf 'FCP layout normalize: hide Inspector\n'
+	if ! set_fcp_toolbar_checkbox "Show or hide the Inspector" 0 >/dev/null; then
+		printf 'FCP layout normalize: Inspector toolbar checkbox was not set; continuing because Viewer ROI/effect preflights remain authoritative.\n' >&2
+	fi
+	printf 'FCP layout normalize: viewer zoom fit\n'
 	set_viewer_zoom_to_fit
+	printf 'FCP layout normalize: focus timeline\n'
 	focus_timeline
 }
 
@@ -2509,7 +2560,9 @@ APPLESCRIPT
 assert_inspector_contains_case_effect() {
 	local expected_effect="$1"
 	local remove_black_edges="$2"
-	/usr/bin/osascript - "$expected_effect" "$remove_black_edges" <<'APPLESCRIPT' &
+	local output_file
+	output_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-inspector-effect.XXXXXX")"
+	/usr/bin/osascript - "$expected_effect" "$remove_black_edges" >"$output_file" 2>&1 <<'APPLESCRIPT' &
 on run argv
 	set expectedEffect to item 1 of argv
 	set requireRemoveBlackEdges to item 2 of argv
@@ -2641,7 +2694,14 @@ on firstElementContainingText(elementRef, targetText, currentDepth, maxDepth)
 end firstElementContainingText
 APPLESCRIPT
 	local osascript_pid=$!
-	wait_for_ui_osascript "$osascript_pid" "Inspector effect text" 300 0
+	if wait_for_ui_osascript "$osascript_pid" "Inspector effect text" 300 0; then
+		cat "$output_file"
+		rm -f "$output_file"
+		return 0
+	fi
+	cat "$output_file" >&2
+	rm -f "$output_file"
+	return 1
 }
 
 set_fcp_remove_black_edges_on_via_local_ax() {
@@ -4492,6 +4552,7 @@ assert_case_prepared() {
 	sleep 0.4
 	ensure_selected_timeline_clip_enabled
 	sleep 0.4
+	printf 'Checking Inspector for expected Stabilizer controls...\n'
 	if assert_inspector_contains_case_effect "$expected_effect" "$remove_black_edges"; then
 		printf 'Inspector shows expected Stabilizer controls.\n'
 	else
@@ -4502,7 +4563,7 @@ assert_case_prepared() {
 			|| fail "case requires Remove Black Edges on, but the Inspector checkbox could not be enabled"
 		printf 'Remove Black Edges set to: on\n'
 	fi
-	set_fcp_debug_overlay_on
+	set_fcp_debug_overlay_on "$viewer_roi"
 	assert_inspector_contains_case_effect_if_readable "$expected_effect" "$remove_black_edges"
 	normalize_fcp_layout
 	set_fcp_proxy_only
@@ -4582,7 +4643,7 @@ capture_case() {
 	sleep 0.6
 	select_playhead_clip
 	sleep 0.2
-	set_fcp_debug_overlay_on
+	set_fcp_debug_overlay_on "$viewer_roi"
 	normalize_fcp_layout
 	set_fcp_proxy_only
 	set_fcp_green_channel
@@ -4599,7 +4660,7 @@ capture_case() {
 	fi
 	wait_for_target_playback_plan_ready "$case_file" "$timecode_entry"
 	assert_fcp_viewer_not_nothing_loaded_with_proxy_warmup "$(json_value "$case_file" project)" "$timecode_entry"
-	set_fcp_debug_overlay_on
+	set_fcp_debug_overlay_on "$viewer_roi"
 	normalize_fcp_layout
 	set_fcp_proxy_only
 	set_fcp_green_channel
