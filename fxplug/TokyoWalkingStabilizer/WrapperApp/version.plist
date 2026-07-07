@@ -5,12 +5,12 @@
 	<key>BuildVersion</key>
 	<string>100</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.379</string>
+	<string>1.0.380</string>
 	<key>CFBundleVersion</key>
-	<string>909</string>
+	<string>910</string>
 	<key>ProjectName</key>
 	<string>FxPlugExtras</string>
 	<key>SourceVersion</key>
-	<string>38286007012000000</string>
+	<string>38286007013000000</string>
 </dict>
 </plist>

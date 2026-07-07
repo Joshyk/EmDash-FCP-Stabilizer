@@ -43,6 +43,9 @@ private struct Strengths {
     )
 }
 
+private let legacyFullTurnSmoothingStrength: Float = 12.0
+private let maximumTurnSmoothingStrength: Float = 36.0
+
 private struct PersistedHostAnalysisCache: Decodable {
     let schemaVersion: Int
     let requestedSampleScalePercent: Double?
@@ -3920,7 +3923,8 @@ private func percentileValue(_ values: [Float], indices: [Int], percentile: Floa
 }
 
 private func correctionFactor(_ strength: Double, confidence: Float) -> Float {
-    let requested = clamp(Float(strength), min: 0.0, max: 12.0)
+    let boundedStrength = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
+    let requested = min(boundedStrength, legacyFullTurnSmoothingStrength)
     let response = turnCorrectionConfidenceResponse(confidence)
     let direct = min(requested, 1.0) * response
     let boost = max(0.0, requested - 1.0) * 0.55 * response * (1.0 - (response * 0.25))

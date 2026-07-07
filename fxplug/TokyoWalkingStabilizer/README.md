@@ -265,8 +265,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,
   so long prepared caches do not require repeated full-cache scans during playback.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
-  It does not change Y or roll, defaults to `12.0`, runs up to `12.0`, and the macro
-  correction is soft-limited to a small output-edge budget. Render playback applies an
+  It does not change Y or roll, defaults to `12.0`, runs up to `36.0`, and the macro
+  correction is soft-limited to a small output-edge budget through `12.0`. Values above
+  `12.0` add crop-aware X turn soft-limit headroom without changing Y or roll. Render playback applies an
   additional `2.8` second zero-phase transition pass to the macro X correction so the start
   and end of walking turns do not step between corrections, even across short low-confidence
   tracking dropouts. When Auto Crop is active, large X-turn travel automatically expands

@@ -843,7 +843,8 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleFullScaleDegrees: Float = 0.16
     private static let strideWobbleFullResponseScale: Float = 0.55
     private static let turnSmoothingFullScalePixels: Float = 2.0
-    private static let maximumTurnSmoothingStrength: Float = 12.0
+    private static let legacyFullTurnSmoothingStrength: Float = 12.0
+    private static let maximumTurnSmoothingStrength: Float = 36.0
     private static let turnOwnershipFootstepXSuppression: Float = 1.0
     private static let turnOwnershipFootstepYSuppression: Float = 0.65
     private static let turnOwnershipFootstepRollSuppression: Float = 0.55
@@ -12867,13 +12868,24 @@ enum AutoStabilizationEstimator {
         usesAutoCropTurnSpace: Bool,
         strength: Double
     ) -> Float {
-        let extraStrength = clamp(Float(strength - 1.0), min: 0.0, max: 3.0)
+        let boundedStrength = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
+        let extraStrength = clamp(boundedStrength - 1.0, min: 0.0, max: 3.0)
         let cropSpaceStrength = clamp(
-            Float((strength - 1.0) / max(1.0, Double(maximumTurnSmoothingStrength - 1.0))),
+            (boundedStrength - 1.0) / max(1.0, legacyFullTurnSmoothingStrength - 1.0),
             min: 0.0,
             max: 1.0
         )
-        let cropSpaceFraction = usesAutoCropTurnSpace ? autoCropFraction * cropSpaceStrength : 0.0
+        let extendedCropSpaceStrength = clamp(
+            (boundedStrength - legacyFullTurnSmoothingStrength) / max(1.0, maximumTurnSmoothingStrength - legacyFullTurnSmoothingStrength),
+            min: 0.0,
+            max: 1.0
+        )
+        let cropSpaceFraction: Float
+        if usesAutoCropTurnSpace {
+            cropSpaceFraction = autoCropFraction * (cropSpaceStrength + extendedCropSpaceStrength)
+        } else {
+            cropSpaceFraction = 0.0
+        }
         let fraction = baseFraction + (extraFraction * extraStrength) + cropSpaceFraction
         return max(8.0, outputPixels * fraction)
     }
@@ -14487,7 +14499,7 @@ enum AutoStabilizationEstimator {
     }
 
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
-        let requestedRemoval = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
+        let requestedRemoval = clamp(Float(strength), min: 0.0, max: legacyFullTurnSmoothingStrength)
         let confidenceResponse = turnCorrectionConfidenceResponse(confidence)
         let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
         let confidenceBoost = max(0.0, requestedRemoval - 1.0)
