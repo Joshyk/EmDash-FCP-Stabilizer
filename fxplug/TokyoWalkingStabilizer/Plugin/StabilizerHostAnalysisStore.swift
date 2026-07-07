@@ -83,6 +83,10 @@ private struct PersistedHostAnalysisCache: Codable {
     let lensBandConfidence: [Float]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
+    let sourceLensShakeLocalBinCount: Int?
+    let sourceLensShakeLocalPathX: [Float]?
+    let sourceLensShakeLocalPathY: [Float]?
+    let sourceLensShakeLocalSupport: [Float]?
     let footstepPathX: [Float]?
     let footstepPathY: [Float]?
     let footstepPathRoll: [Float]?
@@ -242,8 +246,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 39
-    private static let supportedCacheSchemaVersions: Set<Int> = [39]
+    private static let cacheSchemaVersion = 40
+    private static let supportedCacheSchemaVersions: Set<Int> = [40]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1831,6 +1835,10 @@ final class StabilizerHostAnalysisStore {
             lensBandConfidence: prepared.lensBandConfidence,
             sourceLensShakeRidgePathY: prepared.sourceLensShakeRidgePathY,
             sourceLensShakeRidgeSupport: prepared.sourceLensShakeRidgeSupport,
+            sourceLensShakeLocalBinCount: prepared.sourceLensShakeLocalBinCount,
+            sourceLensShakeLocalPathX: prepared.sourceLensShakeLocalPathX,
+            sourceLensShakeLocalPathY: prepared.sourceLensShakeLocalPathY,
+            sourceLensShakeLocalSupport: prepared.sourceLensShakeLocalSupport,
             footstepPathX: prepared.footstepPathX,
             footstepPathY: prepared.footstepPathY,
             footstepPathRoll: prepared.footstepPathRoll,
@@ -1991,6 +1999,10 @@ final class StabilizerHostAnalysisStore {
                 lensBandConfidence: analysis.lensBandConfidence,
                 sourceLensShakeRidgePathY: analysis.sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: analysis.sourceLensShakeRidgeSupport,
+                sourceLensShakeLocalBinCount: analysis.sourceLensShakeLocalBinCount,
+                sourceLensShakeLocalPathX: analysis.sourceLensShakeLocalPathX,
+                sourceLensShakeLocalPathY: analysis.sourceLensShakeLocalPathY,
+                sourceLensShakeLocalSupport: analysis.sourceLensShakeLocalSupport,
                 analysisConfidence: analysis.analysisConfidence,
                 warpConfidence: analysis.warpConfidence,
                 acceptedBlockCounts: analysis.acceptedBlockCounts,
@@ -3065,8 +3077,15 @@ final class StabilizerHostAnalysisStore {
             cache.searchRadiusHitCounts,
             cache.searchRadiusTotalCounts
         ]
+        let localBinCount = cache.sourceLensShakeLocalBinCount ?? 0
+        let localPathCount = frames.count * localBinCount
+        let hasCompleteLocalLensShake = localBinCount == AutoStabilizationEstimator.sourceLensShakeLocalBinCount
+            && cache.sourceLensShakeLocalPathX?.count == localPathCount
+            && cache.sourceLensShakeLocalPathY?.count == localPathCount
+            && cache.sourceLensShakeLocalSupport?.count == localPathCount
         if floatArrays.allSatisfy({ $0?.count == frames.count }),
            countArrays.allSatisfy({ $0?.count == frames.count }),
+           hasCompleteLocalLensShake,
            let residuals = cache.residuals,
            let rollMotion = cache.rollMotion,
            let pathX = cache.pathX,
@@ -3103,6 +3122,9 @@ final class StabilizerHostAnalysisStore {
            let lensBandConfidence = cache.lensBandConfidence,
            let sourceLensShakeRidgePathY = cache.sourceLensShakeRidgePathY,
            let sourceLensShakeRidgeSupport = cache.sourceLensShakeRidgeSupport,
+           let sourceLensShakeLocalPathX = cache.sourceLensShakeLocalPathX,
+           let sourceLensShakeLocalPathY = cache.sourceLensShakeLocalPathY,
+           let sourceLensShakeLocalSupport = cache.sourceLensShakeLocalSupport,
            let footstepPathX = cache.footstepPathX,
            let footstepPathY = cache.footstepPathY,
            let footstepPathRoll = cache.footstepPathRoll,
@@ -3169,6 +3191,10 @@ final class StabilizerHostAnalysisStore {
                 lensBandConfidence: lensBandConfidence,
                 sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: sourceLensShakeRidgeSupport,
+                sourceLensShakeLocalBinCount: localBinCount,
+                sourceLensShakeLocalPathX: sourceLensShakeLocalPathX,
+                sourceLensShakeLocalPathY: sourceLensShakeLocalPathY,
+                sourceLensShakeLocalSupport: sourceLensShakeLocalSupport,
                 analysisConfidence: analysisConfidence,
                 warpConfidence: warpConfidence,
                 acceptedBlockCounts: acceptedBlockCounts,
@@ -3256,6 +3282,26 @@ final class StabilizerHostAnalysisStore {
             }
             if values.count != frameCount {
                 return "\(name) has \(values.count) values but frames has \(frameCount)"
+            }
+        }
+        guard let localBinCount = cache.sourceLensShakeLocalBinCount else {
+            return "sourceLensShakeLocalBinCount is missing"
+        }
+        if localBinCount != AutoStabilizationEstimator.sourceLensShakeLocalBinCount {
+            return "sourceLensShakeLocalBinCount is \(localBinCount) but expected \(AutoStabilizationEstimator.sourceLensShakeLocalBinCount)"
+        }
+        let expectedLocalCount = frameCount * localBinCount
+        let localFloatArrays: [(String, [Float]?)] = [
+            ("sourceLensShakeLocalPathX", cache.sourceLensShakeLocalPathX),
+            ("sourceLensShakeLocalPathY", cache.sourceLensShakeLocalPathY),
+            ("sourceLensShakeLocalSupport", cache.sourceLensShakeLocalSupport)
+        ]
+        for (name, values) in localFloatArrays {
+            guard let values else {
+                return "\(name) is missing"
+            }
+            if values.count != expectedLocalCount {
+                return "\(name) has \(values.count) values but expected \(expectedLocalCount)"
             }
         }
         return nil
@@ -3514,6 +3560,10 @@ final class StabilizerHostAnalysisStore {
                 lensBandConfidence: cache.lensBandConfidence,
                 sourceLensShakeRidgePathY: cache.sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: cache.sourceLensShakeRidgeSupport,
+                sourceLensShakeLocalBinCount: cache.sourceLensShakeLocalBinCount,
+                sourceLensShakeLocalPathX: cache.sourceLensShakeLocalPathX,
+                sourceLensShakeLocalPathY: cache.sourceLensShakeLocalPathY,
+                sourceLensShakeLocalSupport: cache.sourceLensShakeLocalSupport,
                 footstepPathX: cache.footstepPathX,
                 footstepPathY: cache.footstepPathY,
                 footstepPathRoll: cache.footstepPathRoll,

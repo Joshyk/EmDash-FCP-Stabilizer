@@ -7068,6 +7068,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if (mask & 4) != 0 { parts.append("regionCluster") }
         if (mask & 8) != 0 { parts.append("localRoll") }
         if (mask & 16) != 0 { parts.append("sourceRidge") }
+        if (mask & 32) != 0 { parts.append("sourceLocal") }
         return parts.joined(separator: ",")
     }
 
@@ -7267,8 +7268,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensBandTopRowPhaseOffset = autoTransform.lensBandTopRowPhaseOffset * masterStrength
             let appliedLensBandRidgeRowPhaseOffset = autoTransform.lensBandRidgeRowPhaseOffset * masterStrength
             let appliedLensBandMidRowPhaseOffset = autoTransform.lensBandMidRowPhaseOffset * masterStrength
+            let appliedSourceLensShakeLocalTopLeftOffset = autoTransform.sourceLensShakeLocalTopLeftOffset * masterStrength
+            let appliedSourceLensShakeLocalTopCenterOffset = autoTransform.sourceLensShakeLocalTopCenterOffset * masterStrength
+            let appliedSourceLensShakeLocalTopRightOffset = autoTransform.sourceLensShakeLocalTopRightOffset * masterStrength
+            let appliedSourceLensShakeLocalRidgeLeftOffset = autoTransform.sourceLensShakeLocalRidgeLeftOffset * masterStrength
+            let appliedSourceLensShakeLocalRidgeCenterOffset = autoTransform.sourceLensShakeLocalRidgeCenterOffset * masterStrength
+            let appliedSourceLensShakeLocalRidgeRightOffset = autoTransform.sourceLensShakeLocalRidgeRightOffset * masterStrength
+            let appliedSourceLensShakeLocalMidLeftOffset = autoTransform.sourceLensShakeLocalMidLeftOffset * masterStrength
+            let appliedSourceLensShakeLocalMidCenterOffset = autoTransform.sourceLensShakeLocalMidCenterOffset * masterStrength
+            let appliedSourceLensShakeLocalMidRightOffset = autoTransform.sourceLensShakeLocalMidRightOffset * masterStrength
             let componentMessage = String(
-                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f lensBandCorrectionModel=%@ lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f lensBandCorrectionModel=%@ lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
                 analysisSeconds,
                 samplePosition,
                 lowerIndex,
@@ -7333,6 +7343,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoTransform.sourceLensShakeRidgeOffset.y * masterStrength,
                 autoTransform.sourceLensShakeRidgeSupport,
                 autoTransform.sourceLensShakeRidgeApplied,
+                autoTransform.sourceLensShakeLocalSupport,
+                autoTransform.sourceLensShakeLocalApplied,
+                appliedSourceLensShakeLocalTopLeftOffset.x,
+                appliedSourceLensShakeLocalTopLeftOffset.y,
+                appliedSourceLensShakeLocalTopCenterOffset.x,
+                appliedSourceLensShakeLocalTopCenterOffset.y,
+                appliedSourceLensShakeLocalTopRightOffset.x,
+                appliedSourceLensShakeLocalTopRightOffset.y,
+                appliedSourceLensShakeLocalRidgeLeftOffset.x,
+                appliedSourceLensShakeLocalRidgeLeftOffset.y,
+                appliedSourceLensShakeLocalRidgeCenterOffset.x,
+                appliedSourceLensShakeLocalRidgeCenterOffset.y,
+                appliedSourceLensShakeLocalRidgeRightOffset.x,
+                appliedSourceLensShakeLocalRidgeRightOffset.y,
+                appliedSourceLensShakeLocalMidLeftOffset.x,
+                appliedSourceLensShakeLocalMidLeftOffset.y,
+                appliedSourceLensShakeLocalMidCenterOffset.x,
+                appliedSourceLensShakeLocalMidCenterOffset.y,
+                appliedSourceLensShakeLocalMidRightOffset.x,
+                appliedSourceLensShakeLocalMidRightOffset.y,
                 componentResidualPixelOffset.x,
                 componentResidualPixelOffset.y,
                 appliedTurnDetectedPixelOffset.x,
@@ -7372,7 +7402,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 componentMessage
             )
             let lensBandMessage = String(
-                format: "Render lens band csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f",
+                format: "Render lens band csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f",
                 analysisSeconds,
                 samplePosition,
                 frames.count,
@@ -7407,7 +7437,27 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoTransform.lensBandMidLocalRoll * masterStrength,
                 autoTransform.sourceLensShakeRidgeOffset.y * masterStrength,
                 autoTransform.sourceLensShakeRidgeSupport,
-                autoTransform.sourceLensShakeRidgeApplied
+                autoTransform.sourceLensShakeRidgeApplied,
+                autoTransform.sourceLensShakeLocalSupport,
+                autoTransform.sourceLensShakeLocalApplied,
+                appliedSourceLensShakeLocalTopLeftOffset.x,
+                appliedSourceLensShakeLocalTopLeftOffset.y,
+                appliedSourceLensShakeLocalTopCenterOffset.x,
+                appliedSourceLensShakeLocalTopCenterOffset.y,
+                appliedSourceLensShakeLocalTopRightOffset.x,
+                appliedSourceLensShakeLocalTopRightOffset.y,
+                appliedSourceLensShakeLocalRidgeLeftOffset.x,
+                appliedSourceLensShakeLocalRidgeLeftOffset.y,
+                appliedSourceLensShakeLocalRidgeCenterOffset.x,
+                appliedSourceLensShakeLocalRidgeCenterOffset.y,
+                appliedSourceLensShakeLocalRidgeRightOffset.x,
+                appliedSourceLensShakeLocalRidgeRightOffset.y,
+                appliedSourceLensShakeLocalMidLeftOffset.x,
+                appliedSourceLensShakeLocalMidLeftOffset.y,
+                appliedSourceLensShakeLocalMidCenterOffset.x,
+                appliedSourceLensShakeLocalMidCenterOffset.y,
+                appliedSourceLensShakeLocalMidRightOffset.x,
+                appliedSourceLensShakeLocalMidRightOffset.y
             )
             os_log(
                 "%{public}@",
@@ -10460,7 +10510,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             lensBandWarpApplied: renderedAutoTransform.lensBandWarpApplied,
             sourceLensShakeRidgeOffset: renderedAutoTransform.sourceLensShakeRidgeOffset * masterStrength,
             sourceLensShakeRidgeSupport: renderedAutoTransform.sourceLensShakeRidgeSupport,
-            sourceLensShakeRidgeApplied: renderedAutoTransform.sourceLensShakeRidgeApplied
+            sourceLensShakeRidgeApplied: renderedAutoTransform.sourceLensShakeRidgeApplied,
+            sourceLensShakeLocalTopLeftOffset: renderedAutoTransform.sourceLensShakeLocalTopLeftOffset * masterStrength,
+            sourceLensShakeLocalTopCenterOffset: renderedAutoTransform.sourceLensShakeLocalTopCenterOffset * masterStrength,
+            sourceLensShakeLocalTopRightOffset: renderedAutoTransform.sourceLensShakeLocalTopRightOffset * masterStrength,
+            sourceLensShakeLocalRidgeLeftOffset: renderedAutoTransform.sourceLensShakeLocalRidgeLeftOffset * masterStrength,
+            sourceLensShakeLocalRidgeCenterOffset: renderedAutoTransform.sourceLensShakeLocalRidgeCenterOffset * masterStrength,
+            sourceLensShakeLocalRidgeRightOffset: renderedAutoTransform.sourceLensShakeLocalRidgeRightOffset * masterStrength,
+            sourceLensShakeLocalMidLeftOffset: renderedAutoTransform.sourceLensShakeLocalMidLeftOffset * masterStrength,
+            sourceLensShakeLocalMidCenterOffset: renderedAutoTransform.sourceLensShakeLocalMidCenterOffset * masterStrength,
+            sourceLensShakeLocalMidRightOffset: renderedAutoTransform.sourceLensShakeLocalMidRightOffset * masterStrength,
+            sourceLensShakeLocalSupport: renderedAutoTransform.sourceLensShakeLocalSupport,
+            sourceLensShakeLocalApplied: renderedAutoTransform.sourceLensShakeLocalApplied
         )
         if debugOverlayActive && !previewWarmupDecision.active {
             publishHostAnalysisRenderDiagnostics(

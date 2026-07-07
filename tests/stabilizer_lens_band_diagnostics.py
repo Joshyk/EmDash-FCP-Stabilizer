@@ -237,9 +237,9 @@ def classify_residual_model(row: dict[str, Any], window_frames: int) -> tuple[st
 
 def correction_model_covers(residual_model: str, correction_model: str) -> bool:
     required = {
-        "rowPhaseWarp": {"rowPhase", "sourceRidge"},
-        "columnPhaseWarp": {"columnPhase"},
-        "regionClusterWarp": {"regionCluster", "sourceRidge"},
+        "rowPhaseWarp": {"rowPhase", "sourceRidge", "sourceLocal"},
+        "columnPhaseWarp": {"columnPhase", "sourceLocal"},
+        "regionClusterWarp": {"regionCluster", "sourceRidge", "sourceLocal"},
         "localRollWarp": {"localRoll"},
     }.get(residual_model)
     if required is None:
@@ -264,6 +264,20 @@ def runtime_model_applied(row: dict[str, Any], residual_model: str) -> bool:
             ] or [0.0]
         )
 
+    local_magnitude = max_vector_magnitude(
+        (
+            ("sourceLensShakeLocalTopLeftX", "sourceLensShakeLocalTopLeftY"),
+            ("sourceLensShakeLocalTopCenterX", "sourceLensShakeLocalTopCenterY"),
+            ("sourceLensShakeLocalTopRightX", "sourceLensShakeLocalTopRightY"),
+            ("sourceLensShakeLocalRidgeLeftX", "sourceLensShakeLocalRidgeLeftY"),
+            ("sourceLensShakeLocalRidgeCenterX", "sourceLensShakeLocalRidgeCenterY"),
+            ("sourceLensShakeLocalRidgeRightX", "sourceLensShakeLocalRidgeRightY"),
+            ("sourceLensShakeLocalMidLeftX", "sourceLensShakeLocalMidLeftY"),
+            ("sourceLensShakeLocalMidCenterX", "sourceLensShakeLocalMidCenterY"),
+            ("sourceLensShakeLocalMidRightX", "sourceLensShakeLocalMidRightY"),
+        )
+    )
+
     if residual_model == "rowPhaseWarp":
         return max(
             max_vector_magnitude(
@@ -274,17 +288,21 @@ def runtime_model_applied(row: dict[str, Any], residual_model: str) -> bool:
                 )
             ),
             abs(finite_float(row.get("sourceLensShakeRidgeY"))),
+            local_magnitude,
         ) >= 0.02
     if residual_model == "columnPhaseWarp":
-        return max_vector_magnitude(
-            (
-                ("lensBandTopColumnX", "lensBandTopColumnY"),
-                ("lensBandRidgeColumnX", "lensBandRidgeColumnY"),
-                ("lensBandMidColumnX", "lensBandMidColumnY"),
-            )
+        return max(
+            max_vector_magnitude(
+                (
+                    ("lensBandTopColumnX", "lensBandTopColumnY"),
+                    ("lensBandRidgeColumnX", "lensBandRidgeColumnY"),
+                    ("lensBandMidColumnX", "lensBandMidColumnY"),
+                )
+            ),
+            local_magnitude,
         ) >= 0.02
     if residual_model == "regionClusterWarp":
-        return abs(finite_float(row.get("sourceLensShakeRidgeY"))) >= 0.02
+        return max(abs(finite_float(row.get("sourceLensShakeRidgeY"))), local_magnitude) >= 0.02
     if residual_model == "localRollWarp":
         return max(
             abs(finite_float(row.get("lensBandTopLocalRoll"))),
@@ -524,6 +542,26 @@ def main() -> None:
         "sourceLensShakeRidgeY",
         "sourceLensShakeRidgeSupport",
         "sourceLensShakeRidgeApplied",
+        "sourceLensShakeLocalSupport",
+        "sourceLensShakeLocalApplied",
+        "sourceLensShakeLocalTopLeftX",
+        "sourceLensShakeLocalTopLeftY",
+        "sourceLensShakeLocalTopCenterX",
+        "sourceLensShakeLocalTopCenterY",
+        "sourceLensShakeLocalTopRightX",
+        "sourceLensShakeLocalTopRightY",
+        "sourceLensShakeLocalRidgeLeftX",
+        "sourceLensShakeLocalRidgeLeftY",
+        "sourceLensShakeLocalRidgeCenterX",
+        "sourceLensShakeLocalRidgeCenterY",
+        "sourceLensShakeLocalRidgeRightX",
+        "sourceLensShakeLocalRidgeRightY",
+        "sourceLensShakeLocalMidLeftX",
+        "sourceLensShakeLocalMidLeftY",
+        "sourceLensShakeLocalMidCenterX",
+        "sourceLensShakeLocalMidCenterY",
+        "sourceLensShakeLocalMidRightX",
+        "sourceLensShakeLocalMidRightY",
     ]
     band_columns: list[str] = []
     for band_name in BANDS:

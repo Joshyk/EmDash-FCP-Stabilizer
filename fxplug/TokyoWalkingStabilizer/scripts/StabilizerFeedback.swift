@@ -88,6 +88,10 @@ private struct PersistedHostAnalysisCache: Decodable {
     let lensBandConfidence: [Float]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
+    let sourceLensShakeLocalBinCount: Int?
+    let sourceLensShakeLocalPathX: [Float]?
+    let sourceLensShakeLocalPathY: [Float]?
+    let sourceLensShakeLocalSupport: [Float]?
     let footstepPathX: [Float]?
     let footstepPathY: [Float]?
     let footstepPathRoll: [Float]?
@@ -184,6 +188,10 @@ private struct Analysis {
     let lensBandConfidence: [Float]
     let sourceLensShakeRidgePathY: [Float]
     let sourceLensShakeRidgeSupport: [Float]
+    let sourceLensShakeLocalBinCount: Int
+    let sourceLensShakeLocalPathX: [Float]
+    let sourceLensShakeLocalPathY: [Float]
+    let sourceLensShakeLocalSupport: [Float]
     let footstepPathX: [Float]
     let footstepPathY: [Float]
     let footstepPathRoll: [Float]
@@ -224,6 +232,16 @@ private struct Analysis {
             }
             guard value.count == frames.count else {
                 throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but frames has \(frames.count); rerun Host Analysis with the current FxPlug")
+            }
+            return value
+        }
+
+        func requireFloatArray(_ value: [Float]?, _ name: String, count expectedCount: Int) throws -> [Float] {
+            guard let value else {
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with the current FxPlug")
+            }
+            guard value.count == expectedCount else {
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but expected \(expectedCount); rerun Host Analysis with the current FxPlug")
             }
             return value
         }
@@ -283,6 +301,14 @@ private struct Analysis {
         lensBandMidConfidence = try requireFloatArray(cache.lensBandMidConfidence, "lensBandMidConfidence")
         sourceLensShakeRidgePathY = try requireFloatArray(cache.sourceLensShakeRidgePathY, "sourceLensShakeRidgePathY")
         sourceLensShakeRidgeSupport = try requireFloatArray(cache.sourceLensShakeRidgeSupport, "sourceLensShakeRidgeSupport")
+        guard cache.sourceLensShakeLocalBinCount == expectedSourceLensShakeLocalBinCount else {
+            throw FeedbackError(description: "Host Analysis cache has sourceLensShakeLocalBinCount \(cache.sourceLensShakeLocalBinCount.map(String.init) ?? "missing"); expected \(expectedSourceLensShakeLocalBinCount); rerun Host Analysis with the current FxPlug")
+        }
+        self.sourceLensShakeLocalBinCount = expectedSourceLensShakeLocalBinCount
+        let sourceLensShakeLocalPathCount = frames.count * expectedSourceLensShakeLocalBinCount
+        sourceLensShakeLocalPathX = try requireFloatArray(cache.sourceLensShakeLocalPathX, "sourceLensShakeLocalPathX", count: sourceLensShakeLocalPathCount)
+        sourceLensShakeLocalPathY = try requireFloatArray(cache.sourceLensShakeLocalPathY, "sourceLensShakeLocalPathY", count: sourceLensShakeLocalPathCount)
+        sourceLensShakeLocalSupport = try requireFloatArray(cache.sourceLensShakeLocalSupport, "sourceLensShakeLocalSupport", count: sourceLensShakeLocalPathCount)
         footstepPathX = try requireFloatArray(cache.footstepPathX, "footstepPathX")
         footstepPathY = try requireFloatArray(cache.footstepPathY, "footstepPathY")
         footstepPathRoll = try requireFloatArray(cache.footstepPathRoll, "footstepPathRoll")
@@ -715,10 +741,11 @@ private let lensShakeShearStart: Float = 0.000030
 private let lensShakeShearFull: Float = 0.000320
 private let lensShakePerspectiveStart: Float = 0.000010
 private let lensShakePerspectiveFull: Float = 0.000095
+private let expectedSourceLensShakeLocalBinCount = 9
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [39]
+private let supportedCacheSchemaVersions: Set<Int> = [40]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
@@ -885,6 +912,9 @@ private func floatComparisonInputs(baseline: Analysis, compared: Analysis) -> [(
         ("lensBandConfidence", baseline.lensBandConfidence, compared.lensBandConfidence),
         ("sourceLensShakeRidgePathY", baseline.sourceLensShakeRidgePathY, compared.sourceLensShakeRidgePathY),
         ("sourceLensShakeRidgeSupport", baseline.sourceLensShakeRidgeSupport, compared.sourceLensShakeRidgeSupport),
+        ("sourceLensShakeLocalPathX", baseline.sourceLensShakeLocalPathX, compared.sourceLensShakeLocalPathX),
+        ("sourceLensShakeLocalPathY", baseline.sourceLensShakeLocalPathY, compared.sourceLensShakeLocalPathY),
+        ("sourceLensShakeLocalSupport", baseline.sourceLensShakeLocalSupport, compared.sourceLensShakeLocalSupport),
         ("footstepPathX", baseline.footstepPathX, compared.footstepPathX),
         ("footstepPathY", baseline.footstepPathY, compared.footstepPathY),
         ("footstepPathRoll", baseline.footstepPathRoll, compared.footstepPathRoll),
@@ -1150,6 +1180,23 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         }
         if values.count != frameCount {
             return "\(name) has \(values.count) values but frames has \(frameCount)"
+        }
+    }
+    if cache.sourceLensShakeLocalBinCount != expectedSourceLensShakeLocalBinCount {
+        return "sourceLensShakeLocalBinCount is \(cache.sourceLensShakeLocalBinCount.map(String.init) ?? "missing"); expected \(expectedSourceLensShakeLocalBinCount)"
+    }
+    let localPathCount = frameCount * expectedSourceLensShakeLocalBinCount
+    let localFloatArrays: [(String, [Float]?)] = [
+        ("sourceLensShakeLocalPathX", cache.sourceLensShakeLocalPathX),
+        ("sourceLensShakeLocalPathY", cache.sourceLensShakeLocalPathY),
+        ("sourceLensShakeLocalSupport", cache.sourceLensShakeLocalSupport)
+    ]
+    for (name, values) in localFloatArrays {
+        guard let values else {
+            return "\(name) is missing"
+        }
+        if values.count != localPathCount {
+            return "\(name) has \(values.count) values but expected \(localPathCount)"
         }
     }
     for (name, values) in intArrays {

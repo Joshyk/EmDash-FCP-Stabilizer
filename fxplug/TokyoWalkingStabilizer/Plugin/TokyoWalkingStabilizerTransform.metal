@@ -334,6 +334,44 @@ fragment float4 fragmentShader(
             stabilizedPixels -= bandOffset * lensBandSupport * farFieldFade * transform->strength;
         }
     }
+    float localLensSupport = saturate(transform->sourceLensShakeLocalApplied)
+        * lensBandAppliedGain(transform->sourceLensShakeLocalSupport);
+    if (localLensSupport > 0.0001) {
+        float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
+        float farFieldFade = 1.0 - smoothstep(0.36, 0.46, sourceY);
+        float topWeight = lensBandWeight(sourceY, 0.12, 0.12);
+        float ridgeWeight = lensBandWeight(sourceY, 0.23, 0.11);
+        float midWeight = lensBandWeight(sourceY, 0.36, 0.11);
+        float totalBandWeight = topWeight + ridgeWeight + midWeight;
+        if (totalBandWeight > 0.0001) {
+            float sourceX = saturate((stabilizedPixels.x / transform->outputSize.x) + 0.5);
+            float leftWeight = 1.0 - smoothstep(0.22, 0.50, sourceX);
+            float rightWeight = smoothstep(0.50, 0.78, sourceX);
+            float centerWeight = saturate(1.0 - max(leftWeight, rightWeight));
+            float totalColumnWeight = max(0.0001, leftWeight + centerWeight + rightWeight);
+            float2 topOffset = (
+                (transform->sourceLensShakeLocalTopLeftOffset * leftWeight)
+                + (transform->sourceLensShakeLocalTopCenterOffset * centerWeight)
+                + (transform->sourceLensShakeLocalTopRightOffset * rightWeight)
+            ) / totalColumnWeight;
+            float2 ridgeOffset = (
+                (transform->sourceLensShakeLocalRidgeLeftOffset * leftWeight)
+                + (transform->sourceLensShakeLocalRidgeCenterOffset * centerWeight)
+                + (transform->sourceLensShakeLocalRidgeRightOffset * rightWeight)
+            ) / totalColumnWeight;
+            float2 midOffset = (
+                (transform->sourceLensShakeLocalMidLeftOffset * leftWeight)
+                + (transform->sourceLensShakeLocalMidCenterOffset * centerWeight)
+                + (transform->sourceLensShakeLocalMidRightOffset * rightWeight)
+            ) / totalColumnWeight;
+            float2 localOffset = (
+                (topOffset * topWeight)
+                + (ridgeOffset * ridgeWeight)
+                + (midOffset * midWeight)
+            ) / totalBandWeight;
+            stabilizedPixels -= localOffset * localLensSupport * farFieldFade * transform->strength;
+        }
+    }
     float sourceRidgeSupport = saturate(transform->sourceLensShakeRidgeApplied)
         * lensBandAppliedGain(transform->sourceLensShakeRidgeSupport);
     if (sourceRidgeSupport > 0.0001) {

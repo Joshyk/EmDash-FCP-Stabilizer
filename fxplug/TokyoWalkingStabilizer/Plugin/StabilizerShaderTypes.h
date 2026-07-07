@@ -128,6 +128,17 @@ typedef struct TokyoWalkingStabilizerTransformUniforms {
     vector_float2 sourceLensShakeRidgeOffset;
     float sourceLensShakeRidgeSupport;
     float sourceLensShakeRidgeApplied;
+    vector_float2 sourceLensShakeLocalTopLeftOffset;
+    vector_float2 sourceLensShakeLocalTopCenterOffset;
+    vector_float2 sourceLensShakeLocalTopRightOffset;
+    vector_float2 sourceLensShakeLocalRidgeLeftOffset;
+    vector_float2 sourceLensShakeLocalRidgeCenterOffset;
+    vector_float2 sourceLensShakeLocalRidgeRightOffset;
+    vector_float2 sourceLensShakeLocalMidLeftOffset;
+    vector_float2 sourceLensShakeLocalMidCenterOffset;
+    vector_float2 sourceLensShakeLocalMidRightOffset;
+    float sourceLensShakeLocalSupport;
+    float sourceLensShakeLocalApplied;
 } TokyoWalkingStabilizerTransformUniforms;
 
 #endif
