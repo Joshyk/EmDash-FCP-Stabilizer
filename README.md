@@ -18,6 +18,13 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
+Version `1.1.0` is the adopted far-field micro-shake baseline. It treats schema
+44 fps-derived multi-window far-field mesh evidence as the primary path for
+short lens/camera shake up to one second. Future tuning should preserve that
+seconds-based detector, avoid fixed-frame shake windows, and keep the rendered
+correction coherent enough that mountains, clouds, and horizons do not locally
+pulse or swim.
+
 The main correction stages are:
 
 - `Footstep Jitter`: frame-local X/Y/roll impulse removal for landing shock.

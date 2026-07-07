@@ -26,6 +26,11 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
+- Version `1.1.0` is the adopted baseline for far-field micro-shake correction.
+  Keep schema 44's fps-derived dominant mesh windows as the primary evidence for
+  short source-space lens/camera shake up to one second. Do not return to a fixed
+  10-frame detector or a visible local mesh warp that makes mountains, clouds, or
+  horizons pulse.
 - Requires schema 44 far-field 5x5 mesh paths plus fps-derived dominant mesh shake windows, schema 43 far-field 5x5 mesh paths, schema 42 two-way far-field rigid shake paths, schema 37 ridge-line vertical impulse evidence folded into far-field lens-band paths, schema 36 far-field lens-band row-phase and local-roll paths for source-space local correction, schema 35 far-field lens-band column paths for left/right local source-space correction, schema 34 band-specific far-field lens confidence for short-period source-space local correction, schema 33 far-field lens-band paths, schema 32 high-resolution sample-density control for faster full-resolution analysis while keeping far-field block coverage, schema 31 persisted far-field translation/roll paths, schema 30 stricter far-field-prioritized block weighting, schema 29 robust far-field affine X/Y/roll/shear motion, schema 28 far-field plane-prioritized X/Y/roll motion, schema 27 wider far-field consensus motion search, schema 26 tighter fine-refined
   hierarchical block motion search, schema 24 chunked frame fingerprints, and higher
   precision far-field block motion evidence for persisted-cache validation. Schema 44

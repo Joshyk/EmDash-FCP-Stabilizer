@@ -57,6 +57,12 @@ residual pitch/yaw/roll, stride wobble, and parallax between near ground and dis
 background. Stabilization design and tests should treat those body-motion artifacts as the
 core problem, not as generic tripod shake or purely optical crop drift.
 
+The `1.1.0` far-field micro-shake implementation is the current baseline.
+Preserve schema 44's fps-derived dominant mesh window evidence for short
+source-space lens/camera shake up to one second. Future changes should not
+return to fixed-frame shake windows, hidden fallback smoothing, or visible local
+mesh warps that make mountains, clouds, ridgelines, or horizons pulse.
+
 ## Analysis Cache And Legacy Host Analysis
 
 Current analysis generation is owned by the local Stabilizer Event Analyzer. New FxPlug

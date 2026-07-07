@@ -12,6 +12,11 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
+Version `1.1.0` is the accepted review baseline for far-field micro-shake.
+Use schema 44 analysis for review builds so the fps-derived dominant mesh
+windows are present; older schema 43 caches can still render, but they do not
+carry the dominant window evidence used by the adopted short-shake correction.
+
 New effect instances are cache consumers. They do not expose `Sample Size`,
 `Start Host Analysis`, `Clear Host Analysis Cache`, or `Queue` in the Inspector.
 If an older timeline instance still has a `Start Host Analysis` button, pressing
