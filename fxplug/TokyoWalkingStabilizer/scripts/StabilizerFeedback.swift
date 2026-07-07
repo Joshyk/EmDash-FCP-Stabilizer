@@ -3445,7 +3445,7 @@ private func sourceSpaceLensShakeBand(
         applied: applied,
         remaining: max(0.0, diagnosticDetected - applied),
         confidence: max(affineSupport, projectiveSupport),
-        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f bandConf %.2f q %.2f rolling %.2f band %.2f reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, bandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, reason)
+        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f bandConf %.2f q %.2f rolling %.2f band %.2f reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, bandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, reason)
     )
 }
 
