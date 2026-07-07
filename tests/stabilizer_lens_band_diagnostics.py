@@ -216,6 +216,108 @@ def residual_window(values: list[float], index: int, radius: int) -> float:
     return float(values[index] - ((slope * index) + intercept))
 
 
+def smoothstep(edge0: float, edge1: float, value: float) -> float:
+    if edge1 <= edge0:
+        return 1.0 if value >= edge1 else 0.0
+    t = max(0.0, min(1.0, (value - edge0) / (edge1 - edge0)))
+    return t * t * (3.0 - (2.0 * t))
+
+
+def lens_band_gain(row: dict[str, Any]) -> float:
+    applied = max(0.0, min(1.0, finite_float(row.get("lensBandWarpApplied"))))
+    support = max(0.0, min(1.0, finite_float(row.get("lensBandWarpSupport"))))
+    return applied * smoothstep(0.08, 0.55, support)
+
+
+def render_value(row: dict[str, Any], key: str) -> float:
+    return finite_float(row.get(key))
+
+
+def derivative_at(rows: list[dict[str, Any]], index: int, key: str, order: int) -> float:
+    if index < order or index >= len(rows):
+        return 0.0
+    if order == 1:
+        return render_value(rows[index], key) - render_value(rows[index - 1], key)
+    if order == 2:
+        return (
+            render_value(rows[index], key)
+            - (2.0 * render_value(rows[index - 1], key))
+            + render_value(rows[index - 2], key)
+        )
+    if order == 3:
+        return (
+            render_value(rows[index], key)
+            - (3.0 * render_value(rows[index - 1], key))
+            + (3.0 * render_value(rows[index - 2], key))
+            - render_value(rows[index - 3], key)
+        )
+    return 0.0
+
+
+def derived_derivative_at(
+    rows: list[dict[str, Any]],
+    index: int,
+    value_fn,
+    order: int,
+) -> float:
+    if index < order or index >= len(rows):
+        return 0.0
+    values = [value_fn(rows[index - offset]) for offset in range(order + 1)]
+    if order == 1:
+        return values[0] - values[1]
+    if order == 2:
+        return values[0] - (2.0 * values[1]) + values[2]
+    if order == 3:
+        return values[0] - (3.0 * values[1]) + (3.0 * values[2]) - values[3]
+    return 0.0
+
+
+def inter_band_delta_y(row: dict[str, Any]) -> float:
+    top = render_value(row, "lensBandTopY")
+    ridge = render_value(row, "lensBandRidgeY")
+    mid = render_value(row, "lensBandMidY")
+    return max(abs(top - ridge), abs(ridge - mid), abs(top - mid))
+
+
+def inter_band_scale_like(row: dict[str, Any]) -> float:
+    top = render_value(row, "lensBandTopY")
+    ridge = render_value(row, "lensBandRidgeY")
+    mid = render_value(row, "lensBandMidY")
+    top_ridge = abs(top - ridge) / 0.11
+    ridge_mid = abs(ridge - mid) / 0.10
+    top_mid = abs(top - mid) / 0.21
+    return max(top_ridge, ridge_mid, top_mid)
+
+
+def model_switch_count(rows: list[dict[str, Any]], index: int, radius: int = 5) -> int:
+    left = max(0, index - radius)
+    right = min(len(rows), index + radius + 1)
+    models = [str(rows[i].get("lensBandCorrectionModel", "")) for i in range(left, right)]
+    models = [model for model in models if model]
+    if len(models) < 2:
+        return 0
+    return sum(1 for previous, current in zip(models, models[1:]) if previous != current)
+
+
+def boundary_pulse_score(rows: list[dict[str, Any]], index: int) -> float:
+    if not rows or index < 0 or index >= len(rows):
+        return 0.0
+    inter_band_velocity = abs(derived_derivative_at(rows, index, inter_band_delta_y, 1))
+    inter_band_scale_velocity = abs(derived_derivative_at(rows, index, inter_band_scale_like, 1))
+    ridge_y_jerk = abs(derivative_at(rows, index, "lensBandRidgeY", 3))
+    ridge_row_jerk = abs(derivative_at(rows, index, "lensBandRidgeRowPhaseY", 3))
+    gain_derivative = abs(derived_derivative_at(rows, index, lens_band_gain, 1))
+    switch_penalty = float(model_switch_count(rows, index)) * 0.18
+    return max(
+        inter_band_velocity,
+        inter_band_scale_velocity,
+        ridge_y_jerk,
+        ridge_row_jerk,
+        gain_derivative * 2.0,
+        switch_penalty,
+    )
+
+
 def percentile_abs(rows: list[dict[str, Any]], key: str, percentile: float) -> float:
     values = [abs(finite_float(row.get(key))) for row in rows]
     return float(np.percentile(values, percentile)) if values else 0.0
@@ -623,6 +725,19 @@ def main() -> None:
         "lensBandRidgeY",
         "lensBandMidX",
         "lensBandMidY",
+        "lensBandRawTopX",
+        "lensBandRawTopY",
+        "lensBandRawRidgeX",
+        "lensBandRawRidgeY",
+        "lensBandRawMidX",
+        "lensBandRawMidY",
+        "lensBandPulseDeltaTopX",
+        "lensBandPulseDeltaTopY",
+        "lensBandPulseDeltaRidgeX",
+        "lensBandPulseDeltaRidgeY",
+        "lensBandPulseDeltaMidX",
+        "lensBandPulseDeltaMidY",
+        "lensBandPulseWindowFrames",
         "lensBandTopColumnX",
         "lensBandTopColumnY",
         "lensBandRidgeColumnX",
@@ -737,6 +852,30 @@ def main() -> None:
         f"lensBandRollingShutterColScoreHF{args.window_frames}",
         f"lensBandRollingShutterRollScoreHF{args.window_frames}",
         f"lensBandRollingShutterInterBandScoreHF{args.window_frames}",
+        "lensBandTopXVelocity",
+        "lensBandTopYVelocity",
+        "lensBandTopXAcceleration",
+        "lensBandTopYAcceleration",
+        "lensBandTopXJerk",
+        "lensBandTopYJerk",
+        "lensBandRidgeXVelocity",
+        "lensBandRidgeYVelocity",
+        "lensBandRidgeXAcceleration",
+        "lensBandRidgeYAcceleration",
+        "lensBandRidgeXJerk",
+        "lensBandRidgeYJerk",
+        "lensBandMidXVelocity",
+        "lensBandMidYVelocity",
+        "lensBandMidXAcceleration",
+        "lensBandMidYAcceleration",
+        "lensBandMidXJerk",
+        "lensBandMidYJerk",
+        "interBandDeltaY",
+        "interBandDeltaScaleLike",
+        "boundaryPulseScore",
+        "modelSwitchCount",
+        "bandWarpGain",
+        "bandWarpGainDerivative",
         "lensBandResidualModel",
         "lensBandResidualDominantComponent",
         "lensBandResidualDominantBand",
@@ -834,6 +973,56 @@ def main() -> None:
                         "lensBandResidualDominantComponent": component,
                         "lensBandResidualDominantBand": band_component,
                     }[column]
+                elif column in {
+                    "lensBandTopXVelocity",
+                    "lensBandTopYVelocity",
+                    "lensBandTopXAcceleration",
+                    "lensBandTopYAcceleration",
+                    "lensBandTopXJerk",
+                    "lensBandTopYJerk",
+                    "lensBandRidgeXVelocity",
+                    "lensBandRidgeYVelocity",
+                    "lensBandRidgeXAcceleration",
+                    "lensBandRidgeYAcceleration",
+                    "lensBandRidgeXJerk",
+                    "lensBandRidgeYJerk",
+                    "lensBandMidXVelocity",
+                    "lensBandMidYVelocity",
+                    "lensBandMidXAcceleration",
+                    "lensBandMidYAcceleration",
+                    "lensBandMidXJerk",
+                    "lensBandMidYJerk",
+                    "interBandDeltaY",
+                    "interBandDeltaScaleLike",
+                    "boundaryPulseScore",
+                    "modelSwitchCount",
+                    "bandWarpGain",
+                    "bandWarpGainDerivative",
+                }:
+                    render_index = int(finite_float(render_row.get("_renderIndex"), -1))
+                    if column.startswith("lensBand") and column.endswith("Velocity"):
+                        key = column.removesuffix("Velocity")
+                        value = derivative_at(render_rows, render_index, key, 1)
+                    elif column.startswith("lensBand") and column.endswith("Acceleration"):
+                        key = column.removesuffix("Acceleration")
+                        value = derivative_at(render_rows, render_index, key, 2)
+                    elif column.startswith("lensBand") and column.endswith("Jerk"):
+                        key = column.removesuffix("Jerk")
+                        value = derivative_at(render_rows, render_index, key, 3)
+                    elif column == "interBandDeltaY":
+                        value = inter_band_delta_y(render_row)
+                    elif column == "interBandDeltaScaleLike":
+                        value = inter_band_scale_like(render_row)
+                    elif column == "boundaryPulseScore":
+                        value = boundary_pulse_score(render_rows, render_index)
+                    elif column == "modelSwitchCount":
+                        value = float(model_switch_count(render_rows, render_index))
+                    elif column == "bandWarpGain":
+                        value = lens_band_gain(render_row)
+                    elif column == "bandWarpGainDerivative":
+                        value = derived_derivative_at(render_rows, render_index, lens_band_gain, 1)
+                    else:
+                        value = 0.0
                 else:
                     value = video_row.get(column, "")
                 row[column] = f"{value:.6f}" if isinstance(value, float) else value
@@ -898,6 +1087,41 @@ def main() -> None:
     summary["focusLensBandWarpAppliedRows"] = sum(
         1 for row in focus_joined if finite_float(row.get("lensBandWarpApplied")) > 0.5
     )
+    summary["focusLensBandBoundaryPulseScoreP95"] = percentile_abs(focus_joined, "boundaryPulseScore", 95)
+    summary["focusLensBandBoundaryPulseScoreMax"] = max(
+        [abs(finite_float(row.get("boundaryPulseScore"))) for row in focus_joined] or [0.0]
+    )
+    summary["focusLensBandGainDerivativeP95"] = percentile_abs(focus_joined, "bandWarpGainDerivative", 95)
+    summary["focusLensBandModelSwitchCountMax"] = max(
+        [finite_float(row.get("modelSwitchCount")) for row in focus_joined] or [0.0]
+    )
+    for band_name in ("Top", "Ridge", "Mid"):
+        for axis in ("X", "Y"):
+            summary[f"focusLensBandRaw{band_name}{axis}P95"] = percentile_abs(
+                focus_joined,
+                f"lensBandRaw{band_name}{axis}",
+                95,
+            )
+            summary[f"focusLensBandPulseDelta{band_name}{axis}P95"] = percentile_abs(
+                focus_joined,
+                f"lensBandPulseDelta{band_name}{axis}",
+                95,
+            )
+            summary[f"focusLensBand{band_name}{axis}VelocityP95"] = percentile_abs(
+                focus_joined,
+                f"lensBand{band_name}{axis}Velocity",
+                95,
+            )
+            summary[f"focusLensBand{band_name}{axis}AccelerationP95"] = percentile_abs(
+                focus_joined,
+                f"lensBand{band_name}{axis}Acceleration",
+                95,
+            )
+            summary[f"focusLensBand{band_name}{axis}JerkP95"] = percentile_abs(
+                focus_joined,
+                f"lensBand{band_name}{axis}Jerk",
+                95,
+            )
     summary["focusGlobalLensAppliedRows"] = sum(
         1 for row in focus_joined if str(row.get("lensShakeReason")) == "applied"
     )

@@ -28,6 +28,13 @@ struct StabilizerAutoTransform {
     var lensBandTopOffset: vector_float2
     var lensBandRidgeOffset: vector_float2
     var lensBandMidOffset: vector_float2
+    var lensBandRawTopOffset: vector_float2
+    var lensBandRawRidgeOffset: vector_float2
+    var lensBandRawMidOffset: vector_float2
+    var lensBandPulseDeltaTopOffset: vector_float2
+    var lensBandPulseDeltaRidgeOffset: vector_float2
+    var lensBandPulseDeltaMidOffset: vector_float2
+    var lensBandPulseWindowFrames: Float
     var lensBandTopColumnOffset: vector_float2
     var lensBandRidgeColumnOffset: vector_float2
     var lensBandMidColumnOffset: vector_float2
@@ -114,6 +121,13 @@ struct StabilizerAutoTransform {
         lensBandTopOffset: vector_float2(0.0, 0.0),
         lensBandRidgeOffset: vector_float2(0.0, 0.0),
         lensBandMidOffset: vector_float2(0.0, 0.0),
+        lensBandRawTopOffset: vector_float2(0.0, 0.0),
+        lensBandRawRidgeOffset: vector_float2(0.0, 0.0),
+        lensBandRawMidOffset: vector_float2(0.0, 0.0),
+        lensBandPulseDeltaTopOffset: vector_float2(0.0, 0.0),
+        lensBandPulseDeltaRidgeOffset: vector_float2(0.0, 0.0),
+        lensBandPulseDeltaMidOffset: vector_float2(0.0, 0.0),
+        lensBandPulseWindowFrames: 0.0,
         lensBandTopColumnOffset: vector_float2(0.0, 0.0),
         lensBandRidgeColumnOffset: vector_float2(0.0, 0.0),
         lensBandMidColumnOffset: vector_float2(0.0, 0.0),
@@ -958,6 +972,12 @@ enum AutoStabilizationEstimator {
     private static let lensShakePerspectiveFull: Float = 0.000095
     private static let lensShakePixelMaximumCorrection: Float = 2.2
     private static let lensShakeRotationMaximumCorrectionDegrees: Float = 0.11
+    private static let lensBandPulseSmoothingWindowFrames = 10
+    private static let lensBandPulseSmoothingBlend: Float = 0.46
+    private static let lensBandPulseSmoothingStartPixels: Float = 0.22
+    private static let lensBandPulseSmoothingFullPixels: Float = 1.35
+    private static let lensBandPulseSmoothingStartRadians: Float = 0.00035
+    private static let lensBandPulseSmoothingFullRadians: Float = 0.0024
     static let sourceLensShakeLocalBandCount = 3
     static let sourceLensShakeLocalColumnCount = 3
     static let sourceLensShakeLocalBinCount = 9
@@ -1159,6 +1179,13 @@ enum AutoStabilizationEstimator {
         var bandTopOffset: vector_float2 = vector_float2(0.0, 0.0)
         var bandRidgeOffset: vector_float2 = vector_float2(0.0, 0.0)
         var bandMidOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandRawTopOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandRawRidgeOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandRawMidOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandPulseDeltaTopOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandPulseDeltaRidgeOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandPulseDeltaMidOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandPulseWindowFrames: Float = 0.0
         var bandTopColumnOffset: vector_float2 = vector_float2(0.0, 0.0)
         var bandRidgeColumnOffset: vector_float2 = vector_float2(0.0, 0.0)
         var bandMidColumnOffset: vector_float2 = vector_float2(0.0, 0.0)
@@ -3429,6 +3456,13 @@ enum AutoStabilizationEstimator {
             lensBandTopOffset: lensShake.bandTopOffset,
             lensBandRidgeOffset: lensShake.bandRidgeOffset,
             lensBandMidOffset: lensShake.bandMidOffset,
+            lensBandRawTopOffset: lensShake.bandRawTopOffset,
+            lensBandRawRidgeOffset: lensShake.bandRawRidgeOffset,
+            lensBandRawMidOffset: lensShake.bandRawMidOffset,
+            lensBandPulseDeltaTopOffset: lensShake.bandPulseDeltaTopOffset,
+            lensBandPulseDeltaRidgeOffset: lensShake.bandPulseDeltaRidgeOffset,
+            lensBandPulseDeltaMidOffset: lensShake.bandPulseDeltaMidOffset,
+            lensBandPulseWindowFrames: lensShake.bandPulseWindowFrames,
             lensBandTopColumnOffset: lensShake.bandTopColumnOffset,
             lensBandRidgeColumnOffset: lensShake.bandRidgeColumnOffset,
             lensBandMidColumnOffset: lensShake.bandMidColumnOffset,
@@ -4521,6 +4555,12 @@ enum AutoStabilizationEstimator {
         scaled.lensBandTopOffset = scalePixelVector(transform.lensBandTopOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandRidgeOffset = scalePixelVector(transform.lensBandRidgeOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandMidOffset = scalePixelVector(transform.lensBandMidOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandRawTopOffset = scalePixelVector(transform.lensBandRawTopOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandRawRidgeOffset = scalePixelVector(transform.lensBandRawRidgeOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandRawMidOffset = scalePixelVector(transform.lensBandRawMidOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandPulseDeltaTopOffset = scalePixelVector(transform.lensBandPulseDeltaTopOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandPulseDeltaRidgeOffset = scalePixelVector(transform.lensBandPulseDeltaRidgeOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandPulseDeltaMidOffset = scalePixelVector(transform.lensBandPulseDeltaMidOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandTopColumnOffset = scalePixelVector(transform.lensBandTopColumnOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandRidgeColumnOffset = scalePixelVector(transform.lensBandRidgeColumnOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandMidColumnOffset = scalePixelVector(transform.lensBandMidColumnOffset, xScale: xScale, yScale: yScale)
@@ -6957,6 +6997,13 @@ enum AutoStabilizationEstimator {
                 lensBandTopOffset: lensShake.bandTopOffset,
                 lensBandRidgeOffset: lensShake.bandRidgeOffset,
                 lensBandMidOffset: lensShake.bandMidOffset,
+                lensBandRawTopOffset: lensShake.bandRawTopOffset,
+                lensBandRawRidgeOffset: lensShake.bandRawRidgeOffset,
+                lensBandRawMidOffset: lensShake.bandRawMidOffset,
+                lensBandPulseDeltaTopOffset: lensShake.bandPulseDeltaTopOffset,
+                lensBandPulseDeltaRidgeOffset: lensShake.bandPulseDeltaRidgeOffset,
+                lensBandPulseDeltaMidOffset: lensShake.bandPulseDeltaMidOffset,
+                lensBandPulseWindowFrames: lensShake.bandPulseWindowFrames,
                 lensBandTopColumnOffset: lensShake.bandTopColumnOffset,
                 lensBandRidgeColumnOffset: lensShake.bandRidgeColumnOffset,
                 lensBandMidColumnOffset: lensShake.bandMidColumnOffset,
@@ -7163,6 +7210,13 @@ enum AutoStabilizationEstimator {
         target.lensBandTopOffset = source.lensBandTopOffset
         target.lensBandRidgeOffset = source.lensBandRidgeOffset
         target.lensBandMidOffset = source.lensBandMidOffset
+        target.lensBandRawTopOffset = source.lensBandRawTopOffset
+        target.lensBandRawRidgeOffset = source.lensBandRawRidgeOffset
+        target.lensBandRawMidOffset = source.lensBandRawMidOffset
+        target.lensBandPulseDeltaTopOffset = source.lensBandPulseDeltaTopOffset
+        target.lensBandPulseDeltaRidgeOffset = source.lensBandPulseDeltaRidgeOffset
+        target.lensBandPulseDeltaMidOffset = source.lensBandPulseDeltaMidOffset
+        target.lensBandPulseWindowFrames = source.lensBandPulseWindowFrames
         target.lensBandTopColumnOffset = source.lensBandTopColumnOffset
         target.lensBandRidgeColumnOffset = source.lensBandRidgeColumnOffset
         target.lensBandMidColumnOffset = source.lensBandMidColumnOffset
@@ -8573,6 +8627,13 @@ enum AutoStabilizationEstimator {
             lensBandTopOffset: lensShake.bandTopOffset,
             lensBandRidgeOffset: lensShake.bandRidgeOffset,
             lensBandMidOffset: lensShake.bandMidOffset,
+            lensBandRawTopOffset: lensShake.bandRawTopOffset,
+            lensBandRawRidgeOffset: lensShake.bandRawRidgeOffset,
+            lensBandRawMidOffset: lensShake.bandRawMidOffset,
+            lensBandPulseDeltaTopOffset: lensShake.bandPulseDeltaTopOffset,
+            lensBandPulseDeltaRidgeOffset: lensShake.bandPulseDeltaRidgeOffset,
+            lensBandPulseDeltaMidOffset: lensShake.bandPulseDeltaMidOffset,
+            lensBandPulseWindowFrames: lensShake.bandPulseWindowFrames,
             lensBandTopColumnOffset: lensShake.bandTopColumnOffset,
             lensBandRidgeColumnOffset: lensShake.bandRidgeColumnOffset,
             lensBandMidColumnOffset: lensShake.bandMidColumnOffset,
@@ -9617,6 +9678,13 @@ enum AutoStabilizationEstimator {
             lensBandTopOffset: lensShake.bandTopOffset,
             lensBandRidgeOffset: lensShake.bandRidgeOffset,
             lensBandMidOffset: lensShake.bandMidOffset,
+            lensBandRawTopOffset: lensShake.bandRawTopOffset,
+            lensBandRawRidgeOffset: lensShake.bandRawRidgeOffset,
+            lensBandRawMidOffset: lensShake.bandRawMidOffset,
+            lensBandPulseDeltaTopOffset: lensShake.bandPulseDeltaTopOffset,
+            lensBandPulseDeltaRidgeOffset: lensShake.bandPulseDeltaRidgeOffset,
+            lensBandPulseDeltaMidOffset: lensShake.bandPulseDeltaMidOffset,
+            lensBandPulseWindowFrames: lensShake.bandPulseWindowFrames,
             lensBandTopColumnOffset: lensShake.bandTopColumnOffset,
             lensBandRidgeColumnOffset: lensShake.bandRidgeColumnOffset,
             lensBandMidColumnOffset: lensShake.bandMidColumnOffset,
@@ -10434,6 +10502,13 @@ enum AutoStabilizationEstimator {
         var lensBandTopOffset = vector_float2(0.0, 0.0)
         var lensBandRidgeOffset = vector_float2(0.0, 0.0)
         var lensBandMidOffset = vector_float2(0.0, 0.0)
+        var lensBandRawTopOffset = vector_float2(0.0, 0.0)
+        var lensBandRawRidgeOffset = vector_float2(0.0, 0.0)
+        var lensBandRawMidOffset = vector_float2(0.0, 0.0)
+        var lensBandPulseDeltaTopOffset = vector_float2(0.0, 0.0)
+        var lensBandPulseDeltaRidgeOffset = vector_float2(0.0, 0.0)
+        var lensBandPulseDeltaMidOffset = vector_float2(0.0, 0.0)
+        var lensBandPulseWindowFrames: Float = 0.0
         var lensBandTopColumnOffset = vector_float2(0.0, 0.0)
         var lensBandRidgeColumnOffset = vector_float2(0.0, 0.0)
         var lensBandMidColumnOffset = vector_float2(0.0, 0.0)
@@ -10522,6 +10597,13 @@ enum AutoStabilizationEstimator {
             lensBandTopOffset += transform.lensBandTopOffset * weight
             lensBandRidgeOffset += transform.lensBandRidgeOffset * weight
             lensBandMidOffset += transform.lensBandMidOffset * weight
+            lensBandRawTopOffset += transform.lensBandRawTopOffset * weight
+            lensBandRawRidgeOffset += transform.lensBandRawRidgeOffset * weight
+            lensBandRawMidOffset += transform.lensBandRawMidOffset * weight
+            lensBandPulseDeltaTopOffset += transform.lensBandPulseDeltaTopOffset * weight
+            lensBandPulseDeltaRidgeOffset += transform.lensBandPulseDeltaRidgeOffset * weight
+            lensBandPulseDeltaMidOffset += transform.lensBandPulseDeltaMidOffset * weight
+            lensBandPulseWindowFrames += transform.lensBandPulseWindowFrames * weight
             lensBandTopColumnOffset += transform.lensBandTopColumnOffset * weight
             lensBandRidgeColumnOffset += transform.lensBandRidgeColumnOffset * weight
             lensBandMidColumnOffset += transform.lensBandMidColumnOffset * weight
@@ -10621,6 +10703,13 @@ enum AutoStabilizationEstimator {
             lensBandTopOffset: lensBandTopOffset / totalWeight,
             lensBandRidgeOffset: lensBandRidgeOffset / totalWeight,
             lensBandMidOffset: lensBandMidOffset / totalWeight,
+            lensBandRawTopOffset: lensBandRawTopOffset / totalWeight,
+            lensBandRawRidgeOffset: lensBandRawRidgeOffset / totalWeight,
+            lensBandRawMidOffset: lensBandRawMidOffset / totalWeight,
+            lensBandPulseDeltaTopOffset: lensBandPulseDeltaTopOffset / totalWeight,
+            lensBandPulseDeltaRidgeOffset: lensBandPulseDeltaRidgeOffset / totalWeight,
+            lensBandPulseDeltaMidOffset: lensBandPulseDeltaMidOffset / totalWeight,
+            lensBandPulseWindowFrames: lensBandPulseWindowFrames / totalWeight,
             lensBandTopColumnOffset: lensBandTopColumnOffset / totalWeight,
             lensBandRidgeColumnOffset: lensBandRidgeColumnOffset / totalWeight,
             lensBandMidColumnOffset: lensBandMidColumnOffset / totalWeight,
@@ -13242,6 +13331,80 @@ enum AutoStabilizationEstimator {
                 - interpolatedValue(baseline, using: interpolation)
         }
 
+        func residualValue(values: [Float], baseline: EstimatedPath, index: Int) -> Float {
+            guard values.indices.contains(index), baseline.values.indices.contains(index) else {
+                return 0.0
+            }
+            return values[index] - baseline[index]
+        }
+
+        func pulseSmoothedResidual(
+            kind: MotionPathKind,
+            values: [Float],
+            currentResidual: Float,
+            scale: Float,
+            start: Float,
+            full: Float
+        ) -> Float {
+            guard !values.isEmpty else {
+                return currentResidual
+            }
+            let baseline = cachedOuterLinearPredictionPath(
+                kind,
+                analysis: analysis,
+                indices: sampledIndices,
+                innerWindowSeconds: innerWindowSeconds,
+                outerWindowSeconds: outerWindowSeconds,
+                cache: cache
+            )
+            let radiusFrames = max(2, lensBandPulseSmoothingWindowFrames / 2)
+            let centerTime = frames[max(0, min(frames.count - 1, centerIndex))].time
+            let radiusSeconds = max(frameStepSeconds, Double(radiusFrames) * frameStepSeconds)
+            var weightedResidual = Float(0.0)
+            var totalWeight = Float(0.0)
+            for index in (centerIndex - radiusFrames)...(centerIndex + radiusFrames) {
+                guard frames.indices.contains(index), values.indices.contains(index) else {
+                    continue
+                }
+                let distance = abs(frames[index].time - centerTime)
+                let normalizedDistance = clamp(Float(distance / radiusSeconds), min: 0.0, max: 1.0)
+                let weight = (1.0 - normalizedDistance) * (1.0 - normalizedDistance)
+                weightedResidual += residualValue(values: values, baseline: baseline, index: index) * scale * weight
+                totalWeight += weight
+            }
+            guard totalWeight > Float.ulpOfOne else {
+                return currentResidual
+            }
+            let smoothedResidual = weightedResidual / totalWeight
+            let pulseMagnitude = abs(currentResidual - smoothedResidual)
+            let blend = confidenceRamp(pulseMagnitude, start: start, full: full) * lensBandPulseSmoothingBlend
+            return currentResidual + ((smoothedResidual - currentResidual) * blend)
+        }
+
+        func pulseSmoothedPixelResidual(kind: MotionPathKind, values: [Float], scale: Float) -> Float {
+            let currentResidual = residual(kind: kind, values: values) * scale
+            return pulseSmoothedResidual(
+                kind: kind,
+                values: values,
+                currentResidual: currentResidual,
+                scale: scale,
+                start: lensBandPulseSmoothingStartPixels,
+                full: lensBandPulseSmoothingFullPixels
+            )
+        }
+
+        func pulseSmoothedRollResidual(kind: MotionPathKind, values: [Float]) -> Float {
+            let currentResidual = residual(kind: kind, values: values)
+            return pulseSmoothedResidual(
+                kind: kind,
+                values: values,
+                currentResidual: currentResidual,
+                scale: 1.0,
+                start: lensBandPulseSmoothingStartRadians,
+                full: lensBandPulseSmoothingFullRadians
+            )
+        }
+
         var result = SourceSpaceLensShakeCorrection()
         result.windowFrames = Float(targetWindowSeconds / frameStepSeconds)
 
@@ -13335,47 +13498,66 @@ enum AutoStabilizationEstimator {
             && analysis.sourceLensShakeLocalPathY.count == frames.count * sourceLensShakeLocalBinCount
             && analysis.sourceLensShakeLocalSupport.count == frames.count * sourceLensShakeLocalBinCount
         if hasLensBandPaths {
-            let topResidual = vector_float2(
+            let rawTopResidual = vector_float2(
                 residual(kind: .lensBandTopX, values: analysis.lensBandTopPathX) * outputScale.x,
                 residual(kind: .lensBandTopY, values: analysis.lensBandTopPathY) * outputScale.y
             )
-            let ridgeResidual = vector_float2(
+            let topResidual = vector_float2(
+                pulseSmoothedPixelResidual(kind: .lensBandTopX, values: analysis.lensBandTopPathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandTopY, values: analysis.lensBandTopPathY, scale: outputScale.y)
+            )
+            let rawRidgeResidual = vector_float2(
                 residual(kind: .lensBandRidgeX, values: analysis.lensBandRidgePathX) * outputScale.x,
                 residual(kind: .lensBandRidgeY, values: analysis.lensBandRidgePathY) * outputScale.y
             )
-            let midResidual = vector_float2(
+            let ridgeResidual = vector_float2(
+                pulseSmoothedPixelResidual(kind: .lensBandRidgeX, values: analysis.lensBandRidgePathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandRidgeY, values: analysis.lensBandRidgePathY, scale: outputScale.y)
+            )
+            let rawMidResidual = vector_float2(
                 residual(kind: .lensBandMidX, values: analysis.lensBandMidPathX) * outputScale.x,
                 residual(kind: .lensBandMidY, values: analysis.lensBandMidPathY) * outputScale.y
             )
+            let midResidual = vector_float2(
+                pulseSmoothedPixelResidual(kind: .lensBandMidX, values: analysis.lensBandMidPathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandMidY, values: analysis.lensBandMidPathY, scale: outputScale.y)
+            )
+            result.bandPulseWindowFrames = Float(lensBandPulseSmoothingWindowFrames)
+            result.bandRawTopOffset = rawTopResidual
+            result.bandRawRidgeOffset = rawRidgeResidual
+            result.bandRawMidOffset = rawMidResidual
+            result.bandPulseDeltaTopOffset = topResidual - rawTopResidual
+            result.bandPulseDeltaRidgeOffset = ridgeResidual - rawRidgeResidual
+            result.bandPulseDeltaMidOffset = midResidual - rawMidResidual
             let topColumnResidual = vector_float2(
-                residual(kind: .lensBandTopColumnX, values: analysis.lensBandTopColumnPathX) * outputScale.x,
-                residual(kind: .lensBandTopColumnY, values: analysis.lensBandTopColumnPathY) * outputScale.y
+                pulseSmoothedPixelResidual(kind: .lensBandTopColumnX, values: analysis.lensBandTopColumnPathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandTopColumnY, values: analysis.lensBandTopColumnPathY, scale: outputScale.y)
             )
             let topRowResidual = vector_float2(
-                residual(kind: .lensBandTopRowPhaseX, values: analysis.lensBandTopRowPhasePathX) * outputScale.x,
-                residual(kind: .lensBandTopRowPhaseY, values: analysis.lensBandTopRowPhasePathY) * outputScale.y
+                pulseSmoothedPixelResidual(kind: .lensBandTopRowPhaseX, values: analysis.lensBandTopRowPhasePathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandTopRowPhaseY, values: analysis.lensBandTopRowPhasePathY, scale: outputScale.y)
             )
-            let topLocalRoll = residual(kind: .lensBandTopLocalRoll, values: analysis.lensBandTopLocalRollPath)
+            let topLocalRoll = pulseSmoothedRollResidual(kind: .lensBandTopLocalRoll, values: analysis.lensBandTopLocalRollPath)
             let ridgeColumnResidual = vector_float2(
-                residual(kind: .lensBandRidgeColumnX, values: analysis.lensBandRidgeColumnPathX) * outputScale.x,
-                residual(kind: .lensBandRidgeColumnY, values: analysis.lensBandRidgeColumnPathY) * outputScale.y
+                pulseSmoothedPixelResidual(kind: .lensBandRidgeColumnX, values: analysis.lensBandRidgeColumnPathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandRidgeColumnY, values: analysis.lensBandRidgeColumnPathY, scale: outputScale.y)
             )
             let ridgeRowResidual = vector_float2(
-                residual(kind: .lensBandRidgeRowPhaseX, values: analysis.lensBandRidgeRowPhasePathX) * outputScale.x,
-                residual(kind: .lensBandRidgeRowPhaseY, values: analysis.lensBandRidgeRowPhasePathY) * outputScale.y
+                pulseSmoothedPixelResidual(kind: .lensBandRidgeRowPhaseX, values: analysis.lensBandRidgeRowPhasePathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandRidgeRowPhaseY, values: analysis.lensBandRidgeRowPhasePathY, scale: outputScale.y)
             )
-            let ridgeLocalRoll = residual(kind: .lensBandRidgeLocalRoll, values: analysis.lensBandRidgeLocalRollPath)
+            let ridgeLocalRoll = pulseSmoothedRollResidual(kind: .lensBandRidgeLocalRoll, values: analysis.lensBandRidgeLocalRollPath)
             let midColumnResidual = vector_float2(
-                residual(kind: .lensBandMidColumnX, values: analysis.lensBandMidColumnPathX) * outputScale.x,
-                residual(kind: .lensBandMidColumnY, values: analysis.lensBandMidColumnPathY) * outputScale.y
+                pulseSmoothedPixelResidual(kind: .lensBandMidColumnX, values: analysis.lensBandMidColumnPathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandMidColumnY, values: analysis.lensBandMidColumnPathY, scale: outputScale.y)
             )
             let midRowResidual = vector_float2(
-                residual(kind: .lensBandMidRowPhaseX, values: analysis.lensBandMidRowPhasePathX) * outputScale.x,
-                residual(kind: .lensBandMidRowPhaseY, values: analysis.lensBandMidRowPhasePathY) * outputScale.y
+                pulseSmoothedPixelResidual(kind: .lensBandMidRowPhaseX, values: analysis.lensBandMidRowPhasePathX, scale: outputScale.x),
+                pulseSmoothedPixelResidual(kind: .lensBandMidRowPhaseY, values: analysis.lensBandMidRowPhasePathY, scale: outputScale.y)
             )
-            let midLocalRoll = residual(kind: .lensBandMidLocalRoll, values: analysis.lensBandMidLocalRollPath)
-            let sourceRidgeResidualY = residual(kind: .sourceLensShakeRidgeY, values: analysis.sourceLensShakeRidgePathY) * outputScale.y
-            let sourceRidgeLineResidualY = residual(kind: .sourceLensShakeRidgeLineY, values: analysis.sourceLensShakeRidgeLinePathY) * outputScale.y
+            let midLocalRoll = pulseSmoothedRollResidual(kind: .lensBandMidLocalRoll, values: analysis.lensBandMidLocalRollPath)
+            let sourceRidgeResidualY = pulseSmoothedPixelResidual(kind: .sourceLensShakeRidgeY, values: analysis.sourceLensShakeRidgePathY, scale: outputScale.y)
+            let sourceRidgeLineResidualY = pulseSmoothedPixelResidual(kind: .sourceLensShakeRidgeLineY, values: analysis.sourceLensShakeRidgeLinePathY, scale: outputScale.y)
             result.sourceRidgeLineResidual = vector_float2(0.0, sourceRidgeLineResidualY)
             let bandMagnitude = max(
                 simd_length(topResidual),
@@ -13450,8 +13632,8 @@ enum AutoStabilizationEstimator {
                 let pathY = localLensShakePathSlice(analysis.sourceLensShakeLocalPathY, bin: bin, frameCount: frames.count)
                 let supportPath = localLensShakePathSlice(analysis.sourceLensShakeLocalSupport, bin: bin, frameCount: frames.count)
                 let residualVector = vector_float2(
-                    residual(kind: .sourceLensShakeLocalX(bin), values: pathX) * outputScale.x,
-                    residual(kind: .sourceLensShakeLocalY(bin), values: pathY) * outputScale.y
+                    pulseSmoothedPixelResidual(kind: .sourceLensShakeLocalX(bin), values: pathX, scale: outputScale.x),
+                    pulseSmoothedPixelResidual(kind: .sourceLensShakeLocalY(bin), values: pathY, scale: outputScale.y)
                 )
                 let preparedSupport = interpolatedValue(supportPath, using: interpolation)
                 let support = confidenceRamp(simd_length(residualVector), start: 0.10, full: 0.95)

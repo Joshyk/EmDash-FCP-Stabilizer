@@ -7263,6 +7263,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensBandTopOffset = autoTransform.lensBandTopOffset * masterStrength
             let appliedLensBandRidgeOffset = autoTransform.lensBandRidgeOffset * masterStrength
             let appliedLensBandMidOffset = autoTransform.lensBandMidOffset * masterStrength
+            let appliedLensBandRawTopOffset = autoTransform.lensBandRawTopOffset * masterStrength
+            let appliedLensBandRawRidgeOffset = autoTransform.lensBandRawRidgeOffset * masterStrength
+            let appliedLensBandRawMidOffset = autoTransform.lensBandRawMidOffset * masterStrength
+            let appliedLensBandPulseDeltaTopOffset = autoTransform.lensBandPulseDeltaTopOffset * masterStrength
+            let appliedLensBandPulseDeltaRidgeOffset = autoTransform.lensBandPulseDeltaRidgeOffset * masterStrength
+            let appliedLensBandPulseDeltaMidOffset = autoTransform.lensBandPulseDeltaMidOffset * masterStrength
             let appliedLensBandTopColumnOffset = autoTransform.lensBandTopColumnOffset * masterStrength
             let appliedLensBandRidgeColumnOffset = autoTransform.lensBandRidgeColumnOffset * masterStrength
             let appliedLensBandMidColumnOffset = autoTransform.lensBandMidColumnOffset * masterStrength
@@ -7404,7 +7410,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 componentMessage
             )
             let lensBandMessage = String(
-                format: "Render lens band csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f",
+                format: "Render lens band csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandRawTopX=%.5f lensBandRawTopY=%.5f lensBandRawRidgeX=%.5f lensBandRawRidgeY=%.5f lensBandRawMidX=%.5f lensBandRawMidY=%.5f lensBandPulseDeltaTopX=%.5f lensBandPulseDeltaTopY=%.5f lensBandPulseDeltaRidgeX=%.5f lensBandPulseDeltaRidgeY=%.5f lensBandPulseDeltaMidX=%.5f lensBandPulseDeltaMidY=%.5f lensBandPulseWindowFrames=%.2f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f",
                 analysisSeconds,
                 samplePosition,
                 frames.count,
@@ -7422,6 +7428,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 appliedLensBandRidgeOffset.y,
                 appliedLensBandMidOffset.x,
                 appliedLensBandMidOffset.y,
+                appliedLensBandRawTopOffset.x,
+                appliedLensBandRawTopOffset.y,
+                appliedLensBandRawRidgeOffset.x,
+                appliedLensBandRawRidgeOffset.y,
+                appliedLensBandRawMidOffset.x,
+                appliedLensBandRawMidOffset.y,
+                appliedLensBandPulseDeltaTopOffset.x,
+                appliedLensBandPulseDeltaTopOffset.y,
+                appliedLensBandPulseDeltaRidgeOffset.x,
+                appliedLensBandPulseDeltaRidgeOffset.y,
+                appliedLensBandPulseDeltaMidOffset.x,
+                appliedLensBandPulseDeltaMidOffset.y,
+                autoTransform.lensBandPulseWindowFrames,
                 appliedLensBandTopColumnOffset.x,
                 appliedLensBandTopColumnOffset.y,
                 appliedLensBandRidgeColumnOffset.x,
