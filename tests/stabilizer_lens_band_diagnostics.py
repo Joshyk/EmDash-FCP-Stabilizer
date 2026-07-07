@@ -27,6 +27,12 @@ BANDS = {
 }
 
 FAR_FIELD_BANDS = ("cloud_top", "ridge_horizon", "mountain_mid")
+MODEL_COMPONENTS = {
+    "row": "lensBandRollingShutterRowScore",
+    "column": "lensBandRollingShutterColScore",
+    "roll": "lensBandRollingShutterRollScore",
+    "interBand": "lensBandRollingShutterInterBandScore",
+}
 REGIONS = {
     "left": (0.00, 0.38, 0.00, 1.00),
     "center": (0.28, 0.72, 0.00, 1.00),
@@ -171,6 +177,49 @@ def residual_window(values: list[float], index: int, radius: int) -> float:
     ys = np.array([values[i] for i in baseline_indices], dtype=np.float64)
     slope, intercept = np.polyfit(xs, ys, 1)
     return float(values[index] - ((slope * index) + intercept))
+
+
+def percentile_abs(rows: list[dict[str, Any]], key: str, percentile: float) -> float:
+    values = [abs(finite_float(row.get(key))) for row in rows]
+    return float(np.percentile(values, percentile)) if values else 0.0
+
+
+def dominant_key(values: dict[str, float]) -> tuple[str, float]:
+    if not values:
+        return "", 0.0
+    key = max(values, key=lambda item: values[item])
+    return key, values[key]
+
+
+def classify_residual_model(row: dict[str, Any], window_frames: int) -> tuple[str, str, str]:
+    component_values = {
+        label: abs(finite_float(row.get(f"{component}HF{window_frames}")))
+        for label, component in MODEL_COMPONENTS.items()
+    }
+    component, component_value = dominant_key(component_values)
+    band_values: dict[str, float] = {}
+    for band_name in FAR_FIELD_BANDS:
+        band_values[f"{band_name}.row"] = abs(
+            finite_float(row.get(f"{band_name}.rowPhaseMagnitudeHF{window_frames}"))
+        )
+        band_values[f"{band_name}.column"] = abs(
+            finite_float(row.get(f"{band_name}.colPhaseMagnitudeHF{window_frames}"))
+        )
+        band_values[f"{band_name}.roll"] = abs(
+            finite_float(row.get(f"{band_name}.localRollSpreadHF{window_frames}"))
+        )
+    band_component, band_value = dominant_key(band_values)
+    if component_value < 0.35 and band_value < 0.35:
+        return "noSignal", component, band_component
+    if component == "row":
+        return "rowPhaseWarp", component, band_component
+    if component == "column":
+        return "columnPhaseWarp", component, band_component
+    if component == "interBand":
+        return "regionClusterWarp", component, band_component
+    if component == "roll":
+        return "localRollWarp", component, band_component
+    return "unknown", component, band_component
 
 
 def add_region_phase_metrics(row: dict[str, float], band_name: str) -> None:
@@ -439,6 +488,9 @@ def main() -> None:
         f"lensBandRollingShutterColScoreHF{args.window_frames}",
         f"lensBandRollingShutterRollScoreHF{args.window_frames}",
         f"lensBandRollingShutterInterBandScoreHF{args.window_frames}",
+        "lensBandResidualModel",
+        "lensBandResidualDominantComponent",
+        "lensBandResidualDominantBand",
     ]
     csv_path = args.output_dir / "lens_band_source_joined.csv"
     joined_rows: list[dict[str, Any]] = []
@@ -468,7 +520,19 @@ def main() -> None:
             for column in derived_columns:
                 if column == "lensBandSupport":
                     continue
-                value = video_row.get(column, "")
+                if column in (
+                    "lensBandResidualModel",
+                    "lensBandResidualDominantComponent",
+                    "lensBandResidualDominantBand",
+                ):
+                    model, component, band_component = classify_residual_model(video_row, args.window_frames)
+                    value = {
+                        "lensBandResidualModel": model,
+                        "lensBandResidualDominantComponent": component,
+                        "lensBandResidualDominantBand": band_component,
+                    }[column]
+                else:
+                    value = video_row.get(column, "")
                 row[column] = f"{value:.6f}" if isinstance(value, float) else value
             for column in band_columns:
                 value = video_row.get(column, "")
@@ -514,11 +578,72 @@ def main() -> None:
             focus_components,
             key=lambda key: focus_components[key],
         )
+    focus_models = Counter(str(row.get("lensBandResidualModel", "")) for row in focus_joined if row.get("lensBandResidualModel"))
+    focus_model_p95 = {
+        "rowPhaseWarp": percentile_abs(focus_joined, f"lensBandRollingShutterRowScoreHF{args.window_frames}", 95),
+        "columnPhaseWarp": percentile_abs(focus_joined, f"lensBandRollingShutterColScoreHF{args.window_frames}", 95),
+        "localRollWarp": percentile_abs(focus_joined, f"lensBandRollingShutterRollScoreHF{args.window_frames}", 95),
+        "regionClusterWarp": percentile_abs(focus_joined, f"lensBandRollingShutterInterBandScoreHF{args.window_frames}", 95),
+    }
+    dominant_model, dominant_model_value = dominant_key(focus_model_p95)
+    summary["focusLensBandResidualModelCounts"] = dict(focus_models)
+    summary["focusLensBandResidualDominantModel"] = dominant_model
+    summary["focusLensBandResidualDominantModelP95"] = dominant_model_value
+    summary["focusLensBandResidualEvidence"] = (
+        f"{dominant_model} p95={dominant_model_value:.3f}; "
+        f"models={dict(focus_models)}; "
+        f"reasonCounts={summary.get('focusLensReasonCounts', {})}; "
+        f"bandWarpAppliedRows={summary.get('focusLensBandWarpAppliedRows', 0)}"
+    )
     for band_name in ("cloud_top", "ridge_horizon", "mountain_mid"):
         points = [finite_float(row.get(f"{band_name}.points")) for row in focus_joined]
         summary[f"{band_name}FocusPointsP50"] = float(np.percentile(points, 50)) if points else 0.0
         local_support = [finite_float(row.get(f"{band_name}.localSupport")) for row in focus_joined]
         summary[f"{band_name}FocusLocalSupportP50"] = float(np.percentile(local_support, 50)) if local_support else 0.0
+
+    heatmap_path = args.output_dir / "lens_band_residual_heatmap.csv"
+    with heatmap_path.open("w", newline="", encoding="utf-8") as handle:
+        fieldnames = [
+            "frame",
+            "time",
+            "analysisTime",
+            "band",
+            "dxHF",
+            "dyHF",
+            "rowPhaseHF",
+            "columnPhaseHF",
+            "localRollHF",
+            "dominantLocalModel",
+            "runtimeReason",
+            "runtimeBandWarpApplied",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in focus_joined:
+            for band_name in FAR_FIELD_BANDS:
+                local_values = {
+                    "rowPhaseWarp": abs(finite_float(row.get(f"{band_name}.rowPhaseMagnitudeHF{args.window_frames}"))),
+                    "columnPhaseWarp": abs(finite_float(row.get(f"{band_name}.colPhaseMagnitudeHF{args.window_frames}"))),
+                    "localRollWarp": abs(finite_float(row.get(f"{band_name}.localRollSpreadHF{args.window_frames}"))),
+                }
+                local_model, _ = dominant_key(local_values)
+                writer.writerow(
+                    {
+                        "frame": row.get("frame", ""),
+                        "time": row.get("time", ""),
+                        "analysisTime": row.get("analysisTime", ""),
+                        "band": band_name,
+                        "dxHF": row.get(f"{band_name}.dxHF{args.window_frames}", ""),
+                        "dyHF": row.get(f"{band_name}.dyHF{args.window_frames}", ""),
+                        "rowPhaseHF": row.get(f"{band_name}.rowPhaseMagnitudeHF{args.window_frames}", ""),
+                        "columnPhaseHF": row.get(f"{band_name}.colPhaseMagnitudeHF{args.window_frames}", ""),
+                        "localRollHF": row.get(f"{band_name}.localRollSpreadHF{args.window_frames}", ""),
+                        "dominantLocalModel": local_model,
+                        "runtimeReason": row.get("lensShakeReason", ""),
+                        "runtimeBandWarpApplied": row.get("lensBandWarpApplied", ""),
+                    }
+                )
+    summary["heatmapCsv"] = str(heatmap_path)
 
     if args.require_band_warp and summary["focusLensBandWarpAppliedRows"] <= 0:
         raise SystemExit(
