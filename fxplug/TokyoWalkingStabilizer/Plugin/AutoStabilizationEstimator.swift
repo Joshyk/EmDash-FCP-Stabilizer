@@ -831,6 +831,12 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryVelocityCollapseMaximumStepRatio: Float = 0.34
     private static let playbackTrajectoryVelocityCollapseMinimumFarFieldSupport: Float = 0.15
     private static let playbackTrajectoryVelocityCollapseMaximumBlend: Float = 0.78
+    private static let playbackTrajectoryVerticalMicroJitterHalfWindowSeconds = 0.18
+    private static let playbackTrajectoryVerticalMicroJitterMinimumPixels: Float = 0.08
+    private static let playbackTrajectoryVerticalMicroJitterFullPixels: Float = 0.45
+    private static let playbackTrajectoryVerticalMicroJitterMaximumBlend: Float = 0.65
+    private static let playbackTrajectoryVerticalMicroJitterMaximumCorrectionPixels: Float = 0.85
+    private static let playbackTrajectoryVerticalMicroJitterMaximumCorrectionPixelFraction: Float = 0.00085
     private static let playbackTrajectoryFootstepPreservationStartPixels: Float = 0.38
     private static let playbackTrajectoryFootstepPreservationFullPixels: Float = 1.65
     private static let playbackTrajectoryFootstepRotationPreservationStartDegrees: Float = 0.020
@@ -848,7 +854,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 71
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 72
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -4043,9 +4049,23 @@ enum AutoStabilizationEstimator {
                 velocityCollapseGuarded.maximumPixelDeviation
             )
         }
+        let verticalMicroJitterSuppressed = playbackTrajectoryVerticalMicroJitterSuppressedTransforms(
+            frames: frames,
+            transforms: velocityCollapseGuarded.transforms,
+            outputSize: outputSize
+        )
+        if verticalMicroJitterSuppressed.pixelFrameCount > 0 {
+            os_log(
+                "Playback trajectory vertical micro-jitter suppression | pixelFrames %d maxPixel %.3f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                verticalMicroJitterSuppressed.pixelFrameCount,
+                verticalMicroJitterSuppressed.maximumPixelDeviation
+            )
+        }
         let postShockLimitedTransforms = playbackTrajectoryZeroPhaseLimitedTransforms(
             frames: frames,
-            rawTransforms: velocityCollapseGuarded.transforms,
+            rawTransforms: verticalMicroJitterSuppressed.transforms,
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
@@ -4557,6 +4577,177 @@ enum AutoStabilizationEstimator {
             pixelFrameCount: pixelFrameCount,
             rotationFrameCount: 0,
             maximumPixelDeviation: maximumPixelDeviation,
+            maximumRotationDeviation: 0.0
+        )
+    }
+
+    private static func playbackTrajectoryVerticalMicroJitterSuppressedTransforms(
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform],
+        outputSize: vector_float2
+    ) -> PlaybackTrajectoryDespikeResult {
+        guard frames.count == transforms.count,
+              transforms.count >= 5
+        else {
+            return PlaybackTrajectoryDespikeResult(
+                transforms: transforms,
+                pixelFrameCount: 0,
+                rotationFrameCount: 0,
+                maximumPixelDeviation: 0.0,
+                maximumRotationDeviation: 0.0
+            )
+        }
+
+        let outputReference = max(Float(1.0), min(outputSize.x, outputSize.y))
+        let maximumCorrection = max(
+            playbackTrajectoryVerticalMicroJitterMaximumCorrectionPixels,
+            outputReference * playbackTrajectoryVerticalMicroJitterMaximumCorrectionPixelFraction
+        )
+        let halfWindowSeconds = max(
+            playbackTrajectoryVerticalMicroJitterHalfWindowSeconds,
+            localFrameStepSeconds(frames: frames, centerIndex: frames.count / 2) * 3.0
+        )
+        let sigma = max(halfWindowSeconds * 0.5, 1e-6)
+        let finalY = transforms.map(\.pixelOffset.y)
+        var lowFrequencyY = finalY
+
+        for index in transforms.indices {
+            let centerTime = frames[index].time
+            var weightedSum = Float(0.0)
+            var totalWeight = Float(0.0)
+
+            func accumulate(_ sampleIndex: Int) -> Bool {
+                let offset = frames[sampleIndex].time - centerTime
+                guard offset.isFinite,
+                      abs(offset) <= halfWindowSeconds
+                else {
+                    return false
+                }
+                let normalizedDistance = Float(offset / sigma)
+                let weight = Float(Darwin.exp(-0.5 * normalizedDistance * normalizedDistance))
+                weightedSum += finalY[sampleIndex] * weight
+                totalWeight += weight
+                return true
+            }
+
+            _ = accumulate(index)
+            if index > transforms.startIndex {
+                for sampleIndex in stride(from: index - 1, through: transforms.startIndex, by: -1) {
+                    guard accumulate(sampleIndex) else {
+                        break
+                    }
+                }
+            }
+            if index < transforms.endIndex - 1 {
+                for sampleIndex in (index + 1)..<transforms.endIndex {
+                    guard accumulate(sampleIndex) else {
+                        break
+                    }
+                }
+            }
+            if totalWeight > Float.ulpOfOne {
+                lowFrequencyY[index] = weightedSum / totalWeight
+            }
+        }
+
+        var result = transforms
+        var pixelFrameCount = 0
+        var candidateFrameCount = 0
+        var supportRejectedFrameCount = 0
+        var blendRejectedFrameCount = 0
+        var maximumHighFrequency = Float(0.0)
+        var maximumCandidateHighFrequency = Float(0.0)
+        var maximumCorrectionMagnitude = Float(0.0)
+        var minimumCandidateSupport = Float.greatestFiniteMagnitude
+
+        for index in transforms.indices {
+            let transform = transforms[index]
+            let highFrequency = finalY[index] - lowFrequencyY[index]
+            let highFrequencyMagnitude = abs(highFrequency)
+            maximumHighFrequency = max(maximumHighFrequency, highFrequencyMagnitude)
+            guard highFrequencyMagnitude >= playbackTrajectoryVerticalMicroJitterMinimumPixels else {
+                continue
+            }
+            candidateFrameCount += 1
+            maximumCandidateHighFrequency = max(maximumCandidateHighFrequency, highFrequencyMagnitude)
+
+            let trackingSupport = confidenceRamp(
+                max(transform.walkingTrackingConfidence, transform.trackingConfidence),
+                start: 0.16,
+                full: 0.58
+            )
+            let microSupport = confidenceRamp(
+                abs(transform.microPixelOffset.y),
+                start: playbackTrajectoryVerticalMicroJitterMinimumPixels,
+                full: playbackTrajectoryVerticalMicroJitterFullPixels * 2.0
+            )
+            let evidenceSupport = max(
+                confidenceRamp(
+                    highFrequencyMagnitude,
+                    start: playbackTrajectoryVerticalMicroJitterMinimumPixels,
+                    full: playbackTrajectoryVerticalMicroJitterFullPixels
+                ),
+                microSupport * 0.75
+            )
+            let support = trackingSupport * evidenceSupport
+            minimumCandidateSupport = min(minimumCandidateSupport, support)
+            guard support > 0.04 else {
+                supportRejectedFrameCount += 1
+                continue
+            }
+
+            let blend = clamp(
+                support * playbackTrajectoryVerticalMicroJitterMaximumBlend,
+                min: 0.0,
+                max: playbackTrajectoryVerticalMicroJitterMaximumBlend
+            )
+            guard blend > 0.02 else {
+                blendRejectedFrameCount += 1
+                continue
+            }
+
+            let correction = clamp(
+                -highFrequency * blend,
+                min: -maximumCorrection,
+                max: maximumCorrection
+            )
+            guard abs(correction) > Float.ulpOfOne else {
+                continue
+            }
+
+            result[index].pixelOffset.y += correction
+            result[index].microPixelOffset.y += correction
+            result[index].limitedFootstepCorrection.y += correction
+            result[index].temporalSmoothingPixelDelta.y += correction
+            maximumCorrectionMagnitude = max(maximumCorrectionMagnitude, abs(correction))
+            pixelFrameCount += 1
+        }
+
+        if candidateFrameCount > 0 || maximumHighFrequency > playbackTrajectoryVerticalMicroJitterMinimumPixels {
+            let minimumSupportForLog = minimumCandidateSupport == Float.greatestFiniteMagnitude
+                ? Float(0.0)
+                : minimumCandidateSupport
+            os_log(
+                "Playback trajectory vertical micro-jitter scan | candidates %d applied %d supportReject %d blendReject %d window %.3f maxHighFreq %.3f maxCandidateHighFreq %.3f minCandidateSupport %.3f maxCorrection %.3f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                candidateFrameCount,
+                pixelFrameCount,
+                supportRejectedFrameCount,
+                blendRejectedFrameCount,
+                halfWindowSeconds,
+                maximumHighFrequency,
+                maximumCandidateHighFrequency,
+                minimumSupportForLog,
+                maximumCorrectionMagnitude
+            )
+        }
+
+        return PlaybackTrajectoryDespikeResult(
+            transforms: result,
+            pixelFrameCount: pixelFrameCount,
+            rotationFrameCount: 0,
+            maximumPixelDeviation: maximumCorrectionMagnitude,
             maximumRotationDeviation: 0.0
         )
     }
