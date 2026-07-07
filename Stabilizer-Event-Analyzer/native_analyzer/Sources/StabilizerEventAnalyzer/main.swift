@@ -4318,6 +4318,8 @@ private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationU
         try writeOptionalFloatArrayField("lensBandRidgeConfidence", cache.lensBandRidgeConfidence)
         try writeOptionalFloatArrayField("lensBandMidConfidence", cache.lensBandMidConfidence)
         try writeOptionalFloatArrayField("lensBandConfidence", cache.lensBandConfidence)
+        try writeOptionalFloatArrayField("sourceLensShakeRidgePathY", cache.sourceLensShakeRidgePathY)
+        try writeOptionalFloatArrayField("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport)
         try writeOptionalFloatArrayField("analysisConfidence", cache.analysisConfidence)
         try writeOptionalFloatArrayField("warpConfidence", cache.warpConfidence)
         writeOptionalInt32ArrayField("acceptedBlockCounts", cache.acceptedBlockCounts)
