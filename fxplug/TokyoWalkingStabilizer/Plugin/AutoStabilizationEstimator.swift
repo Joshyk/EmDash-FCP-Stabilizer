@@ -1154,6 +1154,23 @@ enum AutoStabilizationEstimator {
         let active: Bool
     }
 
+    private struct TurnOwnershipWindowStats {
+        let range: Range<Int>
+        let positiveTravel: Float
+        let negativeTravel: Float
+        let totalTravel: Float
+        let endpointDelta: Float
+        let dominantTravel: Float
+        let dominantRatio: Float
+        let endpointRatio: Float
+        let monotonicStart: Float
+        let monotonicTravel: Float
+        let direction: Float
+        let firstTime: Double
+        let lastTime: Double
+        let weightedAverage: Float
+    }
+
     private struct EstimatedPath {
         let values: [Float]
         let overrides: [Int: Float]
@@ -12960,11 +12977,12 @@ enum AutoStabilizationEstimator {
         }
         let frames = analysis.frames
         let halfWindowSeconds = max(0.0, windowSeconds * 0.5)
+        let materializedValues = materializedPathValues(values)
         var scales: [Int: Float] = [:]
         scales.reserveCapacity(targetIndices.count)
 
         for index in targetIndices {
-            guard values.values.indices.contains(index),
+            guard materializedValues.indices.contains(index),
                   frames.indices.contains(index),
                   analysis.analysisConfidence.indices.contains(index),
                   analysis.residuals.indices.contains(index),
@@ -12976,31 +12994,34 @@ enum AutoStabilizationEstimator {
             }
 
             let centerTime = frames[index].time
-            let activeIndices = indicesWithinTimeRadius(
+            let activeRange = indexRangeWithinTimeRadius(
                 frames,
                 centerTime: centerTime,
                 radiusSeconds: halfWindowSeconds
             )
-            guard !activeIndices.isEmpty else {
+            guard let stats = turnOwnershipWindowStats(
+                values: materializedValues,
+                frames: frames,
+                range: activeRange,
+                centerTime: centerTime,
+                windowSeconds: windowSeconds
+            ),
+                  stats.totalTravel > footstepImpulseFullScalePixels
+            else {
                 continue
             }
 
-            let turnSmooth = timeWeightedMonotonicSCurveValue(
-                values,
-                frames: frames,
-                indices: activeIndices,
+            let turnSmooth = turnOwnershipMonotonicSCurveValue(
+                stats: stats,
                 centerTime: centerTime,
                 windowSeconds: windowSeconds
-            ) ??
-                timeWeightedAverage(
-                    values,
-                    frames: frames,
-                    indices: activeIndices,
-                    centerTime: centerTime,
-                    windowSeconds: windowSeconds
-                )
-            let turnBand = values[index] - turnSmooth
-            let residual = cache.residualPercentile(analysis: analysis, indices: activeIndices, percentile: 0.75)
+            ) ?? stats.weightedAverage
+            let turnBand = materializedValues[index] - turnSmooth
+            let residual = cache.residualPercentile(
+                analysis: analysis,
+                indices: Array(stats.range),
+                percentile: 0.75
+            )
             let trackingConfidence = frameTrackingConfidence(
                 motionConfidence: analysis.analysisConfidence[index],
                 residual: analysis.residuals[index],
@@ -13016,9 +13037,7 @@ enum AutoStabilizationEstimator {
                 qualityModel: analysis.qualityModel
             )
             let ownership = turnOwnershipConfidence(
-                values: values,
-                frames: frames,
-                indices: activeIndices,
+                stats: stats,
                 turnBandValue: turnBand,
                 trackingConfidence: turnTrackingConfidence
             )
@@ -13029,6 +13048,200 @@ enum AutoStabilizationEstimator {
         }
 
         return scales
+    }
+
+    private static func materializedPathValues(_ values: EstimatedPath) -> [Float] {
+        guard values.valueProvider != nil || !values.overrides.isEmpty else {
+            return values.values
+        }
+        return values.values.indices.map { values[$0] }
+    }
+
+    private static func indexRangeWithinTimeRadius(
+        _ frames: [StabilizerAnalysisFrame],
+        centerTime: Double,
+        radiusSeconds: Double
+    ) -> Range<Int> {
+        guard !frames.isEmpty, centerTime.isFinite, radiusSeconds.isFinite else {
+            return frames.startIndex..<frames.startIndex
+        }
+        let boundedRadius = max(0.0, radiusSeconds)
+        let startTime = centerTime - boundedRadius - timeWindowSelectionEpsilon
+        let endTime = centerTime + boundedRadius + timeWindowSelectionEpsilon
+        let lowerIndex = lowerBoundFrameIndex(frames, time: startTime)
+        let upperIndex = upperBoundFrameIndex(frames, time: endTime)
+        guard lowerIndex < upperIndex else {
+            return frames.startIndex..<frames.startIndex
+        }
+        return lowerIndex..<upperIndex
+    }
+
+    private static func turnOwnershipWindowStats(
+        values: [Float],
+        frames: [StabilizerAnalysisFrame],
+        range: Range<Int>,
+        centerTime: Double,
+        windowSeconds: Double
+    ) -> TurnOwnershipWindowStats? {
+        guard range.count >= 3,
+              values.indices.contains(range.lowerBound),
+              values.indices.contains(range.upperBound - 1),
+              frames.indices.contains(range.lowerBound),
+              frames.indices.contains(range.upperBound - 1)
+        else {
+            return nil
+        }
+
+        var positiveTravel: Float = 0.0
+        var negativeTravel: Float = 0.0
+        for index in (range.lowerBound + 1)..<range.upperBound {
+            let delta = values[index] - values[index - 1]
+            if delta >= 0.0 {
+                positiveTravel += delta
+            } else {
+                negativeTravel += -delta
+            }
+        }
+
+        let totalTravel = positiveTravel + negativeTravel
+        let firstValue = values[range.lowerBound]
+        let lastValue = values[range.upperBound - 1]
+        let endpointDelta = lastValue - firstValue
+        let dominantTravel = max(positiveTravel, negativeTravel)
+        let dominantRatio = dominantTravel / max(totalTravel, Float.ulpOfOne)
+        let endpointRatio = abs(endpointDelta) / max(dominantTravel, Float.ulpOfOne)
+        let direction: Float
+        if abs(endpointDelta) >= dominantTravel * 0.2 {
+            direction = endpointDelta >= 0.0 ? 1.0 : -1.0
+        } else {
+            direction = positiveTravel >= negativeTravel ? 1.0 : -1.0
+        }
+        let monotonicStart = firstValue * direction
+        var monotonicEnd = monotonicStart
+        for index in (range.lowerBound + 1)..<range.upperBound {
+            monotonicEnd = max(monotonicEnd, values[index] * direction)
+        }
+
+        let windowStart = centerTime - (windowSeconds * 0.5)
+        let windowEnd = centerTime + (windowSeconds * 0.5)
+        var weightedTotal: Float = 0.0
+        var totalWeight = Double(0.0)
+        for index in range {
+            let currentTime = frames[index].time
+            let leftBoundary: Double
+            if index > range.lowerBound {
+                leftBoundary = max(windowStart, (frames[index - 1].time + currentTime) * 0.5)
+            } else {
+                leftBoundary = windowStart
+            }
+
+            let rightBoundary: Double
+            if index + 1 < range.upperBound {
+                rightBoundary = min(windowEnd, (currentTime + frames[index + 1].time) * 0.5)
+            } else {
+                rightBoundary = windowEnd
+            }
+
+            let weight = max(0.0, rightBoundary - leftBoundary)
+            weightedTotal += values[index] * Float(weight)
+            totalWeight += weight
+        }
+
+        let weightedAverage: Float
+        if totalWeight > 1e-9 {
+            weightedAverage = weightedTotal / Float(totalWeight)
+        } else {
+            var total = Float(0.0)
+            for index in range {
+                total += values[index]
+            }
+            weightedAverage = total / Float(range.count)
+        }
+
+        return TurnOwnershipWindowStats(
+            range: range,
+            positiveTravel: positiveTravel,
+            negativeTravel: negativeTravel,
+            totalTravel: totalTravel,
+            endpointDelta: endpointDelta,
+            dominantTravel: dominantTravel,
+            dominantRatio: dominantRatio,
+            endpointRatio: endpointRatio,
+            monotonicStart: monotonicStart,
+            monotonicTravel: monotonicEnd - monotonicStart,
+            direction: direction,
+            firstTime: frames[range.lowerBound].time,
+            lastTime: frames[range.upperBound - 1].time,
+            weightedAverage: weightedAverage
+        )
+    }
+
+    private static func turnOwnershipMonotonicSCurveValue(
+        stats: TurnOwnershipWindowStats,
+        centerTime: Double,
+        windowSeconds: Double
+    ) -> Float? {
+        guard stats.totalTravel > 0.5,
+              stats.dominantRatio >= 0.62 || abs(stats.endpointDelta) >= stats.dominantTravel * 0.35,
+              stats.monotonicTravel > 0.5
+        else {
+            return nil
+        }
+
+        let windowStart = centerTime - (windowSeconds * 0.5)
+        let windowEnd = centerTime + (windowSeconds * 0.5)
+        let intentStartTime = max(stats.firstTime, windowStart)
+        let intentEndTime = min(stats.lastTime, windowEnd)
+        let duration = intentEndTime - intentStartTime
+        guard duration > 1e-6 else {
+            return nil
+        }
+
+        let normalizedTime = clamp(Float((centerTime - intentStartTime) / duration), min: 0.0, max: 1.0)
+        let progress = smootherStep(normalizedTime)
+        return (stats.monotonicStart + (stats.monotonicTravel * progress)) * stats.direction
+    }
+
+    private static func turnOwnershipConfidence(
+        stats: TurnOwnershipWindowStats,
+        turnBandValue: Float,
+        trackingConfidence: Float
+    ) -> Float {
+        guard stats.totalTravel > footstepImpulseFullScalePixels else {
+            return 0.0
+        }
+
+        let monotonicQuality = confidenceRamp(stats.dominantRatio, start: 0.58, full: 0.82)
+        let endpointQuality = confidenceRamp(stats.endpointRatio, start: 0.22, full: 0.55)
+        let bandQuality = confidenceRamp(
+            abs(turnBandValue),
+            start: footstepImpulseFullScalePixels * 0.70,
+            full: max((footstepImpulseFullScalePixels * 0.70) + Float.ulpOfOne, turnSmoothingFullScalePixels * 0.65)
+        )
+        let trackingQuality = confidenceRamp(trackingConfidence, start: 0.22, full: 0.62)
+        let strictOwnership = max(monotonicQuality, endpointQuality) * bandQuality * trackingQuality
+        let directionalCoherence = max(monotonicQuality, endpointQuality)
+        let macroBandQuality = confidenceRamp(
+            abs(turnBandValue),
+            start: turnMacroOwnershipBandStartPixels,
+            full: turnMacroOwnershipBandFullPixels
+        )
+        let macroTravelQuality = confidenceRamp(
+            stats.dominantTravel,
+            start: turnMacroOwnershipTravelStartPixels,
+            full: turnMacroOwnershipTravelFullPixels
+        )
+        let macroTrackingQuality = confidenceRamp(
+            trackingConfidence,
+            start: turnMacroOwnershipTrackingStart,
+            full: turnMacroOwnershipTrackingFull
+        )
+        let macroOwnership = directionalCoherence
+            * macroBandQuality
+            * macroTravelQuality
+            * macroTrackingQuality
+            * turnMacroOwnershipScale
+        return clamp(max(strictOwnership, macroOwnership), min: 0.0, max: 1.0)
     }
 
     private static func residualAdjustedTrackingConfidence(

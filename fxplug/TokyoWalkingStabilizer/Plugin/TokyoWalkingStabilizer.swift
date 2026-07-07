@@ -48,10 +48,10 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.375"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 375.0
+private let tokyoWalkingStabilizerVersion = "1.0.376"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 376.0
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_333_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_334_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -2064,7 +2064,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 outputSize: outputSize,
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths,
-                waitForPreparation: true,
+                waitForPreparation: false,
                 onPrepared: onPlaybackPreparationReady
             ) {
                 transform = readyTransform
@@ -5957,7 +5957,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             samplingProfile: samplingProfile,
             analysisRevision: analysisRevision,
             cacheIdentity: cacheIdentity,
-            waitForPreparation: true,
+            waitForPreparation: false,
             onPrepared: onPrepared
         ) else {
             os_log(
