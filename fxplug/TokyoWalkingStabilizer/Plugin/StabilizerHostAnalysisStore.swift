@@ -305,6 +305,22 @@ final class StabilizerHostAnalysisStore {
         return token
     }
 
+    @discardableResult
+    func notePreviewWarmupExpiredForRender(reason: String) -> Double {
+        lock.lock()
+        renderRevisionToken = Self.nextRenderInvalidationToken(after: renderRevisionToken)
+        let token = renderRevisionToken
+        lock.unlock()
+        os_log(
+            "Preview warmup render invalidation | token %.3f | %{public}@",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            token,
+            reason
+        )
+        return token
+    }
+
     var infoText: String {
         lock.lock()
         defer { lock.unlock() }

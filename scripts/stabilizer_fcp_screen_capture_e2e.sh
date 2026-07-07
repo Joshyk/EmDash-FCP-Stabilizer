@@ -897,6 +897,8 @@ columns = [
     "deltaY",
     "deltaSeconds",
     "sampleDelta",
+    "previewWarming",
+    "previewWarmupReason",
     "proxy",
     "crop",
     "identity",
@@ -959,6 +961,16 @@ if has_focus_contract:
             "Render component diagnostics missing focus window rows: "
             f"requested {focus_start:.2f}-{focus_end:.2f}s, available {first_time:.2f}-{last_time:.2f}s, "
             f"log={log_path}"
+        )
+    warming_focus_rows = [row for row in focus_rows if row.get("previewWarming") == "yes"]
+    if warming_focus_rows:
+        first_warming = float_value(warming_focus_rows[0], "time")
+        last_warming = float_value(warming_focus_rows[-1], "time")
+        reasons = sorted({row.get("previewWarmupReason", "") for row in warming_focus_rows})
+        raise SystemExit(
+            "Render component diagnostics focus window contains Preview Warming frames: "
+            f"rows={len(warming_focus_rows)} first={first_warming:.5f}s last={last_warming:.5f}s "
+            f"reasons={reasons} log={log_path}"
         )
     unique_focus_times = sorted({round(float_value(row, "time"), 5) for row in focus_rows})
     focus_duration = focus_end - focus_start

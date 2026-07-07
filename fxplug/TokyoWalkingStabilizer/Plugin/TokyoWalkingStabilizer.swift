@@ -1023,6 +1023,39 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let tinyStep: Bool
     }
 
+    private struct RenderPreviewWarmupState {
+        let cacheIdentityShort: String
+        let analysisSeconds: Double
+        let samplePosition: Double
+        let warmupUntil: TimeInterval
+        let stableSequentialFrameCount: Int
+        let active: Bool
+    }
+
+    private struct RenderPreviewWarmupDecision {
+        let active: Bool
+        let reason: String
+        let analysisSeconds: Double
+        let expectedFrameSeconds: Double
+        let deltaSeconds: Double
+        let samplePosition: Double
+        let sampleDelta: Double
+        let stableSequentialFrameCount: Int
+        let remainingSeconds: Double
+
+        static let inactive = RenderPreviewWarmupDecision(
+            active: false,
+            reason: "inactive",
+            analysisSeconds: 0.0,
+            expectedFrameSeconds: 0.0,
+            deltaSeconds: 0.0,
+            samplePosition: 0.0,
+            sampleDelta: 0.0,
+            stableSequentialFrameCount: 0,
+            remainingSeconds: 0.0
+        )
+    }
+
     private static let serialAnalysisQueueLock = NSLock()
     private static var serialAnalysisQueue: [SerialHostAnalysisRequest] = []
     private static let activeAnalysisStoreLock = NSLock()
@@ -1054,6 +1087,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static var autoTransformCache: [StabilizerAutoTransformCacheKey: StabilizerAutoTransform] = [:]
     private static var autoTransformCacheOrder: [StabilizerAutoTransformCacheKey] = []
     private static let autoTransformCacheLimit = 32768
+    private static let previewWarmupHoldSeconds: TimeInterval = 0.85
+    private static let previewWarmupStableSequentialFrameCount = 2
+    private static let previewWarmupLogIntervalSeconds: TimeInterval = 0.25
     private let apiManager: PROAPIAccessing
     private let statusLock = NSLock()
     private let cacheIdentityLock = NSLock()
@@ -1078,6 +1114,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastRenderMotionDiagnosticLogWallTime: TimeInterval = 0.0
     private var lastRenderDiagnosticStatusWallTime: TimeInterval = 0.0
     private var lastRenderMotionDiagnosticState: RenderMotionDiagnosticState?
+    private var lastPreviewWarmupState: RenderPreviewWarmupState?
+    private var lastPreviewWarmupLogWallTime: TimeInterval = 0.0
+    private var lastScheduledPreviewWarmupExpiry: TimeInterval = 0.0
+    private var lastScheduledPreviewWarmupExpiryIdentity = ""
     private var preferredHostAnalysisCacheIdentity: String?
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
@@ -6728,6 +6768,266 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
     }
 
+    private func renderPreviewWarmupDecision(
+        preparedAnalysis: StabilizerPreparedAnalysis,
+        renderTime: CMTime,
+        renderSourceIsProxy: Bool,
+        autoCropEnabled: Bool,
+        cacheIdentityShort: String
+    ) -> RenderPreviewWarmupDecision {
+        let analysisSeconds = CMTimeGetSeconds(renderTime)
+        let frames = preparedAnalysis.frames
+        guard analysisSeconds.isFinite,
+              !frames.isEmpty
+        else {
+            return .inactive
+        }
+
+        let lastIndex = frames.count - 1
+        let lowerIndex: Int
+        let upperIndex: Int
+        let lowerTime: Double
+        let upperTime: Double
+        let fraction: Double
+        if frames.count == 1 || analysisSeconds <= frames[0].time {
+            lowerIndex = 0
+            upperIndex = 0
+            lowerTime = frames[0].time
+            upperTime = frames[0].time
+            fraction = 0.0
+        } else if analysisSeconds >= frames[lastIndex].time {
+            lowerIndex = lastIndex
+            upperIndex = lastIndex
+            lowerTime = frames[lastIndex].time
+            upperTime = frames[lastIndex].time
+            fraction = 0.0
+        } else {
+            var low = 0
+            var high = lastIndex
+            while low + 1 < high {
+                let middle = (low + high) / 2
+                if frames[middle].time <= analysisSeconds {
+                    low = middle
+                } else {
+                    high = middle
+                }
+            }
+            lowerIndex = low
+            upperIndex = high
+            lowerTime = frames[low].time
+            upperTime = frames[high].time
+            let duration = upperTime - lowerTime
+            fraction = duration.isFinite && duration > Double.ulpOfOne
+                ? min(1.0, max(0.0, (analysisSeconds - lowerTime) / duration))
+                : 0.0
+        }
+
+        let fallbackFrameSeconds: Double
+        if frames.count > 1 {
+            fallbackFrameSeconds = frames[1].time - frames[0].time
+        } else {
+            fallbackFrameSeconds = 1.0 / 60.0
+        }
+        let expectedFrameSeconds = max(
+            1.0 / 240.0,
+            upperTime > lowerTime
+                ? upperTime - lowerTime
+                : fallbackFrameSeconds
+        )
+        let samplePosition = Double(lowerIndex) + fraction
+        let now = CFAbsoluteTimeGetCurrent()
+
+        let previous: RenderPreviewWarmupState?
+        renderDiagnosticsLogLock.lock()
+        previous = lastPreviewWarmupState
+        renderDiagnosticsLogLock.unlock()
+
+        let sameIdentity = previous?.cacheIdentityShort == cacheIdentityShort
+        let deltaSeconds = sameIdentity ? analysisSeconds - (previous?.analysisSeconds ?? analysisSeconds) : 0.0
+        let sampleDelta = sameIdentity ? samplePosition - (previous?.samplePosition ?? samplePosition) : 0.0
+        let previousActive = previous.map { $0.active && now < $0.warmupUntil } ?? false
+        let normalSequentialFrame = sameIdentity
+            && deltaSeconds.isFinite
+            && deltaSeconds > expectedFrameSeconds * 0.45
+            && deltaSeconds < expectedFrameSeconds * 1.85
+            && sampleDelta.isFinite
+            && sampleDelta > 0.45
+            && sampleDelta < 1.55
+        let renderTimeGap = sameIdentity
+            && deltaSeconds.isFinite
+            && deltaSeconds > expectedFrameSeconds * 1.85
+        let renderTimeRewind = sameIdentity
+            && deltaSeconds.isFinite
+            && deltaSeconds < -expectedFrameSeconds * 0.10
+        let preparedSampleGap = sameIdentity
+            && deltaSeconds.isFinite
+            && deltaSeconds > expectedFrameSeconds * 0.45
+            && deltaSeconds < expectedFrameSeconds * 1.85
+            && sampleDelta.isFinite
+            && sampleDelta > 1.55
+        let reconnectNoiseWhileWarming = previousActive
+            && (renderTimeGap || renderTimeRewind || preparedSampleGap)
+        let triggerReason: String?
+        if previous == nil {
+            triggerReason = "startup"
+        } else if !sameIdentity {
+            triggerReason = "analysis-change"
+        } else if reconnectNoiseWhileWarming && renderTimeRewind {
+            triggerReason = "render-time-rewind"
+        } else if reconnectNoiseWhileWarming && renderTimeGap {
+            triggerReason = "render-time-gap"
+        } else if reconnectNoiseWhileWarming && preparedSampleGap {
+            triggerReason = "prepared-sample-gap"
+        } else {
+            triggerReason = nil
+        }
+
+        let stableSequentialFrameCount: Int
+        if normalSequentialFrame {
+            stableSequentialFrameCount = min(
+                (previous?.stableSequentialFrameCount ?? 0) + 1,
+                Self.previewWarmupStableSequentialFrameCount
+            )
+        } else if triggerReason != nil {
+            stableSequentialFrameCount = 0
+        } else {
+            stableSequentialFrameCount = previous?.stableSequentialFrameCount ?? 0
+        }
+
+        var warmupUntil = previous?.warmupUntil ?? 0.0
+        if triggerReason != nil {
+            warmupUntil = max(warmupUntil, now + Self.previewWarmupHoldSeconds)
+        }
+        if stableSequentialFrameCount >= Self.previewWarmupStableSequentialFrameCount {
+            warmupUntil = min(warmupUntil, now)
+        }
+        let active = now < warmupUntil
+        let reason: String
+        if let triggerReason {
+            reason = triggerReason
+        } else if active {
+            reason = stableSequentialFrameCount > 0 ? "stabilizing-cadence" : "waiting-cadence"
+        } else {
+            reason = "ready"
+        }
+        let shouldForceReadyStatus = previousActive && !active
+        let remainingSeconds = max(0.0, warmupUntil - now)
+        let shouldLog: Bool
+
+        renderDiagnosticsLogLock.lock()
+        shouldLog = active
+            && (triggerReason != nil || (now - lastPreviewWarmupLogWallTime) >= Self.previewWarmupLogIntervalSeconds)
+        if shouldLog {
+            lastPreviewWarmupLogWallTime = now
+        }
+        lastPreviewWarmupState = RenderPreviewWarmupState(
+            cacheIdentityShort: cacheIdentityShort,
+            analysisSeconds: analysisSeconds,
+            samplePosition: samplePosition,
+            warmupUntil: warmupUntil,
+            stableSequentialFrameCount: stableSequentialFrameCount,
+            active: active
+        )
+        renderDiagnosticsLogLock.unlock()
+
+        if shouldLog {
+            os_log(
+                "Preview warming | FxPlug %{public}@ | reason %{public}@ | render %.3f dt %.5f expected %.5f sample %.3f dSample %.3f stable %d remaining %.3f | proxy %{public}@ crop %{public}@ identity %{public}@",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                tokyoWalkingStabilizerVersion,
+                reason,
+                analysisSeconds,
+                deltaSeconds,
+                expectedFrameSeconds,
+                samplePosition,
+                sampleDelta,
+                stableSequentialFrameCount,
+                remainingSeconds,
+                renderSourceIsProxy ? "yes" : "no",
+                autoCropEnabled ? "yes" : "no",
+                cacheIdentityShort
+            )
+            publishHostAnalysisStatus(force: true, statusOverride: "Preview Warming - \(reason)")
+        } else if shouldForceReadyStatus {
+            publishHostAnalysisStatus(force: true)
+        }
+        if active {
+            schedulePreviewWarmupExpiryInvalidation(
+                warmupUntil: warmupUntil,
+                cacheIdentityShort: cacheIdentityShort,
+                reason: reason
+            )
+        }
+
+        return RenderPreviewWarmupDecision(
+            active: active,
+            reason: reason,
+            analysisSeconds: analysisSeconds,
+            expectedFrameSeconds: expectedFrameSeconds,
+            deltaSeconds: deltaSeconds,
+            samplePosition: samplePosition,
+            sampleDelta: sampleDelta,
+            stableSequentialFrameCount: stableSequentialFrameCount,
+            remainingSeconds: remainingSeconds
+        )
+    }
+
+    private func schedulePreviewWarmupExpiryInvalidation(
+        warmupUntil: TimeInterval,
+        cacheIdentityShort: String,
+        reason: String
+    ) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let delay = max(0.05, warmupUntil - now + 0.03)
+        renderDiagnosticsLogLock.lock()
+        let shouldSchedule = lastScheduledPreviewWarmupExpiryIdentity != cacheIdentityShort
+            || abs(lastScheduledPreviewWarmupExpiry - warmupUntil) >= 0.05
+        if shouldSchedule {
+            lastScheduledPreviewWarmupExpiry = warmupUntil
+            lastScheduledPreviewWarmupExpiryIdentity = cacheIdentityShort
+        }
+        renderDiagnosticsLogLock.unlock()
+        guard shouldSchedule else {
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else {
+                return
+            }
+            let now = CFAbsoluteTimeGetCurrent()
+            let state: RenderPreviewWarmupState?
+            let shouldInvalidate: Bool
+            self.renderDiagnosticsLogLock.lock()
+            state = self.lastPreviewWarmupState
+            if let state,
+               state.cacheIdentityShort == cacheIdentityShort,
+               state.active,
+               now >= state.warmupUntil - 0.02 {
+                shouldInvalidate = true
+                self.lastPreviewWarmupState = RenderPreviewWarmupState(
+                    cacheIdentityShort: state.cacheIdentityShort,
+                    analysisSeconds: state.analysisSeconds,
+                    samplePosition: state.samplePosition,
+                    warmupUntil: now,
+                    stableSequentialFrameCount: state.stableSequentialFrameCount,
+                    active: false
+                )
+            } else {
+                shouldInvalidate = false
+            }
+            self.renderDiagnosticsLogLock.unlock()
+            guard shouldInvalidate else {
+                return
+            }
+            let revision = self.hostAnalysisStore.notePreviewWarmupExpiredForRender(
+                reason: "identity \(cacheIdentityShort) previous \(reason)"
+            )
+            self.publishHostAnalysisStatus(force: true)
+            self.publishRenderRevision(revision, force: true)
+        }
+    }
+
     private func logRenderMotionCadenceIfNeeded(
         preparedAnalysis: StabilizerPreparedAnalysis,
         renderTime: CMTime,
@@ -6740,7 +7040,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         autoCropEnabled: Bool,
         debugOverlayActive: Bool,
         masterStrength: Float,
-        cacheIdentityShort: String
+        cacheIdentityShort: String,
+        previewWarmupDecision: RenderPreviewWarmupDecision
     ) {
         let analysisSeconds = CMTimeGetSeconds(renderTime)
         let frames = preparedAnalysis.frames
@@ -6909,7 +7210,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedShear = autoTransform.shear * masterStrength
             let appliedYawPitchProxy = autoTransform.yawPitchProxy * masterStrength
             let componentMessage = String(
-                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f proxy=%@ crop=%@ identity=%@",
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@ proxy=%@ crop=%@ identity=%@",
                 analysisSeconds,
                 samplePosition,
                 lowerIndex,
@@ -6957,6 +7258,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 appliedTransformDelta.y,
                 sameIdentity ? deltaSeconds : 0.0,
                 sameIdentity ? sampleDelta : 0.0,
+                previewWarmupDecision.active ? "yes" : "no",
+                previewWarmupDecision.reason,
                 renderSourceIsProxy ? "yes" : "no",
                 autoCropEnabled ? "yes" : "no",
                 cacheIdentityShort
@@ -9339,7 +9642,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         diagnostic2: vector_float4,
         diagnostic3: vector_float4,
         diagnostic4: vector_float4,
-        diagnostic5: vector_float4
+        diagnostic5: vector_float4,
+        previewWarmupDecision: RenderPreviewWarmupDecision
     ) {
         guard debugOverlayActive,
               transformEnabled,
@@ -9371,12 +9675,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         os_log(
-            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | FJIT %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f rawCorr %.3f %.3f limitedCorr %.3f %.3f pulseLimited %.3f %.3f | SWOB %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f",
+            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | previewWarming %{public}@ reason %{public}@ | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | FJIT %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f rawCorr %.3f %.3f limitedCorr %.3f %.3f pulseLimited %.3f %.3f | SWOB %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
             renderSeconds,
             analysisSeconds,
+            previewWarmupDecision.active ? "yes" : "no",
+            previewWarmupDecision.reason,
             renderSourceIsProxy ? "yes" : "no",
             cacheIdentityShort,
             frameCount,
@@ -9873,6 +10179,28 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFraming = .identity
         }
         let cropFinishedAt = CFAbsoluteTimeGetCurrent()
+        let previewWarmupDecision: RenderPreviewWarmupDecision
+        if transformEnabled,
+           renderUsesPreparedAnalysis,
+           let preparedAnalysis = activePreparedAnalysis {
+            let warmupRenderTime = activeAnalysisRenderTime
+                ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
+            previewWarmupDecision = renderPreviewWarmupDecision(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: warmupRenderTime,
+                renderSourceIsProxy: renderSourceIsProxy,
+                autoCropEnabled: state.autoCropEnabled,
+                cacheIdentityShort: renderCacheIdentityShort
+            )
+        } else {
+            previewWarmupDecision = .inactive
+        }
+        let renderedAutoTransform: StabilizerAutoTransform = previewWarmupDecision.active
+            ? .identity
+            : autoTransform
+        let renderedAutoCropFraming: AutoCropFraming = previewWarmupDecision.active
+            ? .identity
+            : autoCropFraming
         if transformEnabled,
            renderUsesPreparedAnalysis,
            let preparedAnalysis = activePreparedAnalysis {
@@ -9890,11 +10218,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoCropEnabled: state.autoCropEnabled,
                 debugOverlayActive: debugOverlayActive,
                 masterStrength: masterStrength,
-                cacheIdentityShort: renderCacheIdentityShort
+                cacheIdentityShort: renderCacheIdentityShort,
+                previewWarmupDecision: previewWarmupDecision
             )
         }
         if debugOverlayActive {
-            diagnostic5.y = min(1.0, max(0.0, (autoCropFraming.scale - 1.0) / 0.25))
+            diagnostic5.y = min(1.0, max(0.0, (renderedAutoCropFraming.scale - 1.0) / 0.25))
             logDebugOverlayRenderTruthIfNeeded(
                 debugOverlayActive: true,
                 transformEnabled: transformEnabled,
@@ -9905,21 +10234,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 frameCount: Int(state.hostAnalysisFrameCount),
                 cacheIdentityShort: renderCacheIdentityShort,
                 autoTransform: autoTransform,
-                autoCropFraming: autoCropFraming,
+                autoCropFraming: renderedAutoCropFraming,
                 diagnostic: diagnostic,
                 diagnostic2: diagnostic2,
                 diagnostic3: diagnostic3,
                 diagnostic4: diagnostic4,
-                diagnostic5: diagnostic5
+                diagnostic5: diagnostic5,
+                previewWarmupDecision: previewWarmupDecision
             )
         }
 
         var transform = TokyoWalkingStabilizerTransformUniforms(
-            pixelOffset: autoTransform.pixelOffset * masterStrength,
-            rotationRadians: autoTransform.rotationDegrees * .pi / 180.0 * masterStrength,
+            pixelOffset: renderedAutoTransform.pixelOffset * masterStrength,
+            rotationRadians: renderedAutoTransform.rotationDegrees * .pi / 180.0 * masterStrength,
             rotationSinCos: vector_float2(
-                Darwin.sinf(-autoTransform.rotationDegrees * .pi / 180.0 * masterStrength),
-                Darwin.cosf(-autoTransform.rotationDegrees * .pi / 180.0 * masterStrength)
+                Darwin.sinf(-renderedAutoTransform.rotationDegrees * .pi / 180.0 * masterStrength),
+                Darwin.cosf(-renderedAutoTransform.rotationDegrees * .pi / 180.0 * masterStrength)
             ),
             strength: 1.0,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
@@ -9928,22 +10258,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic3: diagnostic3,
             diagnostic4: diagnostic4,
             diagnostic5: diagnostic5,
-            shear: autoTransform.shear * masterStrength,
-            perspective: (autoTransform.perspective + autoTransform.yawPitchProxy) * masterStrength,
+            shear: renderedAutoTransform.shear * masterStrength,
+            perspective: (renderedAutoTransform.perspective + renderedAutoTransform.yawPitchProxy) * masterStrength,
             edgeMode: Float(state.edgeDisplayMode),
             debugOverlay: debugOverlayActive ? 1.0 : 0.0,
             debugMode: renderSourceIsProxy ? 2.0 : 1.0,
             debugRuntimeBuild: tokyoWalkingStabilizerDebugBuildNumber,
             debugOverlayScale: debugOverlayScale,
-            autoCropScale: autoCropFraming.scale,
-            autoCropPositionPixels: autoCropFraming.positionPixels
+            autoCropScale: renderedAutoCropFraming.scale,
+            autoCropPositionPixels: renderedAutoCropFraming.positionPixels
         )
-        if debugOverlayActive {
+        if debugOverlayActive && !previewWarmupDecision.active {
             publishHostAnalysisRenderDiagnostics(
                 frameCount: Int(state.hostAnalysisFrameCount),
                 panSmoothSeconds: state.panSmoothSeconds,
-                autoTransform: autoTransform,
-                autoCropFraming: autoCropFraming,
+                autoTransform: renderedAutoTransform,
+                autoCropFraming: renderedAutoCropFraming,
                 appliedPixelOffset: transform.pixelOffset,
                 appliedRotationRadians: transform.rotationRadians
             )
