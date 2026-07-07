@@ -226,7 +226,7 @@ final class StabilizerHostAnalysisStore {
     }
 
     private static let cacheSchemaVersion = 34
-    private static let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
+    private static let supportedCacheSchemaVersions: Set<Int> = [34]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -2958,37 +2958,26 @@ final class StabilizerHostAnalysisStore {
                 userInfo: [NSLocalizedDescriptionKey: "persisted Host Analysis cache prepared paths are incomplete: \(mismatchReason)"]
             )
         }
-        let legacyLensBandZeros = Array(repeating: Float(0.0), count: frames.count)
-        let persistedLensBandTopPathX = cache.schemaVersion >= 33 ? cache.lensBandTopPathX : legacyLensBandZeros
-        let persistedLensBandTopPathY = cache.schemaVersion >= 33 ? cache.lensBandTopPathY : legacyLensBandZeros
-        let persistedLensBandRidgePathX = cache.schemaVersion >= 33 ? cache.lensBandRidgePathX : legacyLensBandZeros
-        let persistedLensBandRidgePathY = cache.schemaVersion >= 33 ? cache.lensBandRidgePathY : legacyLensBandZeros
-        let persistedLensBandMidPathX = cache.schemaVersion >= 33 ? cache.lensBandMidPathX : legacyLensBandZeros
-        let persistedLensBandMidPathY = cache.schemaVersion >= 33 ? cache.lensBandMidPathY : legacyLensBandZeros
-        let persistedLensBandConfidence = cache.schemaVersion >= 33 ? cache.lensBandConfidence : legacyLensBandZeros
-        let persistedLensBandTopConfidence = cache.schemaVersion >= 34 ? cache.lensBandTopConfidence : legacyLensBandZeros
-        let persistedLensBandRidgeConfidence = cache.schemaVersion >= 34 ? cache.lensBandRidgeConfidence : legacyLensBandZeros
-        let persistedLensBandMidConfidence = cache.schemaVersion >= 34 ? cache.lensBandMidConfidence : legacyLensBandZeros
         let floatArrays = [
             cache.residuals,
             cache.rollMotion,
             cache.pathX,
             cache.pathY,
             cache.pathRoll,
-            cache.schemaVersion >= 31 ? cache.farFieldPathX : cache.pathX,
-            cache.schemaVersion >= 31 ? cache.farFieldPathY : cache.pathY,
-            cache.schemaVersion >= 31 ? cache.farFieldPathRoll : cache.pathRoll,
-            cache.schemaVersion >= 31 ? cache.farFieldConfidence : cache.warpConfidence,
-            persistedLensBandTopPathX,
-            persistedLensBandTopPathY,
-            persistedLensBandRidgePathX,
-            persistedLensBandRidgePathY,
-            persistedLensBandMidPathX,
-            persistedLensBandMidPathY,
-            persistedLensBandTopConfidence,
-            persistedLensBandRidgeConfidence,
-            persistedLensBandMidConfidence,
-            persistedLensBandConfidence,
+            cache.farFieldPathX,
+            cache.farFieldPathY,
+            cache.farFieldPathRoll,
+            cache.farFieldConfidence,
+            cache.lensBandTopPathX,
+            cache.lensBandTopPathY,
+            cache.lensBandRidgePathX,
+            cache.lensBandRidgePathY,
+            cache.lensBandMidPathX,
+            cache.lensBandMidPathY,
+            cache.lensBandTopConfidence,
+            cache.lensBandRidgeConfidence,
+            cache.lensBandMidConfidence,
+            cache.lensBandConfidence,
             cache.footstepPathX,
             cache.footstepPathY,
             cache.footstepPathRoll,
@@ -3015,20 +3004,20 @@ final class StabilizerHostAnalysisStore {
            let pathX = cache.pathX,
            let pathY = cache.pathY,
            let pathRoll = cache.pathRoll,
-           let persistedFarFieldPathX = cache.schemaVersion >= 31 ? cache.farFieldPathX : cache.pathX,
-           let persistedFarFieldPathY = cache.schemaVersion >= 31 ? cache.farFieldPathY : cache.pathY,
-           let persistedFarFieldPathRoll = cache.schemaVersion >= 31 ? cache.farFieldPathRoll : cache.pathRoll,
-           let persistedFarFieldConfidence = cache.schemaVersion >= 31 ? cache.farFieldConfidence : cache.warpConfidence,
-           let lensBandTopPathX = persistedLensBandTopPathX,
-           let lensBandTopPathY = persistedLensBandTopPathY,
-           let lensBandRidgePathX = persistedLensBandRidgePathX,
-           let lensBandRidgePathY = persistedLensBandRidgePathY,
-           let lensBandMidPathX = persistedLensBandMidPathX,
-           let lensBandMidPathY = persistedLensBandMidPathY,
-           let lensBandTopConfidence = persistedLensBandTopConfidence,
-           let lensBandRidgeConfidence = persistedLensBandRidgeConfidence,
-           let lensBandMidConfidence = persistedLensBandMidConfidence,
-           let lensBandConfidence = persistedLensBandConfidence,
+           let persistedFarFieldPathX = cache.farFieldPathX,
+           let persistedFarFieldPathY = cache.farFieldPathY,
+           let persistedFarFieldPathRoll = cache.farFieldPathRoll,
+           let persistedFarFieldConfidence = cache.farFieldConfidence,
+           let lensBandTopPathX = cache.lensBandTopPathX,
+           let lensBandTopPathY = cache.lensBandTopPathY,
+           let lensBandRidgePathX = cache.lensBandRidgePathX,
+           let lensBandRidgePathY = cache.lensBandRidgePathY,
+           let lensBandMidPathX = cache.lensBandMidPathX,
+           let lensBandMidPathY = cache.lensBandMidPathY,
+           let lensBandTopConfidence = cache.lensBandTopConfidence,
+           let lensBandRidgeConfidence = cache.lensBandRidgeConfidence,
+           let lensBandMidConfidence = cache.lensBandMidConfidence,
+           let lensBandConfidence = cache.lensBandConfidence,
            let footstepPathX = cache.footstepPathX,
            let footstepPathY = cache.footstepPathY,
            let footstepPathRoll = cache.footstepPathRoll,
@@ -3101,20 +3090,20 @@ final class StabilizerHostAnalysisStore {
             ("pathX", cache.pathX),
             ("pathY", cache.pathY),
             ("pathRoll", cache.pathRoll),
-            ("farFieldPathX", cache.schemaVersion >= 31 ? cache.farFieldPathX : cache.pathX),
-            ("farFieldPathY", cache.schemaVersion >= 31 ? cache.farFieldPathY : cache.pathY),
-            ("farFieldPathRoll", cache.schemaVersion >= 31 ? cache.farFieldPathRoll : cache.pathRoll),
-            ("farFieldConfidence", cache.schemaVersion >= 31 ? cache.farFieldConfidence : cache.warpConfidence),
-            ("lensBandTopPathX", cache.schemaVersion >= 33 ? cache.lensBandTopPathX : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandTopPathY", cache.schemaVersion >= 33 ? cache.lensBandTopPathY : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandRidgePathX", cache.schemaVersion >= 33 ? cache.lensBandRidgePathX : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandRidgePathY", cache.schemaVersion >= 33 ? cache.lensBandRidgePathY : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandMidPathX", cache.schemaVersion >= 33 ? cache.lensBandMidPathX : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandMidPathY", cache.schemaVersion >= 33 ? cache.lensBandMidPathY : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandTopConfidence", cache.schemaVersion >= 34 ? cache.lensBandTopConfidence : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandRidgeConfidence", cache.schemaVersion >= 34 ? cache.lensBandRidgeConfidence : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandMidConfidence", cache.schemaVersion >= 34 ? cache.lensBandMidConfidence : Array(repeating: Float(0.0), count: frameCount)),
-            ("lensBandConfidence", cache.schemaVersion >= 33 ? cache.lensBandConfidence : Array(repeating: Float(0.0), count: frameCount)),
+            ("farFieldPathX", cache.farFieldPathX),
+            ("farFieldPathY", cache.farFieldPathY),
+            ("farFieldPathRoll", cache.farFieldPathRoll),
+            ("farFieldConfidence", cache.farFieldConfidence),
+            ("lensBandTopPathX", cache.lensBandTopPathX),
+            ("lensBandTopPathY", cache.lensBandTopPathY),
+            ("lensBandRidgePathX", cache.lensBandRidgePathX),
+            ("lensBandRidgePathY", cache.lensBandRidgePathY),
+            ("lensBandMidPathX", cache.lensBandMidPathX),
+            ("lensBandMidPathY", cache.lensBandMidPathY),
+            ("lensBandTopConfidence", cache.lensBandTopConfidence),
+            ("lensBandRidgeConfidence", cache.lensBandRidgeConfidence),
+            ("lensBandMidConfidence", cache.lensBandMidConfidence),
+            ("lensBandConfidence", cache.lensBandConfidence),
             ("footstepPathX", cache.footstepPathX),
             ("footstepPathY", cache.footstepPathY),
             ("footstepPathRoll", cache.footstepPathRoll),

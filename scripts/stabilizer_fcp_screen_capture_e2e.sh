@@ -1085,6 +1085,31 @@ print(
 PY
 }
 
+collect_lens_band_source_diagnostics() {
+	local case_file="$1"
+	local video_path="$2"
+	local output_dir="$3"
+	local render_log_path="${output_dir}/render_components.log"
+	[[ -f "$render_log_path" ]] || fail "lens band source diagnostics missing render log: $render_log_path"
+	local case_id
+	case_id="$(python3 - "$case_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")).get("caseId", ""))
+PY
+)"
+	local lens_gate_args=()
+	if [[ "$case_id" == "p1000307_micro_macro_1m44_1m56" ]]; then
+		lens_gate_args+=(--require-band-warp --forbid-global-lens)
+	fi
+	python3 "${ROOT_DIR}/tests/stabilizer_lens_band_diagnostics.py" \
+		--video "$video_path" \
+		--render-log "$render_log_path" \
+		--output-dir "$output_dir" \
+		"${lens_gate_args[@]}"
+}
+
 fail_if_recent_render_mismatches_case() {
 	local case_file="$1"
 	local context="${2:-prepare}"
@@ -5314,6 +5339,13 @@ case "$command_name" in
 				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
 				exit "$status"
 			fi
+			if collect_lens_band_source_diagnostics "$case_file" "$video_path" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
 			progress_viewer_roi="${recording_viewer_roi:-$viewer_roi}"
 			if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$progress_viewer_roi" ]]; then
 				progress_viewer_roi="$(viewer_roi_zero_origin "$progress_viewer_roi")"
@@ -5386,6 +5418,13 @@ case "$command_name" in
 				exit "$status"
 			fi
 			if collect_render_component_diagnostics "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
+			if collect_lens_band_source_diagnostics "$case_file" "$video_path" "$output_dir"; then
 				:
 			else
 				status=$?

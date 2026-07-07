@@ -12547,12 +12547,10 @@ enum AutoStabilizationEstimator {
                 simd_length(topResidual),
                 max(simd_length(ridgeResidual), simd_length(midResidual))
             )
-            let rollingSupport = confidenceRamp(result.rollingShutterCandidate, start: 0.26, full: 0.62)
             func bandSupport(residual: vector_float2, confidenceValues: [Float]) -> Float {
                 let confidence = interpolatedValue(confidenceValues, using: interpolation)
                 return confidenceRamp(simd_length(residual), start: 0.08, full: 0.65)
                     * confidenceRamp(confidence, start: 0.08, full: 0.36)
-                    * rollingSupport
                     * qualitySupport
                     * turnScale
             }
@@ -12577,9 +12575,15 @@ enum AutoStabilizationEstimator {
             }
         }
 
+        if result.bandWarpApplied > 0.5 {
+            result.support = result.bandWarpSupport
+            result.reasonCode = 6
+            return result
+        }
+
         guard result.rollingShutterCandidate < 0.45 else {
             result.support = result.bandWarpSupport
-            result.reasonCode = result.bandWarpApplied > 0.5 ? 6 : 5
+            result.reasonCode = 5
             return result
         }
 
