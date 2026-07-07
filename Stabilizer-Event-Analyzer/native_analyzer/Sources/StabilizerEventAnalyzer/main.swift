@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 38
+private let cacheSchemaVersion = 39
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -1399,6 +1399,30 @@ private final class MetalMotionWorkspace {
                 appendBlock(x0: midX, x1: x1, y0: y0, y1: midY)
                 appendBlock(x0: x0, x1: midX, y0: midY, y1: y1)
                 appendBlock(x0: midX, x1: x1, y0: midY, y1: y1)
+            }
+        }
+        let sourceLensBandColumns = max(4, min(12, usableWidth / 220))
+        let sourceLensBands: [(minY: Float, maxY: Float)] = [
+            (0.06, 0.18),
+            (0.16, 0.30),
+            (0.28, 0.46)
+        ]
+        for band in sourceLensBands {
+            let y0 = verticalMargin + Int((Float(usableHeight) * band.minY).rounded(.down))
+            let y1 = verticalMargin + Int((Float(usableHeight) * band.maxY).rounded(.up))
+            let clampedY0 = max(verticalMargin, min(height - verticalMargin, y0))
+            let clampedY1 = max(clampedY0 + staggeredMotionBlockMinimumHeight, min(height - verticalMargin, y1))
+            guard clampedY1 <= height - verticalMargin else {
+                continue
+            }
+            let centerY = Float(clampedY0 + clampedY1) * 0.5
+            guard farFieldWeight(centerY: centerY, height: height) >= detailMotionBlockFarFieldThreshold else {
+                continue
+            }
+            for column in 0..<sourceLensBandColumns {
+                let x0 = horizontalMargin + ((usableWidth * column) / sourceLensBandColumns)
+                let x1 = horizontalMargin + ((usableWidth * (column + 1)) / sourceLensBandColumns)
+                appendBlock(x0: x0, x1: x1, y0: clampedY0, y1: clampedY1)
             }
         }
         return blocks

@@ -242,8 +242,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 38
-    private static let supportedCacheSchemaVersions: Set<Int> = [38]
+    private static let cacheSchemaVersion = 39
+    private static let supportedCacheSchemaVersions: Set<Int> = [39]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
