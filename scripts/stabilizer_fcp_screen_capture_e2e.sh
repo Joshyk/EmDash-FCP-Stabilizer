@@ -111,44 +111,22 @@ end tell
 APPLESCRIPT
 }
 
-restart_fcp_for_windowless_launch() {
-	local library="$1"
-	printf 'Final Cut Pro AX window recovery: quitting windowless FCP and reopening library: %s\n' "$library" >&2
-	/usr/bin/osascript -e 'tell application "Final Cut Pro" to quit' >/dev/null 2>&1 || true
-	for _ in {1..20}; do
-		/usr/bin/pgrep -x "Final Cut Pro" >/dev/null || break
-		sleep 0.5
-	done
-	if /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
-		printf 'Final Cut Pro AX window recovery: graceful quit did not finish; sending TERM.\n' >&2
-		/usr/bin/pkill -TERM -x "Final Cut Pro" >/dev/null 2>&1 || true
-		for _ in {1..20}; do
-			/usr/bin/pgrep -x "Final Cut Pro" >/dev/null || break
-			sleep 0.5
-		done
-	fi
-	if /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
-		printf 'Final Cut Pro AX window recovery: TERM did not stop Final Cut Pro; refusing to reopen over a windowless process.\n' >&2
-		return 1
-	fi
-	sleep 2
-	local open_attempt
-	local opened=0
-	for open_attempt in {1..3}; do
-		if /usr/bin/open -a "Final Cut Pro" "$library"; then
-			opened=1
-			break
-		fi
-		printf 'Final Cut Pro AX window recovery: reopen attempt %s failed; retrying.\n' "$open_attempt" >&2
-		sleep 2
-	done
-	if [[ "$opened" != "1" ]]; then
-		printf 'Final Cut Pro AX window recovery: could not reopen Final Cut Pro after windowless launch.\n' >&2
-		return 1
-	fi
-	while ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; do
-		sleep 0.25
-	done
+recover_fcp_standard_window_via_ax() {
+	local label="$1"
+	printf 'Final Cut Pro AX window recovery: activate/reopen/frontmost during %s.\n' "$label" >&2
+	timeout 8 /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1 || true
+tell application "Final Cut Pro"
+	activate
+	reopen
+end tell
+delay 0.5
+tell application "System Events"
+	if not (exists process "Final Cut Pro") then error "Final Cut Pro process not found"
+	tell process "Final Cut Pro"
+		set frontmost to true
+	end tell
+end tell
+APPLESCRIPT
 }
 
 ensure_fcp_standard_window_after_open() {
@@ -161,15 +139,32 @@ ensure_fcp_standard_window_after_open() {
 	summary="$(fcp_ax_window_summary)"
 	printf 'Final Cut Pro standard window not readable during %s; AX state: %s\n' "$label" "${summary:-unavailable}" >&2
 	if [[ "$summary" == *"windows=0"* || "$summary" == "process=missing" || -z "$summary" ]]; then
-		restart_fcp_for_windowless_launch "$library"
+		recover_fcp_standard_window_via_ax "$label"
 		if wait_for_fcp_standard_window 180; then
 			return 0
 		fi
 		summary="$(fcp_ax_window_summary)"
-		printf 'Final Cut Pro standard window still not readable after AX window recovery; AX state: %s\n' "${summary:-unavailable}" >&2
+		printf 'Final Cut Pro standard window still not readable after AX activate/reopen recovery; AX state: %s\n' "${summary:-unavailable}" >&2
+		printf 'Final Cut Pro remains windowless after opening %s; refusing same-path LaunchServices reopen. Open FCP visibly or use --assume-current-fcp-state after manual recovery.\n' "$library" >&2
 		return 1
 	fi
 	wait_for_fcp_standard_window 320
+}
+
+ensure_current_fcp_standard_window() {
+	local label="$1"
+	if ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
+		printf 'Final Cut Pro is not running for assume-current FCP state.\n' >&2
+		return 1
+	fi
+	recover_fcp_standard_window_via_ax "$label"
+	if wait_for_fcp_standard_window 180; then
+		return 0
+	fi
+	local summary
+	summary="$(fcp_ax_window_summary)"
+	printf 'Final Cut Pro standard window not readable for current-state run; AX state: %s\n' "${summary:-unavailable}" >&2
+	return 1
 }
 
 json_value() {
@@ -4408,6 +4403,15 @@ open_case_project() {
 	event_name="$(case_event_name "$case_file")"
 	[[ -d "$library" ]] || fail "case library does not exist: $library"
 
+	if [[ "$assume_current" == "1" ]]; then
+		ensure_current_fcp_standard_window "assume-current FCP state" \
+			|| fail "Final Cut Pro standard window was not readable for --assume-current-fcp-state"
+		printf 'Using current FCP project/state for case: %s\n' "$project"
+		assert_fcp_project_visible "$project"
+		assert_fcp_viewer_not_nothing_loaded "$project"
+		return
+	fi
+
 	/usr/bin/open -a "Final Cut Pro" "$library"
 	while ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; do
 		sleep 0.25
@@ -4423,11 +4427,6 @@ open_case_project() {
 	fi
 	ensure_fcp_standard_window_after_open "$library" "import prompt handling" \
 		|| fail "Final Cut Pro standard window was not readable after import prompt handling"
-
-	if [[ "$assume_current" == "1" ]]; then
-		printf 'Using current FCP project/state for case: %s\n' "$project"
-		return
-	fi
 
 	if open_case_project_via_helper "$project" "$event_name" && fcp_project_visible "$project"; then
 		printf 'Opened Final Cut Pro project via helper primary path: %s\n' "$project"
