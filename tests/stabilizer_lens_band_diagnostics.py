@@ -52,6 +52,10 @@ LENS_BAND_RIDGE_RADIUS = 0.20
 LENS_BAND_MID_RADIUS = 0.19
 LENS_BAND_FADE_START = 0.46
 LENS_BAND_FADE_END = 0.58
+LENS_BAND_INTER_BAND_DIFFERENTIAL_GAIN = 0.10
+LENS_BAND_COLUMN_DIFFERENTIAL_GAIN = 0.08
+LENS_BAND_ROW_PHASE_GAIN = 0.05
+LENS_BAND_LOCAL_ROLL_GAIN = 0.04
 SOURCE_LENS_LOCAL_TOP_CENTER = 0.10
 SOURCE_LENS_LOCAL_RIDGE_CENTER = 0.25
 SOURCE_LENS_LOCAL_MID_CENTER = 0.42
@@ -60,6 +64,8 @@ SOURCE_LENS_LOCAL_RIDGE_RADIUS = 0.19
 SOURCE_LENS_LOCAL_MID_RADIUS = 0.18
 SOURCE_LENS_LOCAL_FADE_START = 0.48
 SOURCE_LENS_LOCAL_FADE_END = 0.58
+SOURCE_LENS_LOCAL_COLUMN_DIFFERENTIAL_GAIN = 0.08
+SOURCE_LENS_LOCAL_BAND_DIFFERENTIAL_GAIN = 0.08
 SOURCE_LENS_RIDGE_CENTER = 0.25
 SOURCE_LENS_RIDGE_RADIUS = 0.14
 SOURCE_LENS_RIDGE_FADE_START = 0.38
@@ -264,13 +270,52 @@ def lens_band_render_offset_y(row: dict[str, Any], y: float) -> float:
     total_weight = top_weight + ridge_weight + mid_weight
     if total_weight <= 0.0001:
         return 0.0
-    band_y = (
-        (render_value(row, "lensBandTopY") * top_weight)
-        + (render_value(row, "lensBandRidgeY") * ridge_weight)
-        + (render_value(row, "lensBandMidY") * mid_weight)
+    top_y = render_value(row, "lensBandTopY")
+    ridge_y = render_value(row, "lensBandRidgeY")
+    mid_y = render_value(row, "lensBandMidY")
+    weighted_band_y = (
+        (top_y * top_weight)
+        + (ridge_y * ridge_weight)
+        + (mid_y * mid_weight)
     ) / total_weight
+    common_band_y = (top_y + ridge_y + mid_y) / 3.0
+    band_y = common_band_y + (
+        (weighted_band_y - common_band_y) * LENS_BAND_INTER_BAND_DIFFERENTIAL_GAIN
+    )
     far_field_fade = 1.0 - smoothstep(LENS_BAND_FADE_START, LENS_BAND_FADE_END, y)
     return band_y * lens_band_gain(row) * far_field_fade
+
+
+def lens_band_inter_band_detail_y(row: dict[str, Any], y: float) -> float:
+    top_weight = lens_band_weight(y, LENS_BAND_TOP_CENTER, LENS_BAND_TOP_RADIUS)
+    ridge_weight = lens_band_weight(y, LENS_BAND_RIDGE_CENTER, LENS_BAND_RIDGE_RADIUS)
+    mid_weight = lens_band_weight(y, LENS_BAND_MID_CENTER, LENS_BAND_MID_RADIUS)
+    total_weight = top_weight + ridge_weight + mid_weight
+    if total_weight <= 0.0001:
+        return 0.0
+    top_y = render_value(row, "lensBandTopY")
+    ridge_y = render_value(row, "lensBandRidgeY")
+    mid_y = render_value(row, "lensBandMidY")
+    weighted_band_y = ((top_y * top_weight) + (ridge_y * ridge_weight) + (mid_y * mid_weight)) / total_weight
+    common_band_y = (top_y + ridge_y + mid_y) / 3.0
+    far_field_fade = 1.0 - smoothstep(LENS_BAND_FADE_START, LENS_BAND_FADE_END, y)
+    return (weighted_band_y - common_band_y) * lens_band_gain(row) * far_field_fade
+
+
+def lens_band_core_remaining_differential_y(row: dict[str, Any]) -> float:
+    return max(
+        (abs(lens_band_inter_band_detail_y(row, y) * LENS_BAND_INTER_BAND_DIFFERENTIAL_GAIN)
+         for y in np.linspace(0.02, NEAR_GROUND_PROBE_Y, 25)),
+        default=0.0,
+    )
+
+
+def lens_band_core_suppressed_differential_y(row: dict[str, Any]) -> float:
+    return max(
+        (abs(lens_band_inter_band_detail_y(row, y) * (1.0 - LENS_BAND_INTER_BAND_DIFFERENTIAL_GAIN))
+         for y in np.linspace(0.02, NEAR_GROUND_PROBE_Y, 25)),
+        default=0.0,
+    )
 
 
 def lens_band_spatial_profile(row: dict[str, Any]) -> list[tuple[float, float]]:
@@ -324,37 +369,85 @@ def source_lens_local_gain(row: dict[str, Any]) -> float:
     return applied * smoothstep(0.08, 0.55, support)
 
 
-def source_lens_local_offset_y(row: dict[str, Any], y: float) -> float:
+def source_lens_local_band_common_y(row: dict[str, Any], band: str) -> float:
+    return average_keys(
+        row,
+        (
+            f"sourceLensShakeLocal{band}LeftY",
+            f"sourceLensShakeLocal{band}CenterY",
+            f"sourceLensShakeLocal{band}RightY",
+        ),
+    )
+
+
+def source_lens_local_regularized_band_y(row: dict[str, Any], band: str, column: str) -> float:
+    raw = render_value(row, f"sourceLensShakeLocal{band}{column}Y")
+    common = source_lens_local_band_common_y(row, band)
+    return common + ((raw - common) * SOURCE_LENS_LOCAL_COLUMN_DIFFERENTIAL_GAIN)
+
+
+def source_lens_local_band_weighted_y(
+    row: dict[str, Any],
+    y: float,
+    column: str | None = None,
+) -> tuple[float, float]:
     top_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_TOP_CENTER, SOURCE_LENS_LOCAL_TOP_RADIUS)
     ridge_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_RIDGE_CENTER, SOURCE_LENS_LOCAL_RIDGE_RADIUS)
     mid_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_MID_CENTER, SOURCE_LENS_LOCAL_MID_RADIUS)
     total_weight = top_weight + ridge_weight + mid_weight
     if total_weight <= 0.0001:
-        return 0.0
-    top_y = average_keys(row, ("sourceLensShakeLocalTopLeftY", "sourceLensShakeLocalTopCenterY", "sourceLensShakeLocalTopRightY"))
-    ridge_y = average_keys(row, ("sourceLensShakeLocalRidgeLeftY", "sourceLensShakeLocalRidgeCenterY", "sourceLensShakeLocalRidgeRightY"))
-    mid_y = average_keys(row, ("sourceLensShakeLocalMidLeftY", "sourceLensShakeLocalMidCenterY", "sourceLensShakeLocalMidRightY"))
-    band_y = ((top_y * top_weight) + (ridge_y * ridge_weight) + (mid_y * mid_weight)) / total_weight
+        return 0.0, 0.0
+    if column:
+        top_y = source_lens_local_regularized_band_y(row, "Top", column)
+        ridge_y = source_lens_local_regularized_band_y(row, "Ridge", column)
+        mid_y = source_lens_local_regularized_band_y(row, "Mid", column)
+    else:
+        top_y = source_lens_local_band_common_y(row, "Top")
+        ridge_y = source_lens_local_band_common_y(row, "Ridge")
+        mid_y = source_lens_local_band_common_y(row, "Mid")
+    weighted_y = ((top_y * top_weight) + (ridge_y * ridge_weight) + (mid_y * mid_weight)) / total_weight
+    common_y = (top_y + ridge_y + mid_y) / 3.0
+    band_y = common_y + ((weighted_y - common_y) * SOURCE_LENS_LOCAL_BAND_DIFFERENTIAL_GAIN)
+    return band_y, weighted_y - common_y
+
+
+def source_lens_local_offset_y(row: dict[str, Any], y: float) -> float:
     far_field_fade = 1.0 - smoothstep(SOURCE_LENS_LOCAL_FADE_START, SOURCE_LENS_LOCAL_FADE_END, y)
+    band_y, _detail_y = source_lens_local_band_weighted_y(row, y)
     return band_y * source_lens_local_gain(row) * far_field_fade
 
 
 def source_lens_local_max_abs_offset_y(row: dict[str, Any], y: float) -> float:
-    top_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_TOP_CENTER, SOURCE_LENS_LOCAL_TOP_RADIUS)
-    ridge_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_RIDGE_CENTER, SOURCE_LENS_LOCAL_RIDGE_RADIUS)
-    mid_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_MID_CENTER, SOURCE_LENS_LOCAL_MID_RADIUS)
-    total_weight = top_weight + ridge_weight + mid_weight
-    if total_weight <= 0.0001:
-        return 0.0
     far_field_fade = 1.0 - smoothstep(SOURCE_LENS_LOCAL_FADE_START, SOURCE_LENS_LOCAL_FADE_END, y)
     gain = source_lens_local_gain(row) * far_field_fade
     values = []
     for column in ("Left", "Center", "Right"):
-        top_y = render_value(row, f"sourceLensShakeLocalTop{column}Y")
-        ridge_y = render_value(row, f"sourceLensShakeLocalRidge{column}Y")
-        mid_y = render_value(row, f"sourceLensShakeLocalMid{column}Y")
-        values.append(((top_y * top_weight) + (ridge_y * ridge_weight) + (mid_y * mid_weight)) / total_weight * gain)
+        band_y, _detail_y = source_lens_local_band_weighted_y(row, y, column)
+        values.append(band_y * gain)
     return max((abs(value) for value in values), default=0.0)
+
+
+def source_lens_local_column_suppressed_y(row: dict[str, Any]) -> float:
+    values = []
+    gain = source_lens_local_gain(row)
+    for band, center in (("Top", SOURCE_LENS_LOCAL_TOP_CENTER), ("Ridge", SOURCE_LENS_LOCAL_RIDGE_CENTER), ("Mid", SOURCE_LENS_LOCAL_MID_CENTER)):
+        far_field_fade = 1.0 - smoothstep(SOURCE_LENS_LOCAL_FADE_START, SOURCE_LENS_LOCAL_FADE_END, center)
+        common = source_lens_local_band_common_y(row, band)
+        for column in ("Left", "Center", "Right"):
+            raw = render_value(row, f"sourceLensShakeLocal{band}{column}Y")
+            values.append(abs((raw - common) * (1.0 - SOURCE_LENS_LOCAL_COLUMN_DIFFERENTIAL_GAIN) * gain * far_field_fade))
+    return max(values or [0.0])
+
+
+def source_lens_local_band_suppressed_y(row: dict[str, Any]) -> float:
+    values = []
+    gain = source_lens_local_gain(row)
+    for y in np.linspace(0.02, NEAR_GROUND_PROBE_Y, 25):
+        far_field_fade = 1.0 - smoothstep(SOURCE_LENS_LOCAL_FADE_START, SOURCE_LENS_LOCAL_FADE_END, y)
+        for column in (None, "Left", "Center", "Right"):
+            _band_y, detail_y = source_lens_local_band_weighted_y(row, y, column)
+            values.append(abs(detail_y * (1.0 - SOURCE_LENS_LOCAL_BAND_DIFFERENTIAL_GAIN) * gain * far_field_fade))
+    return max(values or [0.0])
 
 
 def source_lens_ridge_gain(row: dict[str, Any]) -> float:
@@ -1022,8 +1115,12 @@ def main() -> None:
         "bandWarpCoreSpatialCurvature",
         "bandWarpCoreActiveHeight",
         "bandWarpCoreSpatialGradientDerivative",
+        "bandWarpCoreRemainingDifferentialY",
+        "bandWarpCoreSuppressedDifferentialY",
         "bandWarpCoreBoundaryLeak",
         "bandWarpCoreNearGroundLeak",
+        "sourceLensLocalColumnSuppressedY",
+        "sourceLensLocalBandSuppressedY",
         "sourceLensLocalBoundaryLeak",
         "sourceLensLocalNearGroundLeak",
         "sourceLensRidgeBoundaryLeak",
@@ -1154,8 +1251,12 @@ def main() -> None:
                     "bandWarpCoreSpatialCurvature",
                     "bandWarpCoreActiveHeight",
                     "bandWarpCoreSpatialGradientDerivative",
+                    "bandWarpCoreRemainingDifferentialY",
+                    "bandWarpCoreSuppressedDifferentialY",
                     "bandWarpCoreBoundaryLeak",
                     "bandWarpCoreNearGroundLeak",
+                    "sourceLensLocalColumnSuppressedY",
+                    "sourceLensLocalBandSuppressedY",
                     "sourceLensLocalBoundaryLeak",
                     "sourceLensLocalNearGroundLeak",
                     "sourceLensRidgeBoundaryLeak",
@@ -1191,10 +1292,18 @@ def main() -> None:
                         value = lens_band_core_active_height(render_row)
                     elif column == "bandWarpCoreSpatialGradientDerivative":
                         value = derived_derivative_at(render_rows, render_index, lens_band_core_spatial_gradient, 1)
+                    elif column == "bandWarpCoreRemainingDifferentialY":
+                        value = lens_band_core_remaining_differential_y(render_row)
+                    elif column == "bandWarpCoreSuppressedDifferentialY":
+                        value = lens_band_core_suppressed_differential_y(render_row)
                     elif column == "bandWarpCoreBoundaryLeak":
                         value = lens_band_render_offset_y(render_row, BOUNDARY_BAND_PROBE_Y)
                     elif column == "bandWarpCoreNearGroundLeak":
                         value = lens_band_render_offset_y(render_row, NEAR_GROUND_PROBE_Y)
+                    elif column == "sourceLensLocalColumnSuppressedY":
+                        value = source_lens_local_column_suppressed_y(render_row)
+                    elif column == "sourceLensLocalBandSuppressedY":
+                        value = source_lens_local_band_suppressed_y(render_row)
                     elif column == "sourceLensLocalBoundaryLeak":
                         value = source_lens_local_max_abs_offset_y(render_row, BOUNDARY_BAND_PROBE_Y)
                     elif column == "sourceLensLocalNearGroundLeak":
@@ -1287,8 +1396,28 @@ def main() -> None:
         "bandWarpCoreSpatialGradientDerivative",
         95,
     )
+    summary["focusLensBandCoreRemainingDifferentialP95"] = percentile_abs(
+        focus_joined,
+        "bandWarpCoreRemainingDifferentialY",
+        95,
+    )
+    summary["focusLensBandCoreSuppressedDifferentialP95"] = percentile_abs(
+        focus_joined,
+        "bandWarpCoreSuppressedDifferentialY",
+        95,
+    )
     summary["focusLensBandCoreBoundaryLeakP95"] = percentile_abs(focus_joined, "bandWarpCoreBoundaryLeak", 95)
     summary["focusLensBandCoreNearGroundLeakP95"] = percentile_abs(focus_joined, "bandWarpCoreNearGroundLeak", 95)
+    summary["focusSourceLensLocalColumnSuppressedP95"] = percentile_abs(
+        focus_joined,
+        "sourceLensLocalColumnSuppressedY",
+        95,
+    )
+    summary["focusSourceLensLocalBandSuppressedP95"] = percentile_abs(
+        focus_joined,
+        "sourceLensLocalBandSuppressedY",
+        95,
+    )
     summary["focusSourceLensLocalBoundaryLeakP95"] = percentile_abs(
         focus_joined,
         "sourceLensLocalBoundaryLeak",

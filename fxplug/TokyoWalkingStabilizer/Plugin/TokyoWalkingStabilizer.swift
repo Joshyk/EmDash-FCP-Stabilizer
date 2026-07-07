@@ -48,11 +48,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.381"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 381.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 0.0, 381.0, 911.0)
+private let tokyoWalkingStabilizerVersion = "1.0.382"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 912.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 0.0, 382.0, 912.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_337_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_338_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0

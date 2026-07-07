@@ -280,6 +280,10 @@ constant float lensBandRidgeRadius = 0.20;
 constant float lensBandMidRadius = 0.19;
 constant float lensBandFadeStart = 0.46;
 constant float lensBandFadeEnd = 0.58;
+constant float lensBandInterBandDifferentialGain = 0.10;
+constant float lensBandColumnDifferentialGain = 0.08;
+constant float lensBandRowPhaseGain = 0.05;
+constant float lensBandLocalRollGain = 0.04;
 
 constant float sourceLensLocalTopCenter = 0.10;
 constant float sourceLensLocalRidgeCenter = 0.25;
@@ -289,6 +293,8 @@ constant float sourceLensLocalRidgeRadius = 0.19;
 constant float sourceLensLocalMidRadius = 0.18;
 constant float sourceLensLocalFadeStart = 0.48;
 constant float sourceLensLocalFadeEnd = 0.58;
+constant float sourceLensLocalColumnDifferentialGain = 0.08;
+constant float sourceLensLocalBandDifferentialGain = 0.08;
 
 constant float sourceLensRidgeCenter = 0.25;
 constant float sourceLensRidgeRadius = 0.14;
@@ -334,11 +340,18 @@ fragment float4 fragmentShader(
         float midWeight = lensBandWeight(sourceY, lensBandMidCenter, lensBandMidRadius);
         float totalWeight = topWeight + ridgeWeight + midWeight;
         if (totalWeight > 0.0001) {
-            float2 bandOffset = (
+            float2 weightedBandOffset = (
                 (transform->lensBandTopOffset * topWeight)
                 + (transform->lensBandRidgeOffset * ridgeWeight)
                 + (transform->lensBandMidOffset * midWeight)
             ) / totalWeight;
+            float2 commonBandOffset = (
+                transform->lensBandTopOffset
+                + transform->lensBandRidgeOffset
+                + transform->lensBandMidOffset
+            ) / 3.0;
+            float2 bandOffset = commonBandOffset
+                + ((weightedBandOffset - commonBandOffset) * lensBandInterBandDifferentialGain);
             float sourceX = saturate((stabilizedPixels.x / transform->outputSize.x) + 0.5);
             float columnPhase = clamp((sourceX - 0.5) * 2.0, -1.0, 1.0);
             float2 columnOffset = (
@@ -363,9 +376,9 @@ fragment float4 fragmentShader(
                 + (float2(-(transform->lensBandRidgeLocalRoll * ridgeYLocal), transform->lensBandRidgeLocalRoll * xLocal) * ridgeWeight)
                 + (float2(-(transform->lensBandMidLocalRoll * midYLocal), transform->lensBandMidLocalRoll * xLocal) * midWeight)
             ) / totalWeight;
-            bandOffset += columnOffset * columnPhase;
-            bandOffset += rowPhaseOffset;
-            bandOffset += localRollOffset;
+            bandOffset += columnOffset * columnPhase * lensBandColumnDifferentialGain;
+            bandOffset += rowPhaseOffset * lensBandRowPhaseGain;
+            bandOffset += localRollOffset * lensBandLocalRollGain;
             stabilizedPixels -= bandOffset * lensBandSupport * farFieldFade * transform->strength;
         }
     }
@@ -384,26 +397,50 @@ fragment float4 fragmentShader(
             float rightWeight = smoothstep(0.50, 0.78, sourceX);
             float centerWeight = saturate(1.0 - max(leftWeight, rightWeight));
             float totalColumnWeight = max(0.0001, leftWeight + centerWeight + rightWeight);
-            float2 topOffset = (
+            float2 topColumnOffset = (
                 (transform->sourceLensShakeLocalTopLeftOffset * leftWeight)
                 + (transform->sourceLensShakeLocalTopCenterOffset * centerWeight)
                 + (transform->sourceLensShakeLocalTopRightOffset * rightWeight)
             ) / totalColumnWeight;
-            float2 ridgeOffset = (
+            float2 ridgeColumnOffset = (
                 (transform->sourceLensShakeLocalRidgeLeftOffset * leftWeight)
                 + (transform->sourceLensShakeLocalRidgeCenterOffset * centerWeight)
                 + (transform->sourceLensShakeLocalRidgeRightOffset * rightWeight)
             ) / totalColumnWeight;
-            float2 midOffset = (
+            float2 midColumnOffset = (
                 (transform->sourceLensShakeLocalMidLeftOffset * leftWeight)
                 + (transform->sourceLensShakeLocalMidCenterOffset * centerWeight)
                 + (transform->sourceLensShakeLocalMidRightOffset * rightWeight)
             ) / totalColumnWeight;
-            float2 localOffset = (
+            float2 topCommonColumnOffset = (
+                transform->sourceLensShakeLocalTopLeftOffset
+                + transform->sourceLensShakeLocalTopCenterOffset
+                + transform->sourceLensShakeLocalTopRightOffset
+            ) / 3.0;
+            float2 ridgeCommonColumnOffset = (
+                transform->sourceLensShakeLocalRidgeLeftOffset
+                + transform->sourceLensShakeLocalRidgeCenterOffset
+                + transform->sourceLensShakeLocalRidgeRightOffset
+            ) / 3.0;
+            float2 midCommonColumnOffset = (
+                transform->sourceLensShakeLocalMidLeftOffset
+                + transform->sourceLensShakeLocalMidCenterOffset
+                + transform->sourceLensShakeLocalMidRightOffset
+            ) / 3.0;
+            float2 topOffset = topCommonColumnOffset
+                + ((topColumnOffset - topCommonColumnOffset) * sourceLensLocalColumnDifferentialGain);
+            float2 ridgeOffset = ridgeCommonColumnOffset
+                + ((ridgeColumnOffset - ridgeCommonColumnOffset) * sourceLensLocalColumnDifferentialGain);
+            float2 midOffset = midCommonColumnOffset
+                + ((midColumnOffset - midCommonColumnOffset) * sourceLensLocalColumnDifferentialGain);
+            float2 weightedLocalOffset = (
                 (topOffset * topWeight)
                 + (ridgeOffset * ridgeWeight)
                 + (midOffset * midWeight)
             ) / totalBandWeight;
+            float2 commonLocalOffset = (topOffset + ridgeOffset + midOffset) / 3.0;
+            float2 localOffset = commonLocalOffset
+                + ((weightedLocalOffset - commonLocalOffset) * sourceLensLocalBandDifferentialGain);
             stabilizedPixels -= localOffset * localLensSupport * farFieldFade * transform->strength;
         }
     }
