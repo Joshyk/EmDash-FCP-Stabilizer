@@ -237,16 +237,17 @@ def classify_residual_model(row: dict[str, Any], window_frames: int) -> tuple[st
 
 def correction_model_covers(residual_model: str, correction_model: str) -> bool:
     required = {
-        "rowPhaseWarp": "rowPhase",
-        "columnPhaseWarp": "columnPhase",
-        "regionClusterWarp": "regionCluster",
-        "localRollWarp": "localRoll",
+        "rowPhaseWarp": {"rowPhase", "sourceRidge"},
+        "columnPhaseWarp": {"columnPhase"},
+        "regionClusterWarp": {"regionCluster", "sourceRidge"},
+        "localRollWarp": {"localRoll"},
     }.get(residual_model)
     if required is None:
         return residual_model == "noSignal"
-    return required in {
+    present = {
         item.strip() for item in str(correction_model).split(",") if item.strip()
     }
+    return bool(required.intersection(present))
 
 
 def runtime_model_applied(row: dict[str, Any], residual_model: str) -> bool:
@@ -264,12 +265,15 @@ def runtime_model_applied(row: dict[str, Any], residual_model: str) -> bool:
         )
 
     if residual_model == "rowPhaseWarp":
-        return max_vector_magnitude(
-            (
-                ("lensBandTopRowPhaseX", "lensBandTopRowPhaseY"),
-                ("lensBandRidgeRowPhaseX", "lensBandRidgeRowPhaseY"),
-                ("lensBandMidRowPhaseX", "lensBandMidRowPhaseY"),
-            )
+        return max(
+            max_vector_magnitude(
+                (
+                    ("lensBandTopRowPhaseX", "lensBandTopRowPhaseY"),
+                    ("lensBandRidgeRowPhaseX", "lensBandRidgeRowPhaseY"),
+                    ("lensBandMidRowPhaseX", "lensBandMidRowPhaseY"),
+                )
+            ),
+            abs(finite_float(row.get("sourceLensShakeRidgeY"))),
         ) >= 0.02
     if residual_model == "columnPhaseWarp":
         return max_vector_magnitude(
@@ -280,7 +284,7 @@ def runtime_model_applied(row: dict[str, Any], residual_model: str) -> bool:
             )
         ) >= 0.02
     if residual_model == "regionClusterWarp":
-        return False
+        return abs(finite_float(row.get("sourceLensShakeRidgeY"))) >= 0.02
     if residual_model == "localRollWarp":
         return max(
             abs(finite_float(row.get("lensBandTopLocalRoll"))),
@@ -517,6 +521,9 @@ def main() -> None:
         "lensBandWarpSupport",
         "lensBandWarpApplied",
         "lensBandRollingShutterScore",
+        "sourceLensShakeRidgeY",
+        "sourceLensShakeRidgeSupport",
+        "sourceLensShakeRidgeApplied",
     ]
     band_columns: list[str] = []
     for band_name in BANDS:

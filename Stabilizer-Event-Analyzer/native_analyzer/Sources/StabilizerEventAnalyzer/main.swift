@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 37
+private let cacheSchemaVersion = 38
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -203,6 +203,8 @@ struct PairMotion {
     let lensBandRidgeConfidence: Float
     let lensBandMidConfidence: Float
     let lensBandConfidence: Float
+    let sourceLensShakeRidgeDy: Float
+    let sourceLensShakeRidgeSupport: Float
     let analysisConfidence: Float
     let warpConfidence: Float
     let acceptedBlockCount: Int32
@@ -251,6 +253,8 @@ struct PairMotion {
         lensBandRidgeConfidence: 0.0,
         lensBandMidConfidence: 0.0,
         lensBandConfidence: 0.0,
+        sourceLensShakeRidgeDy: 0.0,
+        sourceLensShakeRidgeSupport: 0.0,
         analysisConfidence: 1.0,
         warpConfidence: 0.0,
         acceptedBlockCount: 0,
@@ -712,6 +716,8 @@ struct PreparedAnalysis {
     let lensBandRidgeConfidence: [Float]
     let lensBandMidConfidence: [Float]
     let lensBandConfidence: [Float]
+    let sourceLensShakeRidgePathY: [Float]
+    let sourceLensShakeRidgeSupport: [Float]
     let analysisConfidence: [Float]
     let warpConfidence: [Float]
     let acceptedBlockCounts: [Int32]
@@ -776,6 +782,8 @@ struct PersistedHostAnalysisCache: Encodable {
     let lensBandRidgeConfidence: [Float]?
     let lensBandMidConfidence: [Float]?
     let lensBandConfidence: [Float]?
+    let sourceLensShakeRidgePathY: [Float]?
+    let sourceLensShakeRidgeSupport: [Float]?
     let analysisConfidence: [Float]?
     let warpConfidence: [Float]?
     let acceptedBlockCounts: [Int32]?
@@ -1837,10 +1845,12 @@ private final class MetalMotionWorkspace {
         topConfidence: Float,
         ridgeConfidence: Float,
         midConfidence: Float,
-        confidence: Float
+        confidence: Float,
+        sourceLensShakeRidgeDy: Float,
+        sourceLensShakeRidgeSupport: Float
     ) {
         guard shifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
-            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         }
         func band(_ minY: Float, _ maxY: Float, minX: Float = 0.0, maxX: Float = 1.0) -> (dx: Float, dy: Float, support: Float) {
             let candidates = shifts.filter { shift in
@@ -1988,7 +1998,7 @@ private final class MetalMotionWorkspace {
             topRowPhaseDy: topRow.dy,
             topLocalRoll: localRoll(0.04, 0.22, bandMotion: top),
             ridgeDx: ridge.dx,
-            ridgeDy: ridge.dy + ridgeImpulse.dy,
+            ridgeDy: ridge.dy,
             ridgeColumnDx: ridgeColumn.dx,
             ridgeColumnDy: ridgeColumn.dy,
             ridgeRowPhaseDx: ridgeRow.dx,
@@ -2004,7 +2014,9 @@ private final class MetalMotionWorkspace {
             topConfidence: top.support,
             ridgeConfidence: max(ridge.support, ridgeImpulse.support),
             midConfidence: mid.support,
-            confidence: max(top.support, max(max(ridge.support, ridgeImpulse.support), mid.support))
+            confidence: max(top.support, max(max(ridge.support, ridgeImpulse.support), mid.support)),
+            sourceLensShakeRidgeDy: ridgeImpulse.dy,
+            sourceLensShakeRidgeSupport: ridgeImpulse.support
         )
     }
 
@@ -2238,6 +2250,8 @@ private final class MetalMotionWorkspace {
             lensBandRidgeConfidence: lensBandMotion.ridgeConfidence,
             lensBandMidConfidence: lensBandMotion.midConfidence,
             lensBandConfidence: lensBandMotion.confidence,
+            sourceLensShakeRidgeDy: lensBandMotion.sourceLensShakeRidgeDy,
+            sourceLensShakeRidgeSupport: lensBandMotion.sourceLensShakeRidgeSupport,
             analysisConfidence: analysisConfidence,
             warpConfidence: warpMotion.confidence,
             acceptedBlockCount: Int32(acceptedCount),
@@ -3107,6 +3121,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var lensBandMidRowPhasePathX: [Float] = []
     var lensBandMidRowPhasePathY: [Float] = []
     var lensBandMidLocalRollPath: [Float] = []
+    var sourceLensShakeRidgePathY: [Float] = []
     var x: Float = 0
     var y: Float = 0
     var roll: Float = 0
@@ -3140,6 +3155,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var lensBandMidRowPhaseX: Float = 0
     var lensBandMidRowPhaseY: Float = 0
     var lensBandMidLocalRoll: Float = 0
+    var sourceLensShakeRidgeY: Float = 0
     for motion in motions {
         x += motion.dx
         y += motion.dy
@@ -3174,6 +3190,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandMidRowPhaseX += motion.lensBandMidRowPhaseDx
         lensBandMidRowPhaseY += motion.lensBandMidRowPhaseDy
         lensBandMidLocalRoll += motion.lensBandMidLocalRoll
+        sourceLensShakeRidgeY += motion.sourceLensShakeRidgeDy
         pathX.append(x)
         pathY.append(y)
         rawRoll.append(roll)
@@ -3207,6 +3224,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandMidRowPhasePathX.append(lensBandMidRowPhaseX)
         lensBandMidRowPhasePathY.append(lensBandMidRowPhaseY)
         lensBandMidLocalRollPath.append(lensBandMidLocalRoll)
+        sourceLensShakeRidgePathY.append(sourceLensShakeRidgeY)
     }
     return PreparedAnalysis(
         frames: frames,
@@ -3253,6 +3271,8 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandRidgeConfidence: motions.map(\.lensBandRidgeConfidence),
         lensBandMidConfidence: motions.map(\.lensBandMidConfidence),
         lensBandConfidence: motions.map(\.lensBandConfidence),
+        sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
+        sourceLensShakeRidgeSupport: motions.map(\.sourceLensShakeRidgeSupport),
         analysisConfidence: motions.map(\.analysisConfidence),
         warpConfidence: motions.map(\.warpConfidence),
         acceptedBlockCounts: motions.map(\.acceptedBlockCount),
@@ -4020,6 +4040,8 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         lensBandRidgeConfidence: prepared.lensBandRidgeConfidence,
         lensBandMidConfidence: prepared.lensBandMidConfidence,
         lensBandConfidence: prepared.lensBandConfidence,
+        sourceLensShakeRidgePathY: prepared.sourceLensShakeRidgePathY,
+        sourceLensShakeRidgeSupport: prepared.sourceLensShakeRidgeSupport,
         analysisConfidence: prepared.analysisConfidence,
         warpConfidence: prepared.warpConfidence,
         acceptedBlockCounts: prepared.acceptedBlockCounts,

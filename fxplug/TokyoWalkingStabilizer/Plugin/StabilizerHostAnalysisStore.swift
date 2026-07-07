@@ -81,6 +81,8 @@ private struct PersistedHostAnalysisCache: Codable {
     let lensBandRidgeConfidence: [Float]?
     let lensBandMidConfidence: [Float]?
     let lensBandConfidence: [Float]?
+    let sourceLensShakeRidgePathY: [Float]?
+    let sourceLensShakeRidgeSupport: [Float]?
     let footstepPathX: [Float]?
     let footstepPathY: [Float]?
     let footstepPathRoll: [Float]?
@@ -240,8 +242,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 37
-    private static let supportedCacheSchemaVersions: Set<Int> = [37]
+    private static let cacheSchemaVersion = 38
+    private static let supportedCacheSchemaVersions: Set<Int> = [38]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1827,6 +1829,8 @@ final class StabilizerHostAnalysisStore {
             lensBandRidgeConfidence: prepared.lensBandRidgeConfidence,
             lensBandMidConfidence: prepared.lensBandMidConfidence,
             lensBandConfidence: prepared.lensBandConfidence,
+            sourceLensShakeRidgePathY: prepared.sourceLensShakeRidgePathY,
+            sourceLensShakeRidgeSupport: prepared.sourceLensShakeRidgeSupport,
             footstepPathX: prepared.footstepPathX,
             footstepPathY: prepared.footstepPathY,
             footstepPathRoll: prepared.footstepPathRoll,
@@ -1985,6 +1989,8 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgeConfidence: analysis.lensBandRidgeConfidence,
                 lensBandMidConfidence: analysis.lensBandMidConfidence,
                 lensBandConfidence: analysis.lensBandConfidence,
+                sourceLensShakeRidgePathY: analysis.sourceLensShakeRidgePathY,
+                sourceLensShakeRidgeSupport: analysis.sourceLensShakeRidgeSupport,
                 analysisConfidence: analysis.analysisConfidence,
                 warpConfidence: analysis.warpConfidence,
                 acceptedBlockCounts: analysis.acceptedBlockCounts,
@@ -3038,6 +3044,8 @@ final class StabilizerHostAnalysisStore {
             cache.lensBandRidgeConfidence,
             cache.lensBandMidConfidence,
             cache.lensBandConfidence,
+            cache.sourceLensShakeRidgePathY,
+            cache.sourceLensShakeRidgeSupport,
             cache.footstepPathX,
             cache.footstepPathY,
             cache.footstepPathRoll,
@@ -3093,6 +3101,8 @@ final class StabilizerHostAnalysisStore {
            let lensBandRidgeConfidence = cache.lensBandRidgeConfidence,
            let lensBandMidConfidence = cache.lensBandMidConfidence,
            let lensBandConfidence = cache.lensBandConfidence,
+           let sourceLensShakeRidgePathY = cache.sourceLensShakeRidgePathY,
+           let sourceLensShakeRidgeSupport = cache.sourceLensShakeRidgeSupport,
            let footstepPathX = cache.footstepPathX,
            let footstepPathY = cache.footstepPathY,
            let footstepPathRoll = cache.footstepPathRoll,
@@ -3157,6 +3167,8 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgeConfidence: lensBandRidgeConfidence,
                 lensBandMidConfidence: lensBandMidConfidence,
                 lensBandConfidence: lensBandConfidence,
+                sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
+                sourceLensShakeRidgeSupport: sourceLensShakeRidgeSupport,
                 analysisConfidence: analysisConfidence,
                 warpConfidence: warpConfidence,
                 acceptedBlockCounts: acceptedBlockCounts,
@@ -3209,6 +3221,8 @@ final class StabilizerHostAnalysisStore {
             ("lensBandRidgeConfidence", cache.lensBandRidgeConfidence),
             ("lensBandMidConfidence", cache.lensBandMidConfidence),
             ("lensBandConfidence", cache.lensBandConfidence),
+            ("sourceLensShakeRidgePathY", cache.sourceLensShakeRidgePathY),
+            ("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport),
             ("footstepPathX", cache.footstepPathX),
             ("footstepPathY", cache.footstepPathY),
             ("footstepPathRoll", cache.footstepPathRoll),
@@ -3498,6 +3512,8 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgeConfidence: cache.lensBandRidgeConfidence,
                 lensBandMidConfidence: cache.lensBandMidConfidence,
                 lensBandConfidence: cache.lensBandConfidence,
+                sourceLensShakeRidgePathY: cache.sourceLensShakeRidgePathY,
+                sourceLensShakeRidgeSupport: cache.sourceLensShakeRidgeSupport,
                 footstepPathX: cache.footstepPathX,
                 footstepPathY: cache.footstepPathY,
                 footstepPathRoll: cache.footstepPathRoll,

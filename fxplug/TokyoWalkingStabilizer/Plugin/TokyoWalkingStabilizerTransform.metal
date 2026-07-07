@@ -327,6 +327,17 @@ fragment float4 fragmentShader(
             stabilizedPixels -= bandOffset * lensBandSupport * farFieldFade * transform->strength;
         }
     }
+    float sourceRidgeSupport = saturate(transform->sourceLensShakeRidgeSupport * transform->sourceLensShakeRidgeApplied);
+    if (sourceRidgeSupport > 0.0001) {
+        float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
+        float ridgeWeight = lensBandWeight(sourceY, 0.23, 0.075);
+        float farFieldFade = 1.0 - smoothstep(0.31, 0.39, sourceY);
+        stabilizedPixels -= transform->sourceLensShakeRidgeOffset
+            * sourceRidgeSupport
+            * ridgeWeight
+            * farFieldFade
+            * transform->strength;
+    }
     float2 sampleUV = (stabilizedPixels / transform->outputSize) + 0.5;
 
     bool outsideSource = sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0;

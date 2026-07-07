@@ -24,6 +24,8 @@ The main correction stages are:
 - `Stride Wobble`: medium-period X/Y/roll cleanup after footstep shock.
 - `Far-field Warp Strength`: small-clamp deskew, yaw/pitch proxy, and
   perspective trim for distant background shake.
+- `LENS`: source-space, far-field-only band warp for short ridge/cloud/horizon
+  shake that is not safe to treat as a global camera transform.
 - `Turn Smoothing`: X-only smoothing for stop-and-go walking turns.
 
 `Remove Black Edges` is on by default and applies dynamic Auto Crop framing during
@@ -149,6 +151,12 @@ local tracking support to reduce single-frame gate flicker, then drops tiny warp
 deltas through a deadband so useful ridge-line correction is less likely to
 disappear while high-side gate jumps and low-confidence warp evidence are
 suppressed instead of producing a wavy image.
+Short-period source shake detected on the ridge/horizon band is stored as a
+separate source-space path and rendered as a narrow upper-frame sample-coordinate
+warp. This keeps 10-frame lens/camera/OIS-style residuals out of the final X/Y
+trajectory and avoids using Auto Crop zoom to hide the motion. The correction is
+weighted toward the ridge/cloud/horizon area and fades before the near ground, so
+road, grass, and water parallax are not used as the stability target.
 
 `Remove Black Edges` controls dynamic Auto Crop framing. When it is off, the render
 path skips Auto Crop crop-safe framing completely, so
@@ -335,10 +343,11 @@ fingerprints in the filename.
 cache.
 
 Cache files store prepared paths, frame timing, blur values, search-radius
-edge-hit counts, warp values, confidence metadata, and fingerprints instead of
-every frame's full luma sample. Schema 23 analysis keeps the dense `9 x 7` motion
-grid, adds narrower upper-row far-field detail blocks, and uses denser in-block
-sampling for those high far-field blocks before sub-pixel block shift refinement.
+edge-hit counts, warp values, confidence metadata, source-space ridge shake
+paths, and fingerprints instead of every frame's full luma sample. The current
+schema keeps the dense `9 x 7` motion grid, adds narrower upper-row far-field
+detail blocks, and uses denser in-block sampling for those high far-field blocks
+before sub-pixel block shift refinement.
 Cache writing uses the prepared analysis frame set as the authoritative timeline,
 so a reduced retained source-frame map does not prevent a completed prepared path
 from being saved.
