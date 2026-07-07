@@ -78,7 +78,7 @@ wait_for_fcp_standard_window() {
 	local max_ticks="${1:-300}"
 	local waited=0
 	while (( waited < max_ticks )); do
-		if /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1
+		if timeout 2 /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1
 tell application "System Events"
 	if not (exists process "Final Cut Pro") then error "Final Cut Pro process not found"
 	tell process "Final Cut Pro"
@@ -98,6 +98,78 @@ APPLESCRIPT
 		waited=$((waited + 1))
 	done
 	return 1
+}
+
+fcp_ax_window_summary() {
+	timeout 5 /usr/bin/osascript <<'APPLESCRIPT' 2>/dev/null || true
+tell application "System Events"
+	if not (exists process "Final Cut Pro") then return "process=missing"
+	tell process "Final Cut Pro"
+		return "frontmost=" & (frontmost as text) & ", visible=" & (visible as text) & ", windows=" & ((count of windows) as text)
+	end tell
+end tell
+APPLESCRIPT
+}
+
+restart_fcp_for_windowless_launch() {
+	local library="$1"
+	printf 'Final Cut Pro AX window recovery: quitting windowless FCP and reopening library: %s\n' "$library" >&2
+	/usr/bin/osascript -e 'tell application "Final Cut Pro" to quit' >/dev/null 2>&1 || true
+	for _ in {1..20}; do
+		/usr/bin/pgrep -x "Final Cut Pro" >/dev/null || break
+		sleep 0.5
+	done
+	if /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
+		printf 'Final Cut Pro AX window recovery: graceful quit did not finish; sending TERM.\n' >&2
+		/usr/bin/pkill -TERM -x "Final Cut Pro" >/dev/null 2>&1 || true
+		for _ in {1..20}; do
+			/usr/bin/pgrep -x "Final Cut Pro" >/dev/null || break
+			sleep 0.5
+		done
+	fi
+	if /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; then
+		printf 'Final Cut Pro AX window recovery: TERM did not stop Final Cut Pro; refusing to reopen over a windowless process.\n' >&2
+		return 1
+	fi
+	sleep 2
+	local open_attempt
+	local opened=0
+	for open_attempt in {1..3}; do
+		if /usr/bin/open -a "Final Cut Pro" "$library"; then
+			opened=1
+			break
+		fi
+		printf 'Final Cut Pro AX window recovery: reopen attempt %s failed; retrying.\n' "$open_attempt" >&2
+		sleep 2
+	done
+	if [[ "$opened" != "1" ]]; then
+		printf 'Final Cut Pro AX window recovery: could not reopen Final Cut Pro after windowless launch.\n' >&2
+		return 1
+	fi
+	while ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; do
+		sleep 0.25
+	done
+}
+
+ensure_fcp_standard_window_after_open() {
+	local library="$1"
+	local label="$2"
+	if wait_for_fcp_standard_window 180; then
+		return 0
+	fi
+	local summary
+	summary="$(fcp_ax_window_summary)"
+	printf 'Final Cut Pro standard window not readable during %s; AX state: %s\n' "$label" "${summary:-unavailable}" >&2
+	if [[ "$summary" == *"windows=0"* || "$summary" == "process=missing" || -z "$summary" ]]; then
+		restart_fcp_for_windowless_launch "$library"
+		if wait_for_fcp_standard_window 180; then
+			return 0
+		fi
+		summary="$(fcp_ax_window_summary)"
+		printf 'Final Cut Pro standard window still not readable after AX window recovery; AX state: %s\n' "${summary:-unavailable}" >&2
+		return 1
+	fi
+	wait_for_fcp_standard_window 320
 }
 
 json_value() {
@@ -143,6 +215,71 @@ current_fcp_viewer_roi() {
 	local bounds_json
 	bounds_json="$(/usr/bin/osascript "$FCP_HELPER" viewer-bounds-json)"
 	viewer_bounds_points_to_pixel_roi "$bounds_json"
+}
+
+clamp_viewer_roi_to_screenshot_bounds() {
+	local viewer_roi="$1"
+	local screenshot_path="$2"
+	python3 - "$viewer_roi" "$screenshot_path" <<'PY'
+from pathlib import Path
+import sys
+
+import cv2
+
+roi_parts = [int(part) for part in sys.argv[1].split(",")]
+if len(roi_parts) != 4:
+    raise SystemExit("viewer ROI must be x,y,w,h")
+x, y, w, h = roi_parts
+image = cv2.imread(str(Path(sys.argv[2])), cv2.IMREAD_COLOR)
+if image is None:
+    raise SystemExit(f"could not read screenshot for ROI bounds: {sys.argv[2]}")
+height, width = image.shape[:2]
+clamped_x = max(0, min(x, width - 1))
+clamped_y = max(0, min(y, height - 1))
+clamped_w = min(w, width - clamped_x)
+clamped_h = min(h, height - clamped_y)
+if clamped_w <= 0 or clamped_h <= 0:
+    raise SystemExit(
+        f"dynamic viewer ROI {x},{y},{w},{h} does not overlap screenshot bounds {width}x{height}"
+    )
+gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+run_candidates = []
+row_start = clamped_y + max(8, min(24, clamped_h // 12))
+row_end = clamped_y + max(24, min(clamped_h // 5, 180))
+for row_y in range(row_start, min(height, row_end), max(4, clamped_h // 80)):
+    row = gray[row_y, clamped_x:clamped_x + clamped_w]
+    mask = row > 35
+    run_start = None
+    for index, active in enumerate(mask):
+        at_end = index == len(mask) - 1
+        if active and run_start is None:
+            run_start = index
+        if (not active or at_end) and run_start is not None:
+            run_end = index if not active else index + 1
+            if run_end - run_start >= max(120, int(clamped_w * 0.35)):
+                run_candidates.append((clamped_x + run_start, clamped_x + run_end))
+            run_start = None
+if run_candidates:
+    starts = sorted(start for start, _ in run_candidates)
+    ends = sorted(end for _, end in run_candidates)
+    refined_x = starts[0]
+    refined_end = ends[-1]
+    if refined_end - refined_x >= max(120, int(clamped_w * 0.35)):
+        clamped_x = refined_x
+        clamped_w = refined_end - refined_x
+print(f"{clamped_x},{clamped_y},{clamped_w},{clamped_h}")
+PY
+}
+
+clamp_viewer_roi_to_current_screenshot_bounds() {
+	local viewer_roi="$1"
+	local screenshot_path
+	screenshot_path="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-roi-bounds.XXXXXX.png")"
+	/usr/sbin/screencapture -x "$screenshot_path"
+	clamp_viewer_roi_to_screenshot_bounds "$viewer_roi" "$screenshot_path"
+	local status=$?
+	rm -f "$screenshot_path"
+	return "$status"
 }
 
 viewer_bounds_points_to_pixel_roi() {
@@ -212,6 +349,14 @@ viewer_roi_for_current_fcp() {
 	if ! dynamic_roi="$(current_fcp_viewer_roi)"; then
 		fail "could not resolve current FCP Viewer ROI; pass --viewer-roi explicitly to override"
 	fi
+	local bounded_roi
+	if ! bounded_roi="$(clamp_viewer_roi_to_current_screenshot_bounds "$dynamic_roi")"; then
+		fail "could not clamp current FCP Viewer ROI to screenshot bounds: ${dynamic_roi}"
+	fi
+	if [[ "$bounded_roi" != "$dynamic_roi" ]]; then
+		printf 'Clamped dynamic FCP Viewer ROI to screenshot bounds: %s -> %s\n' "$dynamic_roi" "$bounded_roi" >&2
+	fi
+	dynamic_roi="$bounded_roi"
 	printf 'Using dynamic FCP Viewer ROI in capture pixels: %s\n' "$dynamic_roi" >&2
 	printf '%s\n' "$dynamic_roi"
 }
@@ -1460,6 +1605,10 @@ set_fcp_viewer_media_playback() {
 		return 0
 	fi
 	dismiss_fcp_menus
+	if fcp_viewer_menu_setting set media-playback "$playback_mode"; then
+		return 0
+	fi
+	dismiss_fcp_menus
 	printf 'FCP Viewer media playback View Options AX popover did not confirm "%s"; refusing coordinate fallback.\n' "$playback_mode" >&2
 	return 1
 }
@@ -1475,6 +1624,10 @@ set_fcp_viewer_channel() {
 	[[ -n "$channel_name" ]] || return 0
 	normalize_fcp_window_frame
 	if set_fcp_viewer_option_via_view_options_ax "$channel_name" channel; then
+		return 0
+	fi
+	dismiss_fcp_menus
+	if fcp_viewer_menu_setting set channel "$channel_name"; then
 		return 0
 	fi
 	dismiss_fcp_menus
@@ -1498,6 +1651,9 @@ debug_overlay_visible_now() {
 	mkdir -p "$ARTIFACT_ROOT"
 	screenshot_path="${ARTIFACT_ROOT}/fcp_debug_overlay_probe_$(date +%Y%m%d_%H%M%S).png"
 	/usr/sbin/screencapture -x "$screenshot_path" || return 1
+	if ! viewer_roi="$(clamp_viewer_roi_to_screenshot_bounds "$viewer_roi" "$screenshot_path")"; then
+		return 1
+	fi
 	assert_debug_overlay_visible_in_screenshot "$screenshot_path" "$viewer_roi" "$label"
 }
 
@@ -2469,7 +2625,6 @@ labels = [
 ]
 
 overlay_scale = max(float(h) * 0.5 / (18.0 * 13.0), 0.25)
-panel_x = 16.0 * overlay_scale
 panel_y = 16.0 * overlay_scale
 label_width = 96.0 * overlay_scale
 label_gap = 2.0 * overlay_scale
@@ -2477,11 +2632,8 @@ bar_width = 180.0 * overlay_scale
 row_height = 13.0 * overlay_scale
 panel_width = label_width + label_gap + bar_width
 panel_height = 19.0 * row_height
-if panel_x >= w or panel_y >= h:
+if panel_y >= h:
     raise SystemExit(f"{label}: predicted Debug Overlay panel origin is outside viewer ROI {w}x{h}")
-
-mask = np.zeros((h, w), dtype=np.uint8)
-area = np.zeros((h, w), dtype=np.uint8)
 
 def fill(target, x0, y0, x1, y1):
     ix0 = max(0, int(math.floor(x0)))
@@ -2491,53 +2643,81 @@ def fill(target, x0, y0, x1, y1):
     if ix1 > ix0 and iy1 > iy0:
         target[iy0:iy1, ix0:ix1] = 1
 
-for row, text in enumerate(labels):
-    row_top = panel_y + (float(row) * row_height)
-    fill(area, panel_x, row_top, panel_x + label_width, row_top + row_height)
-    text_scale = 2.0 * overlay_scale
-    glyph_advance = 4.0 * text_scale
-    text_origin_x = panel_x + 6.0
-    text_origin_y = row_top + (1.5 * overlay_scale)
-    for index, char in enumerate(text[:12]):
-        row_bits = bits.get(char, bits[" "])
-        for glyph_y, row_mask in enumerate(row_bits):
-            for glyph_x in range(3):
-                if ((row_mask >> (2 - glyph_x)) & 0x1) == 0:
-                    continue
-                px0 = text_origin_x + (float(index) * glyph_advance) + (float(glyph_x) * text_scale)
-                py0 = text_origin_y + (float(glyph_y) * text_scale)
-                fill(mask, px0, py0, px0 + text_scale, py0 + text_scale)
+def overlay_metrics(candidate_panel_x):
+    if candidate_panel_x >= w:
+        return None
+    mask = np.zeros((h, w), dtype=np.uint8)
+    area = np.zeros((h, w), dtype=np.uint8)
+    for row, text in enumerate(labels):
+        row_top = panel_y + (float(row) * row_height)
+        fill(area, candidate_panel_x, row_top, candidate_panel_x + label_width, row_top + row_height)
+        text_scale = 2.0 * overlay_scale
+        glyph_advance = 4.0 * text_scale
+        text_origin_x = candidate_panel_x + 6.0
+        text_origin_y = row_top + (1.5 * overlay_scale)
+        for index, char in enumerate(text[:12]):
+            row_bits = bits.get(char, bits[" "])
+            for glyph_y, row_mask in enumerate(row_bits):
+                for glyph_x in range(3):
+                    if ((row_mask >> (2 - glyph_x)) & 0x1) == 0:
+                        continue
+                    px0 = text_origin_x + (float(index) * glyph_advance) + (float(glyph_x) * text_scale)
+                    py0 = text_origin_y + (float(glyph_y) * text_scale)
+                    fill(mask, px0, py0, px0 + text_scale, py0 + text_scale)
+    mask_count = int(np.count_nonzero(mask))
+    if mask_count < 80:
+        return None
+    kernel_size = max(3, int(round(overlay_scale)))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+    label_mask = cv2.dilate(mask, kernel)
+    background_kernel = np.ones((max(5, kernel_size + 2), max(5, kernel_size + 2)), dtype=np.uint8)
+    background_mask = (area > 0) & (cv2.dilate(mask, background_kernel) == 0)
+    label_values = gray[label_mask > 0]
+    background_values = gray[background_mask]
+    if label_values.size < 80 or background_values.size < 80:
+        return None
+    label_p95 = float(np.percentile(label_values.astype(np.float32), 95))
+    background_median = float(np.percentile(background_values.astype(np.float32), 50))
+    contrast = label_p95 - background_median
+    bright_threshold = max(78.0, background_median + 32.0)
+    bright_ratio = float(np.count_nonzero(label_values >= bright_threshold)) / float(max(1, label_values.size))
+    panel_x0 = max(0, int(math.floor(candidate_panel_x)))
+    panel_y0 = max(0, int(math.floor(panel_y)))
+    panel_x1 = min(w, int(math.ceil(candidate_panel_x + panel_width)))
+    panel_y1 = min(h, int(math.ceil(panel_y + panel_height)))
+    panel = gray[panel_y0:panel_y1, panel_x0:panel_x1]
+    panel_dark_ratio = float(np.count_nonzero(panel < 80)) / float(max(1, panel.size))
+    score = contrast + (bright_ratio * 1000.0) + (panel_dark_ratio * 15.0)
+    return {
+        "panel_x": candidate_panel_x,
+        "label_p95": label_p95,
+        "background_median": background_median,
+        "contrast": contrast,
+        "bright_ratio": bright_ratio,
+        "panel_dark_ratio": panel_dark_ratio,
+        "score": score,
+    }
 
-mask_count = int(np.count_nonzero(mask))
-if mask_count < 80:
-    raise SystemExit(f"{label}: predicted Debug Overlay label mask was too small for viewer ROI {w}x{h}")
+max_scan_x = max(16.0 * overlay_scale, min(float(w) * 0.45, float(w) - panel_width))
+step = max(8.0, 12.0 * overlay_scale)
+candidate_xs = [16.0 * overlay_scale]
+candidate = 0.0
+while candidate <= max_scan_x:
+    candidate_xs.append(candidate)
+    candidate += step
 
-kernel_size = max(3, int(round(overlay_scale)))
-if kernel_size % 2 == 0:
-    kernel_size += 1
-kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
-label_mask = cv2.dilate(mask, kernel)
-background_mask = (area > 0) & (cv2.dilate(mask, np.ones((max(5, kernel_size + 2), max(5, kernel_size + 2)), dtype=np.uint8)) == 0)
-label_values = gray[label_mask > 0]
-background_values = gray[background_mask]
-if label_values.size < 80 or background_values.size < 80:
-    raise SystemExit(
-        f"{label}: could not sample enough Debug Overlay label/background pixels "
-        f"(labels={label_values.size}, background={background_values.size}, screenshot={image_path})"
-    )
-
-label_p95 = float(np.percentile(label_values.astype(np.float32), 95))
-background_median = float(np.percentile(background_values.astype(np.float32), 50))
-contrast = label_p95 - background_median
-bright_threshold = max(78.0, background_median + 32.0)
-bright_ratio = float(np.count_nonzero(label_values >= bright_threshold)) / float(max(1, label_values.size))
-
-panel_x0 = max(0, int(math.floor(panel_x)))
-panel_y0 = max(0, int(math.floor(panel_y)))
-panel_x1 = min(w, int(math.ceil(panel_x + panel_width)))
-panel_y1 = min(h, int(math.ceil(panel_y + panel_height)))
-panel = gray[panel_y0:panel_y1, panel_x0:panel_x1]
-panel_dark_ratio = float(np.count_nonzero(panel < 80)) / float(max(1, panel.size))
+metrics = [result for result in (overlay_metrics(candidate_x) for candidate_x in candidate_xs) if result is not None]
+if not metrics:
+    raise SystemExit(f"{label}: could not sample enough Debug Overlay label/background pixels for viewer ROI {w}x{h}")
+best = max(metrics, key=lambda item: item["score"])
+label_p95 = best["label_p95"]
+background_median = best["background_median"]
+contrast = best["contrast"]
+bright_ratio = best["bright_ratio"]
+panel_dark_ratio = best["panel_dark_ratio"]
+panel_x = best["panel_x"]
 
 if label_p95 < 85.0 or contrast < 25.0 or bright_ratio < 0.025:
     raise SystemExit(
@@ -2550,7 +2730,8 @@ if label_p95 < 85.0 or contrast < 25.0 or bright_ratio < 0.025:
 print(
     f"{label}: Debug Overlay visible: labelP95={label_p95:.2f}, "
     f"backgroundMedian={background_median:.2f}, contrast={contrast:.2f}, "
-    f"brightRatio={bright_ratio:.3f}, panelDarkRatio={panel_dark_ratio:.3f}, screenshot={image_path}"
+    f"brightRatio={bright_ratio:.3f}, panelDarkRatio={panel_dark_ratio:.3f}, "
+    f"panelX={panel_x:.1f}, screenshot={image_path}"
 )
 PY
 }
@@ -3871,7 +4052,7 @@ open_case_project() {
 	while ! /usr/bin/pgrep -x "Final Cut Pro" >/dev/null; do
 		sleep 0.25
 	done
-	wait_for_fcp_standard_window 500 \
+	ensure_fcp_standard_window_after_open "$library" "opening ${library}" \
 		|| fail "Final Cut Pro standard window did not become readable after opening ${library}"
 	sleep 0.5
 	[[ -f "$FCP_HELPER" ]] || fail "missing FCP helper: ${FCP_HELPER}"
@@ -3880,7 +4061,7 @@ open_case_project() {
 	if ! wait_for_ui_osascript "$import_prompt_pid" "E2E import prompt handling" 90 1; then
 		fail "could not complete E2E import prompt handling"
 	fi
-	wait_for_fcp_standard_window 300 \
+	ensure_fcp_standard_window_after_open "$library" "import prompt handling" \
 		|| fail "Final Cut Pro standard window was not readable after import prompt handling"
 
 	if [[ "$assume_current" == "1" ]]; then
