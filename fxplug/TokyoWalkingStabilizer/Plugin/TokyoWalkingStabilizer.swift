@@ -48,11 +48,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.382"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 912.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 0.0, 382.0, 912.0)
+private let tokyoWalkingStabilizerVersion = "1.0.383"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 913.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 0.0, 383.0, 913.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_338_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_339_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -7054,6 +7054,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return "rollingShutterCandidate"
         case 6:
             return "rollingRowWarp"
+        case 7:
+            return "farFieldRigid"
+        case 8:
+            return "farFieldRigidSuppressed"
         default:
             return "off"
         }
@@ -7071,6 +7075,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if (mask & 16) != 0 { parts.append("sourceRidge") }
         if (mask & 32) != 0 { parts.append("sourceLocal") }
         if (mask & 64) != 0 { parts.append("sourceRidgeLine") }
+        if (mask & 128) != 0 { parts.append("farFieldRigid") }
         return parts.joined(separator: ",")
     }
 
@@ -7276,6 +7281,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensBandTopRowPhaseOffset = autoTransform.lensBandTopRowPhaseOffset * masterStrength
             let appliedLensBandRidgeRowPhaseOffset = autoTransform.lensBandRidgeRowPhaseOffset * masterStrength
             let appliedLensBandMidRowPhaseOffset = autoTransform.lensBandMidRowPhaseOffset * masterStrength
+            let appliedLensFarFieldRigidShakeOffset = autoTransform.lensFarFieldRigidShakeOffset * masterStrength
+            let appliedLensFarFieldRigidCorrectionOffset = autoTransform.lensFarFieldRigidShakeApplied > 0.5
+                ? appliedLensBandRidgeOffset
+                : vector_float2(0.0, 0.0)
             let appliedSourceLensShakeRidgeLineOffset = autoTransform.sourceLensShakeRidgeLineOffset * masterStrength
             let appliedSourceLensShakeLocalTopLeftOffset = autoTransform.sourceLensShakeLocalTopLeftOffset * masterStrength
             let appliedSourceLensShakeLocalTopCenterOffset = autoTransform.sourceLensShakeLocalTopCenterOffset * masterStrength
@@ -7486,6 +7495,32 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 lensBandMessage
+            )
+            let lensRigidMessage = String(
+                format: "Render lens rigid csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensFarFieldRigidX=%.5f lensFarFieldRigidY=%.5f lensFarFieldRigidResidualX=%.5f lensFarFieldRigidResidualY=%.5f lensFarFieldRigidSupport=%.5f lensFarFieldRigidApplied=%.2f lensFarFieldRigidShapeConsistency=%.5f lensFarFieldRigidForwardBackwardConsistency=%.5f lensFarFieldRigidLocalWarpSuppressed=%.2f",
+                analysisSeconds,
+                samplePosition,
+                frames.count,
+                renderSourceIsProxy ? "yes" : "no",
+                autoCropEnabled ? "yes" : "no",
+                cacheIdentityShort,
+                Self.lensShakeReasonDescription(autoTransform.lensShakeReasonCode),
+                Self.lensBandCorrectionModelDescription(autoTransform.lensBandModelMask),
+                appliedLensFarFieldRigidCorrectionOffset.x,
+                appliedLensFarFieldRigidCorrectionOffset.y,
+                appliedLensFarFieldRigidShakeOffset.x,
+                appliedLensFarFieldRigidShakeOffset.y,
+                autoTransform.lensFarFieldRigidShakeSupport,
+                autoTransform.lensFarFieldRigidShakeApplied,
+                autoTransform.lensFarFieldRigidShakeShapeConsistency,
+                autoTransform.lensFarFieldRigidShakeForwardBackwardConsistency,
+                autoTransform.lensFarFieldRigidShakeLocalWarpSuppressed
+            )
+            os_log(
+                "%{public}@",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                lensRigidMessage
             )
             let lensRidgeLineMessage = String(
                 format: "Render lens ridge line csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ sourceLensShakeRidgeLineRawY=%.5f sourceLensShakeRidgeLineY=%.5f sourceLensShakeRidgeLineSupport=%.5f sourceLensShakeRidgeLineBandSupported=%.2f sourceLensShakeRidgeLineApplied=%.2f sourceLensShakeRidgeCombinedY=%.5f",

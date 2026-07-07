@@ -51,7 +51,10 @@ analysis. Compressed video samples are decoded through `VTDecompressionSession`
 into Metal-compatible native YUV pixel buffers, preserving 10-bit luma for
 10-bit sources. Luma sampling, blur metric reduction, cache-validation
 fingerprints, and frame-to-frame block motion search run through Metal compute
-kernels. Schema 24 analysis uses upper-row far-field detail blocks, denser
+kernels. Schema 42 analysis persists two-way far-field rigid shake paths in
+addition to the lens-band evidence, so the FxPlug render path can prefer one
+coherent upper-frame plane and avoid local mountain/cloud pulsing. Earlier
+schema 24 analysis uses upper-row far-field detail blocks, denser
 high far-field vertical detail blocks, central attitude-detail blocks for
 yaw/pitch/roll evidence, denser in-block sample density for high far-field
 blocks, sub-pixel block shift refinement, and chunked fingerprints so

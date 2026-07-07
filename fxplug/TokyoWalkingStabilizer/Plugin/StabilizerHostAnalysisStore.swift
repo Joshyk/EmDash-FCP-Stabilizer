@@ -81,6 +81,11 @@ private struct PersistedHostAnalysisCache: Codable {
     let lensBandRidgeConfidence: [Float]?
     let lensBandMidConfidence: [Float]?
     let lensBandConfidence: [Float]?
+    let farFieldRigidShakePathX: [Float]?
+    let farFieldRigidShakePathY: [Float]?
+    let farFieldRigidShakeSupport: [Float]?
+    let farFieldRigidShakeShapeConsistency: [Float]?
+    let farFieldRigidShakeForwardBackwardConsistency: [Float]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
     let sourceLensShakeRidgeLinePathY: [Float]?
@@ -248,8 +253,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 41
-    private static let supportedCacheSchemaVersions: Set<Int> = [41]
+    private static let cacheSchemaVersion = 42
+    private static let supportedCacheSchemaVersions: Set<Int> = [42]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1835,6 +1840,11 @@ final class StabilizerHostAnalysisStore {
             lensBandRidgeConfidence: prepared.lensBandRidgeConfidence,
             lensBandMidConfidence: prepared.lensBandMidConfidence,
             lensBandConfidence: prepared.lensBandConfidence,
+            farFieldRigidShakePathX: prepared.farFieldRigidShakePathX,
+            farFieldRigidShakePathY: prepared.farFieldRigidShakePathY,
+            farFieldRigidShakeSupport: prepared.farFieldRigidShakeSupport,
+            farFieldRigidShakeShapeConsistency: prepared.farFieldRigidShakeShapeConsistency,
+            farFieldRigidShakeForwardBackwardConsistency: prepared.farFieldRigidShakeForwardBackwardConsistency,
             sourceLensShakeRidgePathY: prepared.sourceLensShakeRidgePathY,
             sourceLensShakeRidgeSupport: prepared.sourceLensShakeRidgeSupport,
             sourceLensShakeRidgeLinePathY: prepared.sourceLensShakeRidgeLinePathY,
@@ -2001,6 +2011,11 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgeConfidence: analysis.lensBandRidgeConfidence,
                 lensBandMidConfidence: analysis.lensBandMidConfidence,
                 lensBandConfidence: analysis.lensBandConfidence,
+                farFieldRigidShakePathX: analysis.farFieldRigidShakePathX,
+                farFieldRigidShakePathY: analysis.farFieldRigidShakePathY,
+                farFieldRigidShakeSupport: analysis.farFieldRigidShakeSupport,
+                farFieldRigidShakeShapeConsistency: analysis.farFieldRigidShakeShapeConsistency,
+                farFieldRigidShakeForwardBackwardConsistency: analysis.farFieldRigidShakeForwardBackwardConsistency,
                 sourceLensShakeRidgePathY: analysis.sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: analysis.sourceLensShakeRidgeSupport,
                 sourceLensShakeRidgeLinePathY: analysis.sourceLensShakeRidgeLinePathY,
@@ -3062,6 +3077,11 @@ final class StabilizerHostAnalysisStore {
             cache.lensBandRidgeConfidence,
             cache.lensBandMidConfidence,
             cache.lensBandConfidence,
+            cache.farFieldRigidShakePathX,
+            cache.farFieldRigidShakePathY,
+            cache.farFieldRigidShakeSupport,
+            cache.farFieldRigidShakeShapeConsistency,
+            cache.farFieldRigidShakeForwardBackwardConsistency,
             cache.sourceLensShakeRidgePathY,
             cache.sourceLensShakeRidgeSupport,
             cache.sourceLensShakeRidgeLinePathY,
@@ -3128,6 +3148,11 @@ final class StabilizerHostAnalysisStore {
            let lensBandRidgeConfidence = cache.lensBandRidgeConfidence,
            let lensBandMidConfidence = cache.lensBandMidConfidence,
            let lensBandConfidence = cache.lensBandConfidence,
+           let farFieldRigidShakePathX = cache.farFieldRigidShakePathX,
+           let farFieldRigidShakePathY = cache.farFieldRigidShakePathY,
+           let farFieldRigidShakeSupport = cache.farFieldRigidShakeSupport,
+           let farFieldRigidShakeShapeConsistency = cache.farFieldRigidShakeShapeConsistency,
+           let farFieldRigidShakeForwardBackwardConsistency = cache.farFieldRigidShakeForwardBackwardConsistency,
            let sourceLensShakeRidgePathY = cache.sourceLensShakeRidgePathY,
            let sourceLensShakeRidgeSupport = cache.sourceLensShakeRidgeSupport,
            let sourceLensShakeRidgeLinePathY = cache.sourceLensShakeRidgeLinePathY,
@@ -3199,6 +3224,11 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgeConfidence: lensBandRidgeConfidence,
                 lensBandMidConfidence: lensBandMidConfidence,
                 lensBandConfidence: lensBandConfidence,
+                farFieldRigidShakePathX: farFieldRigidShakePathX,
+                farFieldRigidShakePathY: farFieldRigidShakePathY,
+                farFieldRigidShakeSupport: farFieldRigidShakeSupport,
+                farFieldRigidShakeShapeConsistency: farFieldRigidShakeShapeConsistency,
+                farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShakeForwardBackwardConsistency,
                 sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: sourceLensShakeRidgeSupport,
                 sourceLensShakeRidgeLinePathY: sourceLensShakeRidgeLinePathY,
@@ -3259,6 +3289,11 @@ final class StabilizerHostAnalysisStore {
             ("lensBandRidgeConfidence", cache.lensBandRidgeConfidence),
             ("lensBandMidConfidence", cache.lensBandMidConfidence),
             ("lensBandConfidence", cache.lensBandConfidence),
+            ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
+            ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
+            ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
+            ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
+            ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency),
             ("sourceLensShakeRidgePathY", cache.sourceLensShakeRidgePathY),
             ("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport),
             ("sourceLensShakeRidgeLinePathY", cache.sourceLensShakeRidgeLinePathY),
@@ -3572,6 +3607,11 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgeConfidence: cache.lensBandRidgeConfidence,
                 lensBandMidConfidence: cache.lensBandMidConfidence,
                 lensBandConfidence: cache.lensBandConfidence,
+                farFieldRigidShakePathX: cache.farFieldRigidShakePathX,
+                farFieldRigidShakePathY: cache.farFieldRigidShakePathY,
+                farFieldRigidShakeSupport: cache.farFieldRigidShakeSupport,
+                farFieldRigidShakeShapeConsistency: cache.farFieldRigidShakeShapeConsistency,
+                farFieldRigidShakeForwardBackwardConsistency: cache.farFieldRigidShakeForwardBackwardConsistency,
                 sourceLensShakeRidgePathY: cache.sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: cache.sourceLensShakeRidgeSupport,
                 sourceLensShakeRidgeLinePathY: cache.sourceLensShakeRidgeLinePathY,

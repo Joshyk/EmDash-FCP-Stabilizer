@@ -19,6 +19,7 @@ import numpy as np
 PAIR_PATTERN = re.compile(r"([A-Za-z][A-Za-z0-9]*)=([^ |]+)")
 PREFIX = "Render frame components csv v1 |"
 LENS_PREFIX = "Render lens band csv v1 |"
+RIGID_PREFIX = "Render lens rigid csv v1 |"
 LOCAL_PREFIX = "Render lens local csv v1 |"
 RIDGE_LINE_PREFIX = "Render lens ridge line csv v1 |"
 
@@ -85,6 +86,7 @@ def finite_float(raw: Any, default: float = 0.0) -> float:
 def parse_render_log(path: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     lens_rows: dict[tuple[str, str], dict[str, str]] = {}
+    rigid_rows: dict[tuple[str, str], dict[str, str]] = {}
     local_rows: dict[tuple[str, str], dict[str, str]] = {}
     ridge_line_rows: dict[tuple[str, str], dict[str, str]] = {}
     if not path.exists():
@@ -96,6 +98,13 @@ def parse_render_log(path: Path) -> list[dict[str, str]]:
             sample = values.get("sample")
             if analysis_time and sample:
                 lens_rows[(analysis_time, sample)] = values
+            continue
+        if RIGID_PREFIX in line:
+            values = dict(PAIR_PATTERN.findall(line.split(RIGID_PREFIX, 1)[1]))
+            analysis_time = values.get("analysisTime")
+            sample = values.get("sample")
+            if analysis_time and sample:
+                rigid_rows[(analysis_time, sample)] = values
             continue
         if LOCAL_PREFIX in line:
             values = dict(PAIR_PATTERN.findall(line.split(LOCAL_PREFIX, 1)[1]))
@@ -121,6 +130,9 @@ def parse_render_log(path: Path) -> list[dict[str, str]]:
         lens_row = lens_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
         if lens_row:
             row.update(lens_row)
+        rigid_row = rigid_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
+        if rigid_row:
+            row.update(rigid_row)
         local_row = local_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
         if local_row:
             row.update(local_row)
@@ -991,6 +1003,15 @@ def main() -> None:
         "lensBandWarpSupport",
         "lensBandWarpApplied",
         "lensBandRollingShutterScore",
+        "lensFarFieldRigidX",
+        "lensFarFieldRigidY",
+        "lensFarFieldRigidResidualX",
+        "lensFarFieldRigidResidualY",
+        "lensFarFieldRigidSupport",
+        "lensFarFieldRigidApplied",
+        "lensFarFieldRigidShapeConsistency",
+        "lensFarFieldRigidForwardBackwardConsistency",
+        "lensFarFieldRigidLocalWarpSuppressed",
         "sourceLensShakeRidgeY",
         "sourceLensShakeRidgeSupport",
         "sourceLensShakeRidgeApplied",

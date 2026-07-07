@@ -20,6 +20,7 @@ from event_cache_resolution import resolve_event_root_from_manifest
 ALWAYS_INVALID_FILTER_VIDEO_ATTRS = {"videoOverride"}
 NAME_OVERRIDE_MIN_VERSION = (1, 12)
 FCP_RESOURCE_ID_PATTERN = re.compile(r"^r[0-9]+$")
+EXPECTED_CACHE_SCHEMA_VERSION = 42
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -183,7 +184,16 @@ def stabilizer_filter_identities(root: ET.Element) -> list[str]:
 
 def cache_prepared_path_present(cache_payload: dict) -> bool:
     frame_count = len(cache_payload.get("frames") or [])
-    for key in ("pathX", "pathY", "pathRoll"):
+    for key in (
+        "pathX",
+        "pathY",
+        "pathRoll",
+        "farFieldRigidShakePathX",
+        "farFieldRigidShakePathY",
+        "farFieldRigidShakeSupport",
+        "farFieldRigidShakeShapeConsistency",
+        "farFieldRigidShakeForwardBackwardConsistency",
+    ):
         value = cache_payload.get(key)
         if not isinstance(value, list) or len(value) != frame_count or frame_count == 0:
             return False
@@ -334,8 +344,13 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> tuple[lis
     prepared = manifest.get("preparedMotionPath")
     if prepared is not True:
         failures.append("manifest does not confirm prepared motion path")
-    if manifest.get("cacheSchemaVersion") is None:
+    manifest_schema_version = manifest.get("cacheSchemaVersion")
+    if manifest_schema_version is None:
         failures.append("manifest is missing cache schema version")
+    elif manifest_schema_version != EXPECTED_CACHE_SCHEMA_VERSION:
+        failures.append(
+            f"manifest cache schema must be {EXPECTED_CACHE_SCHEMA_VERSION}, found {manifest_schema_version}"
+        )
     if manifest.get("sampleWidth") is None or manifest.get("sampleHeight") is None:
         failures.append("manifest is missing sample size")
     if not manifest.get("frameCount"):
@@ -355,8 +370,13 @@ def validate(root: ET.Element, manifest: dict, manifest_path: Path) -> tuple[lis
                     failures.append("cache payload index does not contain manifest identity")
                 elif index_entry.get("cacheFileName") != Path(payload_cache_file).name:
                     failures.append("cache payload index file name does not match manifest")
-                if cache_payload.get("schemaVersion") != manifest.get("cacheSchemaVersion"):
+                if cache_payload.get("schemaVersion") != manifest_schema_version:
                     failures.append("cache payload schema does not match manifest")
+                if cache_payload.get("schemaVersion") != EXPECTED_CACHE_SCHEMA_VERSION:
+                    failures.append(
+                        f"cache payload schema must be {EXPECTED_CACHE_SCHEMA_VERSION}, "
+                        f"found {cache_payload.get('schemaVersion')}"
+                    )
                 if len(cache_payload.get("frames") or []) != manifest.get("frameCount"):
                     failures.append("cache payload frame count does not match manifest")
                 if not cache_prepared_path_present(cache_payload):

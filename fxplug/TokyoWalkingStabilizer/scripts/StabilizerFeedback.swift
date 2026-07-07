@@ -89,6 +89,11 @@ private struct PersistedHostAnalysisCache: Decodable {
     let lensBandRidgeConfidence: [Float]?
     let lensBandMidConfidence: [Float]?
     let lensBandConfidence: [Float]?
+    let farFieldRigidShakePathX: [Float]?
+    let farFieldRigidShakePathY: [Float]?
+    let farFieldRigidShakeSupport: [Float]?
+    let farFieldRigidShakeShapeConsistency: [Float]?
+    let farFieldRigidShakeForwardBackwardConsistency: [Float]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
     let sourceLensShakeRidgeLinePathY: [Float]?
@@ -191,6 +196,11 @@ private struct Analysis {
     let lensBandRidgeConfidence: [Float]
     let lensBandMidConfidence: [Float]
     let lensBandConfidence: [Float]
+    let farFieldRigidShakePathX: [Float]
+    let farFieldRigidShakePathY: [Float]
+    let farFieldRigidShakeSupport: [Float]
+    let farFieldRigidShakeShapeConsistency: [Float]
+    let farFieldRigidShakeForwardBackwardConsistency: [Float]
     let sourceLensShakeRidgePathY: [Float]
     let sourceLensShakeRidgeSupport: [Float]
     let sourceLensShakeRidgeLinePathY: [Float]
@@ -306,6 +316,11 @@ private struct Analysis {
         lensBandTopConfidence = try requireFloatArray(cache.lensBandTopConfidence, "lensBandTopConfidence")
         lensBandRidgeConfidence = try requireFloatArray(cache.lensBandRidgeConfidence, "lensBandRidgeConfidence")
         lensBandMidConfidence = try requireFloatArray(cache.lensBandMidConfidence, "lensBandMidConfidence")
+        farFieldRigidShakePathX = try requireFloatArray(cache.farFieldRigidShakePathX, "farFieldRigidShakePathX")
+        farFieldRigidShakePathY = try requireFloatArray(cache.farFieldRigidShakePathY, "farFieldRigidShakePathY")
+        farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport")
+        farFieldRigidShakeShapeConsistency = try requireFloatArray(cache.farFieldRigidShakeShapeConsistency, "farFieldRigidShakeShapeConsistency")
+        farFieldRigidShakeForwardBackwardConsistency = try requireFloatArray(cache.farFieldRigidShakeForwardBackwardConsistency, "farFieldRigidShakeForwardBackwardConsistency")
         sourceLensShakeRidgePathY = try requireFloatArray(cache.sourceLensShakeRidgePathY, "sourceLensShakeRidgePathY")
         sourceLensShakeRidgeSupport = try requireFloatArray(cache.sourceLensShakeRidgeSupport, "sourceLensShakeRidgeSupport")
         sourceLensShakeRidgeLinePathY = try requireFloatArray(cache.sourceLensShakeRidgeLinePathY, "sourceLensShakeRidgeLinePathY")
@@ -754,7 +769,7 @@ private let expectedSourceLensShakeLocalBinCount = 9
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [41]
+private let supportedCacheSchemaVersions: Set<Int> = [42]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
@@ -919,6 +934,11 @@ private func floatComparisonInputs(baseline: Analysis, compared: Analysis) -> [(
         ("lensBandRidgeConfidence", baseline.lensBandRidgeConfidence, compared.lensBandRidgeConfidence),
         ("lensBandMidConfidence", baseline.lensBandMidConfidence, compared.lensBandMidConfidence),
         ("lensBandConfidence", baseline.lensBandConfidence, compared.lensBandConfidence),
+        ("farFieldRigidShakePathX", baseline.farFieldRigidShakePathX, compared.farFieldRigidShakePathX),
+        ("farFieldRigidShakePathY", baseline.farFieldRigidShakePathY, compared.farFieldRigidShakePathY),
+        ("farFieldRigidShakeSupport", baseline.farFieldRigidShakeSupport, compared.farFieldRigidShakeSupport),
+        ("farFieldRigidShakeShapeConsistency", baseline.farFieldRigidShakeShapeConsistency, compared.farFieldRigidShakeShapeConsistency),
+        ("farFieldRigidShakeForwardBackwardConsistency", baseline.farFieldRigidShakeForwardBackwardConsistency, compared.farFieldRigidShakeForwardBackwardConsistency),
         ("sourceLensShakeRidgePathY", baseline.sourceLensShakeRidgePathY, compared.sourceLensShakeRidgePathY),
         ("sourceLensShakeRidgeSupport", baseline.sourceLensShakeRidgeSupport, compared.sourceLensShakeRidgeSupport),
         ("sourceLensShakeRidgeLinePathY", baseline.sourceLensShakeRidgeLinePathY, compared.sourceLensShakeRidgeLinePathY),
@@ -1163,6 +1183,11 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         ("lensBandRidgeConfidence", cache.lensBandRidgeConfidence),
         ("lensBandMidConfidence", cache.lensBandMidConfidence),
         ("lensBandConfidence", cache.lensBandConfidence),
+        ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
+        ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
+        ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
+        ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
+        ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency),
         ("sourceLensShakeRidgePathY", cache.sourceLensShakeRidgePathY),
         ("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport),
         ("sourceLensShakeRidgeLinePathY", cache.sourceLensShakeRidgeLinePathY),
@@ -3437,6 +3462,37 @@ private func sourceSpaceLensShakeBand(
     )
     func support(_ magnitude: Float, start: Float, full: Float) -> Float {
         clamp(confidenceRamp(magnitude, start: start, full: full) * qualitySupport * turnScale, min: 0.0, max: 1.0)
+    }
+
+    let hasFarFieldRigidShakePaths = analysis.farFieldRigidShakePathX.count == analysis.frames.count
+        && analysis.farFieldRigidShakePathY.count == analysis.frames.count
+        && analysis.farFieldRigidShakeSupport.count == analysis.frames.count
+        && analysis.farFieldRigidShakeShapeConsistency.count == analysis.frames.count
+        && analysis.farFieldRigidShakeForwardBackwardConsistency.count == analysis.frames.count
+    if hasFarFieldRigidShakePaths {
+        let rigidResidualX = residual(analysis.farFieldRigidShakePathX) * xScale
+        let rigidResidualY = residual(analysis.farFieldRigidShakePathY) * yScale
+        let rigidMagnitude = hypotf(rigidResidualX, rigidResidualY)
+        let preparedRigidSupport = analysis.farFieldRigidShakeSupport[index]
+        let shapeConsistency = analysis.farFieldRigidShakeShapeConsistency[index]
+        let forwardBackwardConsistency = analysis.farFieldRigidShakeForwardBackwardConsistency[index]
+        let rigidSupport = confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70)
+            * confidenceRamp(preparedRigidSupport, start: 0.08, full: 0.36)
+            * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
+            * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
+            * qualitySupport
+            * turnScale
+        let boundedSupport = clamp(rigidSupport, min: 0.0, max: 1.0)
+        let applied = boundedSupport >= lensShakeMinimumSupport ? rigidMagnitude * boundedSupport : 0.0
+        let reason = boundedSupport >= lensShakeMinimumSupport ? "farFieldRigid" : "farFieldRigidSuppressed"
+        return BandAssessment(
+            name: "LENS",
+            detected: rigidMagnitude,
+            applied: applied,
+            remaining: max(0.0, rigidMagnitude - applied),
+            confidence: boundedSupport,
+            note: String(format: "source-space 10f farFieldRigid residual %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f localWarpSuppressed 1 reason %@", rigidResidualX, rigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, reason)
+        )
     }
 
     let residualX = residual(analysis.farFieldPathX) * xScale
