@@ -44,6 +44,29 @@ REGIONS = {
     "lower": (0.00, 1.00, 0.42, 1.00),
 }
 
+LENS_BAND_TOP_CENTER = 0.10
+LENS_BAND_RIDGE_CENTER = 0.25
+LENS_BAND_MID_CENTER = 0.40
+LENS_BAND_TOP_RADIUS = 0.18
+LENS_BAND_RIDGE_RADIUS = 0.20
+LENS_BAND_MID_RADIUS = 0.19
+LENS_BAND_FADE_START = 0.46
+LENS_BAND_FADE_END = 0.58
+SOURCE_LENS_LOCAL_TOP_CENTER = 0.10
+SOURCE_LENS_LOCAL_RIDGE_CENTER = 0.25
+SOURCE_LENS_LOCAL_MID_CENTER = 0.42
+SOURCE_LENS_LOCAL_TOP_RADIUS = 0.18
+SOURCE_LENS_LOCAL_RIDGE_RADIUS = 0.19
+SOURCE_LENS_LOCAL_MID_RADIUS = 0.18
+SOURCE_LENS_LOCAL_FADE_START = 0.48
+SOURCE_LENS_LOCAL_FADE_END = 0.58
+SOURCE_LENS_RIDGE_CENTER = 0.25
+SOURCE_LENS_RIDGE_RADIUS = 0.14
+SOURCE_LENS_RIDGE_FADE_START = 0.38
+SOURCE_LENS_RIDGE_FADE_END = 0.52
+BOUNDARY_BAND_PROBE_Y = 0.54
+NEAR_GROUND_PROBE_Y = 0.62
+
 
 def finite_float(raw: Any, default: float = 0.0) -> float:
     try:
@@ -229,6 +252,123 @@ def lens_band_gain(row: dict[str, Any]) -> float:
     return applied * smoothstep(0.08, 0.55, support)
 
 
+def lens_band_weight(y: float, center: float, radius: float) -> float:
+    normalized = max(0.0, min(1.0, 1.0 - (abs(y - center) / max(radius, 0.0001))))
+    return normalized * normalized * (3.0 - (2.0 * normalized))
+
+
+def lens_band_render_offset_y(row: dict[str, Any], y: float) -> float:
+    top_weight = lens_band_weight(y, LENS_BAND_TOP_CENTER, LENS_BAND_TOP_RADIUS)
+    ridge_weight = lens_band_weight(y, LENS_BAND_RIDGE_CENTER, LENS_BAND_RIDGE_RADIUS)
+    mid_weight = lens_band_weight(y, LENS_BAND_MID_CENTER, LENS_BAND_MID_RADIUS)
+    total_weight = top_weight + ridge_weight + mid_weight
+    if total_weight <= 0.0001:
+        return 0.0
+    band_y = (
+        (render_value(row, "lensBandTopY") * top_weight)
+        + (render_value(row, "lensBandRidgeY") * ridge_weight)
+        + (render_value(row, "lensBandMidY") * mid_weight)
+    ) / total_weight
+    far_field_fade = 1.0 - smoothstep(LENS_BAND_FADE_START, LENS_BAND_FADE_END, y)
+    return band_y * lens_band_gain(row) * far_field_fade
+
+
+def lens_band_spatial_profile(row: dict[str, Any]) -> list[tuple[float, float]]:
+    return [
+        (y, lens_band_render_offset_y(row, y))
+        for y in np.linspace(0.02, NEAR_GROUND_PROBE_Y, 25)
+    ]
+
+
+def lens_band_core_spatial_gradient(row: dict[str, Any]) -> float:
+    profile = lens_band_spatial_profile(row)
+    gradients = [
+        abs((current_value - previous_value) / max(current_y - previous_y, 0.0001))
+        for (previous_y, previous_value), (current_y, current_value) in zip(profile, profile[1:])
+    ]
+    return max(gradients or [0.0])
+
+
+def lens_band_core_spatial_curvature(row: dict[str, Any]) -> float:
+    profile = lens_band_spatial_profile(row)
+    curvatures: list[float] = []
+    for previous, current, next_value in zip(profile, profile[1:], profile[2:]):
+        y0, value0 = previous
+        y1, value1 = current
+        y2, value2 = next_value
+        step = max(min(y1 - y0, y2 - y1), 0.0001)
+        curvatures.append(abs((value2 - (2.0 * value1) + value0) / (step * step)))
+    return max(curvatures or [0.0])
+
+
+def lens_band_core_active_height(row: dict[str, Any]) -> float:
+    profile = lens_band_spatial_profile(row)
+    magnitudes = [abs(value) for _y, value in profile]
+    peak = max(magnitudes or [0.0])
+    if peak <= 0.0001:
+        return 0.0
+    active_rows = [y for y, value in profile if abs(value) >= peak * 0.25]
+    if not active_rows:
+        return 0.0
+    return max(active_rows) - min(active_rows)
+
+
+def average_keys(row: dict[str, Any], keys: Iterable[str]) -> float:
+    values = [render_value(row, key) for key in keys]
+    return sum(values) / len(values) if values else 0.0
+
+
+def source_lens_local_gain(row: dict[str, Any]) -> float:
+    applied = max(0.0, min(1.0, finite_float(row.get("sourceLensShakeLocalApplied"))))
+    support = max(0.0, min(1.0, finite_float(row.get("sourceLensShakeLocalSupport"))))
+    return applied * smoothstep(0.08, 0.55, support)
+
+
+def source_lens_local_offset_y(row: dict[str, Any], y: float) -> float:
+    top_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_TOP_CENTER, SOURCE_LENS_LOCAL_TOP_RADIUS)
+    ridge_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_RIDGE_CENTER, SOURCE_LENS_LOCAL_RIDGE_RADIUS)
+    mid_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_MID_CENTER, SOURCE_LENS_LOCAL_MID_RADIUS)
+    total_weight = top_weight + ridge_weight + mid_weight
+    if total_weight <= 0.0001:
+        return 0.0
+    top_y = average_keys(row, ("sourceLensShakeLocalTopLeftY", "sourceLensShakeLocalTopCenterY", "sourceLensShakeLocalTopRightY"))
+    ridge_y = average_keys(row, ("sourceLensShakeLocalRidgeLeftY", "sourceLensShakeLocalRidgeCenterY", "sourceLensShakeLocalRidgeRightY"))
+    mid_y = average_keys(row, ("sourceLensShakeLocalMidLeftY", "sourceLensShakeLocalMidCenterY", "sourceLensShakeLocalMidRightY"))
+    band_y = ((top_y * top_weight) + (ridge_y * ridge_weight) + (mid_y * mid_weight)) / total_weight
+    far_field_fade = 1.0 - smoothstep(SOURCE_LENS_LOCAL_FADE_START, SOURCE_LENS_LOCAL_FADE_END, y)
+    return band_y * source_lens_local_gain(row) * far_field_fade
+
+
+def source_lens_local_max_abs_offset_y(row: dict[str, Any], y: float) -> float:
+    top_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_TOP_CENTER, SOURCE_LENS_LOCAL_TOP_RADIUS)
+    ridge_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_RIDGE_CENTER, SOURCE_LENS_LOCAL_RIDGE_RADIUS)
+    mid_weight = lens_band_weight(y, SOURCE_LENS_LOCAL_MID_CENTER, SOURCE_LENS_LOCAL_MID_RADIUS)
+    total_weight = top_weight + ridge_weight + mid_weight
+    if total_weight <= 0.0001:
+        return 0.0
+    far_field_fade = 1.0 - smoothstep(SOURCE_LENS_LOCAL_FADE_START, SOURCE_LENS_LOCAL_FADE_END, y)
+    gain = source_lens_local_gain(row) * far_field_fade
+    values = []
+    for column in ("Left", "Center", "Right"):
+        top_y = render_value(row, f"sourceLensShakeLocalTop{column}Y")
+        ridge_y = render_value(row, f"sourceLensShakeLocalRidge{column}Y")
+        mid_y = render_value(row, f"sourceLensShakeLocalMid{column}Y")
+        values.append(((top_y * top_weight) + (ridge_y * ridge_weight) + (mid_y * mid_weight)) / total_weight * gain)
+    return max((abs(value) for value in values), default=0.0)
+
+
+def source_lens_ridge_gain(row: dict[str, Any]) -> float:
+    applied = max(0.0, min(1.0, finite_float(row.get("sourceLensShakeRidgeApplied"))))
+    support = max(0.0, min(1.0, finite_float(row.get("sourceLensShakeRidgeSupport"))))
+    return applied * smoothstep(0.08, 0.55, support)
+
+
+def source_lens_ridge_offset_y(row: dict[str, Any], y: float) -> float:
+    weight = lens_band_weight(y, SOURCE_LENS_RIDGE_CENTER, SOURCE_LENS_RIDGE_RADIUS)
+    far_field_fade = 1.0 - smoothstep(SOURCE_LENS_RIDGE_FADE_START, SOURCE_LENS_RIDGE_FADE_END, y)
+    return render_value(row, "sourceLensShakeRidgeY") * source_lens_ridge_gain(row) * weight * far_field_fade
+
+
 def render_value(row: dict[str, Any], key: str) -> float:
     return finite_float(row.get(key))
 
@@ -283,9 +423,9 @@ def inter_band_scale_like(row: dict[str, Any]) -> float:
     top = render_value(row, "lensBandTopY")
     ridge = render_value(row, "lensBandRidgeY")
     mid = render_value(row, "lensBandMidY")
-    top_ridge = abs(top - ridge) / 0.11
-    ridge_mid = abs(ridge - mid) / 0.10
-    top_mid = abs(top - mid) / 0.21
+    top_ridge = abs(top - ridge) / abs(LENS_BAND_RIDGE_CENTER - LENS_BAND_TOP_CENTER)
+    ridge_mid = abs(ridge - mid) / abs(LENS_BAND_MID_CENTER - LENS_BAND_RIDGE_CENTER)
+    top_mid = abs(top - mid) / abs(LENS_BAND_MID_CENTER - LENS_BAND_TOP_CENTER)
     return max(top_ridge, ridge_mid, top_mid)
 
 
@@ -307,6 +447,7 @@ def boundary_pulse_score(rows: list[dict[str, Any]], index: int) -> float:
     ridge_y_jerk = abs(derivative_at(rows, index, "lensBandRidgeY", 3))
     ridge_row_jerk = abs(derivative_at(rows, index, "lensBandRidgeRowPhaseY", 3))
     gain_derivative = abs(derived_derivative_at(rows, index, lens_band_gain, 1))
+    spatial_gradient_velocity = abs(derived_derivative_at(rows, index, lens_band_core_spatial_gradient, 1))
     switch_penalty = float(model_switch_count(rows, index)) * 0.18
     return max(
         inter_band_velocity,
@@ -314,6 +455,7 @@ def boundary_pulse_score(rows: list[dict[str, Any]], index: int) -> float:
         ridge_y_jerk,
         ridge_row_jerk,
         gain_derivative * 2.0,
+        spatial_gradient_velocity,
         switch_penalty,
     )
 
@@ -876,6 +1018,16 @@ def main() -> None:
         "modelSwitchCount",
         "bandWarpGain",
         "bandWarpGainDerivative",
+        "bandWarpCoreSpatialGradient",
+        "bandWarpCoreSpatialCurvature",
+        "bandWarpCoreActiveHeight",
+        "bandWarpCoreSpatialGradientDerivative",
+        "bandWarpCoreBoundaryLeak",
+        "bandWarpCoreNearGroundLeak",
+        "sourceLensLocalBoundaryLeak",
+        "sourceLensLocalNearGroundLeak",
+        "sourceLensRidgeBoundaryLeak",
+        "sourceLensRidgeNearGroundLeak",
         "lensBandResidualModel",
         "lensBandResidualDominantComponent",
         "lensBandResidualDominantBand",
@@ -998,6 +1150,16 @@ def main() -> None:
                     "modelSwitchCount",
                     "bandWarpGain",
                     "bandWarpGainDerivative",
+                    "bandWarpCoreSpatialGradient",
+                    "bandWarpCoreSpatialCurvature",
+                    "bandWarpCoreActiveHeight",
+                    "bandWarpCoreSpatialGradientDerivative",
+                    "bandWarpCoreBoundaryLeak",
+                    "bandWarpCoreNearGroundLeak",
+                    "sourceLensLocalBoundaryLeak",
+                    "sourceLensLocalNearGroundLeak",
+                    "sourceLensRidgeBoundaryLeak",
+                    "sourceLensRidgeNearGroundLeak",
                 }:
                     render_index = int(finite_float(render_row.get("_renderIndex"), -1))
                     if column.startswith("lensBand") and column.endswith("Velocity"):
@@ -1021,6 +1183,26 @@ def main() -> None:
                         value = lens_band_gain(render_row)
                     elif column == "bandWarpGainDerivative":
                         value = derived_derivative_at(render_rows, render_index, lens_band_gain, 1)
+                    elif column == "bandWarpCoreSpatialGradient":
+                        value = lens_band_core_spatial_gradient(render_row)
+                    elif column == "bandWarpCoreSpatialCurvature":
+                        value = lens_band_core_spatial_curvature(render_row)
+                    elif column == "bandWarpCoreActiveHeight":
+                        value = lens_band_core_active_height(render_row)
+                    elif column == "bandWarpCoreSpatialGradientDerivative":
+                        value = derived_derivative_at(render_rows, render_index, lens_band_core_spatial_gradient, 1)
+                    elif column == "bandWarpCoreBoundaryLeak":
+                        value = lens_band_render_offset_y(render_row, BOUNDARY_BAND_PROBE_Y)
+                    elif column == "bandWarpCoreNearGroundLeak":
+                        value = lens_band_render_offset_y(render_row, NEAR_GROUND_PROBE_Y)
+                    elif column == "sourceLensLocalBoundaryLeak":
+                        value = source_lens_local_max_abs_offset_y(render_row, BOUNDARY_BAND_PROBE_Y)
+                    elif column == "sourceLensLocalNearGroundLeak":
+                        value = source_lens_local_max_abs_offset_y(render_row, NEAR_GROUND_PROBE_Y)
+                    elif column == "sourceLensRidgeBoundaryLeak":
+                        value = source_lens_ridge_offset_y(render_row, BOUNDARY_BAND_PROBE_Y)
+                    elif column == "sourceLensRidgeNearGroundLeak":
+                        value = source_lens_ridge_offset_y(render_row, NEAR_GROUND_PROBE_Y)
                     else:
                         value = 0.0
                 else:
@@ -1092,6 +1274,41 @@ def main() -> None:
         [abs(finite_float(row.get("boundaryPulseScore"))) for row in focus_joined] or [0.0]
     )
     summary["focusLensBandGainDerivativeP95"] = percentile_abs(focus_joined, "bandWarpGainDerivative", 95)
+    summary["focusLensBandCoreSpatialGradientP95"] = percentile_abs(focus_joined, "bandWarpCoreSpatialGradient", 95)
+    summary["focusLensBandCoreSpatialCurvatureP95"] = percentile_abs(focus_joined, "bandWarpCoreSpatialCurvature", 95)
+    summary["focusLensBandCoreActiveHeightP50"] = float(
+        np.percentile(
+            [finite_float(row.get("bandWarpCoreActiveHeight")) for row in focus_joined],
+            50,
+        )
+    ) if focus_joined else 0.0
+    summary["focusLensBandCoreSpatialGradientDerivativeP95"] = percentile_abs(
+        focus_joined,
+        "bandWarpCoreSpatialGradientDerivative",
+        95,
+    )
+    summary["focusLensBandCoreBoundaryLeakP95"] = percentile_abs(focus_joined, "bandWarpCoreBoundaryLeak", 95)
+    summary["focusLensBandCoreNearGroundLeakP95"] = percentile_abs(focus_joined, "bandWarpCoreNearGroundLeak", 95)
+    summary["focusSourceLensLocalBoundaryLeakP95"] = percentile_abs(
+        focus_joined,
+        "sourceLensLocalBoundaryLeak",
+        95,
+    )
+    summary["focusSourceLensLocalNearGroundLeakP95"] = percentile_abs(
+        focus_joined,
+        "sourceLensLocalNearGroundLeak",
+        95,
+    )
+    summary["focusSourceLensRidgeBoundaryLeakP95"] = percentile_abs(
+        focus_joined,
+        "sourceLensRidgeBoundaryLeak",
+        95,
+    )
+    summary["focusSourceLensRidgeNearGroundLeakP95"] = percentile_abs(
+        focus_joined,
+        "sourceLensRidgeNearGroundLeak",
+        95,
+    )
     summary["focusLensBandModelSwitchCountMax"] = max(
         [finite_float(row.get("modelSwitchCount")) for row in focus_joined] or [0.0]
     )
