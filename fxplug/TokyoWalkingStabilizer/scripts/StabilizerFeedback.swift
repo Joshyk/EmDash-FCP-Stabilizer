@@ -99,6 +99,10 @@ private struct PersistedHostAnalysisCache: Decodable {
     let farFieldMeshPathX: [Float]?
     let farFieldMeshPathY: [Float]?
     let farFieldMeshSupport: [Float]?
+    let farFieldMeshDominantWindowFrames: [Float]?
+    let farFieldMeshDominantWindowSeconds: [Float]?
+    let farFieldMeshDominantSupport: [Float]?
+    let farFieldMeshDominantCell: [Int32]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
     let sourceLensShakeRidgeLinePathY: [Float]?
@@ -206,6 +210,10 @@ private struct Analysis {
     let farFieldRigidShakeSupport: [Float]
     let farFieldRigidShakeShapeConsistency: [Float]
     let farFieldRigidShakeForwardBackwardConsistency: [Float]
+    let farFieldMeshDominantWindowFrames: [Float]
+    let farFieldMeshDominantWindowSeconds: [Float]
+    let farFieldMeshDominantSupport: [Float]
+    let farFieldMeshDominantCell: [Int32]
     let sourceLensShakeRidgePathY: [Float]
     let sourceLensShakeRidgeSupport: [Float]
     let sourceLensShakeRidgeLinePathY: [Float]
@@ -354,6 +362,17 @@ private struct Analysis {
             farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport")
             farFieldRigidShakeShapeConsistency = try requireFloatArray(cache.farFieldRigidShakeShapeConsistency, "farFieldRigidShakeShapeConsistency")
             farFieldRigidShakeForwardBackwardConsistency = try requireFloatArray(cache.farFieldRigidShakeForwardBackwardConsistency, "farFieldRigidShakeForwardBackwardConsistency")
+        }
+        if cache.schemaVersion >= 44 {
+            farFieldMeshDominantWindowFrames = try requireFloatArray(cache.farFieldMeshDominantWindowFrames, "farFieldMeshDominantWindowFrames")
+            farFieldMeshDominantWindowSeconds = try requireFloatArray(cache.farFieldMeshDominantWindowSeconds, "farFieldMeshDominantWindowSeconds")
+            farFieldMeshDominantSupport = try requireFloatArray(cache.farFieldMeshDominantSupport, "farFieldMeshDominantSupport")
+            farFieldMeshDominantCell = try requireIntArray(cache.farFieldMeshDominantCell, "farFieldMeshDominantCell")
+        } else {
+            farFieldMeshDominantWindowFrames = Array(repeating: 0.0, count: frames.count)
+            farFieldMeshDominantWindowSeconds = Array(repeating: 0.0, count: frames.count)
+            farFieldMeshDominantSupport = Array(repeating: 0.0, count: frames.count)
+            farFieldMeshDominantCell = Array(repeating: -1, count: frames.count)
         }
         sourceLensShakeRidgePathY = try requireFloatArray(cache.sourceLensShakeRidgePathY, "sourceLensShakeRidgePathY")
         sourceLensShakeRidgeSupport = try requireFloatArray(cache.sourceLensShakeRidgeSupport, "sourceLensShakeRidgeSupport")
@@ -784,10 +803,9 @@ private let farFieldWarpEdgeQualityGateFull: Float = 0.86
 private let farFieldWarpConsensusGateStart: Float = 0.04
 private let farFieldWarpConsensusGateFull: Float = 0.28
 private let farFieldConsensusConfidenceFloor: Float = 0.04
-private let lensShakeTargetWindowFrames: Float = 10.0
 private let lensShakeInnerWindowMinimumSeconds = 0.13
 private let lensShakeOuterWindowMinimumSeconds = 0.44
-private let lensShakeOuterWindowMaximumSeconds = 0.90
+private let lensShakeOuterWindowMaximumSeconds = 1.0
 private let lensShakeMinimumSupport: Float = 0.08
 private let lensShakePixelStartPixels: Float = 0.10
 private let lensShakePixelFullPixels: Float = 0.85
@@ -806,7 +824,7 @@ private let expectedFarFieldMeshBinCount = expectedFarFieldMeshRows * expectedFa
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [41, 42, 43]
+private let supportedCacheSchemaVersions: Set<Int> = [41, 42, 43, 44]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 private let farFieldRigidShakeTwoWayRadiusFrames = 5
 private let farFieldRigidShakeShapeStartPixels: Float = 0.10
@@ -1400,7 +1418,41 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
             return "\(name) has \(values.count) values but expected \(localPathCount)"
         }
     }
-    if cache.schemaVersion >= 43 {
+    if cache.schemaVersion >= 44 {
+        let meshPathCount = frameCount * expectedFarFieldMeshBinCount
+        let meshFloatArrays: [(String, [Float]?)] = [
+            ("farFieldMeshPathX", cache.farFieldMeshPathX),
+            ("farFieldMeshPathY", cache.farFieldMeshPathY),
+            ("farFieldMeshSupport", cache.farFieldMeshSupport)
+        ]
+        for (name, values) in meshFloatArrays {
+            guard let values else {
+                return "\(name) is missing"
+            }
+            if values.count != meshPathCount {
+                return "\(name) has \(values.count) values but expected \(meshPathCount)"
+            }
+        }
+        let meshFrameFloatArrays: [(String, [Float]?)] = [
+            ("farFieldMeshDominantWindowFrames", cache.farFieldMeshDominantWindowFrames),
+            ("farFieldMeshDominantWindowSeconds", cache.farFieldMeshDominantWindowSeconds),
+            ("farFieldMeshDominantSupport", cache.farFieldMeshDominantSupport)
+        ]
+        for (name, values) in meshFrameFloatArrays {
+            guard let values else {
+                return "\(name) is missing"
+            }
+            if values.count != frameCount {
+                return "\(name) has \(values.count) values but frames has \(frameCount)"
+            }
+        }
+        guard let dominantCell = cache.farFieldMeshDominantCell else {
+            return "farFieldMeshDominantCell is missing"
+        }
+        if dominantCell.count != frameCount {
+            return "farFieldMeshDominantCell has \(dominantCell.count) values but frames has \(frameCount)"
+        }
+    } else if cache.schemaVersion >= 43 {
         let meshPathCount = frameCount * expectedFarFieldMeshBinCount
         let meshFloatArrays: [(String, [Float]?)] = [
             ("farFieldMeshPathX", cache.farFieldMeshPathX),
@@ -3613,7 +3665,13 @@ private func sourceSpaceLensShakeBand(
     let previousTime = index > 0 ? analysis.frames[index - 1].time : analysis.frames[index].time
     let nextTime = index + 1 < analysis.frames.count ? analysis.frames[index + 1].time : analysis.frames[index].time
     let frameStep = max(1.0 / 240.0, max(nextTime - previousTime, 1.0 / 60.0) * 0.5)
-    let targetWindowSeconds = Double(lensShakeTargetWindowFrames) * frameStep
+    let preparedWindowSeconds = analysis.farFieldMeshDominantWindowSeconds.indices.contains(index)
+        ? Double(analysis.farFieldMeshDominantWindowSeconds[index])
+        : 0.0
+    guard preparedWindowSeconds > 0.0 else {
+        return BandAssessment(name: "LENS", detected: 0.0, applied: 0.0, remaining: 0.0, confidence: 0.0, note: "dominantWindowRequired")
+    }
+    let targetWindowSeconds = min(1.0, max(frameStep * 3.0, preparedWindowSeconds))
     let innerWindowSeconds = max(lensShakeInnerWindowMinimumSeconds, targetWindowSeconds * 0.56)
     let outerWindowSeconds = min(lensShakeOuterWindowMaximumSeconds, max(lensShakeOuterWindowMinimumSeconds, targetWindowSeconds * 3.0))
 
@@ -3670,7 +3728,7 @@ private func sourceSpaceLensShakeBand(
             applied: applied,
             remaining: max(0.0, rigidMagnitude - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space 10f farFieldRigid residual %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f localWarpSuppressed 1 reason %@", rigidResidualX, rigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f localWarpSuppressed 1 reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, reason)
         )
     }
 
@@ -3917,7 +3975,7 @@ private func sourceSpaceLensShakeBand(
         applied: applied,
         remaining: max(0.0, diagnosticDetected - applied),
         confidence: max(affineSupport, projectiveSupport),
-        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f rowT %.3f %.3f rowR %.3f %.3f rowM %.3f %.3f localRoll %.6f %.6f %.6f sourceRidgeY %.3f sourceRidgeSupport %.2f sourceRidgeLineY %.3f sourceRidgeLineSupport %.2f sourceRidgeLineBandSupport %.2f sourceLocalMag %.3f sourceLocalSupport %.2f bandConf %.2f q %.2f rolling %.2f band %.2f model %@ reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, topRowResidual.x, topRowResidual.y, ridgeRowResidual.x, ridgeRowResidual.y, midRowResidual.x, midRowResidual.y, topLocalRoll, ridgeLocalRoll, midLocalRoll, sourceRidgeResidualY, sourceRidgeSupport, sourceRidgeLineResidualY, sourceRidgeLineSupport, sourceRidgeLineBandSupport, sourceLocalMagnitude, sourceLocalSupport, maxBandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, correctionModel, reason)
+        note: String(format: "source-space %.3fs residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f rowT %.3f %.3f rowR %.3f %.3f rowM %.3f %.3f localRoll %.6f %.6f %.6f sourceRidgeY %.3f sourceRidgeSupport %.2f sourceRidgeLineY %.3f sourceRidgeLineSupport %.2f sourceRidgeLineBandSupport %.2f sourceLocalMag %.3f sourceLocalSupport %.2f bandConf %.2f q %.2f rolling %.2f band %.2f model %@ reason %@", targetWindowSeconds, residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, topRowResidual.x, topRowResidual.y, ridgeRowResidual.x, ridgeRowResidual.y, midRowResidual.x, midRowResidual.y, topLocalRoll, ridgeLocalRoll, midLocalRoll, sourceRidgeResidualY, sourceRidgeSupport, sourceRidgeLineResidualY, sourceRidgeLineSupport, sourceRidgeLineBandSupport, sourceLocalMagnitude, sourceLocalSupport, maxBandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, correctionModel, reason)
     )
 }
 

@@ -362,16 +362,17 @@ FxPlug.
   for moderate 25% Host Analysis evidence, stabilizes that gate with short local tracking
   support, applies only short render-time smoothing, and drops tiny warp deltas through a
   deadband to avoid wave-like image distortion while tuning micro jitter.
-- Host Analysis cache schema `43` stores the original-size-percentage sample path with the
+- Host Analysis cache schema `44` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
   Footstep Jitter X/Y/roll impulse paths, warp paths, band-specific far-field lens paths
   and confidence, left/right lens-band column paths, two-way far-field rigid shake paths,
-  far-field 5x5 mesh paths, accepted-block counts, blur values, and search-radius edge-hit
-  counts. Schema 43 is the current write format so playback can use denser far-field
-  evidence without returning to visible local mountain/cloud warp. Schema 42 remains
-  accepted without mesh evidence, and schema 41 is accepted with an explicit in-memory
-  rigid-path compatibility upgrade for existing timelines; older schemas are rejected so
-  playback cannot silently run without the required evidence.
+  far-field 5x5 mesh paths, fps-derived dominant mesh shake windows up to one second,
+  accepted-block counts, blur values, and search-radius edge-hit counts. Schema 44 is the
+  current write format so playback can use denser far-field evidence without returning to
+  visible local mountain/cloud warp. Schema 43 remains accepted with mesh-only evidence,
+  schema 42 remains accepted without mesh evidence, and schema 41 is accepted with an
+  explicit in-memory rigid-path compatibility upgrade for existing timelines; older schemas
+  are rejected so playback cannot silently run without the required evidence.
 - Persisted cache state changes update a hidden render revision parameter. Viewer-side
   instances also monitor saved cache changes so Final Cut Pro invalidates cached preview
   frames and redraws from the prepared motion path after the local analyzer writes a

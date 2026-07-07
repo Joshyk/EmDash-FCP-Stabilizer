@@ -91,6 +91,10 @@ private struct PersistedHostAnalysisCache: Codable {
     let farFieldMeshPathX: [Float]?
     let farFieldMeshPathY: [Float]?
     let farFieldMeshSupport: [Float]?
+    let farFieldMeshDominantWindowFrames: [Float]?
+    let farFieldMeshDominantWindowSeconds: [Float]?
+    let farFieldMeshDominantSupport: [Float]?
+    let farFieldMeshDominantCell: [Int32]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
     let sourceLensShakeRidgeLinePathY: [Float]?
@@ -258,8 +262,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 43
-    private static let supportedCacheSchemaVersions: Set<Int> = [41, 42, 43]
+    private static let cacheSchemaVersion = 44
+    private static let supportedCacheSchemaVersions: Set<Int> = [41, 42, 43, 44]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1855,6 +1859,10 @@ final class StabilizerHostAnalysisStore {
             farFieldMeshPathX: prepared.farFieldMeshPathX,
             farFieldMeshPathY: prepared.farFieldMeshPathY,
             farFieldMeshSupport: prepared.farFieldMeshSupport,
+            farFieldMeshDominantWindowFrames: prepared.farFieldMeshDominantWindowFrames,
+            farFieldMeshDominantWindowSeconds: prepared.farFieldMeshDominantWindowSeconds,
+            farFieldMeshDominantSupport: prepared.farFieldMeshDominantSupport,
+            farFieldMeshDominantCell: prepared.farFieldMeshDominantCell,
             sourceLensShakeRidgePathY: prepared.sourceLensShakeRidgePathY,
             sourceLensShakeRidgeSupport: prepared.sourceLensShakeRidgeSupport,
             sourceLensShakeRidgeLinePathY: prepared.sourceLensShakeRidgeLinePathY,
@@ -2031,6 +2039,10 @@ final class StabilizerHostAnalysisStore {
                 farFieldMeshPathX: analysis.farFieldMeshPathX,
                 farFieldMeshPathY: analysis.farFieldMeshPathY,
                 farFieldMeshSupport: analysis.farFieldMeshSupport,
+                farFieldMeshDominantWindowFrames: analysis.farFieldMeshDominantWindowFrames,
+                farFieldMeshDominantWindowSeconds: analysis.farFieldMeshDominantWindowSeconds,
+                farFieldMeshDominantSupport: analysis.farFieldMeshDominantSupport,
+                farFieldMeshDominantCell: analysis.farFieldMeshDominantCell,
                 sourceLensShakeRidgePathY: analysis.sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: analysis.sourceLensShakeRidgeSupport,
                 sourceLensShakeRidgeLinePathY: analysis.sourceLensShakeRidgeLinePathY,
@@ -3130,18 +3142,25 @@ final class StabilizerHostAnalysisStore {
         let farFieldMeshRows = cache.farFieldMeshRows ?? 0
         let farFieldMeshColumns = cache.farFieldMeshColumns ?? 0
         let farFieldMeshPathCount = frames.count * farFieldMeshRows * farFieldMeshColumns
-        let hasCompleteFarFieldMesh = cache.schemaVersion < 43 || (
+        let hasCompleteFarFieldMeshPaths = cache.schemaVersion < 43 || (
             farFieldMeshRows == AutoStabilizationEstimator.farFieldMeshRows
                 && farFieldMeshColumns == AutoStabilizationEstimator.farFieldMeshColumns
                 && cache.farFieldMeshPathX?.count == farFieldMeshPathCount
                 && cache.farFieldMeshPathY?.count == farFieldMeshPathCount
                 && cache.farFieldMeshSupport?.count == farFieldMeshPathCount
         )
+        let hasCompleteFarFieldMeshDominantWindows = cache.schemaVersion < 44 || (
+            cache.farFieldMeshDominantWindowFrames?.count == frames.count
+                && cache.farFieldMeshDominantWindowSeconds?.count == frames.count
+                && cache.farFieldMeshDominantSupport?.count == frames.count
+                && cache.farFieldMeshDominantCell?.count == frames.count
+        )
         if floatArrays.allSatisfy({ $0?.count == frames.count }),
            countArrays.allSatisfy({ $0?.count == frames.count }),
            hasCompleteLocalLensShake,
            (hasCompletePersistedFarFieldRigidShake || canSynthesizeFarFieldRigidShake),
-           hasCompleteFarFieldMesh,
+           hasCompleteFarFieldMeshPaths,
+           hasCompleteFarFieldMeshDominantWindows,
            let residuals = cache.residuals,
            let rollMotion = cache.rollMotion,
            let pathX = cache.pathX,
@@ -3202,6 +3221,10 @@ final class StabilizerHostAnalysisStore {
             let farFieldMeshPathX = cache.schemaVersion >= 43 ? (cache.farFieldMeshPathX ?? []) : []
             let farFieldMeshPathY = cache.schemaVersion >= 43 ? (cache.farFieldMeshPathY ?? []) : []
             let farFieldMeshSupport = cache.schemaVersion >= 43 ? (cache.farFieldMeshSupport ?? []) : []
+            let farFieldMeshDominantWindowFrames = cache.schemaVersion >= 44 ? (cache.farFieldMeshDominantWindowFrames ?? []) : []
+            let farFieldMeshDominantWindowSeconds = cache.schemaVersion >= 44 ? (cache.farFieldMeshDominantWindowSeconds ?? []) : []
+            let farFieldMeshDominantSupport = cache.schemaVersion >= 44 ? (cache.farFieldMeshDominantSupport ?? []) : []
+            let farFieldMeshDominantCell = cache.schemaVersion >= 44 ? (cache.farFieldMeshDominantCell ?? []) : []
             let farFieldRigidShake: AutoStabilizationEstimator.FarFieldRigidShakePreparedPaths
             if let farFieldRigidShakePathX = cache.farFieldRigidShakePathX,
                let farFieldRigidShakePathY = cache.farFieldRigidShakePathY,
@@ -3221,7 +3244,9 @@ final class StabilizerHostAnalysisStore {
                     forwardBackwardConsistency: farFieldRigidShakeForwardBackwardConsistency
                 )
                 if cache.schemaVersion == 42 {
-                    NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache schema 42 without schema 43 far-field mesh paths; rerun Event Analyzer to persist mesh evidence for finer far-field shake detection.")
+                    NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache schema 42 without schema 43 far-field mesh paths; rerun Event Analyzer to persist schema 44 mesh window evidence for finer far-field shake detection.")
+                } else if cache.schemaVersion == 43 {
+                    NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache schema 43 with mesh paths but without schema 44 dominant far-field mesh windows; rerun Event Analyzer to persist fps-derived multi-window evidence.")
                 }
             } else if cache.schemaVersion == 41 {
                 farFieldRigidShake = AutoStabilizationEstimator.farFieldRigidShakePreparedPaths(
@@ -3246,7 +3271,7 @@ final class StabilizerHostAnalysisStore {
                         userInfo: [NSLocalizedDescriptionKey: "schema 41 Host Analysis cache could not synthesize complete far-field rigid shake compatibility paths"]
                     )
                 }
-                NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache schema 41 with in-memory far-field rigid shake compatibility paths; rerun Event Analyzer to persist schema 43 far-field mesh paths.")
+                NSLog("TokyoWalkingStabilizer: loaded Host Analysis cache schema 41 with in-memory far-field rigid shake compatibility paths; rerun Event Analyzer to persist schema 44 far-field mesh window paths.")
             } else {
                 throw NSError(
                     domain: "com.justadev.TokyoWalkingStabilizer",
@@ -3312,6 +3337,10 @@ final class StabilizerHostAnalysisStore {
                 farFieldMeshPathX: farFieldMeshPathX,
                 farFieldMeshPathY: farFieldMeshPathY,
                 farFieldMeshSupport: farFieldMeshSupport,
+                farFieldMeshDominantWindowFrames: farFieldMeshDominantWindowFrames,
+                farFieldMeshDominantWindowSeconds: farFieldMeshDominantWindowSeconds,
+                farFieldMeshDominantSupport: farFieldMeshDominantSupport,
+                farFieldMeshDominantCell: farFieldMeshDominantCell,
                 sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: sourceLensShakeRidgeSupport,
                 sourceLensShakeRidgeLinePathY: sourceLensShakeRidgeLinePathY,
@@ -3450,7 +3479,41 @@ final class StabilizerHostAnalysisStore {
                 return "\(name) has \(values.count) values but expected \(expectedLocalCount)"
             }
         }
-        if cache.schemaVersion >= 43 {
+        if cache.schemaVersion >= 44 {
+            let expectedMeshCount = frameCount * AutoStabilizationEstimator.farFieldMeshBinCount
+            let meshFloatArrays: [(String, [Float]?)] = [
+                ("farFieldMeshPathX", cache.farFieldMeshPathX),
+                ("farFieldMeshPathY", cache.farFieldMeshPathY),
+                ("farFieldMeshSupport", cache.farFieldMeshSupport)
+            ]
+            for (name, values) in meshFloatArrays {
+                guard let values else {
+                    return "\(name) is missing"
+                }
+                if values.count != expectedMeshCount {
+                    return "\(name) has \(values.count) values but expected \(expectedMeshCount)"
+                }
+            }
+            let meshFrameFloatArrays: [(String, [Float]?)] = [
+                ("farFieldMeshDominantWindowFrames", cache.farFieldMeshDominantWindowFrames),
+                ("farFieldMeshDominantWindowSeconds", cache.farFieldMeshDominantWindowSeconds),
+                ("farFieldMeshDominantSupport", cache.farFieldMeshDominantSupport)
+            ]
+            for (name, values) in meshFrameFloatArrays {
+                guard let values else {
+                    return "\(name) is missing"
+                }
+                if values.count != frameCount {
+                    return "\(name) has \(values.count) values but frames has \(frameCount)"
+                }
+            }
+            guard let dominantCell = cache.farFieldMeshDominantCell else {
+                return "farFieldMeshDominantCell is missing"
+            }
+            if dominantCell.count != frameCount {
+                return "farFieldMeshDominantCell has \(dominantCell.count) values but frames has \(frameCount)"
+            }
+        } else if cache.schemaVersion >= 43 {
             let expectedMeshCount = frameCount * AutoStabilizationEstimator.farFieldMeshBinCount
             let meshFloatArrays: [(String, [Float]?)] = [
                 ("farFieldMeshPathX", cache.farFieldMeshPathX),
@@ -3730,6 +3793,10 @@ final class StabilizerHostAnalysisStore {
                 farFieldMeshPathX: cache.farFieldMeshPathX,
                 farFieldMeshPathY: cache.farFieldMeshPathY,
                 farFieldMeshSupport: cache.farFieldMeshSupport,
+                farFieldMeshDominantWindowFrames: cache.farFieldMeshDominantWindowFrames,
+                farFieldMeshDominantWindowSeconds: cache.farFieldMeshDominantWindowSeconds,
+                farFieldMeshDominantSupport: cache.farFieldMeshDominantSupport,
+                farFieldMeshDominantCell: cache.farFieldMeshDominantCell,
                 sourceLensShakeRidgePathY: cache.sourceLensShakeRidgePathY,
                 sourceLensShakeRidgeSupport: cache.sourceLensShakeRidgeSupport,
                 sourceLensShakeRidgeLinePathY: cache.sourceLensShakeRidgeLinePathY,

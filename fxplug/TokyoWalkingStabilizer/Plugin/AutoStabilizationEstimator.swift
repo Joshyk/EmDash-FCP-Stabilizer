@@ -22,6 +22,7 @@ struct StabilizerAutoTransform {
     var lensShakeScore: Float
     var lensShakeSupport: Float
     var lensShakeWindowFrames: Float
+    var lensShakeWindowSeconds: Float = 0.0
     var lensShakeAxisMask: Int32
     var lensShakeReasonCode: Int32
     var lensShakeRollingShutterCandidate: Float
@@ -61,6 +62,10 @@ struct StabilizerAutoTransform {
     var lensFarFieldMeshSupportedBins: Float = 0.0
     var lensFarFieldMeshMaxBinDelta: Float = 0.0
     var lensFarFieldMeshOpposingBins: Float = 0.0
+    var lensFarFieldMeshDominantWindowFrames: Float = 0.0
+    var lensFarFieldMeshDominantWindowSeconds: Float = 0.0
+    var lensFarFieldMeshDominantSupport: Float = 0.0
+    var lensFarFieldMeshDominantCell: Float = -1.0
     var sourceLensShakeRidgeOffset: vector_float2
     var sourceLensShakeRidgeSupport: Float
     var sourceLensShakeRidgeApplied: Float
@@ -513,6 +518,10 @@ struct StabilizerPreparedAnalysis {
     let farFieldMeshPathX: [Float]
     let farFieldMeshPathY: [Float]
     let farFieldMeshSupport: [Float]
+    let farFieldMeshDominantWindowFrames: [Float]
+    let farFieldMeshDominantWindowSeconds: [Float]
+    let farFieldMeshDominantSupport: [Float]
+    let farFieldMeshDominantCell: [Int32]
     let sourceLensShakeRidgePathY: [Float]
     let sourceLensShakeRidgeSupport: [Float]
     let sourceLensShakeRidgeLinePathY: [Float]
@@ -986,10 +995,9 @@ enum AutoStabilizationEstimator {
     private static let footstepImpulseOuterWindowSeconds = 1.0
     private static let farFieldWarpInnerWindowSeconds = 0.10
     private static let farFieldWarpOuterWindowSeconds = 1.0
-    private static let lensShakeTargetWindowFrames: Float = 10.0
     private static let lensShakeInnerWindowMinimumSeconds = 0.13
     private static let lensShakeOuterWindowMinimumSeconds = 0.44
-    private static let lensShakeOuterWindowMaximumSeconds = 0.90
+    private static let lensShakeOuterWindowMaximumSeconds = 1.0
     private static let lensShakeMinimumSupport: Float = 0.08
     private static let lensShakeGlobalUnsafeSupport: Float = 0.35
     private static let lensShakePixelStartPixels: Float = 0.10
@@ -1004,7 +1012,6 @@ enum AutoStabilizationEstimator {
     private static let lensShakePerspectiveFull: Float = 0.000095
     private static let lensShakePixelMaximumCorrection: Float = 2.2
     private static let lensShakeRotationMaximumCorrectionDegrees: Float = 0.11
-    private static let lensBandPulseSmoothingWindowFrames = 10
     private static let lensBandPulseSmoothingBlend: Float = 0.46
     private static let lensBandPulseSmoothingStartPixels: Float = 0.22
     private static let lensBandPulseSmoothingFullPixels: Float = 1.35
@@ -1020,6 +1027,17 @@ enum AutoStabilizationEstimator {
     static let farFieldMeshRows = 5
     static let farFieldMeshColumns = 5
     static let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
+    private static let farFieldMeshDominantWindowSecondsCandidates: [Double] = [
+        1.0 / 20.0,
+        1.0 / 12.0,
+        1.0 / 8.0,
+        1.0 / 6.0,
+        1.0 / 4.0,
+        1.0 / 3.0,
+        1.0 / 2.0,
+        2.0 / 3.0,
+        1.0
+    ]
     static let sourceLensShakeLocalBandCount = 3
     static let sourceLensShakeLocalColumnCount = 3
     static let sourceLensShakeLocalBinCount = 9
@@ -1153,10 +1171,22 @@ enum AutoStabilizationEstimator {
         case lensBandMidLocalRoll
         case farFieldRigidShakeX
         case farFieldRigidShakeY
+        case farFieldMeshX(Int)
+        case farFieldMeshY(Int)
         case sourceLensShakeRidgeY
         case sourceLensShakeRidgeLineY
         case sourceLensShakeLocalX(Int)
         case sourceLensShakeLocalY(Int)
+        case sourceLensShakeLocalSupport(Int)
+
+        var usesCachedPathSlice: Bool {
+            switch self {
+            case .farFieldMeshX, .farFieldMeshY, .sourceLensShakeLocalX, .sourceLensShakeLocalY, .sourceLensShakeLocalSupport:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     private enum LocalAverageSourceRole: Hashable {
@@ -1217,6 +1247,7 @@ enum AutoStabilizationEstimator {
         var score: Float = 0.0
         var support: Float = 0.0
         var windowFrames: Float = 0.0
+        var windowSeconds: Float = 0.0
         var axisMask: Int32 = 0
         var reasonCode: Int32 = 0
         var rollingShutterCandidate: Float = 0.0
@@ -1256,6 +1287,10 @@ enum AutoStabilizationEstimator {
         var farFieldMeshSupportedBins: Float = 0.0
         var farFieldMeshMaxBinDelta: Float = 0.0
         var farFieldMeshOpposingBins: Float = 0.0
+        var farFieldMeshDominantWindowFrames: Float = 0.0
+        var farFieldMeshDominantWindowSeconds: Float = 0.0
+        var farFieldMeshDominantSupport: Float = 0.0
+        var farFieldMeshDominantCell: Float = -1.0
         var sourceRidgeOffset: vector_float2 = vector_float2(0.0, 0.0)
         var sourceRidgeSupport: Float = 0.0
         var sourceRidgeApplied: Float = 0.0
@@ -1439,6 +1474,12 @@ enum AutoStabilizationEstimator {
         combineFloats(analysis.farFieldMeshPathX)
         combineFloats(analysis.farFieldMeshPathY)
         combineFloats(analysis.farFieldMeshSupport)
+        combineFloats(analysis.farFieldMeshDominantWindowFrames)
+        combineFloats(analysis.farFieldMeshDominantWindowSeconds)
+        combineFloats(analysis.farFieldMeshDominantSupport)
+        for value in analysis.farFieldMeshDominantCell {
+            combinePreparedPathHash(UInt64(bitPattern: Int64(value)), into: &hash)
+        }
         combineFloats(analysis.sourceLensShakeRidgePathY)
         combineFloats(analysis.sourceLensShakeRidgeSupport)
         combineFloats(analysis.sourceLensShakeRidgeLinePathY)
@@ -1612,6 +1653,7 @@ enum AutoStabilizationEstimator {
         private var rawTransformOrder: [RawTransformCacheKey] = []
         private var residualPercentiles: [ResidualPercentileCacheKey: Float] = [:]
         private var footstepConfidences: [FootstepConfidenceCacheKey: Float] = [:]
+        private var pathValueSlices: [MotionPathKind: [Float]] = [:]
         private let rawTransformLimit = 32768
 
         func rawTransform(
@@ -1770,7 +1812,7 @@ enum AutoStabilizationEstimator {
             innerWindowSeconds: Double,
             outerWindowSeconds: Double
         ) -> EstimatedPath {
-            let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+            let values = pathValues(kind, analysis: analysis)
             guard !values.isEmpty else {
                 return EstimatedPath(values: values)
             }
@@ -1843,7 +1885,7 @@ enum AutoStabilizationEstimator {
                 return cached
             }
             lock.unlock()
-            let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+            let values = pathValues(kind, analysis: analysis)
             let prediction = AutoStabilizationEstimator.outerLinearPrediction(
                 values,
                 frames: analysis.frames,
@@ -1855,6 +1897,28 @@ enum AutoStabilizationEstimator {
             outerPredictions[key] = prediction
             lock.unlock()
             return prediction
+        }
+
+        func pathValues(_ kind: MotionPathKind, analysis: StabilizerPreparedAnalysis) -> [Float] {
+            guard kind.usesCachedPathSlice else {
+                return AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+            }
+            lock.lock()
+            if let cached = pathValueSlices[kind] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+
+            let values = AutoStabilizationEstimator.values(for: kind, analysis: analysis)
+
+            lock.lock()
+            if pathValueSlices[kind] == nil {
+                pathValueSlices[kind] = values
+            }
+            let stored = pathValueSlices[kind] ?? values
+            lock.unlock()
+            return stored
         }
 
         private func localTimeWeightedAverage(
@@ -2041,6 +2105,10 @@ enum AutoStabilizationEstimator {
             return analysis.farFieldRigidShakePathX
         case .farFieldRigidShakeY:
             return analysis.farFieldRigidShakePathY
+        case .farFieldMeshX(let bin):
+            return farFieldMeshPathSlice(analysis.farFieldMeshPathX, bin: bin, frameCount: analysis.frames.count)
+        case .farFieldMeshY(let bin):
+            return farFieldMeshPathSlice(analysis.farFieldMeshPathY, bin: bin, frameCount: analysis.frames.count)
         case .sourceLensShakeRidgeY:
             return analysis.sourceLensShakeRidgePathY
         case .sourceLensShakeRidgeLineY:
@@ -2049,11 +2117,25 @@ enum AutoStabilizationEstimator {
             return localLensShakePathSlice(analysis.sourceLensShakeLocalPathX, bin: bin, frameCount: analysis.frames.count)
         case .sourceLensShakeLocalY(let bin):
             return localLensShakePathSlice(analysis.sourceLensShakeLocalPathY, bin: bin, frameCount: analysis.frames.count)
+        case .sourceLensShakeLocalSupport(let bin):
+            return localLensShakePathSlice(analysis.sourceLensShakeLocalSupport, bin: bin, frameCount: analysis.frames.count)
         }
     }
 
     private static func localLensShakePathSlice(_ values: [Float], bin: Int, frameCount: Int) -> [Float] {
         guard bin >= 0, bin < sourceLensShakeLocalBinCount, frameCount > 0 else {
+            return []
+        }
+        let start = bin * frameCount
+        let end = start + frameCount
+        guard start >= 0, end <= values.count else {
+            return []
+        }
+        return Array(values[start..<end])
+    }
+
+    private static func farFieldMeshPathSlice(_ values: [Float], bin: Int, frameCount: Int) -> [Float] {
+        guard bin >= 0, bin < farFieldMeshBinCount, frameCount > 0 else {
             return []
         }
         let start = bin * frameCount
@@ -2082,6 +2164,168 @@ enum AutoStabilizationEstimator {
             (0.58, 0.82),
             (0.78, 1.00)
         ]
+    }
+
+    private struct FarFieldMeshWindowCandidate {
+        let frames: Int
+        let seconds: Float
+    }
+
+    private struct FarFieldMeshDominantWindows {
+        let windowFrames: [Float]
+        let windowSeconds: [Float]
+        let support: [Float]
+        let cell: [Int32]
+    }
+
+    private static func farFieldMeshWindowCandidates(frameStepSeconds: Double) -> [FarFieldMeshWindowCandidate] {
+        let safeFrameStep = max(1.0 / 240.0, min(1.0, frameStepSeconds))
+        let fps = max(1.0, min(240.0, 1.0 / safeFrameStep))
+        var maximumFrames = max(3, Int(floor(fps)))
+        if maximumFrames % 2 == 0 {
+            maximumFrames -= 1
+        }
+        var seen = Set<Int>()
+        var candidates: [FarFieldMeshWindowCandidate] = []
+        for seconds in farFieldMeshDominantWindowSecondsCandidates {
+            let targetFrames = seconds * fps
+            var frameCount = max(3, Int(targetFrames.rounded()))
+            if frameCount % 2 == 0 {
+                frameCount += 1
+            }
+            if frameCount > maximumFrames {
+                frameCount = maximumFrames
+            }
+            if frameCount < 3 {
+                frameCount = 3
+            }
+            guard seen.insert(frameCount).inserted else {
+                continue
+            }
+            candidates.append(FarFieldMeshWindowCandidate(
+                frames: frameCount,
+                seconds: Float(Double(frameCount) / fps)
+            ))
+        }
+        return candidates.sorted { $0.frames < $1.frames }
+    }
+
+    private static func farFieldMeshDominantWindows(
+        frames: [StabilizerAnalysisFrame],
+        pathX: [Float],
+        pathY: [Float],
+        support: [Float],
+        rows: Int,
+        columns: Int
+    ) -> FarFieldMeshDominantWindows {
+        let frameCount = frames.count
+        guard frameCount > 0 else {
+            return FarFieldMeshDominantWindows(windowFrames: [], windowSeconds: [], support: [], cell: [])
+        }
+        let frameStepSeconds = representativeFrameStepSeconds(frames: frames)
+        let candidates = farFieldMeshWindowCandidates(frameStepSeconds: frameStepSeconds)
+        let defaultCandidate = candidates.first ?? FarFieldMeshWindowCandidate(frames: 3, seconds: Float(frameStepSeconds * 3.0))
+        var dominantWindowFrames = Array(repeating: Float(defaultCandidate.frames), count: frameCount)
+        var dominantWindowSeconds = Array(repeating: defaultCandidate.seconds, count: frameCount)
+        var dominantSupport = Array(repeating: Float(0.0), count: frameCount)
+        var dominantCell = Array(repeating: Int32(-1), count: frameCount)
+        let binCount = rows * columns
+        guard rows == farFieldMeshRows,
+              columns == farFieldMeshColumns,
+              pathX.count == frameCount * binCount,
+              pathY.count == frameCount * binCount,
+              support.count == frameCount * binCount
+        else {
+            return FarFieldMeshDominantWindows(
+                windowFrames: dominantWindowFrames,
+                windowSeconds: dominantWindowSeconds,
+                support: dominantSupport,
+                cell: dominantCell
+            )
+        }
+
+        func meshValue(_ values: [Float], bin: Int, index: Int) -> Float {
+            values[(bin * frameCount) + index]
+        }
+
+        func timingSupport(center: Int, radius: Int) -> Float {
+            guard radius > 0,
+                  frames.indices.contains(center - radius),
+                  frames.indices.contains(center + radius)
+            else {
+                return 0.0
+            }
+            let expected = frameStepSeconds
+            var maximumError = 0.0
+            let lower = max(1, center - radius + 1)
+            let upper = min(frameCount - 1, center + radius)
+            guard lower <= upper else {
+                return 0.0
+            }
+            for index in lower...upper {
+                let delta = frames[index].time - frames[index - 1].time
+                maximumError = max(maximumError, abs(delta - expected))
+            }
+            let normalizedError = Float(maximumError / max(expected, 1.0e-6))
+            return 1.0 - confidenceRamp(normalizedError, start: 0.08, full: 0.34)
+        }
+
+        for center in 0..<frameCount {
+            let blurGate = blurEvidenceQuality(frames[center].blurAmount)
+            var bestScore = Float(0.0)
+            for candidate in candidates {
+                let radius = max(1, candidate.frames / 2)
+                guard center - radius >= 0,
+                      center + radius < frameCount
+                else {
+                    continue
+                }
+                let ptsGate = timingSupport(center: center, radius: radius)
+                let shortWindowGate: Float
+                if candidate.seconds <= Float(1.0 / 12.0) {
+                    shortWindowGate = ptsGate * blurGate
+                } else if candidate.seconds <= Float(1.0 / 8.0) {
+                    shortWindowGate = min(ptsGate, blurGate)
+                } else {
+                    shortWindowGate = (ptsGate * 0.65) + (blurGate * 0.35)
+                }
+                guard shortWindowGate > 0.0 else {
+                    continue
+                }
+                let leftTime = frames[center - radius].time
+                let rightTime = frames[center + radius].time
+                let centerTime = frames[center].time
+                let denominator = max(1.0e-6, rightTime - leftTime)
+                let fraction = Float(min(max((centerTime - leftTime) / denominator, 0.0), 1.0))
+                for bin in 0..<binCount {
+                    let leftX = meshValue(pathX, bin: bin, index: center - radius)
+                    let centerX = meshValue(pathX, bin: bin, index: center)
+                    let rightX = meshValue(pathX, bin: bin, index: center + radius)
+                    let leftY = meshValue(pathY, bin: bin, index: center - radius)
+                    let centerY = meshValue(pathY, bin: bin, index: center)
+                    let rightY = meshValue(pathY, bin: bin, index: center + radius)
+                    let baselineX = leftX + ((rightX - leftX) * fraction)
+                    let baselineY = leftY + ((rightY - leftY) * fraction)
+                    let residual = simd_length(vector_float2(centerX - baselineX, centerY - baselineY))
+                    let supportGate = confidenceRamp(meshValue(support, bin: bin, index: center), start: 0.08, full: 0.38)
+                    let evidence = confidenceRamp(residual, start: 0.035, full: 0.58) * supportGate * shortWindowGate
+                    if evidence > bestScore {
+                        bestScore = evidence
+                        dominantWindowFrames[center] = Float(candidate.frames)
+                        dominantWindowSeconds[center] = candidate.seconds
+                        dominantSupport[center] = clamp(evidence, min: 0.0, max: 1.0)
+                        dominantCell[center] = Int32(bin)
+                    }
+                }
+            }
+        }
+
+        return FarFieldMeshDominantWindows(
+            windowFrames: dominantWindowFrames,
+            windowSeconds: dominantWindowSeconds,
+            support: dominantSupport,
+            cell: dominantCell
+        )
     }
 
     struct FarFieldRigidShakePreparedPaths {
@@ -3644,6 +3888,7 @@ enum AutoStabilizationEstimator {
             lensShakeScore: lensShake.score,
             lensShakeSupport: lensShake.support,
             lensShakeWindowFrames: lensShake.windowFrames,
+            lensShakeWindowSeconds: lensShake.windowSeconds,
             lensShakeAxisMask: lensShake.axisMask,
             lensShakeReasonCode: lensShake.reasonCode,
             lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
@@ -3683,6 +3928,10 @@ enum AutoStabilizationEstimator {
             lensFarFieldMeshSupportedBins: lensShake.farFieldMeshSupportedBins,
             lensFarFieldMeshMaxBinDelta: lensShake.farFieldMeshMaxBinDelta,
             lensFarFieldMeshOpposingBins: lensShake.farFieldMeshOpposingBins,
+            lensFarFieldMeshDominantWindowFrames: lensShake.farFieldMeshDominantWindowFrames,
+            lensFarFieldMeshDominantWindowSeconds: lensShake.farFieldMeshDominantWindowSeconds,
+            lensFarFieldMeshDominantSupport: lensShake.farFieldMeshDominantSupport,
+            lensFarFieldMeshDominantCell: lensShake.farFieldMeshDominantCell,
             sourceLensShakeRidgeOffset: lensShake.sourceRidgeOffset,
             sourceLensShakeRidgeSupport: lensShake.sourceRidgeSupport,
             sourceLensShakeRidgeApplied: lensShake.sourceRidgeApplied,
@@ -7199,6 +7448,7 @@ enum AutoStabilizationEstimator {
                 lensShakeScore: lensShake.score,
                 lensShakeSupport: lensShake.support,
                 lensShakeWindowFrames: lensShake.windowFrames,
+                lensShakeWindowSeconds: lensShake.windowSeconds,
                 lensShakeAxisMask: lensShake.axisMask,
                 lensShakeReasonCode: lensShake.reasonCode,
                 lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
@@ -7238,6 +7488,10 @@ enum AutoStabilizationEstimator {
                 lensFarFieldMeshSupportedBins: lensShake.farFieldMeshSupportedBins,
                 lensFarFieldMeshMaxBinDelta: lensShake.farFieldMeshMaxBinDelta,
                 lensFarFieldMeshOpposingBins: lensShake.farFieldMeshOpposingBins,
+                lensFarFieldMeshDominantWindowFrames: lensShake.farFieldMeshDominantWindowFrames,
+                lensFarFieldMeshDominantWindowSeconds: lensShake.farFieldMeshDominantWindowSeconds,
+                lensFarFieldMeshDominantSupport: lensShake.farFieldMeshDominantSupport,
+                lensFarFieldMeshDominantCell: lensShake.farFieldMeshDominantCell,
             sourceLensShakeRidgeOffset: lensShake.sourceRidgeOffset,
             sourceLensShakeRidgeSupport: lensShake.sourceRidgeSupport,
             sourceLensShakeRidgeApplied: lensShake.sourceRidgeApplied,
@@ -8848,6 +9102,7 @@ enum AutoStabilizationEstimator {
             lensShakeScore: lensShake.score,
             lensShakeSupport: lensShake.support,
             lensShakeWindowFrames: lensShake.windowFrames,
+            lensShakeWindowSeconds: lensShake.windowSeconds,
             lensShakeAxisMask: lensShake.axisMask,
             lensShakeReasonCode: lensShake.reasonCode,
             lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
@@ -8887,6 +9142,10 @@ enum AutoStabilizationEstimator {
             lensFarFieldMeshSupportedBins: lensShake.farFieldMeshSupportedBins,
             lensFarFieldMeshMaxBinDelta: lensShake.farFieldMeshMaxBinDelta,
             lensFarFieldMeshOpposingBins: lensShake.farFieldMeshOpposingBins,
+            lensFarFieldMeshDominantWindowFrames: lensShake.farFieldMeshDominantWindowFrames,
+            lensFarFieldMeshDominantWindowSeconds: lensShake.farFieldMeshDominantWindowSeconds,
+            lensFarFieldMeshDominantSupport: lensShake.farFieldMeshDominantSupport,
+            lensFarFieldMeshDominantCell: lensShake.farFieldMeshDominantCell,
             sourceLensShakeRidgeOffset: lensShake.sourceRidgeOffset,
             sourceLensShakeRidgeSupport: lensShake.sourceRidgeSupport,
             sourceLensShakeRidgeApplied: lensShake.sourceRidgeApplied,
@@ -9912,6 +10171,7 @@ enum AutoStabilizationEstimator {
             lensShakeScore: lensShake.score,
             lensShakeSupport: lensShake.support,
             lensShakeWindowFrames: lensShake.windowFrames,
+            lensShakeWindowSeconds: lensShake.windowSeconds,
             lensShakeAxisMask: lensShake.axisMask,
             lensShakeReasonCode: lensShake.reasonCode,
             lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
@@ -9951,6 +10211,10 @@ enum AutoStabilizationEstimator {
             lensFarFieldMeshSupportedBins: lensShake.farFieldMeshSupportedBins,
             lensFarFieldMeshMaxBinDelta: lensShake.farFieldMeshMaxBinDelta,
             lensFarFieldMeshOpposingBins: lensShake.farFieldMeshOpposingBins,
+            lensFarFieldMeshDominantWindowFrames: lensShake.farFieldMeshDominantWindowFrames,
+            lensFarFieldMeshDominantWindowSeconds: lensShake.farFieldMeshDominantWindowSeconds,
+            lensFarFieldMeshDominantSupport: lensShake.farFieldMeshDominantSupport,
+            lensFarFieldMeshDominantCell: lensShake.farFieldMeshDominantCell,
             sourceLensShakeRidgeOffset: lensShake.sourceRidgeOffset,
             sourceLensShakeRidgeSupport: lensShake.sourceRidgeSupport,
             sourceLensShakeRidgeApplied: lensShake.sourceRidgeApplied,
@@ -11283,6 +11547,14 @@ enum AutoStabilizationEstimator {
                 motion.farFieldMeshSupport.indices.contains(bin) ? motion.farFieldMeshSupport[bin] : 0.0
             })
         }
+        let farFieldMeshDominantWindows = farFieldMeshDominantWindows(
+            frames: sortedFrames,
+            pathX: rawFarFieldMeshPathX,
+            pathY: rawFarFieldMeshPathY,
+            support: rawFarFieldMeshSupport,
+            rows: farFieldMeshRows,
+            columns: farFieldMeshColumns
+        )
         let farFieldRigidShake = farFieldRigidShakePreparedPaths(
             topX: rawLensBandTopPathX,
             topY: rawLensBandTopPathY,
@@ -11357,6 +11629,10 @@ enum AutoStabilizationEstimator {
             farFieldMeshPathX: rawFarFieldMeshPathX,
             farFieldMeshPathY: rawFarFieldMeshPathY,
             farFieldMeshSupport: rawFarFieldMeshSupport,
+            farFieldMeshDominantWindowFrames: farFieldMeshDominantWindows.windowFrames,
+            farFieldMeshDominantWindowSeconds: farFieldMeshDominantWindows.windowSeconds,
+            farFieldMeshDominantSupport: farFieldMeshDominantWindows.support,
+            farFieldMeshDominantCell: farFieldMeshDominantWindows.cell,
             sourceLensShakeRidgePathY: rawSourceLensShakeRidgePathY,
             sourceLensShakeRidgeSupport: motions.map(\.sourceLensShakeRidgeSupport),
             sourceLensShakeRidgeLinePathY: rawSourceLensShakeRidgeLinePathY,
@@ -13296,6 +13572,25 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    private static func representativeFrameStepSeconds(frames: [StabilizerAnalysisFrame]) -> Double {
+        guard frames.count >= 2 else {
+            return 1.0 / 60.0
+        }
+        var deltas: [Double] = []
+        deltas.reserveCapacity(frames.count - 1)
+        for index in 1..<frames.count {
+            let delta = frames[index].time - frames[index - 1].time
+            if delta.isFinite, delta > 0.0 {
+                deltas.append(delta)
+            }
+        }
+        guard !deltas.isEmpty else {
+            return 1.0 / 60.0
+        }
+        deltas.sort()
+        return max(1.0 / 240.0, deltas[deltas.count / 2])
+    }
+
     private static func interpolatedValue(_ values: [Float], using interpolation: FrameInterpolation) -> Float {
         guard values.indices.contains(interpolation.lowerIndex) else {
             return 0.0
@@ -13644,11 +13939,31 @@ enum AutoStabilizationEstimator {
         }
 
         let centerIndex = interpolation.fraction < 0.5 ? interpolation.lowerIndex : interpolation.upperIndex
-        let frameStepSeconds = max(
-            1.0 / 240.0,
-            localFrameStepSeconds(frames: frames, centerIndex: max(0, min(frames.count - 1, centerIndex)))
-        )
-        let targetWindowSeconds = Double(lensShakeTargetWindowFrames) * frameStepSeconds
+        let frameStepSeconds = representativeFrameStepSeconds(frames: frames)
+        let hasDominantWindowPaths = analysis.farFieldMeshDominantWindowFrames.count == frames.count
+            && analysis.farFieldMeshDominantWindowSeconds.count == frames.count
+            && analysis.farFieldMeshDominantSupport.count == frames.count
+            && analysis.farFieldMeshDominantCell.count == frames.count
+        guard hasDominantWindowPaths else {
+            var result = SourceSpaceLensShakeCorrection()
+            result.reasonCode = 9
+            return result
+        }
+        let dominantWindowFrames = hasDominantWindowPaths
+            ? max(3.0, interpolatedValue(analysis.farFieldMeshDominantWindowFrames, using: interpolation))
+            : 3.0
+        let dominantWindowSeconds = hasDominantWindowPaths
+            ? max(Float(frameStepSeconds * 3.0), interpolatedValue(analysis.farFieldMeshDominantWindowSeconds, using: interpolation))
+            : Float(frameStepSeconds * 3.0)
+        let dominantWindowSupport = hasDominantWindowPaths
+            ? max(0.0, interpolatedValue(analysis.farFieldMeshDominantSupport, using: interpolation))
+            : 0.0
+        let dominantCellIndex = hasDominantWindowPaths
+            ? (interpolation.fraction < 0.5
+                ? (analysis.farFieldMeshDominantCell.indices.contains(interpolation.lowerIndex) ? analysis.farFieldMeshDominantCell[interpolation.lowerIndex] : -1)
+                : (analysis.farFieldMeshDominantCell.indices.contains(interpolation.upperIndex) ? analysis.farFieldMeshDominantCell[interpolation.upperIndex] : -1))
+            : -1
+        let targetWindowSeconds = min(1.0, Double(dominantWindowSeconds))
         let innerWindowSeconds = max(lensShakeInnerWindowMinimumSeconds, targetWindowSeconds * 0.56)
         let outerWindowSeconds = min(
             lensShakeOuterWindowMaximumSeconds,
@@ -13728,7 +14043,7 @@ enum AutoStabilizationEstimator {
                 outerWindowSeconds: outerWindowSeconds,
                 cache: cache
             )
-            let radiusFrames = max(2, lensBandPulseSmoothingWindowFrames / 2)
+            let radiusFrames = max(1, Int(max(3.0, dominantWindowFrames).rounded()) / 2)
             let centerTime = frames[max(0, min(frames.count - 1, centerIndex))].time
             let radiusSeconds = max(frameStepSeconds, Double(radiusFrames) * frameStepSeconds)
             var weightedResidual = Float(0.0)
@@ -13790,91 +14105,38 @@ enum AutoStabilizationEstimator {
             return lowerValue + ((upperValue - lowerValue) * interpolation.fraction)
         }
 
-        func meshOuterLinearPrediction(_ values: [Float], bin: Int, binCount: Int, centerIndex: Int) -> Float? {
-            guard frames.indices.contains(centerIndex),
-                  let centerValue = meshValue(values, bin: bin, index: centerIndex, binCount: binCount)
-            else {
-                return nil
-            }
-            let innerWindow = max(0.0, min(innerWindowSeconds, outerWindowSeconds))
-            let outerWindow = max(innerWindow, outerWindowSeconds)
-            let centerTime = frames[centerIndex].time
-            var points: [(x: Float, y: Float)] = []
-            for index in indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: outerWindow) {
-                guard let value = meshValue(values, bin: bin, index: index, binCount: binCount) else {
-                    continue
-                }
-                let offsetSeconds = frames[index].time - centerTime
-                let distance = abs(offsetSeconds)
-                if distance <= outerWindow + timeWindowSelectionEpsilon
-                    && distance > innerWindow + timeWindowSelectionEpsilon {
-                    points.append((x: Float(offsetSeconds), y: value))
-                }
-            }
-            guard points.count >= 3 else {
-                var candidates: [Float] = []
-                for index in surroundingIndicesExcludingCenter(
-                    around: centerIndex,
-                    frames: frames,
-                    innerWindowSeconds: innerWindow,
-                    outerWindowSeconds: outerWindow
-                ) {
-                    if let value = meshValue(values, bin: bin, index: index, binCount: binCount) {
-                        candidates.append(value)
-                    }
-                }
-                guard !candidates.isEmpty else {
-                    return centerValue
-                }
-                candidates.sort()
-                return candidates[candidates.count / 2]
-            }
-
-            let count = Float(points.count)
-            let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
-            let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
-            let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
-            let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
-            let denominator = (count * sumXX) - (sumX * sumX)
-            guard abs(denominator) > Float.ulpOfOne else {
-                return sumY / count
-            }
-            return ((sumY * sumXX) - (sumX * sumXY)) / denominator
-        }
-
-        func interpolatedMeshBaseline(_ values: [Float], bin: Int, binCount: Int) -> Float {
-            guard let lowerValue = meshOuterLinearPrediction(values, bin: bin, binCount: binCount, centerIndex: interpolation.lowerIndex) else {
+        func pulseSmoothedMeshPixelResidual(kind: MotionPathKind, values: [Float], scale: Float) -> Float {
+            guard !values.isEmpty else {
                 return 0.0
             }
-            guard interpolation.upperIndex != interpolation.lowerIndex,
-                  let upperValue = meshOuterLinearPrediction(values, bin: bin, binCount: binCount, centerIndex: interpolation.upperIndex)
-            else {
-                return lowerValue
-            }
-            return lowerValue + ((upperValue - lowerValue) * interpolation.fraction)
-        }
-
-        func pulseSmoothedMeshPixelResidual(values: [Float], bin: Int, binCount: Int, scale: Float) -> Float {
+            let baseline = cachedOuterLinearPredictionPath(
+                kind,
+                analysis: analysis,
+                indices: sampledIndices,
+                innerWindowSeconds: innerWindowSeconds,
+                outerWindowSeconds: outerWindowSeconds,
+                cache: cache
+            )
             let currentResidual = (
-                interpolatedMeshValue(values, bin: bin, binCount: binCount)
-                - interpolatedMeshBaseline(values, bin: bin, binCount: binCount)
+                interpolatedValue(values, using: interpolation)
+                - interpolatedValue(baseline, using: interpolation)
             ) * scale
-            let radiusFrames = max(2, lensBandPulseSmoothingWindowFrames / 2)
+            let radiusFrames = max(1, Int(max(3.0, dominantWindowFrames).rounded()) / 2)
             let centerTime = frames[max(0, min(frames.count - 1, centerIndex))].time
             let radiusSeconds = max(frameStepSeconds, Double(radiusFrames) * frameStepSeconds)
             var weightedResidual = Float(0.0)
             var totalWeight = Float(0.0)
             for index in (centerIndex - radiusFrames)...(centerIndex + radiusFrames) {
                 guard frames.indices.contains(index),
-                      let value = meshValue(values, bin: bin, index: index, binCount: binCount)
+                      values.indices.contains(index),
+                      baseline.values.indices.contains(index)
                 else {
                     continue
                 }
-                let baseline = meshOuterLinearPrediction(values, bin: bin, binCount: binCount, centerIndex: index) ?? value
                 let distance = abs(frames[index].time - centerTime)
                 let normalizedDistance = clamp(Float(distance / radiusSeconds), min: 0.0, max: 1.0)
                 let weight = (1.0 - normalizedDistance) * (1.0 - normalizedDistance)
-                weightedResidual += (value - baseline) * scale * weight
+                weightedResidual += (values[index] - baseline[index]) * scale * weight
                 totalWeight += weight
             }
             guard totalWeight > Float.ulpOfOne else {
@@ -13899,7 +14161,12 @@ enum AutoStabilizationEstimator {
         }
 
         var result = SourceSpaceLensShakeCorrection()
-        result.windowFrames = Float(targetWindowSeconds / frameStepSeconds)
+        result.windowFrames = dominantWindowFrames
+        result.windowSeconds = Float(targetWindowSeconds)
+        result.farFieldMeshDominantWindowFrames = dominantWindowFrames
+        result.farFieldMeshDominantWindowSeconds = Float(targetWindowSeconds)
+        result.farFieldMeshDominantSupport = clamp(dominantWindowSupport, min: 0.0, max: 1.0)
+        result.farFieldMeshDominantCell = Float(dominantCellIndex)
 
         var maximumEvidence = Float(0.0)
         var maximumAppliedSupport = Float(0.0)
@@ -14021,9 +14288,11 @@ enum AutoStabilizationEstimator {
             if hasFarFieldMeshPaths {
                 result.farFieldMeshAvailable = 1.0
                 for bin in 0..<farFieldMeshBinCount {
+                    let pathX = cache.pathValues(.farFieldMeshX(bin), analysis: analysis)
+                    let pathY = cache.pathValues(.farFieldMeshY(bin), analysis: analysis)
                     let residualVector = vector_float2(
-                        pulseSmoothedMeshPixelResidual(values: analysis.farFieldMeshPathX, bin: bin, binCount: farFieldMeshBinCount, scale: outputScale.x),
-                        pulseSmoothedMeshPixelResidual(values: analysis.farFieldMeshPathY, bin: bin, binCount: farFieldMeshBinCount, scale: outputScale.y)
+                        pulseSmoothedMeshPixelResidual(kind: .farFieldMeshX(bin), values: pathX, scale: outputScale.x),
+                        pulseSmoothedMeshPixelResidual(kind: .farFieldMeshY(bin), values: pathY, scale: outputScale.y)
                     )
                     let preparedSupport = interpolatedMeshValue(analysis.farFieldMeshSupport, bin: bin, binCount: farFieldMeshBinCount)
                     let support = confidenceRamp(simd_length(residualVector), start: 0.08, full: 0.70)
@@ -14090,7 +14359,7 @@ enum AutoStabilizationEstimator {
             result.bandPulseDeltaTopOffset = rigidResidual - rawRigidResidual
             result.bandPulseDeltaRidgeOffset = rigidResidual - rawRigidResidual
             result.bandPulseDeltaMidOffset = rigidResidual - rawRigidResidual
-            result.bandPulseWindowFrames = Float(lensBandPulseSmoothingWindowFrames)
+            result.bandPulseWindowFrames = dominantWindowFrames
             result.bandWarpSupport = max(result.bandWarpSupport, result.farFieldRigidSupport)
             if result.farFieldRigidSupport >= lensShakeMinimumSupport {
                 let rigidOffset = vector_float2(
@@ -14132,7 +14401,7 @@ enum AutoStabilizationEstimator {
                 pulseSmoothedPixelResidual(kind: .lensBandMidX, values: analysis.lensBandMidPathX, scale: outputScale.x),
                 pulseSmoothedPixelResidual(kind: .lensBandMidY, values: analysis.lensBandMidPathY, scale: outputScale.y)
             )
-            result.bandPulseWindowFrames = Float(lensBandPulseSmoothingWindowFrames)
+            result.bandPulseWindowFrames = dominantWindowFrames
             result.bandRawTopOffset = rawTopResidual
             result.bandRawRidgeOffset = rawRidgeResidual
             result.bandRawMidOffset = rawMidResidual
@@ -14238,9 +14507,9 @@ enum AutoStabilizationEstimator {
             var localSupports = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
             var localPreparedSupports = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
             for bin in 0..<sourceLensShakeLocalBinCount {
-                let pathX = localLensShakePathSlice(analysis.sourceLensShakeLocalPathX, bin: bin, frameCount: frames.count)
-                let pathY = localLensShakePathSlice(analysis.sourceLensShakeLocalPathY, bin: bin, frameCount: frames.count)
-                let supportPath = localLensShakePathSlice(analysis.sourceLensShakeLocalSupport, bin: bin, frameCount: frames.count)
+                let pathX = cache.pathValues(.sourceLensShakeLocalX(bin), analysis: analysis)
+                let pathY = cache.pathValues(.sourceLensShakeLocalY(bin), analysis: analysis)
+                let supportPath = cache.pathValues(.sourceLensShakeLocalSupport(bin), analysis: analysis)
                 let residualVector = vector_float2(
                     pulseSmoothedPixelResidual(kind: .sourceLensShakeLocalX(bin), values: pathX, scale: outputScale.x),
                     pulseSmoothedPixelResidual(kind: .sourceLensShakeLocalY(bin), values: pathY, scale: outputScale.y)

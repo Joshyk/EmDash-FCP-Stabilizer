@@ -7,10 +7,21 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 43
+private let cacheSchemaVersion = 44
 private let farFieldMeshRows = 5
 private let farFieldMeshColumns = 5
 private let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
+private let farFieldMeshDominantWindowSecondsCandidates: [Double] = [
+    1.0 / 20.0,
+    1.0 / 12.0,
+    1.0 / 8.0,
+    1.0 / 6.0,
+    1.0 / 4.0,
+    1.0 / 3.0,
+    1.0 / 2.0,
+    2.0 / 3.0,
+    1.0
+]
 private let sourceLensShakeLocalBandCount = 3
 private let sourceLensShakeLocalColumnCount = 3
 private let sourceLensShakeLocalBinCount = 9
@@ -51,6 +62,205 @@ private func farFieldMeshColumnRanges() -> [(Float, Float)] {
         (0.58, 0.82),
         (0.78, 1.00)
     ]
+}
+
+private struct FarFieldMeshWindowCandidate {
+    let frames: Int
+    let seconds: Float
+}
+
+private struct FarFieldMeshDominantWindows {
+    let windowFrames: [Float]
+    let windowSeconds: [Float]
+    let support: [Float]
+    let cell: [Int32]
+}
+
+private func representativeFrameStepSeconds(frames: [AnalysisFrame]) -> Double {
+    guard frames.count >= 2 else {
+        return 1.0 / 30.0
+    }
+    var deltas: [Double] = []
+    deltas.reserveCapacity(frames.count - 1)
+    for index in 1..<frames.count {
+        let delta = frames[index].time - frames[index - 1].time
+        if delta.isFinite && delta > 0.0 {
+            deltas.append(delta)
+        }
+    }
+    guard !deltas.isEmpty else {
+        return 1.0 / 30.0
+    }
+    deltas.sort()
+    return max(1.0 / 240.0, deltas[deltas.count / 2])
+}
+
+private func farFieldMeshWindowCandidates(frameStepSeconds: Double) -> [FarFieldMeshWindowCandidate] {
+    let safeFrameStep = max(1.0 / 240.0, min(1.0, frameStepSeconds))
+    let fps = max(1.0, min(240.0, 1.0 / safeFrameStep))
+    var maximumFrames = max(3, Int(floor(fps)))
+    if maximumFrames % 2 == 0 {
+        maximumFrames -= 1
+    }
+    var seen = Set<Int>()
+    var candidates: [FarFieldMeshWindowCandidate] = []
+    for seconds in farFieldMeshDominantWindowSecondsCandidates {
+        var frameCount = max(3, Int((seconds * fps).rounded()))
+        if frameCount % 2 == 0 {
+            frameCount += 1
+        }
+        if frameCount > maximumFrames {
+            frameCount = maximumFrames
+        }
+        if frameCount < 3 {
+            frameCount = 3
+        }
+        guard seen.insert(frameCount).inserted else {
+            continue
+        }
+        candidates.append(FarFieldMeshWindowCandidate(
+            frames: frameCount,
+            seconds: Float(Double(frameCount) / fps)
+        ))
+    }
+    return candidates.sorted { $0.frames < $1.frames }
+}
+
+private func farFieldMeshConfidenceRamp(_ value: Float, start: Float, full: Float) -> Float {
+    guard full > start else {
+        return value >= full ? 1.0 : 0.0
+    }
+    return min(max((value - start) / (full - start), 0.0), 1.0)
+}
+
+private func blurEvidenceQuality(_ blurAmount: Float) -> Float {
+    guard blurAmount.isFinite else {
+        return 0.0
+    }
+    if blurAmount > 1.25 {
+        return min(max((blurAmount - 1.5) / 3.0, 0.0), 1.0)
+    }
+    return min(max(1.0 - (blurAmount * 0.45), 0.0), 1.0)
+}
+
+private func farFieldMeshDominantWindows(
+    frames: [AnalysisFrame],
+    pathX: [Float],
+    pathY: [Float],
+    support: [Float],
+    rows: Int,
+    columns: Int
+) -> FarFieldMeshDominantWindows {
+    let frameCount = frames.count
+    guard frameCount > 0 else {
+        return FarFieldMeshDominantWindows(windowFrames: [], windowSeconds: [], support: [], cell: [])
+    }
+    let frameStepSeconds = representativeFrameStepSeconds(frames: frames)
+    let candidates = farFieldMeshWindowCandidates(frameStepSeconds: frameStepSeconds)
+    let defaultCandidate = candidates.first ?? FarFieldMeshWindowCandidate(frames: 3, seconds: Float(frameStepSeconds * 3.0))
+    var dominantWindowFrames = Array(repeating: Float(defaultCandidate.frames), count: frameCount)
+    var dominantWindowSeconds = Array(repeating: defaultCandidate.seconds, count: frameCount)
+    var dominantSupport = Array(repeating: Float(0.0), count: frameCount)
+    var dominantCell = Array(repeating: Int32(-1), count: frameCount)
+    let binCount = rows * columns
+    guard rows == farFieldMeshRows,
+          columns == farFieldMeshColumns,
+          pathX.count == frameCount * binCount,
+          pathY.count == frameCount * binCount,
+          support.count == frameCount * binCount
+    else {
+        return FarFieldMeshDominantWindows(
+            windowFrames: dominantWindowFrames,
+            windowSeconds: dominantWindowSeconds,
+            support: dominantSupport,
+            cell: dominantCell
+        )
+    }
+
+    func meshValue(_ values: [Float], bin: Int, index: Int) -> Float {
+        values[(bin * frameCount) + index]
+    }
+
+    func timingSupport(center: Int, radius: Int) -> Float {
+        guard radius > 0,
+              frames.indices.contains(center - radius),
+              frames.indices.contains(center + radius)
+        else {
+            return 0.0
+        }
+        let expected = frameStepSeconds
+        var maximumError = 0.0
+        let lower = max(1, center - radius + 1)
+        let upper = min(frameCount - 1, center + radius)
+        guard lower <= upper else {
+            return 0.0
+        }
+        for index in lower...upper {
+            let delta = frames[index].time - frames[index - 1].time
+            maximumError = max(maximumError, abs(delta - expected))
+        }
+        let normalizedError = Float(maximumError / max(expected, 1.0e-6))
+        return 1.0 - farFieldMeshConfidenceRamp(normalizedError, start: 0.08, full: 0.34)
+    }
+
+    for center in 0..<frameCount {
+        let blurGate = blurEvidenceQuality(frames[center].blurAmount)
+        var bestScore = Float(0.0)
+        for candidate in candidates {
+            let radius = max(1, candidate.frames / 2)
+            guard center - radius >= 0,
+                  center + radius < frameCount
+            else {
+                continue
+            }
+            let ptsGate = timingSupport(center: center, radius: radius)
+            let shortWindowGate: Float
+            if candidate.seconds <= Float(1.0 / 12.0) {
+                shortWindowGate = ptsGate * blurGate
+            } else if candidate.seconds <= Float(1.0 / 8.0) {
+                shortWindowGate = min(ptsGate, blurGate)
+            } else {
+                shortWindowGate = (ptsGate * 0.65) + (blurGate * 0.35)
+            }
+            guard shortWindowGate > 0.0 else {
+                continue
+            }
+            let leftTime = frames[center - radius].time
+            let rightTime = frames[center + radius].time
+            let centerTime = frames[center].time
+            let denominator = max(1.0e-6, rightTime - leftTime)
+            let fraction = Float(min(max((centerTime - leftTime) / denominator, 0.0), 1.0))
+            for bin in 0..<binCount {
+                let leftX = meshValue(pathX, bin: bin, index: center - radius)
+                let centerX = meshValue(pathX, bin: bin, index: center)
+                let rightX = meshValue(pathX, bin: bin, index: center + radius)
+                let leftY = meshValue(pathY, bin: bin, index: center - radius)
+                let centerY = meshValue(pathY, bin: bin, index: center)
+                let rightY = meshValue(pathY, bin: bin, index: center + radius)
+                let baselineX = leftX + ((rightX - leftX) * fraction)
+                let baselineY = leftY + ((rightY - leftY) * fraction)
+                let residualX = centerX - baselineX
+                let residualY = centerY - baselineY
+                let residual = sqrtf((residualX * residualX) + (residualY * residualY))
+                let supportGate = farFieldMeshConfidenceRamp(meshValue(support, bin: bin, index: center), start: 0.08, full: 0.38)
+                let evidence = farFieldMeshConfidenceRamp(residual, start: 0.035, full: 0.58) * supportGate * shortWindowGate
+                if evidence > bestScore {
+                    bestScore = evidence
+                    dominantWindowFrames[center] = Float(candidate.frames)
+                    dominantWindowSeconds[center] = candidate.seconds
+                    dominantSupport[center] = min(max(evidence, 0.0), 1.0)
+                    dominantCell[center] = Int32(bin)
+                }
+            }
+        }
+    }
+
+    return FarFieldMeshDominantWindows(
+        windowFrames: dominantWindowFrames,
+        windowSeconds: dominantWindowSeconds,
+        support: dominantSupport,
+        cell: dominantCell
+    )
 }
 private let localSearchRadius = 5
 private let maximumMotionSearchRadius = 36
@@ -848,6 +1058,10 @@ struct PreparedAnalysis {
     let farFieldMeshPathX: [Float]
     let farFieldMeshPathY: [Float]
     let farFieldMeshSupport: [Float]
+    let farFieldMeshDominantWindowFrames: [Float]
+    let farFieldMeshDominantWindowSeconds: [Float]
+    let farFieldMeshDominantSupport: [Float]
+    let farFieldMeshDominantCell: [Int32]
     let sourceLensShakeRidgePathY: [Float]
     let sourceLensShakeRidgeSupport: [Float]
     let sourceLensShakeRidgeLinePathY: [Float]
@@ -930,6 +1144,10 @@ struct PersistedHostAnalysisCache: Encodable {
     let farFieldMeshPathX: [Float]?
     let farFieldMeshPathY: [Float]?
     let farFieldMeshSupport: [Float]?
+    let farFieldMeshDominantWindowFrames: [Float]?
+    let farFieldMeshDominantWindowSeconds: [Float]?
+    let farFieldMeshDominantSupport: [Float]?
+    let farFieldMeshDominantCell: [Int32]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
     let sourceLensShakeRidgeLinePathY: [Float]?
@@ -3627,6 +3845,17 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         sourceLensShakeRidgePathY.append(sourceLensShakeRidgeY)
         sourceLensShakeRidgeLinePathY.append(sourceLensShakeRidgeLineY)
     }
+    let flatFarFieldMeshPathX = farFieldMeshPathX.flatMap { $0 }
+    let flatFarFieldMeshPathY = farFieldMeshPathY.flatMap { $0 }
+    let flatFarFieldMeshSupport = farFieldMeshSupport.flatMap { $0 }
+    let farFieldMeshDominantWindows = farFieldMeshDominantWindows(
+        frames: frames,
+        pathX: flatFarFieldMeshPathX,
+        pathY: flatFarFieldMeshPathY,
+        support: flatFarFieldMeshSupport,
+        rows: farFieldMeshRows,
+        columns: farFieldMeshColumns
+    )
     let farFieldRigidShake = farFieldRigidShakePreparedPaths(
         topX: lensBandTopPathX,
         topY: lensBandTopPathY,
@@ -3697,9 +3926,13 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShake.forwardBackwardConsistency,
         farFieldMeshRows: farFieldMeshRows,
         farFieldMeshColumns: farFieldMeshColumns,
-        farFieldMeshPathX: farFieldMeshPathX.flatMap { $0 },
-        farFieldMeshPathY: farFieldMeshPathY.flatMap { $0 },
-        farFieldMeshSupport: farFieldMeshSupport.flatMap { $0 },
+        farFieldMeshPathX: flatFarFieldMeshPathX,
+        farFieldMeshPathY: flatFarFieldMeshPathY,
+        farFieldMeshSupport: flatFarFieldMeshSupport,
+        farFieldMeshDominantWindowFrames: farFieldMeshDominantWindows.windowFrames,
+        farFieldMeshDominantWindowSeconds: farFieldMeshDominantWindows.windowSeconds,
+        farFieldMeshDominantSupport: farFieldMeshDominantWindows.support,
+        farFieldMeshDominantCell: farFieldMeshDominantWindows.cell,
         sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
         sourceLensShakeRidgeSupport: motions.map(\.sourceLensShakeRidgeSupport),
         sourceLensShakeRidgeLinePathY: sourceLensShakeRidgeLinePathY,
@@ -4598,6 +4831,10 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         farFieldMeshPathX: prepared.farFieldMeshPathX,
         farFieldMeshPathY: prepared.farFieldMeshPathY,
         farFieldMeshSupport: prepared.farFieldMeshSupport,
+        farFieldMeshDominantWindowFrames: prepared.farFieldMeshDominantWindowFrames,
+        farFieldMeshDominantWindowSeconds: prepared.farFieldMeshDominantWindowSeconds,
+        farFieldMeshDominantSupport: prepared.farFieldMeshDominantSupport,
+        farFieldMeshDominantCell: prepared.farFieldMeshDominantCell,
         sourceLensShakeRidgePathY: prepared.sourceLensShakeRidgePathY,
         sourceLensShakeRidgeSupport: prepared.sourceLensShakeRidgeSupport,
         sourceLensShakeRidgeLinePathY: prepared.sourceLensShakeRidgeLinePathY,
@@ -4901,6 +5138,10 @@ private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationU
         try writeOptionalFloatArrayField("farFieldMeshPathX", cache.farFieldMeshPathX)
         try writeOptionalFloatArrayField("farFieldMeshPathY", cache.farFieldMeshPathY)
         try writeOptionalFloatArrayField("farFieldMeshSupport", cache.farFieldMeshSupport)
+        try writeOptionalFloatArrayField("farFieldMeshDominantWindowFrames", cache.farFieldMeshDominantWindowFrames)
+        try writeOptionalFloatArrayField("farFieldMeshDominantWindowSeconds", cache.farFieldMeshDominantWindowSeconds)
+        try writeOptionalFloatArrayField("farFieldMeshDominantSupport", cache.farFieldMeshDominantSupport)
+        writeOptionalInt32ArrayField("farFieldMeshDominantCell", cache.farFieldMeshDominantCell)
         try writeOptionalFloatArrayField("sourceLensShakeRidgePathY", cache.sourceLensShakeRidgePathY)
         try writeOptionalFloatArrayField("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport)
         try writeOptionalFloatArrayField("sourceLensShakeRidgeLinePathY", cache.sourceLensShakeRidgeLinePathY)
