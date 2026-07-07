@@ -7465,6 +7465,41 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 type: .default,
                 lensBandMessage
             )
+            let lensLocalMessage = String(
+                format: "Render lens local csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f",
+                analysisSeconds,
+                samplePosition,
+                frames.count,
+                renderSourceIsProxy ? "yes" : "no",
+                autoCropEnabled ? "yes" : "no",
+                cacheIdentityShort,
+                autoTransform.sourceLensShakeLocalSupport,
+                autoTransform.sourceLensShakeLocalApplied,
+                appliedSourceLensShakeLocalTopLeftOffset.x,
+                appliedSourceLensShakeLocalTopLeftOffset.y,
+                appliedSourceLensShakeLocalTopCenterOffset.x,
+                appliedSourceLensShakeLocalTopCenterOffset.y,
+                appliedSourceLensShakeLocalTopRightOffset.x,
+                appliedSourceLensShakeLocalTopRightOffset.y,
+                appliedSourceLensShakeLocalRidgeLeftOffset.x,
+                appliedSourceLensShakeLocalRidgeLeftOffset.y,
+                appliedSourceLensShakeLocalRidgeCenterOffset.x,
+                appliedSourceLensShakeLocalRidgeCenterOffset.y,
+                appliedSourceLensShakeLocalRidgeRightOffset.x,
+                appliedSourceLensShakeLocalRidgeRightOffset.y,
+                appliedSourceLensShakeLocalMidLeftOffset.x,
+                appliedSourceLensShakeLocalMidLeftOffset.y,
+                appliedSourceLensShakeLocalMidCenterOffset.x,
+                appliedSourceLensShakeLocalMidCenterOffset.y,
+                appliedSourceLensShakeLocalMidRightOffset.x,
+                appliedSourceLensShakeLocalMidRightOffset.y
+            )
+            os_log(
+                "%{public}@",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                lensLocalMessage
+            )
         }
         let motionAnomaly = irregularRenderCadence
             || catchUpAfterTinyStep

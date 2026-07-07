@@ -723,7 +723,7 @@ collect_render_component_diagnostics() {
 	local component_csv_path="${evidence_dir}/render_components.csv"
 	local component_focus_path="${evidence_dir}/render_components_focus.csv"
 	local component_points_path="${evidence_dir}/render_components_focus_points.csv"
-	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND (eventMessage CONTAINS "Render frame components csv v1" OR eventMessage CONTAINS "Render lens band csv v1")'
+	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND (eventMessage CONTAINS "Render frame components csv v1" OR eventMessage CONTAINS "Render lens band csv v1" OR eventMessage CONTAINS "Render lens local csv v1")'
 	if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$component_log_path" 2>&1; then
 		fail "could not read FxPlug render component diagnostics: $component_log_path"
 	fi
@@ -744,6 +744,7 @@ points_path = Path(sys.argv[5])
 
 prefix = "Render frame components csv v1 |"
 lens_prefix = "Render lens band csv v1 |"
+local_prefix = "Render lens local csv v1 |"
 pair_pattern = re.compile(r"([A-Za-z][A-Za-z0-9]*)=([^ |]+)")
 idx_pattern = re.compile(r"idx=(\d+)-(\d+)")
 
@@ -810,11 +811,17 @@ if isinstance(case.get("removeBlackEdges"), bool):
 
 rows = []
 lens_rows = {}
+local_rows = {}
 for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
     if lens_prefix in line:
         values = dict(pair_pattern.findall(line.split(lens_prefix, 1)[1]))
         if "analysisTime" in values and "sample" in values:
             lens_rows[(values["analysisTime"], values["sample"])] = values
+        continue
+    if local_prefix in line:
+        values = dict(pair_pattern.findall(line.split(local_prefix, 1)[1]))
+        if "analysisTime" in values and "sample" in values:
+            local_rows[(values["analysisTime"], values["sample"])] = values
         continue
     if prefix not in line:
         continue
@@ -839,6 +846,24 @@ for row in rows:
     lens_row = lens_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
     if lens_row:
         row.update(lens_row)
+    local_row = local_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
+    if local_row:
+        row.update(local_row)
+
+source_local_rows = [
+    row for row in rows
+    if "sourceLocal" in str(row.get("lensBandCorrectionModel", ""))
+]
+missing_source_local_rows = [
+    row for row in source_local_rows
+    if row.get("sourceLensShakeLocalApplied", "") == ""
+]
+if missing_source_local_rows:
+    raise SystemExit(
+        "Render component diagnostics missing source-local lens rows: "
+        f"missing={len(missing_source_local_rows)} sourceLocalRows={len(source_local_rows)} "
+        f"localLogRows={len(local_rows)} log={log_path}"
+    )
 
 if not rows:
     raise SystemExit(f"Render component diagnostics missing: no '{prefix.strip()}' log rows in {log_path}")

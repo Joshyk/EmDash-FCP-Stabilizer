@@ -19,6 +19,7 @@ import numpy as np
 PAIR_PATTERN = re.compile(r"([A-Za-z][A-Za-z0-9]*)=([^ |]+)")
 PREFIX = "Render frame components csv v1 |"
 LENS_PREFIX = "Render lens band csv v1 |"
+LOCAL_PREFIX = "Render lens local csv v1 |"
 
 BANDS = {
     "cloud_top": (0.06, 0.22),
@@ -54,6 +55,7 @@ def finite_float(raw: Any, default: float = 0.0) -> float:
 def parse_render_log(path: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     lens_rows: dict[tuple[str, str], dict[str, str]] = {}
+    local_rows: dict[tuple[str, str], dict[str, str]] = {}
     if not path.exists():
         return rows
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -63,6 +65,13 @@ def parse_render_log(path: Path) -> list[dict[str, str]]:
             sample = values.get("sample")
             if analysis_time and sample:
                 lens_rows[(analysis_time, sample)] = values
+            continue
+        if LOCAL_PREFIX in line:
+            values = dict(PAIR_PATTERN.findall(line.split(LOCAL_PREFIX, 1)[1]))
+            analysis_time = values.get("analysisTime")
+            sample = values.get("sample")
+            if analysis_time and sample:
+                local_rows[(analysis_time, sample)] = values
             continue
         if PREFIX not in line:
             continue
@@ -74,6 +83,9 @@ def parse_render_log(path: Path) -> list[dict[str, str]]:
         lens_row = lens_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
         if lens_row:
             row.update(lens_row)
+        local_row = local_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
+        if local_row:
+            row.update(local_row)
     rows.sort(key=lambda row: finite_float(row.get("analysisTime")))
     first_time = finite_float(rows[0].get("analysisTime")) if rows else 0.0
     for index, row in enumerate(rows):
@@ -713,6 +725,16 @@ def main() -> None:
     summary["focusLensBandCorrectionModelCounts"] = dict(
         Counter(str(row.get("lensBandCorrectionModel", "")) for row in focus_joined if row.get("lensBandCorrectionModel"))
     )
+    source_local_rows = [
+        row for row in focus_joined
+        if "sourceLocal" in str(row.get("lensBandCorrectionModel", ""))
+    ]
+    missing_source_local_rows = [
+        row for row in source_local_rows
+        if str(row.get("sourceLensShakeLocalApplied", "")) == ""
+    ]
+    summary["focusSourceLocalRows"] = len(source_local_rows)
+    summary["focusSourceLocalMissingRows"] = len(missing_source_local_rows)
     covered_rows = sum(
         1 for row in focus_joined
         if correction_model_covers(dominant_model, str(row.get("lensBandCorrectionModel", "")))
@@ -796,6 +818,12 @@ def main() -> None:
         raise SystemExit(
             "lens band diagnostics failed: target focus window had no rollingRowWarp band application; "
             f"summary={args.output_dir / 'lens_band_source_summary.json'} csv={csv_path}"
+        )
+    if args.require_band_warp and missing_source_local_rows:
+        raise SystemExit(
+            "lens band diagnostics failed: sourceLocal correction model was present but local lens rows "
+            "were missing from the joined runtime diagnostics; "
+            f"missing={len(missing_source_local_rows)} sourceLocalRows={len(source_local_rows)} csv={csv_path}"
         )
     if (
         args.require_band_warp
