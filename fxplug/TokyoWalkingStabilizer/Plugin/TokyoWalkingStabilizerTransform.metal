@@ -256,6 +256,10 @@ static float lensBandWeight(float y, float center, float radius) {
     return normalized * normalized * (3.0 - (2.0 * normalized));
 }
 
+static float lensBandAppliedGain(float support) {
+    return smoothstep(0.08, 0.55, saturate(support));
+}
+
 fragment float4 fragmentShader(
     RasterizerData in [[stage_in]],
     texture2d<half> colorTexture [[texture(STI_InputImage)]],
@@ -283,7 +287,10 @@ fragment float4 fragmentShader(
         transform->shear.x * stabilizedPixels.y,
         transform->shear.y * stabilizedPixels.x
     );
-    float lensBandSupport = saturate(transform->lensBandWarpSupport * transform->lensBandWarpApplied);
+    // The Swift path gates these offsets before marking them applied; Metal maps that
+    // support to a continuous application gain so weak evidence cannot step to full warp.
+    float lensBandSupport = saturate(transform->lensBandWarpApplied)
+        * lensBandAppliedGain(transform->lensBandWarpSupport);
     if (lensBandSupport > 0.0001) {
         float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
         float farFieldFade = 1.0 - smoothstep(0.36, 0.46, sourceY);
@@ -327,7 +334,8 @@ fragment float4 fragmentShader(
             stabilizedPixels -= bandOffset * lensBandSupport * farFieldFade * transform->strength;
         }
     }
-    float sourceRidgeSupport = saturate(transform->sourceLensShakeRidgeSupport * transform->sourceLensShakeRidgeApplied);
+    float sourceRidgeSupport = saturate(transform->sourceLensShakeRidgeApplied)
+        * lensBandAppliedGain(transform->sourceLensShakeRidgeSupport);
     if (sourceRidgeSupport > 0.0001) {
         float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
         float ridgeWeight = lensBandWeight(sourceY, 0.23, 0.075);
