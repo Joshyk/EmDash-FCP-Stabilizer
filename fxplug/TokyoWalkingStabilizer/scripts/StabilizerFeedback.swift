@@ -94,6 +94,11 @@ private struct PersistedHostAnalysisCache: Decodable {
     let farFieldRigidShakeSupport: [Float]?
     let farFieldRigidShakeShapeConsistency: [Float]?
     let farFieldRigidShakeForwardBackwardConsistency: [Float]?
+    let farFieldMeshRows: Int?
+    let farFieldMeshColumns: Int?
+    let farFieldMeshPathX: [Float]?
+    let farFieldMeshPathY: [Float]?
+    let farFieldMeshSupport: [Float]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
     let sourceLensShakeRidgeLinePathY: [Float]?
@@ -795,10 +800,13 @@ private let lensShakeShearFull: Float = 0.000320
 private let lensShakePerspectiveStart: Float = 0.000010
 private let lensShakePerspectiveFull: Float = 0.000095
 private let expectedSourceLensShakeLocalBinCount = 9
+private let expectedFarFieldMeshRows = 5
+private let expectedFarFieldMeshColumns = 5
+private let expectedFarFieldMeshBinCount = expectedFarFieldMeshRows * expectedFarFieldMeshColumns
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [41, 42]
+private let supportedCacheSchemaVersions: Set<Int> = [41, 42, 43]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 private let farFieldRigidShakeTwoWayRadiusFrames = 5
 private let farFieldRigidShakeShapeStartPixels: Float = 0.10
@@ -1350,6 +1358,16 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
             ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
         ])
     }
+    if cache.schemaVersion >= 43 {
+        guard let rows = cache.farFieldMeshRows,
+              let columns = cache.farFieldMeshColumns
+        else {
+            return "farFieldMeshRows/Columns are missing"
+        }
+        if rows != expectedFarFieldMeshRows || columns != expectedFarFieldMeshColumns {
+            return "farFieldMesh grid is \(rows)x\(columns); expected \(expectedFarFieldMeshRows)x\(expectedFarFieldMeshColumns)"
+        }
+    }
     let intArrays: [(String, [Int32]?)] = [
         ("acceptedBlockCounts", cache.acceptedBlockCounts),
         ("totalBlockCounts", cache.totalBlockCounts),
@@ -1380,6 +1398,22 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         }
         if values.count != localPathCount {
             return "\(name) has \(values.count) values but expected \(localPathCount)"
+        }
+    }
+    if cache.schemaVersion >= 43 {
+        let meshPathCount = frameCount * expectedFarFieldMeshBinCount
+        let meshFloatArrays: [(String, [Float]?)] = [
+            ("farFieldMeshPathX", cache.farFieldMeshPathX),
+            ("farFieldMeshPathY", cache.farFieldMeshPathY),
+            ("farFieldMeshSupport", cache.farFieldMeshSupport)
+        ]
+        for (name, values) in meshFloatArrays {
+            guard let values else {
+                return "\(name) is missing"
+            }
+            if values.count != meshPathCount {
+                return "\(name) has \(values.count) values but expected \(meshPathCount)"
+            }
         }
     }
     for (name, values) in intArrays {

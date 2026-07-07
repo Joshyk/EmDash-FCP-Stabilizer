@@ -7,7 +7,10 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 42
+private let cacheSchemaVersion = 43
+private let farFieldMeshRows = 5
+private let farFieldMeshColumns = 5
+private let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
 private let sourceLensShakeLocalBandCount = 3
 private let sourceLensShakeLocalColumnCount = 3
 private let sourceLensShakeLocalBinCount = 9
@@ -29,6 +32,26 @@ private let farFieldRigidShakeForwardBackwardStartPixels: Float = 0.08
 private let farFieldRigidShakeForwardBackwardFullPixels: Float = 1.00
 private let farFieldRigidShakeResidualStartPixels: Float = 0.08
 private let farFieldRigidShakeResidualFullPixels: Float = 0.70
+
+private func farFieldMeshBandRanges() -> [(Float, Float)] {
+    [
+        (0.04, 0.16),
+        (0.13, 0.25),
+        (0.22, 0.34),
+        (0.31, 0.43),
+        (0.40, 0.52)
+    ]
+}
+
+private func farFieldMeshColumnRanges() -> [(Float, Float)] {
+    [
+        (0.00, 0.22),
+        (0.18, 0.42),
+        (0.38, 0.62),
+        (0.58, 0.82),
+        (0.78, 1.00)
+    ]
+}
 private let localSearchRadius = 5
 private let maximumMotionSearchRadius = 36
 private let minimumAcceptedMotionBlocks = 3
@@ -220,6 +243,9 @@ struct PairMotion {
     let sourceLensShakeLocalDx: [Float]
     let sourceLensShakeLocalDy: [Float]
     let sourceLensShakeLocalSupport: [Float]
+    let farFieldMeshDx: [Float]
+    let farFieldMeshDy: [Float]
+    let farFieldMeshSupport: [Float]
     let analysisConfidence: Float
     let warpConfidence: Float
     let acceptedBlockCount: Int32
@@ -275,6 +301,9 @@ struct PairMotion {
         sourceLensShakeLocalDx: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
         sourceLensShakeLocalDy: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
         sourceLensShakeLocalSupport: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
+        farFieldMeshDx: Array(repeating: 0.0, count: farFieldMeshBinCount),
+        farFieldMeshDy: Array(repeating: 0.0, count: farFieldMeshBinCount),
+        farFieldMeshSupport: Array(repeating: 0.0, count: farFieldMeshBinCount),
         analysisConfidence: 1.0,
         warpConfidence: 0.0,
         acceptedBlockCount: 0,
@@ -350,6 +379,9 @@ private func pairMotion(_ motion: PairMotion, applying ridgeLineMotion: RidgeLin
         sourceLensShakeLocalDx: motion.sourceLensShakeLocalDx,
         sourceLensShakeLocalDy: motion.sourceLensShakeLocalDy,
         sourceLensShakeLocalSupport: motion.sourceLensShakeLocalSupport,
+        farFieldMeshDx: motion.farFieldMeshDx,
+        farFieldMeshDy: motion.farFieldMeshDy,
+        farFieldMeshSupport: motion.farFieldMeshSupport,
         analysisConfidence: motion.analysisConfidence,
         warpConfidence: motion.warpConfidence,
         acceptedBlockCount: motion.acceptedBlockCount,
@@ -811,6 +843,11 @@ struct PreparedAnalysis {
     let farFieldRigidShakeSupport: [Float]
     let farFieldRigidShakeShapeConsistency: [Float]
     let farFieldRigidShakeForwardBackwardConsistency: [Float]
+    let farFieldMeshRows: Int
+    let farFieldMeshColumns: Int
+    let farFieldMeshPathX: [Float]
+    let farFieldMeshPathY: [Float]
+    let farFieldMeshSupport: [Float]
     let sourceLensShakeRidgePathY: [Float]
     let sourceLensShakeRidgeSupport: [Float]
     let sourceLensShakeRidgeLinePathY: [Float]
@@ -888,6 +925,11 @@ struct PersistedHostAnalysisCache: Encodable {
     let farFieldRigidShakeSupport: [Float]?
     let farFieldRigidShakeShapeConsistency: [Float]?
     let farFieldRigidShakeForwardBackwardConsistency: [Float]?
+    let farFieldMeshRows: Int?
+    let farFieldMeshColumns: Int?
+    let farFieldMeshPathX: [Float]?
+    let farFieldMeshPathY: [Float]?
+    let farFieldMeshSupport: [Float]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
     let sourceLensShakeRidgeLinePathY: [Float]?
@@ -1519,7 +1561,8 @@ private final class MetalMotionWorkspace {
             (0.16, 0.30),
             (0.28, 0.46)
         ]
-        for band in sourceLensBands {
+        let meshObservationBands = farFieldMeshBandRanges().map { (minY: $0.0, maxY: $0.1) }
+        for band in sourceLensBands + meshObservationBands {
             let y0 = verticalMargin + Int((Float(usableHeight) * band.minY).rounded(.down))
             let y1 = verticalMargin + Int((Float(usableHeight) * band.maxY).rounded(.up))
             let clampedY0 = max(verticalMargin, min(height - verticalMargin, y0))
@@ -1986,7 +2029,10 @@ private final class MetalMotionWorkspace {
         sourceLensShakeRidgeSupport: Float,
         sourceLensShakeLocalDx: [Float],
         sourceLensShakeLocalDy: [Float],
-        sourceLensShakeLocalSupport: [Float]
+        sourceLensShakeLocalSupport: [Float],
+        farFieldMeshDx: [Float],
+        farFieldMeshDy: [Float],
+        farFieldMeshSupport: [Float]
     ) {
         guard shifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
             return (
@@ -1994,7 +2040,10 @@ private final class MetalMotionWorkspace {
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
                 Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
-                Array(repeating: 0.0, count: sourceLensShakeLocalBinCount)
+                Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
+                Array(repeating: 0.0, count: farFieldMeshBinCount),
+                Array(repeating: 0.0, count: farFieldMeshBinCount),
+                Array(repeating: 0.0, count: farFieldMeshBinCount)
             )
         }
         func band(_ minY: Float, _ maxY: Float, minX: Float = 0.0, maxX: Float = 1.0) -> (dx: Float, dy: Float, support: Float) {
@@ -2158,6 +2207,27 @@ private final class MetalMotionWorkspace {
                 localSupport[bin] = local.support
             }
         }
+        let meshBandRanges = farFieldMeshBandRanges()
+        let meshColumnRanges = farFieldMeshColumnRanges()
+        var meshDx = Array(repeating: Float(0.0), count: farFieldMeshBinCount)
+        var meshDy = Array(repeating: Float(0.0), count: farFieldMeshBinCount)
+        var meshSupport = Array(repeating: Float(0.0), count: farFieldMeshBinCount)
+        for bandIndex in 0..<farFieldMeshRows {
+            for columnIndex in 0..<farFieldMeshColumns {
+                let bin = (bandIndex * farFieldMeshColumns) + columnIndex
+                guard meshBandRanges.indices.contains(bandIndex),
+                      meshColumnRanges.indices.contains(columnIndex)
+                else {
+                    continue
+                }
+                let bandRange = meshBandRanges[bandIndex]
+                let columnRange = meshColumnRanges[columnIndex]
+                let mesh = band(bandRange.0, bandRange.1, minX: columnRange.0, maxX: columnRange.1)
+                meshDx[bin] = mesh.dx
+                meshDy[bin] = mesh.dy
+                meshSupport[bin] = mesh.support
+            }
+        }
         return (
             topDx: top.dx,
             topDy: top.dy,
@@ -2188,7 +2258,10 @@ private final class MetalMotionWorkspace {
             sourceLensShakeRidgeSupport: ridgeImpulse.support,
             sourceLensShakeLocalDx: localDx,
             sourceLensShakeLocalDy: localDy,
-            sourceLensShakeLocalSupport: localSupport
+            sourceLensShakeLocalSupport: localSupport,
+            farFieldMeshDx: meshDx,
+            farFieldMeshDy: meshDy,
+            farFieldMeshSupport: meshSupport
         )
     }
 
@@ -2429,6 +2502,9 @@ private final class MetalMotionWorkspace {
             sourceLensShakeLocalDx: lensBandMotion.sourceLensShakeLocalDx,
             sourceLensShakeLocalDy: lensBandMotion.sourceLensShakeLocalDy,
             sourceLensShakeLocalSupport: lensBandMotion.sourceLensShakeLocalSupport,
+            farFieldMeshDx: lensBandMotion.farFieldMeshDx,
+            farFieldMeshDy: lensBandMotion.farFieldMeshDy,
+            farFieldMeshSupport: lensBandMotion.farFieldMeshSupport,
             analysisConfidence: analysisConfidence,
             warpConfidence: warpMotion.confidence,
             acceptedBlockCount: Int32(acceptedCount),
@@ -3423,6 +3499,9 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var sourceLensShakeLocalPathX = Array(repeating: Array<Float>(), count: sourceLensShakeLocalBinCount)
     var sourceLensShakeLocalPathY = Array(repeating: Array<Float>(), count: sourceLensShakeLocalBinCount)
     var sourceLensShakeLocalSupport = Array(repeating: Array<Float>(), count: sourceLensShakeLocalBinCount)
+    var farFieldMeshPathX = Array(repeating: Array<Float>(), count: farFieldMeshBinCount)
+    var farFieldMeshPathY = Array(repeating: Array<Float>(), count: farFieldMeshBinCount)
+    var farFieldMeshSupport = Array(repeating: Array<Float>(), count: farFieldMeshBinCount)
     var x: Float = 0
     var y: Float = 0
     var roll: Float = 0
@@ -3460,6 +3539,8 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var sourceLensShakeRidgeLineY: Float = 0
     var sourceLensShakeLocalX = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
     var sourceLensShakeLocalY = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
+    var farFieldMeshX = Array(repeating: Float(0.0), count: farFieldMeshBinCount)
+    var farFieldMeshY = Array(repeating: Float(0.0), count: farFieldMeshBinCount)
     for motion in motions {
         x += motion.dx
         y += motion.dy
@@ -3502,6 +3583,13 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
             sourceLensShakeLocalPathX[bin].append(sourceLensShakeLocalX[bin])
             sourceLensShakeLocalPathY[bin].append(sourceLensShakeLocalY[bin])
             sourceLensShakeLocalSupport[bin].append(motion.sourceLensShakeLocalSupport.indices.contains(bin) ? motion.sourceLensShakeLocalSupport[bin] : 0.0)
+        }
+        for bin in 0..<farFieldMeshBinCount {
+            farFieldMeshX[bin] += motion.farFieldMeshDx.indices.contains(bin) ? motion.farFieldMeshDx[bin] : 0.0
+            farFieldMeshY[bin] += motion.farFieldMeshDy.indices.contains(bin) ? motion.farFieldMeshDy[bin] : 0.0
+            farFieldMeshPathX[bin].append(farFieldMeshX[bin])
+            farFieldMeshPathY[bin].append(farFieldMeshY[bin])
+            farFieldMeshSupport[bin].append(motion.farFieldMeshSupport.indices.contains(bin) ? motion.farFieldMeshSupport[bin] : 0.0)
         }
         pathX.append(x)
         pathY.append(y)
@@ -3555,7 +3643,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
           farFieldRigidShake.support.count == frames.count,
           farFieldRigidShake.shapeConsistency.count == frames.count,
           farFieldRigidShake.forwardBackwardConsistency.count == frames.count else {
-        throw AnalyzerError("far-field rigid shake preparation produced incomplete schema 42 paths")
+        throw AnalyzerError("far-field rigid shake preparation produced incomplete current-schema paths")
     }
     return PreparedAnalysis(
         frames: frames,
@@ -3607,6 +3695,11 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         farFieldRigidShakeSupport: farFieldRigidShake.support,
         farFieldRigidShakeShapeConsistency: farFieldRigidShake.shapeConsistency,
         farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShake.forwardBackwardConsistency,
+        farFieldMeshRows: farFieldMeshRows,
+        farFieldMeshColumns: farFieldMeshColumns,
+        farFieldMeshPathX: farFieldMeshPathX.flatMap { $0 },
+        farFieldMeshPathY: farFieldMeshPathY.flatMap { $0 },
+        farFieldMeshSupport: farFieldMeshSupport.flatMap { $0 },
         sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
         sourceLensShakeRidgeSupport: motions.map(\.sourceLensShakeRidgeSupport),
         sourceLensShakeRidgeLinePathY: sourceLensShakeRidgeLinePathY,
@@ -4500,6 +4593,11 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         farFieldRigidShakeSupport: prepared.farFieldRigidShakeSupport,
         farFieldRigidShakeShapeConsistency: prepared.farFieldRigidShakeShapeConsistency,
         farFieldRigidShakeForwardBackwardConsistency: prepared.farFieldRigidShakeForwardBackwardConsistency,
+        farFieldMeshRows: prepared.farFieldMeshRows,
+        farFieldMeshColumns: prepared.farFieldMeshColumns,
+        farFieldMeshPathX: prepared.farFieldMeshPathX,
+        farFieldMeshPathY: prepared.farFieldMeshPathY,
+        farFieldMeshSupport: prepared.farFieldMeshSupport,
         sourceLensShakeRidgePathY: prepared.sourceLensShakeRidgePathY,
         sourceLensShakeRidgeSupport: prepared.sourceLensShakeRidgeSupport,
         sourceLensShakeRidgeLinePathY: prepared.sourceLensShakeRidgeLinePathY,
@@ -4794,6 +4892,15 @@ private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationU
         try writeOptionalFloatArrayField("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport)
         try writeOptionalFloatArrayField("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency)
         try writeOptionalFloatArrayField("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
+        if let farFieldMeshRows = cache.farFieldMeshRows {
+            writeIntField("farFieldMeshRows", farFieldMeshRows)
+        }
+        if let farFieldMeshColumns = cache.farFieldMeshColumns {
+            writeIntField("farFieldMeshColumns", farFieldMeshColumns)
+        }
+        try writeOptionalFloatArrayField("farFieldMeshPathX", cache.farFieldMeshPathX)
+        try writeOptionalFloatArrayField("farFieldMeshPathY", cache.farFieldMeshPathY)
+        try writeOptionalFloatArrayField("farFieldMeshSupport", cache.farFieldMeshSupport)
         try writeOptionalFloatArrayField("sourceLensShakeRidgePathY", cache.sourceLensShakeRidgePathY)
         try writeOptionalFloatArrayField("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport)
         try writeOptionalFloatArrayField("sourceLensShakeRidgeLinePathY", cache.sourceLensShakeRidgeLinePathY)

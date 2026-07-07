@@ -54,6 +54,13 @@ struct StabilizerAutoTransform {
     var lensFarFieldRigidShakeShapeConsistency: Float
     var lensFarFieldRigidShakeForwardBackwardConsistency: Float
     var lensFarFieldRigidShakeLocalWarpSuppressed: Float
+    var lensFarFieldMeshOffset: vector_float2 = vector_float2(0.0, 0.0)
+    var lensFarFieldMeshSupport: Float = 0.0
+    var lensFarFieldMeshBlend: Float = 0.0
+    var lensFarFieldMeshAvailable: Float = 0.0
+    var lensFarFieldMeshSupportedBins: Float = 0.0
+    var lensFarFieldMeshMaxBinDelta: Float = 0.0
+    var lensFarFieldMeshOpposingBins: Float = 0.0
     var sourceLensShakeRidgeOffset: vector_float2
     var sourceLensShakeRidgeSupport: Float
     var sourceLensShakeRidgeApplied: Float
@@ -501,6 +508,11 @@ struct StabilizerPreparedAnalysis {
     let farFieldRigidShakeSupport: [Float]
     let farFieldRigidShakeShapeConsistency: [Float]
     let farFieldRigidShakeForwardBackwardConsistency: [Float]
+    let farFieldMeshRows: Int
+    let farFieldMeshColumns: Int
+    let farFieldMeshPathX: [Float]
+    let farFieldMeshPathY: [Float]
+    let farFieldMeshSupport: [Float]
     let sourceLensShakeRidgePathY: [Float]
     let sourceLensShakeRidgeSupport: [Float]
     let sourceLensShakeRidgeLinePathY: [Float]
@@ -566,6 +578,9 @@ fileprivate struct PairMotion {
     let sourceLensShakeLocalDx: [Float]
     let sourceLensShakeLocalDy: [Float]
     let sourceLensShakeLocalSupport: [Float]
+    let farFieldMeshDx: [Float]
+    let farFieldMeshDy: [Float]
+    let farFieldMeshSupport: [Float]
     let analysisConfidence: Float
     let warpConfidence: Float
     let acceptedBlockCount: Int32
@@ -1002,6 +1017,9 @@ enum AutoStabilizationEstimator {
     private static let farFieldRigidShakeForwardBackwardFullPixels: Float = 1.00
     private static let farFieldRigidShakeResidualStartPixels: Float = 0.08
     private static let farFieldRigidShakeResidualFullPixels: Float = 0.70
+    static let farFieldMeshRows = 5
+    static let farFieldMeshColumns = 5
+    static let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
     static let sourceLensShakeLocalBandCount = 3
     static let sourceLensShakeLocalColumnCount = 3
     static let sourceLensShakeLocalBinCount = 9
@@ -1231,6 +1249,13 @@ enum AutoStabilizationEstimator {
         var farFieldRigidShapeConsistency: Float = 0.0
         var farFieldRigidForwardBackwardConsistency: Float = 0.0
         var farFieldRigidLocalWarpSuppressed: Float = 0.0
+        var farFieldMeshOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var farFieldMeshSupport: Float = 0.0
+        var farFieldMeshBlend: Float = 0.0
+        var farFieldMeshAvailable: Float = 0.0
+        var farFieldMeshSupportedBins: Float = 0.0
+        var farFieldMeshMaxBinDelta: Float = 0.0
+        var farFieldMeshOpposingBins: Float = 0.0
         var sourceRidgeOffset: vector_float2 = vector_float2(0.0, 0.0)
         var sourceRidgeSupport: Float = 0.0
         var sourceRidgeApplied: Float = 0.0
@@ -1409,6 +1434,11 @@ enum AutoStabilizationEstimator {
         combineFloats(analysis.farFieldRigidShakeSupport)
         combineFloats(analysis.farFieldRigidShakeShapeConsistency)
         combineFloats(analysis.farFieldRigidShakeForwardBackwardConsistency)
+        combinePreparedPathHash(UInt64(analysis.farFieldMeshRows), into: &hash)
+        combinePreparedPathHash(UInt64(analysis.farFieldMeshColumns), into: &hash)
+        combineFloats(analysis.farFieldMeshPathX)
+        combineFloats(analysis.farFieldMeshPathY)
+        combineFloats(analysis.farFieldMeshSupport)
         combineFloats(analysis.sourceLensShakeRidgePathY)
         combineFloats(analysis.sourceLensShakeRidgeSupport)
         combineFloats(analysis.sourceLensShakeRidgeLinePathY)
@@ -2034,6 +2064,26 @@ enum AutoStabilizationEstimator {
         return Array(values[start..<end])
     }
 
+    private static func farFieldMeshBandRanges() -> [(Float, Float)] {
+        [
+            (0.04, 0.16),
+            (0.13, 0.25),
+            (0.22, 0.34),
+            (0.31, 0.43),
+            (0.40, 0.52)
+        ]
+    }
+
+    private static func farFieldMeshColumnRanges() -> [(Float, Float)] {
+        [
+            (0.00, 0.22),
+            (0.18, 0.42),
+            (0.38, 0.62),
+            (0.58, 0.82),
+            (0.78, 1.00)
+        ]
+    }
+
     struct FarFieldRigidShakePreparedPaths {
         let pathX: [Float]
         let pathY: [Float]
@@ -2234,6 +2284,9 @@ enum AutoStabilizationEstimator {
                 sourceLensShakeLocalDx: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
                 sourceLensShakeLocalDy: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
                 sourceLensShakeLocalSupport: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
+                farFieldMeshDx: Array(repeating: 0.0, count: farFieldMeshBinCount),
+                farFieldMeshDy: Array(repeating: 0.0, count: farFieldMeshBinCount),
+                farFieldMeshSupport: Array(repeating: 0.0, count: farFieldMeshBinCount),
                 analysisConfidence: 1.0,
                 warpConfidence: 0.0,
                 acceptedBlockCount: 0,
@@ -3623,6 +3676,13 @@ enum AutoStabilizationEstimator {
             lensFarFieldRigidShakeShapeConsistency: lensShake.farFieldRigidShapeConsistency,
             lensFarFieldRigidShakeForwardBackwardConsistency: lensShake.farFieldRigidForwardBackwardConsistency,
             lensFarFieldRigidShakeLocalWarpSuppressed: lensShake.farFieldRigidLocalWarpSuppressed,
+            lensFarFieldMeshOffset: lensShake.farFieldMeshOffset,
+            lensFarFieldMeshSupport: lensShake.farFieldMeshSupport,
+            lensFarFieldMeshBlend: lensShake.farFieldMeshBlend,
+            lensFarFieldMeshAvailable: lensShake.farFieldMeshAvailable,
+            lensFarFieldMeshSupportedBins: lensShake.farFieldMeshSupportedBins,
+            lensFarFieldMeshMaxBinDelta: lensShake.farFieldMeshMaxBinDelta,
+            lensFarFieldMeshOpposingBins: lensShake.farFieldMeshOpposingBins,
             sourceLensShakeRidgeOffset: lensShake.sourceRidgeOffset,
             sourceLensShakeRidgeSupport: lensShake.sourceRidgeSupport,
             sourceLensShakeRidgeApplied: lensShake.sourceRidgeApplied,
@@ -7171,6 +7231,13 @@ enum AutoStabilizationEstimator {
                 lensFarFieldRigidShakeShapeConsistency: lensShake.farFieldRigidShapeConsistency,
                 lensFarFieldRigidShakeForwardBackwardConsistency: lensShake.farFieldRigidForwardBackwardConsistency,
                 lensFarFieldRigidShakeLocalWarpSuppressed: lensShake.farFieldRigidLocalWarpSuppressed,
+                lensFarFieldMeshOffset: lensShake.farFieldMeshOffset,
+                lensFarFieldMeshSupport: lensShake.farFieldMeshSupport,
+                lensFarFieldMeshBlend: lensShake.farFieldMeshBlend,
+                lensFarFieldMeshAvailable: lensShake.farFieldMeshAvailable,
+                lensFarFieldMeshSupportedBins: lensShake.farFieldMeshSupportedBins,
+                lensFarFieldMeshMaxBinDelta: lensShake.farFieldMeshMaxBinDelta,
+                lensFarFieldMeshOpposingBins: lensShake.farFieldMeshOpposingBins,
             sourceLensShakeRidgeOffset: lensShake.sourceRidgeOffset,
             sourceLensShakeRidgeSupport: lensShake.sourceRidgeSupport,
             sourceLensShakeRidgeApplied: lensShake.sourceRidgeApplied,
@@ -8813,6 +8880,13 @@ enum AutoStabilizationEstimator {
             lensFarFieldRigidShakeShapeConsistency: lensShake.farFieldRigidShapeConsistency,
             lensFarFieldRigidShakeForwardBackwardConsistency: lensShake.farFieldRigidForwardBackwardConsistency,
             lensFarFieldRigidShakeLocalWarpSuppressed: lensShake.farFieldRigidLocalWarpSuppressed,
+            lensFarFieldMeshOffset: lensShake.farFieldMeshOffset,
+            lensFarFieldMeshSupport: lensShake.farFieldMeshSupport,
+            lensFarFieldMeshBlend: lensShake.farFieldMeshBlend,
+            lensFarFieldMeshAvailable: lensShake.farFieldMeshAvailable,
+            lensFarFieldMeshSupportedBins: lensShake.farFieldMeshSupportedBins,
+            lensFarFieldMeshMaxBinDelta: lensShake.farFieldMeshMaxBinDelta,
+            lensFarFieldMeshOpposingBins: lensShake.farFieldMeshOpposingBins,
             sourceLensShakeRidgeOffset: lensShake.sourceRidgeOffset,
             sourceLensShakeRidgeSupport: lensShake.sourceRidgeSupport,
             sourceLensShakeRidgeApplied: lensShake.sourceRidgeApplied,
@@ -9870,6 +9944,13 @@ enum AutoStabilizationEstimator {
             lensFarFieldRigidShakeShapeConsistency: lensShake.farFieldRigidShapeConsistency,
             lensFarFieldRigidShakeForwardBackwardConsistency: lensShake.farFieldRigidForwardBackwardConsistency,
             lensFarFieldRigidShakeLocalWarpSuppressed: lensShake.farFieldRigidLocalWarpSuppressed,
+            lensFarFieldMeshOffset: lensShake.farFieldMeshOffset,
+            lensFarFieldMeshSupport: lensShake.farFieldMeshSupport,
+            lensFarFieldMeshBlend: lensShake.farFieldMeshBlend,
+            lensFarFieldMeshAvailable: lensShake.farFieldMeshAvailable,
+            lensFarFieldMeshSupportedBins: lensShake.farFieldMeshSupportedBins,
+            lensFarFieldMeshMaxBinDelta: lensShake.farFieldMeshMaxBinDelta,
+            lensFarFieldMeshOpposingBins: lensShake.farFieldMeshOpposingBins,
             sourceLensShakeRidgeOffset: lensShake.sourceRidgeOffset,
             sourceLensShakeRidgeSupport: lensShake.sourceRidgeSupport,
             sourceLensShakeRidgeApplied: lensShake.sourceRidgeApplied,
@@ -10700,6 +10781,13 @@ enum AutoStabilizationEstimator {
         var lensFarFieldRigidShakeShapeConsistency: Float = 0.0
         var lensFarFieldRigidShakeForwardBackwardConsistency: Float = 0.0
         var lensFarFieldRigidShakeLocalWarpSuppressed: Float = 0.0
+        var lensFarFieldMeshOffset = vector_float2(0.0, 0.0)
+        var lensFarFieldMeshSupport: Float = 0.0
+        var lensFarFieldMeshBlend: Float = 0.0
+        var lensFarFieldMeshAvailable: Float = 0.0
+        var lensFarFieldMeshSupportedBins: Float = 0.0
+        var lensFarFieldMeshMaxBinDelta: Float = 0.0
+        var lensFarFieldMeshOpposingBins: Float = 0.0
         var sourceLensShakeRidgeOffset = vector_float2(0.0, 0.0)
         var sourceLensShakeRidgeSupport: Float = 0.0
         var sourceLensShakeRidgeApplied: Float = 0.0
@@ -10801,6 +10889,13 @@ enum AutoStabilizationEstimator {
             lensFarFieldRigidShakeShapeConsistency += transform.lensFarFieldRigidShakeShapeConsistency * weight
             lensFarFieldRigidShakeForwardBackwardConsistency += transform.lensFarFieldRigidShakeForwardBackwardConsistency * weight
             lensFarFieldRigidShakeLocalWarpSuppressed += transform.lensFarFieldRigidShakeLocalWarpSuppressed * weight
+            lensFarFieldMeshOffset += transform.lensFarFieldMeshOffset * weight
+            lensFarFieldMeshSupport += transform.lensFarFieldMeshSupport * weight
+            lensFarFieldMeshBlend += transform.lensFarFieldMeshBlend * weight
+            lensFarFieldMeshAvailable += transform.lensFarFieldMeshAvailable * weight
+            lensFarFieldMeshSupportedBins += transform.lensFarFieldMeshSupportedBins * weight
+            lensFarFieldMeshMaxBinDelta += transform.lensFarFieldMeshMaxBinDelta * weight
+            lensFarFieldMeshOpposingBins += transform.lensFarFieldMeshOpposingBins * weight
             sourceLensShakeRidgeOffset += transform.sourceLensShakeRidgeOffset * weight
             sourceLensShakeRidgeSupport += transform.sourceLensShakeRidgeSupport * weight
             sourceLensShakeRidgeApplied += transform.sourceLensShakeRidgeApplied * weight
@@ -10913,6 +11008,13 @@ enum AutoStabilizationEstimator {
             lensFarFieldRigidShakeShapeConsistency: lensFarFieldRigidShakeShapeConsistency / totalWeight,
             lensFarFieldRigidShakeForwardBackwardConsistency: lensFarFieldRigidShakeForwardBackwardConsistency / totalWeight,
             lensFarFieldRigidShakeLocalWarpSuppressed: lensFarFieldRigidShakeLocalWarpSuppressed / totalWeight,
+            lensFarFieldMeshOffset: lensFarFieldMeshOffset / totalWeight,
+            lensFarFieldMeshSupport: lensFarFieldMeshSupport / totalWeight,
+            lensFarFieldMeshBlend: lensFarFieldMeshBlend / totalWeight,
+            lensFarFieldMeshAvailable: lensFarFieldMeshAvailable / totalWeight,
+            lensFarFieldMeshSupportedBins: lensFarFieldMeshSupportedBins / totalWeight,
+            lensFarFieldMeshMaxBinDelta: lensFarFieldMeshMaxBinDelta / totalWeight,
+            lensFarFieldMeshOpposingBins: lensFarFieldMeshOpposingBins / totalWeight,
             sourceLensShakeRidgeOffset: sourceLensShakeRidgeOffset / totalWeight,
             sourceLensShakeRidgeSupport: sourceLensShakeRidgeSupport / totalWeight,
             sourceLensShakeRidgeApplied: sourceLensShakeRidgeApplied / totalWeight,
@@ -11164,6 +11266,23 @@ enum AutoStabilizationEstimator {
                 motion.sourceLensShakeLocalSupport.indices.contains(bin) ? motion.sourceLensShakeLocalSupport[bin] : 0.0
             })
         }
+        var rawFarFieldMeshPathX: [Float] = []
+        var rawFarFieldMeshPathY: [Float] = []
+        var rawFarFieldMeshSupport: [Float] = []
+        rawFarFieldMeshPathX.reserveCapacity(farFieldMeshBinCount * motions.count)
+        rawFarFieldMeshPathY.reserveCapacity(farFieldMeshBinCount * motions.count)
+        rawFarFieldMeshSupport.reserveCapacity(farFieldMeshBinCount * motions.count)
+        for bin in 0..<farFieldMeshBinCount {
+            rawFarFieldMeshPathX.append(contentsOf: cumulative(motions.map { motion in
+                motion.farFieldMeshDx.indices.contains(bin) ? motion.farFieldMeshDx[bin] : 0.0
+            }))
+            rawFarFieldMeshPathY.append(contentsOf: cumulative(motions.map { motion in
+                motion.farFieldMeshDy.indices.contains(bin) ? motion.farFieldMeshDy[bin] : 0.0
+            }))
+            rawFarFieldMeshSupport.append(contentsOf: motions.map { motion in
+                motion.farFieldMeshSupport.indices.contains(bin) ? motion.farFieldMeshSupport[bin] : 0.0
+            })
+        }
         let farFieldRigidShake = farFieldRigidShakePreparedPaths(
             topX: rawLensBandTopPathX,
             topY: rawLensBandTopPathY,
@@ -11180,7 +11299,7 @@ enum AutoStabilizationEstimator {
               farFieldRigidShake.support.count == sortedFrames.count,
               farFieldRigidShake.shapeConsistency.count == sortedFrames.count,
               farFieldRigidShake.forwardBackwardConsistency.count == sortedFrames.count else {
-            throw metalError("far-field rigid shake preparation produced incomplete schema 42 paths")
+            throw metalError("far-field rigid shake preparation produced incomplete current-schema paths")
         }
         return StabilizerPreparedAnalysis(
             frames: sortedFrames.map { $0.withoutRetainedPixels() },
@@ -11233,6 +11352,11 @@ enum AutoStabilizationEstimator {
             farFieldRigidShakeSupport: farFieldRigidShake.support,
             farFieldRigidShakeShapeConsistency: farFieldRigidShake.shapeConsistency,
             farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShake.forwardBackwardConsistency,
+            farFieldMeshRows: farFieldMeshRows,
+            farFieldMeshColumns: farFieldMeshColumns,
+            farFieldMeshPathX: rawFarFieldMeshPathX,
+            farFieldMeshPathY: rawFarFieldMeshPathY,
+            farFieldMeshSupport: rawFarFieldMeshSupport,
             sourceLensShakeRidgePathY: rawSourceLensShakeRidgePathY,
             sourceLensShakeRidgeSupport: motions.map(\.sourceLensShakeRidgeSupport),
             sourceLensShakeRidgeLinePathY: rawSourceLensShakeRidgeLinePathY,
@@ -11429,6 +11553,9 @@ enum AutoStabilizationEstimator {
                 sourceLensShakeLocalDx: lensBandMotion.sourceLensShakeLocalDx,
                 sourceLensShakeLocalDy: lensBandMotion.sourceLensShakeLocalDy,
                 sourceLensShakeLocalSupport: lensBandMotion.sourceLensShakeLocalSupport,
+                farFieldMeshDx: lensBandMotion.farFieldMeshDx,
+                farFieldMeshDy: lensBandMotion.farFieldMeshDy,
+                farFieldMeshSupport: lensBandMotion.farFieldMeshSupport,
                 analysisConfidence: analysisConfidence,
                 warpConfidence: warpMotion.confidence,
                 acceptedBlockCount: Int32(acceptedCount),
@@ -11665,7 +11792,8 @@ enum AutoStabilizationEstimator {
             (0.16, 0.30),
             (0.28, 0.46)
         ]
-        for band in sourceLensBands {
+        let meshObservationBands = farFieldMeshBandRanges().map { (minY: $0.0, maxY: $0.1) }
+        for band in sourceLensBands + meshObservationBands {
             let y0 = verticalMargin + Int((Float(usableHeight) * band.minY).rounded(.down))
             let y1 = verticalMargin + Int((Float(usableHeight) * band.maxY).rounded(.up))
             let clampedY0 = max(verticalMargin, min(sampleHeight - verticalMargin, y0))
@@ -12188,7 +12316,10 @@ enum AutoStabilizationEstimator {
         sourceLensShakeRidgeSupport: Float,
         sourceLensShakeLocalDx: [Float],
         sourceLensShakeLocalDy: [Float],
-        sourceLensShakeLocalSupport: [Float]
+        sourceLensShakeLocalSupport: [Float],
+        farFieldMeshDx: [Float],
+        farFieldMeshDy: [Float],
+        farFieldMeshSupport: [Float]
     ) {
         guard shifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
             return (
@@ -12196,7 +12327,10 @@ enum AutoStabilizationEstimator {
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
                 Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
-                Array(repeating: 0.0, count: sourceLensShakeLocalBinCount)
+                Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
+                Array(repeating: 0.0, count: farFieldMeshBinCount),
+                Array(repeating: 0.0, count: farFieldMeshBinCount),
+                Array(repeating: 0.0, count: farFieldMeshBinCount)
             )
         }
         func band(_ minY: Float, _ maxY: Float, minX: Float = 0.0, maxX: Float = 1.0) -> (dx: Float, dy: Float, support: Float) {
@@ -12368,6 +12502,27 @@ enum AutoStabilizationEstimator {
                 localSupport[bin] = local.support
             }
         }
+        let meshBandRanges = farFieldMeshBandRanges()
+        let meshColumnRanges = farFieldMeshColumnRanges()
+        var meshDx = Array(repeating: Float(0.0), count: farFieldMeshBinCount)
+        var meshDy = Array(repeating: Float(0.0), count: farFieldMeshBinCount)
+        var meshSupport = Array(repeating: Float(0.0), count: farFieldMeshBinCount)
+        for bandIndex in 0..<farFieldMeshRows {
+            for columnIndex in 0..<farFieldMeshColumns {
+                let bin = (bandIndex * farFieldMeshColumns) + columnIndex
+                guard meshBandRanges.indices.contains(bandIndex),
+                      meshColumnRanges.indices.contains(columnIndex)
+                else {
+                    continue
+                }
+                let bandRange = meshBandRanges[bandIndex]
+                let columnRange = meshColumnRanges[columnIndex]
+                let mesh = band(bandRange.0, bandRange.1, minX: columnRange.0, maxX: columnRange.1)
+                meshDx[bin] = mesh.dx
+                meshDy[bin] = mesh.dy
+                meshSupport[bin] = mesh.support
+            }
+        }
         return (
             topDx: top.dx,
             topDy: top.dy,
@@ -12398,7 +12553,10 @@ enum AutoStabilizationEstimator {
             sourceLensShakeRidgeSupport: ridgeImpulse.support,
             sourceLensShakeLocalDx: localDx,
             sourceLensShakeLocalDy: localDy,
-            sourceLensShakeLocalSupport: localSupport
+            sourceLensShakeLocalSupport: localSupport,
+            farFieldMeshDx: meshDx,
+            farFieldMeshDy: meshDy,
+            farFieldMeshSupport: meshSupport
         )
     }
 
@@ -13606,6 +13764,128 @@ enum AutoStabilizationEstimator {
             )
         }
 
+        func meshValue(_ values: [Float], bin: Int, index: Int, binCount: Int) -> Float? {
+            guard bin >= 0,
+                  bin < binCount,
+                  frames.indices.contains(index)
+            else {
+                return nil
+            }
+            let offset = (bin * frames.count) + index
+            guard values.indices.contains(offset) else {
+                return nil
+            }
+            return values[offset]
+        }
+
+        func interpolatedMeshValue(_ values: [Float], bin: Int, binCount: Int) -> Float {
+            guard let lowerValue = meshValue(values, bin: bin, index: interpolation.lowerIndex, binCount: binCount) else {
+                return 0.0
+            }
+            guard interpolation.upperIndex != interpolation.lowerIndex,
+                  let upperValue = meshValue(values, bin: bin, index: interpolation.upperIndex, binCount: binCount)
+            else {
+                return lowerValue
+            }
+            return lowerValue + ((upperValue - lowerValue) * interpolation.fraction)
+        }
+
+        func meshOuterLinearPrediction(_ values: [Float], bin: Int, binCount: Int, centerIndex: Int) -> Float? {
+            guard frames.indices.contains(centerIndex),
+                  let centerValue = meshValue(values, bin: bin, index: centerIndex, binCount: binCount)
+            else {
+                return nil
+            }
+            let innerWindow = max(0.0, min(innerWindowSeconds, outerWindowSeconds))
+            let outerWindow = max(innerWindow, outerWindowSeconds)
+            let centerTime = frames[centerIndex].time
+            var points: [(x: Float, y: Float)] = []
+            for index in indicesWithinTimeRadius(frames, centerTime: centerTime, radiusSeconds: outerWindow) {
+                guard let value = meshValue(values, bin: bin, index: index, binCount: binCount) else {
+                    continue
+                }
+                let offsetSeconds = frames[index].time - centerTime
+                let distance = abs(offsetSeconds)
+                if distance <= outerWindow + timeWindowSelectionEpsilon
+                    && distance > innerWindow + timeWindowSelectionEpsilon {
+                    points.append((x: Float(offsetSeconds), y: value))
+                }
+            }
+            guard points.count >= 3 else {
+                var candidates: [Float] = []
+                for index in surroundingIndicesExcludingCenter(
+                    around: centerIndex,
+                    frames: frames,
+                    innerWindowSeconds: innerWindow,
+                    outerWindowSeconds: outerWindow
+                ) {
+                    if let value = meshValue(values, bin: bin, index: index, binCount: binCount) {
+                        candidates.append(value)
+                    }
+                }
+                guard !candidates.isEmpty else {
+                    return centerValue
+                }
+                candidates.sort()
+                return candidates[candidates.count / 2]
+            }
+
+            let count = Float(points.count)
+            let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
+            let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
+            let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
+            let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
+            let denominator = (count * sumXX) - (sumX * sumX)
+            guard abs(denominator) > Float.ulpOfOne else {
+                return sumY / count
+            }
+            return ((sumY * sumXX) - (sumX * sumXY)) / denominator
+        }
+
+        func interpolatedMeshBaseline(_ values: [Float], bin: Int, binCount: Int) -> Float {
+            guard let lowerValue = meshOuterLinearPrediction(values, bin: bin, binCount: binCount, centerIndex: interpolation.lowerIndex) else {
+                return 0.0
+            }
+            guard interpolation.upperIndex != interpolation.lowerIndex,
+                  let upperValue = meshOuterLinearPrediction(values, bin: bin, binCount: binCount, centerIndex: interpolation.upperIndex)
+            else {
+                return lowerValue
+            }
+            return lowerValue + ((upperValue - lowerValue) * interpolation.fraction)
+        }
+
+        func pulseSmoothedMeshPixelResidual(values: [Float], bin: Int, binCount: Int, scale: Float) -> Float {
+            let currentResidual = (
+                interpolatedMeshValue(values, bin: bin, binCount: binCount)
+                - interpolatedMeshBaseline(values, bin: bin, binCount: binCount)
+            ) * scale
+            let radiusFrames = max(2, lensBandPulseSmoothingWindowFrames / 2)
+            let centerTime = frames[max(0, min(frames.count - 1, centerIndex))].time
+            let radiusSeconds = max(frameStepSeconds, Double(radiusFrames) * frameStepSeconds)
+            var weightedResidual = Float(0.0)
+            var totalWeight = Float(0.0)
+            for index in (centerIndex - radiusFrames)...(centerIndex + radiusFrames) {
+                guard frames.indices.contains(index),
+                      let value = meshValue(values, bin: bin, index: index, binCount: binCount)
+                else {
+                    continue
+                }
+                let baseline = meshOuterLinearPrediction(values, bin: bin, binCount: binCount, centerIndex: index) ?? value
+                let distance = abs(frames[index].time - centerTime)
+                let normalizedDistance = clamp(Float(distance / radiusSeconds), min: 0.0, max: 1.0)
+                let weight = (1.0 - normalizedDistance) * (1.0 - normalizedDistance)
+                weightedResidual += (value - baseline) * scale * weight
+                totalWeight += weight
+            }
+            guard totalWeight > Float.ulpOfOne else {
+                return currentResidual
+            }
+            let smoothedResidual = weightedResidual / totalWeight
+            let pulseMagnitude = abs(currentResidual - smoothedResidual)
+            let blend = confidenceRamp(pulseMagnitude, start: lensBandPulseSmoothingStartPixels, full: lensBandPulseSmoothingFullPixels) * lensBandPulseSmoothingBlend
+            return currentResidual + ((smoothedResidual - currentResidual) * blend)
+        }
+
         func pulseSmoothedRollResidual(kind: MotionPathKind, values: [Float]) -> Float {
             let currentResidual = residual(kind: kind, values: values)
             return pulseSmoothedResidual(
@@ -13715,25 +13995,91 @@ enum AutoStabilizationEstimator {
             && analysis.farFieldRigidShakeSupport.count == frames.count
             && analysis.farFieldRigidShakeShapeConsistency.count == frames.count
             && analysis.farFieldRigidShakeForwardBackwardConsistency.count == frames.count
+        let farFieldMeshBinCount = analysis.farFieldMeshRows * analysis.farFieldMeshColumns
+        let hasFarFieldMeshPaths = analysis.farFieldMeshRows == farFieldMeshRows
+            && analysis.farFieldMeshColumns == farFieldMeshColumns
+            && analysis.farFieldMeshPathX.count == frames.count * farFieldMeshBinCount
+            && analysis.farFieldMeshPathY.count == frames.count * farFieldMeshBinCount
+            && analysis.farFieldMeshSupport.count == frames.count * farFieldMeshBinCount
         if hasFarFieldRigidShakePaths {
             result.farFieldRigidLocalWarpSuppressed = 1.0
             let rawRigidResidual = vector_float2(
                 residual(kind: .farFieldRigidShakeX, values: analysis.farFieldRigidShakePathX) * outputScale.x,
                 residual(kind: .farFieldRigidShakeY, values: analysis.farFieldRigidShakePathY) * outputScale.y
             )
-            let rigidResidual = vector_float2(
+            var rigidResidual = vector_float2(
                 pulseSmoothedPixelResidual(kind: .farFieldRigidShakeX, values: analysis.farFieldRigidShakePathX, scale: outputScale.x),
                 pulseSmoothedPixelResidual(kind: .farFieldRigidShakeY, values: analysis.farFieldRigidShakePathY, scale: outputScale.y)
             )
+            var meshRigidResidual = vector_float2(0.0, 0.0)
+            var meshRigidWeight = Float(0.0)
+            var meshRigidSupport = Float(0.0)
+            var meshRigidMaxSupport = Float(0.0)
+            var meshRigidSupportSum = Float(0.0)
+            var meshRigidSupportedBinCount = 0
+            var meshRigidSupportedResiduals: [(residual: vector_float2, support: Float)] = []
+            if hasFarFieldMeshPaths {
+                result.farFieldMeshAvailable = 1.0
+                for bin in 0..<farFieldMeshBinCount {
+                    let residualVector = vector_float2(
+                        pulseSmoothedMeshPixelResidual(values: analysis.farFieldMeshPathX, bin: bin, binCount: farFieldMeshBinCount, scale: outputScale.x),
+                        pulseSmoothedMeshPixelResidual(values: analysis.farFieldMeshPathY, bin: bin, binCount: farFieldMeshBinCount, scale: outputScale.y)
+                    )
+                    let preparedSupport = interpolatedMeshValue(analysis.farFieldMeshSupport, bin: bin, binCount: farFieldMeshBinCount)
+                    let support = confidenceRamp(simd_length(residualVector), start: 0.08, full: 0.70)
+                        * confidenceRamp(preparedSupport, start: 0.08, full: 0.38)
+                        * qualitySupport
+                        * turnScale
+                    let weight = max(0.0, support)
+                    meshRigidResidual += residualVector * weight
+                    meshRigidWeight += weight
+                    if support > 0.01 {
+                        meshRigidMaxSupport = max(meshRigidMaxSupport, support)
+                        meshRigidSupportSum += support
+                        meshRigidSupportedBinCount += 1
+                        meshRigidSupportedResiduals.append((residual: residualVector, support: support))
+                    }
+                }
+                if meshRigidSupportedBinCount > 0 {
+                    let averageSupport = meshRigidSupportSum / Float(meshRigidSupportedBinCount)
+                    let coverageSupport = confidenceRamp(Float(meshRigidSupportedBinCount), start: 4.0, full: 12.0)
+                    meshRigidSupport = min(meshRigidMaxSupport, averageSupport * coverageSupport)
+                }
+                if meshRigidWeight > Float.ulpOfOne {
+                    meshRigidResidual /= meshRigidWeight
+                    var meshMaxBinDelta = Float(0.0)
+                    var meshOpposingBins = Float(0.0)
+                    for supported in meshRigidSupportedResiduals {
+                        meshMaxBinDelta = max(meshMaxBinDelta, simd_length(supported.residual - meshRigidResidual))
+                        if simd_dot(supported.residual, meshRigidResidual) < -0.01 {
+                            meshOpposingBins += 1.0
+                        }
+                    }
+                    let meshBlend = min(Float(0.45), meshRigidSupport * 0.45)
+                    result.farFieldMeshOffset = meshRigidResidual
+                    result.farFieldMeshSupport = clamp(meshRigidSupport, min: 0.0, max: 1.0)
+                    result.farFieldMeshBlend = meshBlend
+                    result.farFieldMeshSupportedBins = Float(meshRigidSupportedBinCount)
+                    result.farFieldMeshMaxBinDelta = meshMaxBinDelta
+                    result.farFieldMeshOpposingBins = meshOpposingBins
+                    rigidResidual += (meshRigidResidual - rigidResidual) * meshBlend
+                    if meshBlend > 0.0 {
+                        result.bandModelMask |= 256
+                    }
+                }
+            }
             let preparedRigidSupport = interpolatedValue(analysis.farFieldRigidShakeSupport, using: interpolation)
             let shapeConsistency = interpolatedValue(analysis.farFieldRigidShakeShapeConsistency, using: interpolation)
             let forwardBackwardConsistency = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistency, using: interpolation)
-            let rigidSupport = confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70)
+            let rigidSupport = max(
+                confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70)
                 * confidenceRamp(preparedRigidSupport, start: 0.08, full: 0.36)
                 * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
                 * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
                 * qualitySupport
-                * turnScale
+                * turnScale,
+                meshRigidSupport * confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70)
+            )
             result.farFieldRigidOffset = rigidResidual
             result.farFieldRigidSupport = clamp(rigidSupport, min: 0.0, max: 1.0)
             result.farFieldRigidShapeConsistency = clamp(shapeConsistency, min: 0.0, max: 1.0)
@@ -16870,6 +17216,9 @@ final class StreamingStabilizationAnalysisBuilder {
                 sourceLensShakeLocalDx: Array(repeating: 0.0, count: AutoStabilizationEstimator.sourceLensShakeLocalBinCount),
                 sourceLensShakeLocalDy: Array(repeating: 0.0, count: AutoStabilizationEstimator.sourceLensShakeLocalBinCount),
                 sourceLensShakeLocalSupport: Array(repeating: 0.0, count: AutoStabilizationEstimator.sourceLensShakeLocalBinCount),
+                farFieldMeshDx: Array(repeating: 0.0, count: AutoStabilizationEstimator.farFieldMeshBinCount),
+                farFieldMeshDy: Array(repeating: 0.0, count: AutoStabilizationEstimator.farFieldMeshBinCount),
+                farFieldMeshSupport: Array(repeating: 0.0, count: AutoStabilizationEstimator.farFieldMeshBinCount),
                 analysisConfidence: 1.0,
                 warpConfidence: 0.0,
                 acceptedBlockCount: 0,

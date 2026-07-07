@@ -48,11 +48,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.0.384"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 914.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 0.0, 384.0, 914.0)
+private let tokyoWalkingStabilizerVersion = "1.0.385"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 915.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 0.0, 385.0, 915.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_340_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_350_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -7076,6 +7076,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if (mask & 32) != 0 { parts.append("sourceLocal") }
         if (mask & 64) != 0 { parts.append("sourceRidgeLine") }
         if (mask & 128) != 0 { parts.append("farFieldRigid") }
+        if (mask & 256) != 0 { parts.append("farFieldMesh") }
         return parts.joined(separator: ",")
     }
 
@@ -7282,6 +7283,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensBandRidgeRowPhaseOffset = autoTransform.lensBandRidgeRowPhaseOffset * masterStrength
             let appliedLensBandMidRowPhaseOffset = autoTransform.lensBandMidRowPhaseOffset * masterStrength
             let appliedLensFarFieldRigidShakeOffset = autoTransform.lensFarFieldRigidShakeOffset * masterStrength
+            let appliedLensFarFieldMeshOffset = autoTransform.lensFarFieldMeshOffset * masterStrength
             let appliedLensFarFieldRigidCorrectionOffset = autoTransform.lensFarFieldRigidShakeApplied > 0.5
                 ? appliedLensBandRidgeOffset
                 : vector_float2(0.0, 0.0)
@@ -7497,7 +7499,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 lensBandMessage
             )
             let lensRigidMessage = String(
-                format: "Render lens rigid csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensFarFieldRigidX=%.5f lensFarFieldRigidY=%.5f lensFarFieldRigidResidualX=%.5f lensFarFieldRigidResidualY=%.5f lensFarFieldRigidSupport=%.5f lensFarFieldRigidApplied=%.2f lensFarFieldRigidShapeConsistency=%.5f lensFarFieldRigidForwardBackwardConsistency=%.5f lensFarFieldRigidLocalWarpSuppressed=%.2f",
+                format: "Render lens rigid csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensFarFieldRigidX=%.5f lensFarFieldRigidY=%.5f lensFarFieldRigidResidualX=%.5f lensFarFieldRigidResidualY=%.5f lensFarFieldRigidSupport=%.5f lensFarFieldRigidApplied=%.2f lensFarFieldRigidShapeConsistency=%.5f lensFarFieldRigidForwardBackwardConsistency=%.5f lensFarFieldRigidLocalWarpSuppressed=%.2f lensFarFieldMeshAvailable=%.2f lensFarFieldMeshX=%.5f lensFarFieldMeshY=%.5f lensFarFieldMeshSupport=%.5f lensFarFieldMeshBlend=%.5f lensFarFieldMeshSupportedBins=%.1f lensFarFieldMeshMaxBinDelta=%.5f lensFarFieldMeshOpposingBins=%.1f",
                 analysisSeconds,
                 samplePosition,
                 frames.count,
@@ -7514,7 +7516,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoTransform.lensFarFieldRigidShakeApplied,
                 autoTransform.lensFarFieldRigidShakeShapeConsistency,
                 autoTransform.lensFarFieldRigidShakeForwardBackwardConsistency,
-                autoTransform.lensFarFieldRigidShakeLocalWarpSuppressed
+                autoTransform.lensFarFieldRigidShakeLocalWarpSuppressed,
+                autoTransform.lensFarFieldMeshAvailable,
+                appliedLensFarFieldMeshOffset.x,
+                appliedLensFarFieldMeshOffset.y,
+                autoTransform.lensFarFieldMeshSupport,
+                autoTransform.lensFarFieldMeshBlend,
+                autoTransform.lensFarFieldMeshSupportedBins,
+                autoTransform.lensFarFieldMeshMaxBinDelta,
+                autoTransform.lensFarFieldMeshOpposingBins
             )
             os_log(
                 "%{public}@",

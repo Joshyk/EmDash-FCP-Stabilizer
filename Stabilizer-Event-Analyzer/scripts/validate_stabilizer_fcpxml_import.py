@@ -20,7 +20,7 @@ from event_cache_resolution import resolve_event_root_from_manifest
 ALWAYS_INVALID_FILTER_VIDEO_ATTRS = {"videoOverride"}
 NAME_OVERRIDE_MIN_VERSION = (1, 12)
 FCP_RESOURCE_ID_PATTERN = re.compile(r"^r[0-9]+$")
-EXPECTED_CACHE_SCHEMA_VERSION = 42
+EXPECTED_CACHE_SCHEMA_VERSION = 43
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -196,6 +196,13 @@ def cache_prepared_path_present(cache_payload: dict) -> bool:
     ):
         value = cache_payload.get(key)
         if not isinstance(value, list) or len(value) != frame_count or frame_count == 0:
+            return False
+    if cache_payload.get("farFieldMeshRows") != 5 or cache_payload.get("farFieldMeshColumns") != 5:
+        return False
+    mesh_count = frame_count * 25
+    for key in ("farFieldMeshPathX", "farFieldMeshPathY", "farFieldMeshSupport"):
+        value = cache_payload.get(key)
+        if not isinstance(value, list) or len(value) != mesh_count:
             return False
     return True
 
