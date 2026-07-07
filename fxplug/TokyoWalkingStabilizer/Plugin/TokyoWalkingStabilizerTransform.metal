@@ -250,6 +250,12 @@ static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlay
     return debugLabelPixel(debugLabelChar(row, index, debugMode, runtimeBuild), glyphX, glyphY);
 }
 
+static float lensBandWeight(float y, float center, float radius) {
+    float distance = abs(y - center);
+    float normalized = saturate(1.0 - (distance / max(radius, 0.0001)));
+    return normalized * normalized * (3.0 - (2.0 * normalized));
+}
+
 fragment float4 fragmentShader(
     RasterizerData in [[stage_in]],
     texture2d<half> colorTexture [[texture(STI_InputImage)]],
@@ -277,6 +283,23 @@ fragment float4 fragmentShader(
         transform->shear.x * stabilizedPixels.y,
         transform->shear.y * stabilizedPixels.x
     );
+    float lensBandSupport = saturate(transform->lensBandWarpSupport * transform->lensBandWarpApplied);
+    if (lensBandSupport > 0.0001) {
+        float y = saturate(uv.y);
+        float farFieldFade = 1.0 - smoothstep(0.42, 0.56, y);
+        float topWeight = lensBandWeight(y, 0.12, 0.13);
+        float ridgeWeight = lensBandWeight(y, 0.23, 0.13);
+        float midWeight = lensBandWeight(y, 0.35, 0.12);
+        float totalWeight = topWeight + ridgeWeight + midWeight;
+        if (totalWeight > 0.0001) {
+            float2 bandOffset = (
+                (transform->lensBandTopOffset * topWeight)
+                + (transform->lensBandRidgeOffset * ridgeWeight)
+                + (transform->lensBandMidOffset * midWeight)
+            ) / totalWeight;
+            stabilizedPixels -= bandOffset * lensBandSupport * farFieldFade * transform->strength;
+        }
+    }
     float2 sampleUV = (stabilizedPixels / transform->outputSize) + 0.5;
 
     bool outsideSource = sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0;

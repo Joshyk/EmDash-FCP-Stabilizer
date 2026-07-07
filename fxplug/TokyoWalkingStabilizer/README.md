@@ -26,10 +26,10 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Uses schema 32 high-resolution sample-density control for faster full-resolution analysis while keeping far-field block coverage, schema 31 persisted far-field translation/roll paths, schema 30 stricter far-field-prioritized block weighting, schema 29 robust far-field affine X/Y/roll/shear motion, schema 28 far-field plane-prioritized X/Y/roll motion, schema 27 wider far-field consensus motion search, schema 26 tighter fine-refined
+- Uses schema 33 far-field lens-band paths for short-period source-space local correction, schema 32 high-resolution sample-density control for faster full-resolution analysis while keeping far-field block coverage, schema 31 persisted far-field translation/roll paths, schema 30 stricter far-field-prioritized block weighting, schema 29 robust far-field affine X/Y/roll/shear motion, schema 28 far-field plane-prioritized X/Y/roll motion, schema 27 wider far-field consensus motion search, schema 26 tighter fine-refined
   hierarchical block motion search, schema 24 chunked frame fingerprints, and higher
   precision far-field block motion evidence for persisted-cache validation, while keeping
-  compatible schema 17-31 caches
+  compatible schema 17-32 caches
   readable.
 - Reuses persisted analysis only after the current source frame validates against saved
   frame fingerprints.
@@ -64,7 +64,13 @@ estimators, or Transform-keyframe writers back into this target.
   short zoom-in/out caps so black-edge protection does not create brief scale pulses.
   Clip-edge smoothing skips out-of-range neighboring samples instead of duplicating the first
   or last analysis frame.
-- New schema 32 analysis keeps schema 31 far-field prepared paths but prevents high-resolution
+- New schema 33 analysis persists separate upper far-field lens-band motion paths for cloud,
+  ridge/horizon, and distant-mountain rows. Render can use those measured short-window
+  residuals for a source-space y-dependent local warp when the lens/camera shake looks
+  rolling/projective, instead of hiding the shake with extra zoom or reusing final X/Y
+  smoothing. Older complete schema 17-32 caches remain readable, but only schema 33 carries
+  the measured band paths needed for this local correction. Schema 32 analysis keeps schema
+  31 far-field prepared paths but prevents high-resolution
   far-field detail blocks from collapsing to a one-pixel sample step. Full-resolution
   Event analysis still tracks the same distant rows and detail blocks, but the minimum
   two-pixel sample step avoids spending most Metal time on redundant adjacent samples.
@@ -91,7 +97,7 @@ estimators, or Transform-keyframe writers back into this target.
   for higher throughput and the schema 24 higher precision prepared warp paths from extra
   upper-row far-field detail blocks, high far-field vertical detail blocks, central
   attitude-detail blocks for yaw/pitch/roll evidence, denser high far-field in-block
-  sampling, and sub-pixel block shift refinement. Older complete schema 17-30 caches remain
+  sampling, and sub-pixel block shift refinement. Older complete schema 17-32 caches remain
   readable.
 - `Remove Black Edges` is on by default and applies dynamic Auto Crop framing during
   render. Turning it off skips Auto Crop window sampling and framing entirely, so

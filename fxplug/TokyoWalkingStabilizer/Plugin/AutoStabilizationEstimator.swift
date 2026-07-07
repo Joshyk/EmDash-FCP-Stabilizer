@@ -25,6 +25,11 @@ struct StabilizerAutoTransform {
     var lensShakeAxisMask: Int32
     var lensShakeReasonCode: Int32
     var lensShakeRollingShutterCandidate: Float
+    var lensBandTopOffset: vector_float2
+    var lensBandRidgeOffset: vector_float2
+    var lensBandMidOffset: vector_float2
+    var lensBandWarpSupport: Float
+    var lensBandWarpApplied: Float
     var footstepJitterRotationDegrees: Float
     var strideWobbleRotationDegrees: Float
     var rotationDegrees: Float
@@ -76,6 +81,11 @@ struct StabilizerAutoTransform {
         lensShakeAxisMask: 0,
         lensShakeReasonCode: 0,
         lensShakeRollingShutterCandidate: 0.0,
+        lensBandTopOffset: vector_float2(0.0, 0.0),
+        lensBandRidgeOffset: vector_float2(0.0, 0.0),
+        lensBandMidOffset: vector_float2(0.0, 0.0),
+        lensBandWarpSupport: 0.0,
+        lensBandWarpApplied: 0.0,
         footstepJitterRotationDegrees: 0.0,
         strideWobbleRotationDegrees: 0.0,
         rotationDegrees: 0.0,
@@ -375,6 +385,13 @@ struct StabilizerPreparedAnalysis {
     let pathShearY: [Float]
     let pathPerspectiveX: [Float]
     let pathPerspectiveY: [Float]
+    let lensBandTopPathX: [Float]
+    let lensBandTopPathY: [Float]
+    let lensBandRidgePathX: [Float]
+    let lensBandRidgePathY: [Float]
+    let lensBandMidPathX: [Float]
+    let lensBandMidPathY: [Float]
+    let lensBandConfidence: [Float]
     let analysisConfidence: [Float]
     let warpConfidence: [Float]
     let acceptedBlockCounts: [Int32]
@@ -400,6 +417,13 @@ fileprivate struct PairMotion {
     let shearY: Float
     let perspectiveX: Float
     let perspectiveY: Float
+    let lensBandTopDx: Float
+    let lensBandTopDy: Float
+    let lensBandRidgeDx: Float
+    let lensBandRidgeDy: Float
+    let lensBandMidDx: Float
+    let lensBandMidDy: Float
+    let lensBandConfidence: Float
     let analysisConfidence: Float
     let warpConfidence: Float
     let acceptedBlockCount: Int32
@@ -928,6 +952,12 @@ enum AutoStabilizationEstimator {
         case shearY
         case perspectiveX
         case perspectiveY
+        case lensBandTopX
+        case lensBandTopY
+        case lensBandRidgeX
+        case lensBandRidgeY
+        case lensBandMidX
+        case lensBandMidY
     }
 
     private enum LocalAverageSourceRole: Hashable {
@@ -991,6 +1021,11 @@ enum AutoStabilizationEstimator {
         var axisMask: Int32 = 0
         var reasonCode: Int32 = 0
         var rollingShutterCandidate: Float = 0.0
+        var bandTopOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandRidgeOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandMidOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var bandWarpSupport: Float = 0.0
+        var bandWarpApplied: Float = 0.0
     }
 
     private struct ResidualPercentileCacheKey: Hashable {
@@ -1120,6 +1155,13 @@ enum AutoStabilizationEstimator {
         combineFloats(analysis.pathShearY)
         combineFloats(analysis.pathPerspectiveX)
         combineFloats(analysis.pathPerspectiveY)
+        combineFloats(analysis.lensBandTopPathX)
+        combineFloats(analysis.lensBandTopPathY)
+        combineFloats(analysis.lensBandRidgePathX)
+        combineFloats(analysis.lensBandRidgePathY)
+        combineFloats(analysis.lensBandMidPathX)
+        combineFloats(analysis.lensBandMidPathY)
+        combineFloats(analysis.lensBandConfidence)
         combineFloats(analysis.analysisConfidence)
         combineFloats(analysis.warpConfidence)
         combineInt32s(analysis.acceptedBlockCounts)
@@ -1668,6 +1710,18 @@ enum AutoStabilizationEstimator {
             return analysis.pathPerspectiveX
         case .perspectiveY:
             return analysis.pathPerspectiveY
+        case .lensBandTopX:
+            return analysis.lensBandTopPathX
+        case .lensBandTopY:
+            return analysis.lensBandTopPathY
+        case .lensBandRidgeX:
+            return analysis.lensBandRidgePathX
+        case .lensBandRidgeY:
+            return analysis.lensBandRidgePathY
+        case .lensBandMidX:
+            return analysis.lensBandMidPathX
+        case .lensBandMidY:
+            return analysis.lensBandMidPathY
         }
     }
 
@@ -1739,6 +1793,13 @@ enum AutoStabilizationEstimator {
                 shearY: 0.0,
                 perspectiveX: 0.0,
                 perspectiveY: 0.0,
+                lensBandTopDx: 0.0,
+                lensBandTopDy: 0.0,
+                lensBandRidgeDx: 0.0,
+                lensBandRidgeDy: 0.0,
+                lensBandMidDx: 0.0,
+                lensBandMidDy: 0.0,
+                lensBandConfidence: 0.0,
                 analysisConfidence: 1.0,
                 warpConfidence: 0.0,
                 acceptedBlockCount: 0,
@@ -3099,6 +3160,11 @@ enum AutoStabilizationEstimator {
             lensShakeAxisMask: lensShake.axisMask,
             lensShakeReasonCode: lensShake.reasonCode,
             lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
+            lensBandTopOffset: lensShake.bandTopOffset,
+            lensBandRidgeOffset: lensShake.bandRidgeOffset,
+            lensBandMidOffset: lensShake.bandMidOffset,
+            lensBandWarpSupport: lensShake.bandWarpSupport,
+            lensBandWarpApplied: lensShake.bandWarpApplied,
             footstepJitterRotationDegrees: macroRotation + microRotation,
             strideWobbleRotationDegrees: strideRotation,
             rotationDegrees: rotation,
@@ -4156,6 +4222,9 @@ enum AutoStabilizationEstimator {
         scaled.trajectoryMicroJitterPixelOffset = scalePixelVector(transform.trajectoryMicroJitterPixelOffset, xScale: xScale, yScale: yScale)
         scaled.trajectoryContinuityPixelOffset = scalePixelVector(transform.trajectoryContinuityPixelOffset, xScale: xScale, yScale: yScale)
         scaled.lensShakePixelOffset = scalePixelVector(transform.lensShakePixelOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandTopOffset = scalePixelVector(transform.lensBandTopOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandRidgeOffset = scalePixelVector(transform.lensBandRidgeOffset, xScale: xScale, yScale: yScale)
+        scaled.lensBandMidOffset = scalePixelVector(transform.lensBandMidOffset, xScale: xScale, yScale: yScale)
         scaled.turnDetectedPixelOffset = scalePixelVector(transform.turnDetectedPixelOffset, xScale: xScale, yScale: yScale)
         scaled.rawPixelOffset = scalePixelVector(transform.rawPixelOffset, xScale: xScale, yScale: yScale)
         scaled.temporalSmoothingPixelDelta = scalePixelVector(transform.temporalSmoothingPixelDelta, xScale: xScale, yScale: yScale)
@@ -6583,6 +6652,11 @@ enum AutoStabilizationEstimator {
                 lensShakeAxisMask: lensShake.axisMask,
                 lensShakeReasonCode: lensShake.reasonCode,
                 lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
+                lensBandTopOffset: lensShake.bandTopOffset,
+                lensBandRidgeOffset: lensShake.bandRidgeOffset,
+                lensBandMidOffset: lensShake.bandMidOffset,
+                lensBandWarpSupport: lensShake.bandWarpSupport,
+                lensBandWarpApplied: lensShake.bandWarpApplied,
                 footstepJitterRotationDegrees: macroRotation + microRotation,
                 strideWobbleRotationDegrees: strideRotation,
                 rotationDegrees: rotation,
@@ -6754,6 +6828,11 @@ enum AutoStabilizationEstimator {
         target.lensShakeAxisMask = source.lensShakeAxisMask
         target.lensShakeReasonCode = source.lensShakeReasonCode
         target.lensShakeRollingShutterCandidate = source.lensShakeRollingShutterCandidate
+        target.lensBandTopOffset = source.lensBandTopOffset
+        target.lensBandRidgeOffset = source.lensBandRidgeOffset
+        target.lensBandMidOffset = source.lensBandMidOffset
+        target.lensBandWarpSupport = source.lensBandWarpSupport
+        target.lensBandWarpApplied = source.lensBandWarpApplied
     }
 
     private static func playbackTrajectoryLimitedTransform(
@@ -8141,6 +8220,11 @@ enum AutoStabilizationEstimator {
             lensShakeAxisMask: lensShake.axisMask,
             lensShakeReasonCode: lensShake.reasonCode,
             lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
+            lensBandTopOffset: lensShake.bandTopOffset,
+            lensBandRidgeOffset: lensShake.bandRidgeOffset,
+            lensBandMidOffset: lensShake.bandMidOffset,
+            lensBandWarpSupport: lensShake.bandWarpSupport,
+            lensBandWarpApplied: lensShake.bandWarpApplied,
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation + lensShake.rotationDegrees,
@@ -9150,6 +9234,11 @@ enum AutoStabilizationEstimator {
             lensShakeAxisMask: lensShake.axisMask,
             lensShakeReasonCode: lensShake.reasonCode,
             lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
+            lensBandTopOffset: lensShake.bandTopOffset,
+            lensBandRidgeOffset: lensShake.bandRidgeOffset,
+            lensBandMidOffset: lensShake.bandMidOffset,
+            lensBandWarpSupport: lensShake.bandWarpSupport,
+            lensBandWarpApplied: lensShake.bandWarpApplied,
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation + lensShake.rotationDegrees,
@@ -9932,6 +10021,11 @@ enum AutoStabilizationEstimator {
         var lensShakeAxisMask: Int32 = 0
         var lensShakeReasonCode: Int32 = 0
         var lensShakeRollingShutterCandidate: Float = 0.0
+        var lensBandTopOffset = vector_float2(0.0, 0.0)
+        var lensBandRidgeOffset = vector_float2(0.0, 0.0)
+        var lensBandMidOffset = vector_float2(0.0, 0.0)
+        var lensBandWarpSupport: Float = 0.0
+        var lensBandWarpApplied: Float = 0.0
         var footstepJitterRotationDegrees: Float = 0.0
         var strideWobbleRotationDegrees: Float = 0.0
         var rotationDegrees: Float = 0.0
@@ -9981,10 +10075,15 @@ enum AutoStabilizationEstimator {
             lensShakeSupport += transform.lensShakeSupport * weight
             lensShakeWindowFrames += transform.lensShakeWindowFrames * weight
             lensShakeAxisMask |= transform.lensShakeAxisMask
-            if transform.lensShakeReasonCode == 1 || lensShakeReasonCode == 0 {
+            if transform.lensShakeReasonCode == 1 || transform.lensShakeReasonCode == 6 || lensShakeReasonCode == 0 {
                 lensShakeReasonCode = transform.lensShakeReasonCode
             }
             lensShakeRollingShutterCandidate += transform.lensShakeRollingShutterCandidate * weight
+            lensBandTopOffset += transform.lensBandTopOffset * weight
+            lensBandRidgeOffset += transform.lensBandRidgeOffset * weight
+            lensBandMidOffset += transform.lensBandMidOffset * weight
+            lensBandWarpSupport += transform.lensBandWarpSupport * weight
+            lensBandWarpApplied += transform.lensBandWarpApplied * weight
             footstepJitterRotationDegrees += transform.footstepJitterRotationDegrees * weight
             strideWobbleRotationDegrees += transform.strideWobbleRotationDegrees * weight
             rotationDegrees += transform.rotationDegrees * weight
@@ -10049,6 +10148,11 @@ enum AutoStabilizationEstimator {
             lensShakeAxisMask: lensShakeAxisMask,
             lensShakeReasonCode: lensShakeReasonCode,
             lensShakeRollingShutterCandidate: lensShakeRollingShutterCandidate / totalWeight,
+            lensBandTopOffset: lensBandTopOffset / totalWeight,
+            lensBandRidgeOffset: lensBandRidgeOffset / totalWeight,
+            lensBandMidOffset: lensBandMidOffset / totalWeight,
+            lensBandWarpSupport: lensBandWarpSupport / totalWeight,
+            lensBandWarpApplied: lensBandWarpApplied / totalWeight,
             footstepJitterRotationDegrees: footstepJitterRotationDegrees / totalWeight,
             strideWobbleRotationDegrees: strideWobbleRotationDegrees / totalWeight,
             rotationDegrees: rotationDegrees / totalWeight,
@@ -10239,6 +10343,12 @@ enum AutoStabilizationEstimator {
         let rawPathShearY = cumulative(motions.map(\.shearY))
         let rawPathPerspectiveX = cumulative(motions.map(\.perspectiveX))
         let rawPathPerspectiveY = cumulative(motions.map(\.perspectiveY))
+        let rawLensBandTopPathX = cumulative(motions.map(\.lensBandTopDx))
+        let rawLensBandTopPathY = cumulative(motions.map(\.lensBandTopDy))
+        let rawLensBandRidgePathX = cumulative(motions.map(\.lensBandRidgeDx))
+        let rawLensBandRidgePathY = cumulative(motions.map(\.lensBandRidgeDy))
+        let rawLensBandMidPathX = cumulative(motions.map(\.lensBandMidDx))
+        let rawLensBandMidPathY = cumulative(motions.map(\.lensBandMidDy))
         return StabilizerPreparedAnalysis(
             frames: sortedFrames.map { $0.withoutRetainedPixels() },
             qualityModel: .fxplugHostAnalysis,
@@ -10260,6 +10370,13 @@ enum AutoStabilizationEstimator {
             pathShearY: jerkLimitedMotionPath(rawPathShearY, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
             pathPerspectiveX: jerkLimitedMotionPath(rawPathPerspectiveX, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
             pathPerspectiveY: jerkLimitedMotionPath(rawPathPerspectiveY, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
+            lensBandTopPathX: rawLensBandTopPathX,
+            lensBandTopPathY: rawLensBandTopPathY,
+            lensBandRidgePathX: rawLensBandRidgePathX,
+            lensBandRidgePathY: rawLensBandRidgePathY,
+            lensBandMidPathX: rawLensBandMidPathX,
+            lensBandMidPathY: rawLensBandMidPathY,
+            lensBandConfidence: motions.map(\.lensBandConfidence),
             analysisConfidence: motions.map(\.analysisConfidence),
             warpConfidence: motions.map(\.warpConfidence),
             acceptedBlockCounts: motions.map(\.acceptedBlockCount),
@@ -10380,6 +10497,12 @@ enum AutoStabilizationEstimator {
             sampleHeight: sampleHeight,
             analysisConfidence: analysisConfidence
         )
+        let lensBandMotion = farFieldLensBandMotion(
+            shifts: motionBlocksForModel,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
+            analysisConfidence: analysisConfidence
+        )
         let modelYawProxy = farFieldPlane.map {
             warpMotion.yawProxy + (($0.yawProxy - warpMotion.yawProxy) * farFieldAuthority)
         } ?? warpMotion.yawProxy
@@ -10410,6 +10533,13 @@ enum AutoStabilizationEstimator {
                 shearY: modelShearY,
                 perspectiveX: warpMotion.perspectiveX,
                 perspectiveY: warpMotion.perspectiveY,
+                lensBandTopDx: lensBandMotion.topDx,
+                lensBandTopDy: lensBandMotion.topDy,
+                lensBandRidgeDx: lensBandMotion.ridgeDx,
+                lensBandRidgeDy: lensBandMotion.ridgeDy,
+                lensBandMidDx: lensBandMotion.midDx,
+                lensBandMidDy: lensBandMotion.midDy,
+                lensBandConfidence: lensBandMotion.confidence,
                 analysisConfidence: analysisConfidence,
                 warpConfidence: warpMotion.confidence,
                 acceptedBlockCount: Int32(acceptedCount),
@@ -11107,6 +11237,65 @@ enum AutoStabilizationEstimator {
             perspectiveX: (weightedMedian(perspectiveXCandidates) ?? 0.0) * confidence,
             perspectiveY: (weightedMedian(perspectiveYCandidates) ?? 0.0) * confidence,
             confidence: confidence
+        )
+    }
+
+    private static func farFieldLensBandMotion(
+        shifts: [StabilizerBlockShift],
+        sampleWidth: Int,
+        sampleHeight: Int,
+        analysisConfidence: Float
+    ) -> (topDx: Float, topDy: Float, ridgeDx: Float, ridgeDy: Float, midDx: Float, midDy: Float, confidence: Float) {
+        guard shifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        }
+        func band(_ minY: Float, _ maxY: Float) -> (dx: Float, dy: Float, support: Float) {
+            let candidates = shifts.filter { shift in
+                let normalizedY = shift.block.centerY / Float(max(1, sampleHeight))
+                return normalizedY >= minY
+                    && normalizedY <= maxY
+                    && shift.block.farFieldWeight >= farFieldPlaneBroadThreshold
+                    && shift.score.isFinite
+                    && shift.dx.isFinite
+                    && shift.dy.isFinite
+            }
+            guard candidates.count >= minimumFarFieldMotionBlocks else {
+                return (0.0, 0.0, 0.0)
+            }
+            let scoreReference = median(candidates.map(\.score)) ?? 0.0
+            let weighted = candidates.map { shift -> (dx: (value: Float, weight: Float), dy: (value: Float, weight: Float)) in
+                let scoreQuality = clamp(
+                    1.0 - ((shift.score - scoreReference) / max(0.020, scoreReference * 1.25)),
+                    min: 0.10,
+                    max: 1.0
+                )
+                let searchHeadroom: Float = shift.searchRadiusHit ? 0.55 : 1.0
+                let weight = farFieldPriorityWeight(shift.block.farFieldWeight) * scoreQuality * searchHeadroom
+                return ((shift.dx, weight), (shift.dy, weight))
+            }
+            let dx = weightedMedian(weighted.map(\.dx)) ?? 0.0
+            let dy = weightedMedian(weighted.map(\.dy)) ?? 0.0
+            let coherencePixels = farFieldConsensusCoherencePixels(sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+            let medianDistance = median(candidates.map { hypotf($0.dx - dx, $0.dy - dy) }) ?? coherencePixels
+            let coherence = clamp(1.0 - (medianDistance / coherencePixels), min: 0.0, max: 1.0)
+            let coverage = confidenceRamp(
+                Float(candidates.count),
+                start: Float(minimumFarFieldMotionBlocks),
+                full: Float(minimumFarFieldMotionBlocks * 3)
+            )
+            return (dx, dy, clamp(analysisConfidence * coherence * coverage, min: 0.0, max: 1.0))
+        }
+        let top = band(0.04, 0.22)
+        let ridge = band(0.14, 0.34)
+        let mid = band(0.28, 0.50)
+        return (
+            topDx: top.dx,
+            topDy: top.dy,
+            ridgeDx: ridge.dx,
+            ridgeDy: ridge.dy,
+            midDx: mid.dx,
+            midDy: mid.dy,
+            confidence: max(top.support, max(ridge.support, mid.support))
         )
     }
 
@@ -12298,6 +12487,61 @@ enum AutoStabilizationEstimator {
         if supportPitch >= lensShakeMinimumSupport { result.axisMask |= 16 }
         if supportShearX >= lensShakeMinimumSupport || supportShearY >= lensShakeMinimumSupport { result.axisMask |= 32 }
         if supportPerspectiveX >= lensShakeMinimumSupport || supportPerspectiveY >= lensShakeMinimumSupport { result.axisMask |= 64 }
+
+        let hasLensBandPaths = analysis.lensBandTopPathX.count == frames.count
+            && analysis.lensBandTopPathY.count == frames.count
+            && analysis.lensBandRidgePathX.count == frames.count
+            && analysis.lensBandRidgePathY.count == frames.count
+            && analysis.lensBandMidPathX.count == frames.count
+            && analysis.lensBandMidPathY.count == frames.count
+            && analysis.lensBandConfidence.count == frames.count
+        if hasLensBandPaths {
+            let topResidual = vector_float2(
+                residual(kind: .lensBandTopX, values: analysis.lensBandTopPathX) * outputScale.x,
+                residual(kind: .lensBandTopY, values: analysis.lensBandTopPathY) * outputScale.y
+            )
+            let ridgeResidual = vector_float2(
+                residual(kind: .lensBandRidgeX, values: analysis.lensBandRidgePathX) * outputScale.x,
+                residual(kind: .lensBandRidgeY, values: analysis.lensBandRidgePathY) * outputScale.y
+            )
+            let midResidual = vector_float2(
+                residual(kind: .lensBandMidX, values: analysis.lensBandMidPathX) * outputScale.x,
+                residual(kind: .lensBandMidY, values: analysis.lensBandMidPathY) * outputScale.y
+            )
+            let bandMagnitude = max(
+                simd_length(topResidual),
+                max(simd_length(ridgeResidual), simd_length(midResidual))
+            )
+            let bandConfidence = interpolatedValue(analysis.lensBandConfidence, using: interpolation)
+            let bandSupport = confidenceRamp(bandMagnitude, start: 0.08, full: 0.65)
+                * confidenceRamp(bandConfidence, start: 0.08, full: 0.36)
+                * confidenceRamp(result.rollingShutterCandidate, start: 0.26, full: 0.62)
+                * qualitySupport
+                * turnScale
+            if bandSupport >= lensShakeMinimumSupport {
+                result.bandTopOffset = vector_float2(
+                    clamp(-topResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
+                    clamp(-topResidual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                )
+                result.bandRidgeOffset = vector_float2(
+                    clamp(-ridgeResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
+                    clamp(-ridgeResidual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                )
+                result.bandMidOffset = vector_float2(
+                    clamp(-midResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
+                    clamp(-midResidual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                )
+                result.bandWarpSupport = clamp(bandSupport, min: 0.0, max: 1.0)
+                result.bandWarpApplied = 1.0
+            }
+        }
+
+        guard result.rollingShutterCandidate < 0.45 else {
+            result.support = result.bandWarpSupport
+            result.reasonCode = result.bandWarpApplied > 0.5 ? 6 : 5
+            return result
+        }
+
         result.yawPitch = vector_float2(
             clamp(yaw * supportYaw, min: -maxRenderedFarFieldYawPitchProxy, max: maxRenderedFarFieldYawPitchProxy),
             clamp(pitch * supportPitch, min: -maxRenderedFarFieldYawPitchProxy, max: maxRenderedFarFieldYawPitchProxy)
@@ -12310,12 +12554,6 @@ enum AutoStabilizationEstimator {
             clamp(perspectiveX * supportPerspectiveX, min: -maxRenderedFarFieldPerspective, max: maxRenderedFarFieldPerspective),
             clamp(perspectiveY * supportPerspectiveY, min: -maxRenderedFarFieldPerspective, max: maxRenderedFarFieldPerspective)
         )
-
-        guard result.rollingShutterCandidate < 0.45 else {
-            result.support = 0.0
-            result.reasonCode = 5
-            return result
-        }
 
         if recordSupport(supportX, axisBit: 1) {
             result.pixelOffset.x = clamp(-residualX * supportX, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
@@ -15015,6 +15253,13 @@ final class StreamingStabilizationAnalysisBuilder {
                 shearY: 0.0,
                 perspectiveX: 0.0,
                 perspectiveY: 0.0,
+                lensBandTopDx: 0.0,
+                lensBandTopDy: 0.0,
+                lensBandRidgeDx: 0.0,
+                lensBandRidgeDy: 0.0,
+                lensBandMidDx: 0.0,
+                lensBandMidDy: 0.0,
+                lensBandConfidence: 0.0,
                 analysisConfidence: 1.0,
                 warpConfidence: 0.0,
                 acceptedBlockCount: 0,
