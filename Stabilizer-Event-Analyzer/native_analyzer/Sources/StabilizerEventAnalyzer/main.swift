@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 40
+private let cacheSchemaVersion = 41
 private let sourceLensShakeLocalBandCount = 3
 private let sourceLensShakeLocalColumnCount = 3
 private let sourceLensShakeLocalBinCount = 9
@@ -208,6 +208,8 @@ struct PairMotion {
     let lensBandConfidence: Float
     let sourceLensShakeRidgeDy: Float
     let sourceLensShakeRidgeSupport: Float
+    let sourceLensShakeRidgeLineDy: Float
+    let sourceLensShakeRidgeLineSupport: Float
     let sourceLensShakeLocalDx: [Float]
     let sourceLensShakeLocalDy: [Float]
     let sourceLensShakeLocalSupport: [Float]
@@ -261,6 +263,8 @@ struct PairMotion {
         lensBandConfidence: 0.0,
         sourceLensShakeRidgeDy: 0.0,
         sourceLensShakeRidgeSupport: 0.0,
+        sourceLensShakeRidgeLineDy: 0.0,
+        sourceLensShakeRidgeLineSupport: 0.0,
         sourceLensShakeLocalDx: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
         sourceLensShakeLocalDy: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
         sourceLensShakeLocalSupport: Array(repeating: 0.0, count: sourceLensShakeLocalBinCount),
@@ -276,6 +280,76 @@ struct PairMotion {
 private struct FrameMetrics {
     let blurAmount: Float
     let fingerprint: String
+}
+
+private struct RidgeLineProfile {
+    let values: [Float]
+    let support: Float
+}
+
+private struct RidgeLineMotion {
+    let dy: Float
+    let support: Float
+
+    static let zero = RidgeLineMotion(dy: 0.0, support: 0.0)
+}
+
+private func pairMotion(_ motion: PairMotion, applying ridgeLineMotion: RidgeLineMotion) -> PairMotion {
+    PairMotion(
+        dx: motion.dx,
+        dy: motion.dy,
+        residual: motion.residual,
+        signedRoll: motion.signedRoll,
+        rollMotion: motion.rollMotion,
+        farFieldDx: motion.farFieldDx,
+        farFieldDy: motion.farFieldDy,
+        farFieldSignedRoll: motion.farFieldSignedRoll,
+        farFieldConfidence: motion.farFieldConfidence,
+        yawProxy: motion.yawProxy,
+        pitchProxy: motion.pitchProxy,
+        shearX: motion.shearX,
+        shearY: motion.shearY,
+        perspectiveX: motion.perspectiveX,
+        perspectiveY: motion.perspectiveY,
+        lensBandTopDx: motion.lensBandTopDx,
+        lensBandTopDy: motion.lensBandTopDy,
+        lensBandTopColumnDx: motion.lensBandTopColumnDx,
+        lensBandTopColumnDy: motion.lensBandTopColumnDy,
+        lensBandTopRowPhaseDx: motion.lensBandTopRowPhaseDx,
+        lensBandTopRowPhaseDy: motion.lensBandTopRowPhaseDy,
+        lensBandTopLocalRoll: motion.lensBandTopLocalRoll,
+        lensBandRidgeDx: motion.lensBandRidgeDx,
+        lensBandRidgeDy: motion.lensBandRidgeDy,
+        lensBandRidgeColumnDx: motion.lensBandRidgeColumnDx,
+        lensBandRidgeColumnDy: motion.lensBandRidgeColumnDy,
+        lensBandRidgeRowPhaseDx: motion.lensBandRidgeRowPhaseDx,
+        lensBandRidgeRowPhaseDy: motion.lensBandRidgeRowPhaseDy,
+        lensBandRidgeLocalRoll: motion.lensBandRidgeLocalRoll,
+        lensBandMidDx: motion.lensBandMidDx,
+        lensBandMidDy: motion.lensBandMidDy,
+        lensBandMidColumnDx: motion.lensBandMidColumnDx,
+        lensBandMidColumnDy: motion.lensBandMidColumnDy,
+        lensBandMidRowPhaseDx: motion.lensBandMidRowPhaseDx,
+        lensBandMidRowPhaseDy: motion.lensBandMidRowPhaseDy,
+        lensBandMidLocalRoll: motion.lensBandMidLocalRoll,
+        lensBandTopConfidence: motion.lensBandTopConfidence,
+        lensBandRidgeConfidence: max(motion.lensBandRidgeConfidence, ridgeLineMotion.support),
+        lensBandMidConfidence: motion.lensBandMidConfidence,
+        lensBandConfidence: max(motion.lensBandConfidence, ridgeLineMotion.support),
+        sourceLensShakeRidgeDy: motion.sourceLensShakeRidgeDy,
+        sourceLensShakeRidgeSupport: motion.sourceLensShakeRidgeSupport,
+        sourceLensShakeRidgeLineDy: ridgeLineMotion.dy,
+        sourceLensShakeRidgeLineSupport: ridgeLineMotion.support,
+        sourceLensShakeLocalDx: motion.sourceLensShakeLocalDx,
+        sourceLensShakeLocalDy: motion.sourceLensShakeLocalDy,
+        sourceLensShakeLocalSupport: motion.sourceLensShakeLocalSupport,
+        analysisConfidence: motion.analysisConfidence,
+        warpConfidence: motion.warpConfidence,
+        acceptedBlockCount: motion.acceptedBlockCount,
+        totalBlockCount: motion.totalBlockCount,
+        searchRadiusHitCount: motion.searchRadiusHitCount,
+        searchRadiusTotalCount: motion.searchRadiusTotalCount
+    )
 }
 
 private struct LumaBufferFormat {
@@ -727,6 +801,8 @@ struct PreparedAnalysis {
     let lensBandConfidence: [Float]
     let sourceLensShakeRidgePathY: [Float]
     let sourceLensShakeRidgeSupport: [Float]
+    let sourceLensShakeRidgeLinePathY: [Float]
+    let sourceLensShakeRidgeLineSupport: [Float]
     let sourceLensShakeLocalBinCount: Int
     let sourceLensShakeLocalPathX: [Float]
     let sourceLensShakeLocalPathY: [Float]
@@ -797,6 +873,8 @@ struct PersistedHostAnalysisCache: Encodable {
     let lensBandConfidence: [Float]?
     let sourceLensShakeRidgePathY: [Float]?
     let sourceLensShakeRidgeSupport: [Float]?
+    let sourceLensShakeRidgeLinePathY: [Float]?
+    let sourceLensShakeRidgeLineSupport: [Float]?
     let sourceLensShakeLocalBinCount: Int?
     let sourceLensShakeLocalPathX: [Float]?
     let sourceLensShakeLocalPathY: [Float]?
@@ -2329,6 +2407,8 @@ private final class MetalMotionWorkspace {
             lensBandConfidence: lensBandMotion.confidence,
             sourceLensShakeRidgeDy: lensBandMotion.sourceLensShakeRidgeDy,
             sourceLensShakeRidgeSupport: lensBandMotion.sourceLensShakeRidgeSupport,
+            sourceLensShakeRidgeLineDy: 0.0,
+            sourceLensShakeRidgeLineSupport: 0.0,
             sourceLensShakeLocalDx: lensBandMotion.sourceLensShakeLocalDx,
             sourceLensShakeLocalDy: lensBandMotion.sourceLensShakeLocalDy,
             sourceLensShakeLocalSupport: lensBandMotion.sourceLensShakeLocalSupport,
@@ -2362,6 +2442,8 @@ private struct MetalLumaSource {
 private struct MetalEncodedFrame {
     let commandBuffer: MTLCommandBuffer
     let outputBuffer: MTLBuffer
+    let sampleWidth: Int
+    let sampleHeight: Int
     let blurResultBuffer: MTLBuffer
     let blurChunkCount: Int
     let fingerprintResultBuffer: MTLBuffer
@@ -2679,6 +2761,8 @@ final class MetalAnalysisContext {
         return MetalEncodedFrame(
             commandBuffer: commandBuffer,
             outputBuffer: outputBuffer,
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
             blurResultBuffer: blurResultBuffer,
             blurChunkCount: metalBlurChunkCount,
             fingerprintResultBuffer: fingerprintResultBuffer,
@@ -2691,7 +2775,7 @@ final class MetalAnalysisContext {
 
     fileprivate func completeFrame(
         _ encodedFrame: MetalEncodedFrame
-    ) throws -> (metrics: FrameMetrics, motion: PairMotion?) {
+    ) throws -> (metrics: FrameMetrics, motion: PairMotion?, ridgeLineProfile: RidgeLineProfile) {
         encodedFrame.commandBuffer.waitUntilCompleted()
         let stage = encodedFrame.motionWorkspace == nil ? "luma sampling, blur, and fingerprint" : "luma sampling, blur, fingerprint, and block motion search"
         try Self.validate(commandBuffer: encodedFrame.commandBuffer, stage: stage)
@@ -2709,6 +2793,12 @@ final class MetalAnalysisContext {
             fingerprint: fingerprint,
             blurAmount: blurAmount
         )
+        let ridgeLineProfile = Self.ridgeLineProfile(
+            outputBuffer: encodedFrame.outputBuffer,
+            width: encodedFrame.sampleWidth,
+            height: encodedFrame.sampleHeight,
+            lumaFormat: encodedFrame.lumaFormat
+        )
         let motion: PairMotion?
         if let motionWorkspace = encodedFrame.motionWorkspace,
            let resultBuffer = encodedFrame.resultBuffer {
@@ -2716,7 +2806,117 @@ final class MetalAnalysisContext {
         } else {
             motion = nil
         }
-        return (metrics, motion)
+        return (metrics, motion, ridgeLineProfile)
+    }
+
+    private static func ridgeLineProfile(
+        outputBuffer: MTLBuffer,
+        width: Int,
+        height: Int,
+        lumaFormat: LumaBufferFormat
+    ) -> RidgeLineProfile {
+        let rowStart = max(2, Int((Float(height) * 0.12).rounded(.down)))
+        let rowEnd = min(height - 3, Int((Float(height) * 0.36).rounded(.up)))
+        let colStart = max(2, Int((Float(width) * 0.08).rounded(.down)))
+        let colEnd = min(width - 3, Int((Float(width) * 0.92).rounded(.up)))
+        guard rowEnd > rowStart + 6, colEnd > colStart + 8 else {
+            return RidgeLineProfile(values: [], support: 0.0)
+        }
+        let pixels = UnsafeBufferPointer(
+            start: outputBuffer.contents().assumingMemoryBound(to: UInt16.self),
+            count: max(0, width * height)
+        )
+        let xStride = max(1, width / 420)
+        let valueScale = Float(max(1, lumaFormat.valueRange))
+        var values: [Float] = []
+        values.reserveCapacity(rowEnd - rowStart + 1)
+        var strengthTotal: Float = 0.0
+        for y in rowStart...rowEnd {
+            var rowStrength: Float = 0.0
+            var sampleCount = 0
+            var x = colStart
+            while x <= colEnd {
+                let above = Float(pixels[(y - 1) * width + x])
+                let below = Float(pixels[(y + 1) * width + x])
+                rowStrength += abs(below - above) / valueScale
+                sampleCount += 1
+                x += xStride
+            }
+            let normalized = sampleCount > 0 ? rowStrength / Float(sampleCount) : 0.0
+            values.append(normalized)
+            strengthTotal += normalized
+        }
+        guard !values.isEmpty else {
+            return RidgeLineProfile(values: [], support: 0.0)
+        }
+        let meanStrength = strengthTotal / Float(values.count)
+        let centered = values.map { max(0.0, $0 - (meanStrength * 0.55)) }
+        let peak = centered.max() ?? 0.0
+        let centeredMean = centered.reduce(Float(0.0), +) / Float(max(1, centered.count))
+        let contrast = peak - centeredMean
+        let support = profileConfidenceRamp(contrast, start: 0.0025, full: 0.018)
+            * profileConfidenceRamp(peak, start: 0.006, full: 0.040)
+        return RidgeLineProfile(values: centered, support: clamp(support, 0.0, 1.0))
+    }
+
+    fileprivate static func ridgeLineMotion(previous: RidgeLineProfile?, current: RidgeLineProfile) -> RidgeLineMotion {
+        guard let previous,
+              previous.support > 0.0,
+              current.support > 0.0,
+              previous.values.count == current.values.count,
+              previous.values.count >= 12
+        else {
+            return .zero
+        }
+        let radius = min(36, max(3, previous.values.count / 4))
+        var bestShift = 0
+        var bestScore = Float.greatestFiniteMagnitude
+        var scores: [(shift: Int, score: Float)] = []
+        scores.reserveCapacity((radius * 2) + 1)
+        for shift in -radius...radius {
+            var total: Float = 0.0
+            var weightTotal: Float = 0.0
+            for index in 0..<previous.values.count {
+                let currentIndex = index + shift
+                guard currentIndex >= 0, currentIndex < current.values.count else {
+                    continue
+                }
+                let weight = max(previous.values[index], current.values[currentIndex])
+                guard weight > 0.0 else {
+                    continue
+                }
+                total += abs(previous.values[index] - current.values[currentIndex]) * (0.25 + weight)
+                weightTotal += 0.25 + weight
+            }
+            guard weightTotal > 0.0 else {
+                continue
+            }
+            let score = total / weightTotal
+            scores.append((shift, score))
+            if score < bestScore {
+                bestScore = score
+                bestShift = shift
+            }
+        }
+        guard scores.count >= 5, bestScore.isFinite else {
+            return .zero
+        }
+        let scoreMedian = median(scores.map(\.score)) ?? bestScore
+        let separation = max(0.0, scoreMedian - bestScore)
+        let support = min(previous.support, current.support)
+            * profileConfidenceRamp(separation, start: 0.0005, full: 0.006)
+            * profileConfidenceRamp(abs(Float(bestShift)), start: 0.10, full: 1.50)
+        guard support > 0.0 else {
+            return .zero
+        }
+        return RidgeLineMotion(dy: Float(bestShift), support: clamp(support, 0.0, 1.0))
+    }
+
+    private static func profileConfidenceRamp(_ value: Float, start: Float, full: Float) -> Float {
+        guard full > start else {
+            return value >= full ? 1.0 : 0.0
+        }
+        return clamp((value - start) / (full - start), 0.0, 1.0)
     }
 
     private static func blurAmount(resultBuffer: MTLBuffer, chunkCount: Int, lumaFormat: LumaBufferFormat) -> Float {
@@ -3202,6 +3402,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var lensBandMidRowPhasePathY: [Float] = []
     var lensBandMidLocalRollPath: [Float] = []
     var sourceLensShakeRidgePathY: [Float] = []
+    var sourceLensShakeRidgeLinePathY: [Float] = []
     var sourceLensShakeLocalPathX = Array(repeating: Array<Float>(), count: sourceLensShakeLocalBinCount)
     var sourceLensShakeLocalPathY = Array(repeating: Array<Float>(), count: sourceLensShakeLocalBinCount)
     var sourceLensShakeLocalSupport = Array(repeating: Array<Float>(), count: sourceLensShakeLocalBinCount)
@@ -3239,6 +3440,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var lensBandMidRowPhaseY: Float = 0
     var lensBandMidLocalRoll: Float = 0
     var sourceLensShakeRidgeY: Float = 0
+    var sourceLensShakeRidgeLineY: Float = 0
     var sourceLensShakeLocalX = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
     var sourceLensShakeLocalY = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
     for motion in motions {
@@ -3276,6 +3478,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandMidRowPhaseY += motion.lensBandMidRowPhaseDy
         lensBandMidLocalRoll += motion.lensBandMidLocalRoll
         sourceLensShakeRidgeY += motion.sourceLensShakeRidgeDy
+        sourceLensShakeRidgeLineY += motion.sourceLensShakeRidgeLineDy
         for bin in 0..<sourceLensShakeLocalBinCount {
             sourceLensShakeLocalX[bin] += motion.sourceLensShakeLocalDx.indices.contains(bin) ? motion.sourceLensShakeLocalDx[bin] : 0.0
             sourceLensShakeLocalY[bin] += motion.sourceLensShakeLocalDy.indices.contains(bin) ? motion.sourceLensShakeLocalDy[bin] : 0.0
@@ -3317,6 +3520,7 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandMidRowPhasePathY.append(lensBandMidRowPhaseY)
         lensBandMidLocalRollPath.append(lensBandMidLocalRoll)
         sourceLensShakeRidgePathY.append(sourceLensShakeRidgeY)
+        sourceLensShakeRidgeLinePathY.append(sourceLensShakeRidgeLineY)
     }
     return PreparedAnalysis(
         frames: frames,
@@ -3365,6 +3569,8 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandConfidence: motions.map(\.lensBandConfidence),
         sourceLensShakeRidgePathY: sourceLensShakeRidgePathY,
         sourceLensShakeRidgeSupport: motions.map(\.sourceLensShakeRidgeSupport),
+        sourceLensShakeRidgeLinePathY: sourceLensShakeRidgeLinePathY,
+        sourceLensShakeRidgeLineSupport: motions.map(\.sourceLensShakeRidgeLineSupport),
         sourceLensShakeLocalBinCount: sourceLensShakeLocalBinCount,
         sourceLensShakeLocalPathX: sourceLensShakeLocalPathX.flatMap { $0 },
         sourceLensShakeLocalPathY: sourceLensShakeLocalPathY.flatMap { $0 },
@@ -3708,6 +3914,7 @@ private func readFrameChunk(
     pendingFrames.reserveCapacity(inFlightLimit)
     let textureCacheFlushInterval = analyzerTextureCacheFlushInterval(sourcePixelCount: sourcePixelCount)
     var completedEncodedFrameCount = 0
+    var previousRidgeLineProfile: RidgeLineProfile?
 
     func pendingOutputFrameCount() -> Int {
         pendingFrames.reduce(0) { count, pending in
@@ -3724,6 +3931,11 @@ private func readFrameChunk(
         if completedEncodedFrameCount % textureCacheFlushInterval == 0 {
             metalContext.flushTextureCache()
         }
+        let ridgeLineMotion = MetalAnalysisContext.ridgeLineMotion(
+            previous: previousRidgeLineProfile,
+            current: frameAnalysis.ridgeLineProfile
+        )
+        previousRidgeLineProfile = frameAnalysis.ridgeLineProfile
         guard pending.shouldOutput else {
             return
         }
@@ -3735,7 +3947,11 @@ private func readFrameChunk(
             blurAmount: frameAnalysis.metrics.blurAmount,
             fingerprint: frameAnalysis.metrics.fingerprint
         )
-        motions.append(frameAnalysis.motion ?? .zero)
+        if let motion = frameAnalysis.motion {
+            motions.append(pairMotion(motion, applying: ridgeLineMotion))
+        } else {
+            motions.append(.zero)
+        }
         frames.append(frame)
         if let progressReporter {
             progressReporter.completeFrame()
@@ -4138,6 +4354,8 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         lensBandConfidence: prepared.lensBandConfidence,
         sourceLensShakeRidgePathY: prepared.sourceLensShakeRidgePathY,
         sourceLensShakeRidgeSupport: prepared.sourceLensShakeRidgeSupport,
+        sourceLensShakeRidgeLinePathY: prepared.sourceLensShakeRidgeLinePathY,
+        sourceLensShakeRidgeLineSupport: prepared.sourceLensShakeRidgeLineSupport,
         sourceLensShakeLocalBinCount: prepared.sourceLensShakeLocalBinCount,
         sourceLensShakeLocalPathX: prepared.sourceLensShakeLocalPathX,
         sourceLensShakeLocalPathY: prepared.sourceLensShakeLocalPathY,

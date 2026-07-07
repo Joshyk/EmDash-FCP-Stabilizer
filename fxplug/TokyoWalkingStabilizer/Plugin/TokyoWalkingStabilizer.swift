@@ -7069,6 +7069,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if (mask & 8) != 0 { parts.append("localRoll") }
         if (mask & 16) != 0 { parts.append("sourceRidge") }
         if (mask & 32) != 0 { parts.append("sourceLocal") }
+        if (mask & 64) != 0 { parts.append("sourceRidgeLine") }
         return parts.joined(separator: ",")
     }
 
@@ -7268,6 +7269,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensBandTopRowPhaseOffset = autoTransform.lensBandTopRowPhaseOffset * masterStrength
             let appliedLensBandRidgeRowPhaseOffset = autoTransform.lensBandRidgeRowPhaseOffset * masterStrength
             let appliedLensBandMidRowPhaseOffset = autoTransform.lensBandMidRowPhaseOffset * masterStrength
+            let appliedSourceLensShakeRidgeLineOffset = autoTransform.sourceLensShakeRidgeLineOffset * masterStrength
             let appliedSourceLensShakeLocalTopLeftOffset = autoTransform.sourceLensShakeLocalTopLeftOffset * masterStrength
             let appliedSourceLensShakeLocalTopCenterOffset = autoTransform.sourceLensShakeLocalTopCenterOffset * masterStrength
             let appliedSourceLensShakeLocalTopRightOffset = autoTransform.sourceLensShakeLocalTopRightOffset * masterStrength
@@ -7464,6 +7466,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 lensBandMessage
+            )
+            let lensRidgeLineMessage = String(
+                format: "Render lens ridge line csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ sourceLensShakeRidgeLineRawY=%.5f sourceLensShakeRidgeLineY=%.5f sourceLensShakeRidgeLineSupport=%.5f sourceLensShakeRidgeLineApplied=%.2f sourceLensShakeRidgeCombinedY=%.5f",
+                analysisSeconds,
+                samplePosition,
+                frames.count,
+                renderSourceIsProxy ? "yes" : "no",
+                autoCropEnabled ? "yes" : "no",
+                cacheIdentityShort,
+                autoTransform.sourceLensShakeRidgeLineResidual.y * masterStrength,
+                appliedSourceLensShakeRidgeLineOffset.y,
+                autoTransform.sourceLensShakeRidgeLineSupport,
+                autoTransform.sourceLensShakeRidgeLineApplied,
+                autoTransform.sourceLensShakeRidgeOffset.y * masterStrength
+            )
+            os_log(
+                "%{public}@",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                lensRidgeLineMessage
             )
             let lensLocalMessage = String(
                 format: "Render lens local csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f",
