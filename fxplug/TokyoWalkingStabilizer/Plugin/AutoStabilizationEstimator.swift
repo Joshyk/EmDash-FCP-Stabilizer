@@ -715,6 +715,11 @@ enum AutoStabilizationEstimator {
     private static let turnOwnedFarFieldStrideRescueTrackingFull: Float = 0.56
     private static let turnOwnedFarFieldStrideRescueFarFieldStart: Float = 0.04
     private static let turnOwnedFarFieldStrideRescueFarFieldFull: Float = 0.22
+    private static let farFieldWalkingResidualContinuityStartPixels: Float = 0.75
+    private static let farFieldWalkingResidualContinuityFullPixels: Float = 3.5
+    private static let farFieldWalkingResidualContinuityBandStartPixels: Float = 2.0
+    private static let farFieldWalkingResidualContinuityBandFullPixels: Float = 12.0
+    private static let farFieldWalkingResidualContinuityMaximumResidualScale: Float = 0.92
     private static let turnOwnedFootstepXFineFadeStartPixels: Float = 28.0
     private static let turnOwnedFootstepXFineFadeFullPixels: Float = 72.0
     private static let turnOwnedFootstepXRescueConfidenceFloorMax: Float = 0.34
@@ -870,7 +875,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 75
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 76
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -2987,11 +2992,25 @@ enum AutoStabilizationEstimator {
             )
         )
 
-        let trajectoryMicroJitterPixelOffset = vector_float2(0.0, 0.0)
+        let trajectoryMicroJitterPixelOffset = farFieldWalkingResidualContinuityOffset(
+            footstepBandPixels: vector_float2(microBandX * xScale, microBandY * yScale),
+            footstepCorrectionPixels: microPixelOffset,
+            strideBandPixels: vector_float2(strideBandX * xScale, strideBandY * yScale),
+            strideCorrectionPixels: stridePixelOffset,
+            turnShakeSuppression: playbackTurnShakeSuppression,
+            turnOwnership: vector_float2(playbackTurnOwnershipX, playbackTurnOwnershipY),
+            turnMacroMagnitude: vector_float2(turnXMacroPixels, turnYMacroPixels),
+            farFieldSupport: farFieldWalkingXSupport,
+            warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+            trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
         let pixelOffset = macroPixelOffset
             + microPixelOffset
             + stridePixelOffset
             + trajectoryMicroJitterPixelOffset
+            + trajectoryContinuityPixelOffset
         let rotation = macroRotation + microRotation + strideRotation
         return StabilizerAutoTransform(
             pixelOffset: pixelOffset,
@@ -2999,7 +3018,7 @@ enum AutoStabilizationEstimator {
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: stridePixelOffset,
             trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
-            trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
+            trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
             footstepJitterRotationDegrees: macroRotation + microRotation,
             strideWobbleRotationDegrees: strideRotation,
             rotationDegrees: rotation,
@@ -6423,11 +6442,25 @@ enum AutoStabilizationEstimator {
                 )
             )
 
-            let trajectoryMicroJitterPixelOffset = vector_float2(0.0, 0.0)
+            let trajectoryMicroJitterPixelOffset = farFieldWalkingResidualContinuityOffset(
+                footstepBandPixels: vector_float2(microBandX * xScale, microBandY * yScale),
+                footstepCorrectionPixels: microPixelOffset,
+                strideBandPixels: vector_float2(strideBandX * xScale, strideBandY * yScale),
+                strideCorrectionPixels: stridePixelOffset,
+                turnShakeSuppression: playbackTurnShakeSuppression,
+                turnOwnership: vector_float2(playbackTurnOwnershipX, playbackTurnOwnershipY),
+                turnMacroMagnitude: vector_float2(turnXMacroPixels, turnYMacroPixels),
+                farFieldSupport: farFieldWalkingXSupport,
+                warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+                trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+                farFieldConfidence: farFieldMacroConfidence
+            )
+            let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
             let pixelOffset = macroPixelOffset
                 + microPixelOffset
                 + stridePixelOffset
                 + trajectoryMicroJitterPixelOffset
+                + trajectoryContinuityPixelOffset
             let rotation = macroRotation + microRotation + strideRotation
             return StabilizerAutoTransform(
                 pixelOffset: pixelOffset,
@@ -6435,7 +6468,7 @@ enum AutoStabilizationEstimator {
                 microPixelOffset: microPixelOffset,
                 strideWobblePixelOffset: stridePixelOffset,
                 trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
-                trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
+                trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
                 footstepJitterRotationDegrees: macroRotation + microRotation,
                 strideWobbleRotationDegrees: strideRotation,
                 rotationDegrees: rotation,
@@ -7793,8 +7826,22 @@ enum AutoStabilizationEstimator {
         let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
         let microPixelOffset = vector_float2(microCompensationX, microCompensationY)
         let strideWobblePixelOffset = vector_float2(strideCompensationX, strideCompensationY)
-        let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x
-        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y
+        let trajectoryMicroJitterPixelOffset = farFieldWalkingResidualContinuityOffset(
+            footstepBandPixels: vector_float2(footstepImpulseX * xScale, footstepImpulseY * yScale),
+            footstepCorrectionPixels: microPixelOffset,
+            strideBandPixels: vector_float2(strideBandX * xScale, strideBandY * yScale),
+            strideCorrectionPixels: strideWobblePixelOffset,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: vector_float2(turnOwnershipX, turnOwnershipY),
+            turnMacroMagnitude: vector_float2(turnXMacroPixels, turnYMacroPixels),
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+        let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x + trajectoryMicroJitterPixelOffset.x
+        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + trajectoryMicroJitterPixelOffset.y
         let compensationRotation = macroCompensationRotation + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrengths = effectiveFarFieldWarpComponentStrengths(Float(strengths.farFieldWarp))
         let shouldEstimateFarFieldWarp = farFieldWarpStrengths.isActive
@@ -7921,8 +7968,8 @@ enum AutoStabilizationEstimator {
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
-            trajectoryMicroJitterPixelOffset: vector_float2(0.0, 0.0),
-            trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
+            trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
+            trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation,
@@ -8716,8 +8763,25 @@ enum AutoStabilizationEstimator {
         let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
         let microPixelOffset = vector_float2(microCompensationX, microCompensationY)
         let strideWobblePixelOffset = vector_float2(strideCompensationX, strideCompensationY)
-        let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x
-        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y
+        let trajectoryMicroJitterPixelOffset = farFieldWalkingResidualContinuityOffset(
+            footstepBandPixels: vector_float2(
+                footstepImpulseX * xScale,
+                (footstepPathYAtRender - footstepBaselineY) * yScale
+            ),
+            footstepCorrectionPixels: microPixelOffset,
+            strideBandPixels: vector_float2(strideBandX * xScale, strideBandY * yScale),
+            strideCorrectionPixels: strideWobblePixelOffset,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: vector_float2(turnOwnershipX, turnOwnershipY),
+            turnMacroMagnitude: vector_float2(turnXMacroPixels, turnYMacroPixels),
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+        let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x + trajectoryMicroJitterPixelOffset.x
+        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + trajectoryMicroJitterPixelOffset.y
         let compensationRotation = macroCompensationRotation + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrengths = effectiveFarFieldWarpComponentStrengths(Float(strengths.farFieldWarp))
         let shouldEstimateFarFieldWarp = includeFarFieldWarp && farFieldWarpStrengths.isActive
@@ -8884,8 +8948,8 @@ enum AutoStabilizationEstimator {
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
-            trajectoryMicroJitterPixelOffset: vector_float2(0.0, 0.0),
-            trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
+            trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
+            trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation,
@@ -13181,6 +13245,142 @@ enum AutoStabilizationEstimator {
             min: 0.0,
             max: turnOwnedFarFieldStrideRescueConfidenceFloorMax
         )
+    }
+
+    private static func farFieldWalkingResidualContinuityOffset(
+        footstepBandPixels: vector_float2,
+        footstepCorrectionPixels: vector_float2,
+        strideBandPixels: vector_float2,
+        strideCorrectionPixels: vector_float2,
+        turnShakeSuppression: Float,
+        turnOwnership: vector_float2,
+        turnMacroMagnitude: vector_float2,
+        farFieldSupport: Float,
+        warpConfidence: Float,
+        trackingConfidence: Float,
+        farFieldConfidence: Float
+    ) -> vector_float2 {
+        vector_float2(
+            farFieldWalkingResidualContinuityCorrection(
+                footstepBandPixels: footstepBandPixels.x,
+                footstepCorrectionPixels: footstepCorrectionPixels.x,
+                strideBandPixels: strideBandPixels.x,
+                strideCorrectionPixels: strideCorrectionPixels.x,
+                turnShakeSuppression: turnShakeSuppression,
+                turnOwnership: turnOwnership.x,
+                turnMacroMagnitude: turnMacroMagnitude.x,
+                farFieldSupport: farFieldSupport,
+                warpConfidence: warpConfidence,
+                trackingConfidence: trackingConfidence,
+                farFieldConfidence: farFieldConfidence
+            ),
+            farFieldWalkingResidualContinuityCorrection(
+                footstepBandPixels: footstepBandPixels.y,
+                footstepCorrectionPixels: footstepCorrectionPixels.y,
+                strideBandPixels: strideBandPixels.y,
+                strideCorrectionPixels: strideCorrectionPixels.y,
+                turnShakeSuppression: turnShakeSuppression,
+                turnOwnership: turnOwnership.y,
+                turnMacroMagnitude: turnMacroMagnitude.y,
+                farFieldSupport: farFieldSupport,
+                warpConfidence: warpConfidence,
+                trackingConfidence: trackingConfidence,
+                farFieldConfidence: farFieldConfidence
+            )
+        )
+    }
+
+    private static func farFieldWalkingResidualContinuityCorrection(
+        footstepBandPixels: Float,
+        footstepCorrectionPixels: Float,
+        strideBandPixels: Float,
+        strideCorrectionPixels: Float,
+        turnShakeSuppression: Float,
+        turnOwnership: Float,
+        turnMacroMagnitude: Float,
+        farFieldSupport: Float,
+        warpConfidence: Float,
+        trackingConfidence: Float,
+        farFieldConfidence: Float
+    ) -> Float {
+        guard footstepBandPixels.isFinite,
+              footstepCorrectionPixels.isFinite,
+              strideBandPixels.isFinite,
+              strideCorrectionPixels.isFinite
+        else {
+            return 0.0
+        }
+        let residualPixels = footstepBandPixels
+            + footstepCorrectionPixels
+            + strideBandPixels
+            + strideCorrectionPixels
+        guard residualPixels.isFinite else {
+            return 0.0
+        }
+        let residualMagnitude = abs(residualPixels)
+        let bandMagnitude = max(abs(footstepBandPixels), abs(strideBandPixels))
+        let residualSupport = confidenceRamp(
+            residualMagnitude,
+            start: farFieldWalkingResidualContinuityStartPixels,
+            full: farFieldWalkingResidualContinuityFullPixels
+        )
+        let bandSupport = confidenceRamp(
+            bandMagnitude,
+            start: farFieldWalkingResidualContinuityBandStartPixels,
+            full: farFieldWalkingResidualContinuityBandFullPixels
+        )
+        guard residualSupport > 0.0,
+              bandSupport > 0.0
+        else {
+            return 0.0
+        }
+
+        let directFarFieldSupport = confidenceRamp(
+            clamp(farFieldSupport, min: 0.0, max: 1.0),
+            start: 0.08,
+            full: 0.28
+        )
+        let pathFarFieldSupport = confidenceRamp(
+            clamp(farFieldConfidence, min: 0.0, max: 1.0),
+            start: 0.04,
+            full: 0.18
+        )
+        let warpSupport = confidenceRamp(
+            clamp(warpConfidence, min: 0.0, max: 1.0),
+            start: 0.18,
+            full: 0.55
+        )
+        let trackingSupport = confidenceRamp(
+            clamp(trackingConfidence, min: 0.0, max: 1.0),
+            start: 0.14,
+            full: 0.38
+        )
+        let turnSupport = max(
+            max(
+                confidenceRamp(turnShakeSuppression, start: 0.18, full: 0.56),
+                confidenceRamp(turnOwnership, start: 0.18, full: 0.56)
+            ),
+            confidenceRamp(
+                turnMacroMagnitude,
+                start: turnMacroOwnershipBandStartPixels,
+                full: turnMacroOwnershipBandFullPixels
+            ) * 0.85
+        )
+        let evidenceSupport = max(directFarFieldSupport, pathFarFieldSupport)
+            * max(warpSupport, trackingSupport)
+            * max(0.35, turnSupport)
+        let authority = clamp(
+            residualSupport * bandSupport * evidenceSupport,
+            min: 0.0,
+            max: 1.0
+        )
+        guard authority > 0.0 else {
+            return 0.0
+        }
+
+        let rawCorrection = -residualPixels * authority
+        let limit = residualMagnitude * farFieldWalkingResidualContinuityMaximumResidualScale
+        return clamp(rawCorrection, min: -limit, max: limit)
     }
 
     private static func turnOwnedFootstepXFineBandGate(
