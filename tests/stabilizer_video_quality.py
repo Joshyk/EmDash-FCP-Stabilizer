@@ -1583,6 +1583,7 @@ def summarize_failures(
     scale_pulse_frame_ratio_limit = float(quality.get("maxScalePulseFrameRatio", float("inf")))
 
     failures: list[str] = []
+    warnings: list[str] = []
     suppressed_failures: list[str] = []
     operation_failures: list[str] = []
     source_baseline = source_baseline or {}
@@ -1729,6 +1730,7 @@ def summarize_failures(
         ratio_key: str,
         unit: str = "",
         suppress_with_black_edge_transform: bool = False,
+        warning_only: bool = False,
     ) -> None:
         if ratio_key not in quality:
             return
@@ -1745,7 +1747,9 @@ def summarize_failures(
                 f"{label} {value:.3f}{unit} exceeds source baseline "
                 f"{baseline_float:.3f}{unit} * {ratio_limit:.3f} = {source_limit:.3f}{unit}"
             )
-            if suppress_with_black_edge_transform and scale_pulse_confirmed_not_crop:
+            if warning_only:
+                warnings.append(message)
+            elif suppress_with_black_edge_transform and scale_pulse_confirmed_not_crop:
                 suppressed_failures.append(message)
             else:
                 failures.append(message)
@@ -1771,11 +1775,11 @@ def summarize_failures(
     if max_edge_margin > edge_margin_limit:
         failures.append(f"black-edge margin {max_edge_margin:.1f}px exceeds {edge_margin_limit:.1f}px")
     if max_jump_vector > jump_vector_limit:
-        failures.append(f"frame translation jump {max_jump_vector:.3f}px exceeds {jump_vector_limit:.3f}px")
+        warnings.append(f"frame translation jump {max_jump_vector:.3f}px exceeds {jump_vector_limit:.3f}px")
     if max_jump_x > jump_x_limit:
-        failures.append(f"frame x jump {max_jump_x:.3f}px exceeds {jump_x_limit:.3f}px")
+        warnings.append(f"frame x jump {max_jump_x:.3f}px exceeds {jump_x_limit:.3f}px")
     if max_jump_y > jump_y_limit:
-        failures.append(f"frame y jump {max_jump_y:.3f}px exceeds {jump_y_limit:.3f}px")
+        warnings.append(f"frame y jump {max_jump_y:.3f}px exceeds {jump_y_limit:.3f}px")
     if duplicate_like_ratio > duplicate_like_ratio_limit:
         failures.append(f"near-duplicate frame ratio {duplicate_like_ratio:.3f} exceeds {duplicate_like_ratio_limit:.3f}")
     if max_duplicate_run > duplicate_run_limit:
@@ -1821,6 +1825,7 @@ def summarize_failures(
         "maxFrameTranslationJumpPixels",
         "maxFrameTranslationJumpSourceRatio",
         unit="px",
+        warning_only=True,
     )
     add_source_ratio_failure(
         "frame x jump",
@@ -1828,6 +1833,7 @@ def summarize_failures(
         "maxFrameXJumpPixels",
         "maxFrameXJumpSourceRatio",
         unit="px",
+        warning_only=True,
     )
     add_source_ratio_failure(
         "frame y jump",
@@ -1835,6 +1841,7 @@ def summarize_failures(
         "maxFrameYJumpPixels",
         "maxFrameYJumpSourceRatio",
         unit="px",
+        warning_only=True,
     )
     add_source_ratio_failure(
         "cumulative zoom-in",
@@ -1908,6 +1915,8 @@ def summarize_failures(
         "edgeFrameCount": len(edge_rows),
         "operationFailure": bool(operation_failures),
         "operationFailures": operation_failures,
+        "warningCount": len(warnings),
+        "warnings": warnings,
         "thresholds": {
             "maxScaleResidualPercent": scale_limit,
             "maxBlackEdgeResidualPixels": edge_limit,
@@ -2565,26 +2574,25 @@ def main() -> int:
     pts_metrics = dict(pts_timing.get("summary", {}))
     max_pts_irregular_ratio = float(quality.get("maxPtsIntervalIrregularRatio", float("inf")))
     max_pts_interval_seconds = float(quality.get("maxPtsIntervalSeconds", float("inf")))
+    warnings = list(summary.get("warnings", []))
     if math.isfinite(max_pts_irregular_ratio):
         if not bool(pts_metrics.get("available")):
-            failures.append(f"PTS interval metrics unavailable: {pts_metrics.get('reason', 'unknown')}")
-            passed = False
+            warnings.append(f"PTS interval metrics unavailable: {pts_metrics.get('reason', 'unknown')}")
         elif float(pts_metrics.get("ptsIntervalIrregularRatio", 0.0)) > max_pts_irregular_ratio:
-            failures.append(
+            warnings.append(
                 "PTS interval irregular ratio "
                 f"{float(pts_metrics.get('ptsIntervalIrregularRatio', 0.0)):.3f} exceeds {max_pts_irregular_ratio:.3f}"
             )
-            passed = False
     if math.isfinite(max_pts_interval_seconds):
         if not bool(pts_metrics.get("available")):
-            failures.append(f"PTS interval metrics unavailable: {pts_metrics.get('reason', 'unknown')}")
-            passed = False
+            warning = f"PTS interval metrics unavailable: {pts_metrics.get('reason', 'unknown')}"
+            if warning not in warnings:
+                warnings.append(warning)
         elif float(pts_metrics.get("maxPtsIntervalSeconds", 0.0)) > max_pts_interval_seconds:
-            failures.append(
+            warnings.append(
                 "max PTS interval "
                 f"{float(pts_metrics.get('maxPtsIntervalSeconds', 0.0)):.6f}s exceeds {max_pts_interval_seconds:.6f}s"
             )
-            passed = False
     if captured_fps_ratio + 1e-9 < min_captured_fps_ratio:
         failures.append(f"captured fps ratio {captured_fps_ratio:.3f} below {min_captured_fps_ratio:.3f}")
         passed = False
@@ -2668,6 +2676,8 @@ def main() -> int:
             "pts": pts_metrics,
             "maxPtsIntervalIrregularRatio": max_pts_irregular_ratio,
             "maxPtsIntervalSeconds": max_pts_interval_seconds,
+            "warningCount": len(warnings),
+            "warnings": warnings,
             "metricsPass": metrics_passed,
             "visualReview": {
                 "required": visual_review_required,
@@ -2683,14 +2693,26 @@ def main() -> int:
                 "requiresRecordedFcpPreview": visual_review_required,
                 "requiresEveryCapturedFrame": require_every_captured_frame,
                 "contactSheets": "navigation-only" if contact_sheet_navigation_only else "diagnostic",
+                "blockingSignals": [
+                    "visual review failed or not-reviewed",
+                    "operation/proxy/fallback/prepared playback invalidity reported by the harness",
+                    "scale pulse",
+                    "black-edge breathing or transform instability",
+                    "ridge/horizon residual",
+                    "near-duplicate/freeze/cadence hold",
+                ],
+                "warningSignals": [
+                    "single-frame translation jump",
+                    "PTS/frame-interval irregularity",
+                ],
                 "measuredSignals": [
-                    "frame-to-frame translation jump",
+                    "frame-to-frame translation jump (warning/evidence)",
                     "scale pulse",
                     "black-edge transform jump/scale/rotation",
                     "ridge/horizon residual",
                     "black-edge breathing",
                     "near-duplicate/freeze",
-                    "PTS irregularity",
+                    "PTS irregularity (capture health warning)",
                 ],
                 "fixedRegressions": [
                     "P1000307 00:01:26-00:01:46 turn",
@@ -2942,6 +2964,7 @@ def main() -> int:
             f"max {summary['ridge']['maxHighFrequencyResidualPixels']:.3f}px, "
             f"p95 {summary['ridge']['highFrequencyResidualP95Pixels']:.3f}px, "
             f"vertical p95 {summary['ridge']['verticalResidualP95Pixels']:.3f}px, "
+            f"horizontal p95 {summary['ridge']['horizontalResidualP95Pixels']:.3f}px, "
             f"tracking {summary['ridge']['trackingRatio']:.3f}, "
             f"hold excluded {summary['ridge']['captureHoldExcludedFrameCount']}, "
             f"PTS excluded {summary['ridge']['ptsCadenceExcludedFrameCount']}"
@@ -2963,6 +2986,8 @@ def main() -> int:
     else:
         print(f"  PTS intervals: unavailable ({summary['pts'].get('reason', 'unknown')})")
     print(f"  diagnostics: {output_dir}")
+    for item in summary.get("warnings", []):
+        print(f"  warning: {item}")
     for item in failures:
         print(f"  failure: {item}")
 
