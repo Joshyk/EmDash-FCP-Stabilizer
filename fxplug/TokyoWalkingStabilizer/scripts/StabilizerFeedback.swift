@@ -3562,7 +3562,7 @@ private func sourceSpaceLensShakeBand(
     let topRowSupport = bandSupport(residual: topRowResidual, confidence: topConfidence)
     let ridgeRowSupport = bandSupport(residual: ridgeRowResidual, confidence: ridgeConfidence)
     let midRowSupport = bandSupport(residual: midRowResidual, confidence: midConfidence)
-    let bandConfidence = max(topConfidence, max(ridgeConfidence, midConfidence))
+    let maxBandConfidence = max(topConfidence, max(ridgeConfidence, midConfidence))
     let sourceRidgeSupport = confidenceRamp(abs(sourceRidgeResidualY), start: 0.18, full: 1.25)
         * confidenceRamp(sourceRidgePreparedSupport, start: 0.08, full: 0.45)
         * qualitySupport
@@ -3571,9 +3571,39 @@ private func sourceSpaceLensShakeBand(
         * confidenceRamp(sourceRidgeLinePreparedSupport, start: 0.08, full: 0.45)
         * qualitySupport
         * turnScale
+    func localLensShakePathSlice(_ values: [Float], bin: Int) -> [Float] {
+        guard bin >= 0, bin < analysis.sourceLensShakeLocalBinCount else {
+            return []
+        }
+        let start = bin * analysis.frames.count
+        let end = start + analysis.frames.count
+        guard start >= 0, end <= values.count else {
+            return []
+        }
+        return Array(values[start..<end])
+    }
+    var sourceLocalMagnitude: Float = 0.0
+    var sourceLocalSupport: Float = 0.0
+    for bin in 0..<analysis.sourceLensShakeLocalBinCount {
+        let localX = localLensShakePathSlice(analysis.sourceLensShakeLocalPathX, bin: bin)
+        let localY = localLensShakePathSlice(analysis.sourceLensShakeLocalPathY, bin: bin)
+        let localSupportPath = localLensShakePathSlice(analysis.sourceLensShakeLocalSupport, bin: bin)
+        let localResidual = (
+            x: residual(localX) * xScale,
+            y: residual(localY) * yScale
+        )
+        let localMagnitude = hypotf(localResidual.x, localResidual.y)
+        let localPreparedSupport = bandConfidence(localSupportPath)
+        let localSupport = confidenceRamp(localMagnitude, start: 0.10, full: 0.95)
+            * confidenceRamp(localPreparedSupport, start: 0.08, full: 0.38)
+            * qualitySupport
+            * turnScale
+        sourceLocalMagnitude = max(sourceLocalMagnitude, localMagnitude)
+        sourceLocalSupport = max(sourceLocalSupport, localSupport)
+    }
     let bandSupport = max(
         max(max(topSupport, max(ridgeSupport, midSupport)), max(topRowSupport, max(ridgeRowSupport, midRowSupport))),
-        max(max(topColumnSupport, max(ridgeColumnSupport, midColumnSupport)), max(max(sourceRidgeSupport, sourceRidgeLineSupport), support(localRollMagnitude, start: lensShakeRollStartDegrees * 0.25, full: lensShakeRollFullDegrees * 0.75)))
+        max(max(topColumnSupport, max(ridgeColumnSupport, midColumnSupport)), max(max(max(sourceRidgeSupport, sourceRidgeLineSupport), sourceLocalSupport), support(localRollMagnitude, start: lensShakeRollStartDegrees * 0.25, full: lensShakeRollFullDegrees * 0.75)))
     )
     let bandDisagreementSupport = confidenceRamp(bandDisagreement, start: 0.20, full: 1.50)
         * confidenceRamp(max(topSupport, max(ridgeSupport, midSupport)), start: 0.04, full: 0.20)
@@ -3604,6 +3634,9 @@ private func sourceSpaceLensShakeBand(
     if bandSupport >= lensShakeMinimumSupport && sourceRidgeLineSupport >= lensShakeMinimumSupport {
         correctionModels.append("sourceRidgeLine")
     }
+    if bandSupport >= lensShakeMinimumSupport && sourceLocalSupport >= lensShakeMinimumSupport {
+        correctionModels.append("sourceLocal")
+    }
     let correctionModel = correctionModels.isEmpty ? "none" : correctionModels.joined(separator: ",")
     let detected = hypotf(residualX, residualY)
         + (abs(residualRoll) * 12.0)
@@ -3613,11 +3646,12 @@ private func sourceSpaceLensShakeBand(
         + (hypotf(perspectiveX, perspectiveY) * 900.0)
         + bandMagnitude
         + columnMagnitude
+        + sourceLocalMagnitude
         + abs(sourceRidgeResidualY)
         + abs(sourceRidgeLineResidualY)
     let appliesBand = bandSupport >= lensShakeMinimumSupport
     let appliesGlobal = !appliesBand && lensSupport >= lensShakeMinimumSupport && rollingShutterCandidate < 0.45
-    let bandAppliedMagnitude = max(max(bandMagnitude, columnMagnitude), max(abs(sourceRidgeResidualY), abs(sourceRidgeLineResidualY)))
+    let bandAppliedMagnitude = max(max(max(bandMagnitude, columnMagnitude), sourceLocalMagnitude), max(abs(sourceRidgeResidualY), abs(sourceRidgeLineResidualY)))
     let applied = appliesGlobal ? detected * lensSupport : (appliesBand ? bandAppliedMagnitude * bandSupport : 0.0)
     let reason: String
     if appliesGlobal {
@@ -3639,7 +3673,7 @@ private func sourceSpaceLensShakeBand(
         applied: applied,
         remaining: max(0.0, diagnosticDetected - applied),
         confidence: max(affineSupport, projectiveSupport),
-        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f rowT %.3f %.3f rowR %.3f %.3f rowM %.3f %.3f localRoll %.6f %.6f %.6f sourceRidgeY %.3f sourceRidgeSupport %.2f sourceRidgeLineY %.3f sourceRidgeLineSupport %.2f bandConf %.2f q %.2f rolling %.2f band %.2f model %@ reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, topRowResidual.x, topRowResidual.y, ridgeRowResidual.x, ridgeRowResidual.y, midRowResidual.x, midRowResidual.y, topLocalRoll, ridgeLocalRoll, midLocalRoll, sourceRidgeResidualY, sourceRidgeSupport, sourceRidgeLineResidualY, sourceRidgeLineSupport, bandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, correctionModel, reason)
+        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f rowT %.3f %.3f rowR %.3f %.3f rowM %.3f %.3f localRoll %.6f %.6f %.6f sourceRidgeY %.3f sourceRidgeSupport %.2f sourceRidgeLineY %.3f sourceRidgeLineSupport %.2f sourceLocalMag %.3f sourceLocalSupport %.2f bandConf %.2f q %.2f rolling %.2f band %.2f model %@ reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, topRowResidual.x, topRowResidual.y, ridgeRowResidual.x, ridgeRowResidual.y, midRowResidual.x, midRowResidual.y, topLocalRoll, ridgeLocalRoll, midLocalRoll, sourceRidgeResidualY, sourceRidgeSupport, sourceRidgeLineResidualY, sourceRidgeLineSupport, sourceLocalMagnitude, sourceLocalSupport, maxBandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, correctionModel, reason)
     )
 }
 
