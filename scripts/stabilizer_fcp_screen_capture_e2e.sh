@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEFAULT_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json"
+DEFAULT_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json"
 ARTIFACT_ROOT="${STABILIZER_E2E_ARTIFACT_DIR:-/tmp/stabilizer_e2e}"
 FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
 
@@ -25,7 +25,7 @@ Commands:
   run        Capture, then evaluate.
 
 Options:
-  --case PATH                  Case JSON. Defaults to P1000307 turn E2E.
+  --case PATH                  Case JSON. Defaults to P1000307 00:01:49 micro/macro E2E.
   --video PATH                 Capture output or existing recording to evaluate.
   --viewer-roi x,y,w,h         Override absolute FCP Viewer ROI in capture pixels.
   --output-dir PATH            Directory for evaluator diagnostics.

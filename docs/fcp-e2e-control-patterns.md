@@ -11,10 +11,12 @@ terminal-first scripts instead of adding a second UI automation path.
   FCP UI prepare, Proxy Only setup, Viewer ROI recording, evidence checks, and
   video evaluation.
 - The fixed cases are:
-  - `p1000307`: `tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json`
+  - `p1000307`: `tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json`
+  - `p1000307-crop-on`: `tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56_crop_on.json`
+  - `p1000307-turn`: `tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json`
   - `p1000304`: `tests/stabilizer_e2e_cases/p1000304_ridge_4m23_4m43.json`
 - Both cases target `/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stabilizer_super_smoother.fcpbundle`
-  and require `playbackMode: "Proxy Only"` plus `removeBlackEdges: true`.
+  and require `playbackMode: "Proxy Only"`; crop state follows each case file.
 
 ## Fixed Regression Patterns
 
@@ -24,7 +26,7 @@ Print the repo-local command set:
 scripts/fcp_e2e_control.sh patterns
 ```
 
-P1000307 turn window:
+P1000307 00:01:49 micro/macro shake window:
 
 ```sh
 scripts/fcp_e2e_control.sh recover-case --case p1000307
@@ -32,6 +34,19 @@ scripts/fcp_e2e_control.sh warmup-proxy --case p1000307 --assume-current-fcp-sta
 STABILIZER_E2E_PLAYBACK_READY_LOOKBACK_SECONDS=3600 \
 STABILIZER_E2E_PROXY_EVIDENCE_LOOKBACK_SECONDS=3600 \
 scripts/fcp_e2e_control.sh run --case p1000307 \
+  --capture-backend avfoundation-roi \
+  --visual-review not-reviewed \
+  --assume-current-fcp-state
+```
+
+P1000307 crop-on and older turn regressions remain explicit aliases:
+
+```sh
+scripts/fcp_e2e_control.sh run --case p1000307-crop-on \
+  --capture-backend avfoundation-roi \
+  --visual-review not-reviewed \
+  --assume-current-fcp-state
+scripts/fcp_e2e_control.sh run --case p1000307-turn \
   --capture-backend avfoundation-roi \
   --visual-review not-reviewed \
   --assume-current-fcp-state

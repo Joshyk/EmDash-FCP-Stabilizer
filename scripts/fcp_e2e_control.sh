@@ -5,7 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 E2E_SCRIPT="${ROOT_DIR}/scripts/stabilizer_fcp_screen_capture_e2e.sh"
 FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
 ARTIFACT_ROOT="${STABILIZER_E2E_ARTIFACT_DIR:-/tmp/stabilizer_e2e}"
-P1000307_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json"
+P1000307_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json"
+P1000307_CROP_ON_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56_crop_on.json"
+P1000307_TURN_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json"
 P1000304_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000304_ridge_4m23_4m43.json"
 DEFAULT_CASE="$P1000307_CASE"
 
@@ -39,7 +41,7 @@ Commands:
   run             Capture and evaluate through the existing E2E harness.
 
 Options:
-  --case PATH                  Case JSON. Default: P1000307 turn regression.
+  --case PATH                  Case JSON. Default: P1000307 00:01:49 micro/macro regression.
   --video PATH                 Recording path for capture/evaluate/run.
   --output-dir PATH            Diagnostics output directory.
   --viewer-roi x,y,w,h         Explicit absolute FCP Viewer ROI in capture pixels.
@@ -53,7 +55,7 @@ Options:
   --assume-prepared-fcp        Pass through to the E2E harness.
 
 Notes:
-  - --case accepts full paths and aliases: p1000307, p1000304.
+  - --case accepts full paths and aliases: p1000307, p1000307-crop-on, p1000307-turn, p1000304.
   - Proxy Only, Viewer Green channel, and visible Debug Overlay are required by
     the checked-in E2E cases; Proxy Preferred is not accepted.
   - Smoothness acceptance still requires the recorded FCP Preview video, full CSV/PTS
@@ -111,8 +113,14 @@ PY
 resolve_case_path() {
 	local requested="$1"
 	case "$requested" in
-		p1000307|P1000307|307|turn)
+		p1000307|P1000307|307|micro|micro-macro|p1000307-micro|p1000307_micro)
 			printf '%s\n' "$P1000307_CASE"
+			;;
+		p1000307-crop-on|p1000307_crop_on|307-crop-on|crop-on)
+			printf '%s\n' "$P1000307_CROP_ON_CASE"
+			;;
+		p1000307-turn|p1000307_turn|307-turn|turn)
+			printf '%s\n' "$P1000307_TURN_CASE"
 			;;
 		p1000304|P1000304|304|ridge)
 			printf '%s\n' "$P1000304_CASE"
@@ -203,6 +211,8 @@ print_patterns() {
 
 PATTERN
 	print_case_run_pattern p1000307 "$P1000307_CASE"
+	print_case_run_pattern p1000307-crop-on "$P1000307_CROP_ON_CASE"
+	print_case_run_pattern p1000307-turn "$P1000307_TURN_CASE"
 	print_case_run_pattern p1000304 "$P1000304_CASE"
 }
 
@@ -735,7 +745,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case_file="$(resolve_case_path "$case_file")"
-[[ -f "$case_file" ]] || fail "case file does not exist: ${case_file} (aliases: p1000307, p1000304)"
+[[ -f "$case_file" ]] || fail "case file does not exist: ${case_file} (aliases: p1000307, p1000307-crop-on, p1000307-turn, p1000304)"
 
 if [[ "$capture_backend_explicit" == "0" && -z "${STABILIZER_E2E_CAPTURE_BACKEND:-}" ]]; then
 	case "$command_name" in

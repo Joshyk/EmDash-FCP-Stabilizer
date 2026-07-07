@@ -7185,7 +7185,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let repeatedPreparedSample = normalCadence
             && sameIdentity
             && samplePosition <= (previous?.samplePosition ?? -1.0) + 0.05
-        if debugOverlayActive {
+        do {
             let trackingQuality = max(autoTransform.walkingTrackingConfidence, autoTransform.trackingConfidence)
             let appliedPixelOffset = autoTransform.pixelOffset * masterStrength
             let appliedMacroPixelOffset = autoTransform.macroPixelOffset * masterStrength

@@ -12,18 +12,19 @@ and `CurrentVersion.flexolibrary` SQLite fixtures under a new temporary director
 run. The fixture is intentionally left in place so the test does not delete anything from
 the local machine.
 
-Run the Final Cut Pro screen-capture E2E for the reported P1000307 turn with:
+Run the Final Cut Pro screen-capture E2E for the reported P1000307 00:01:49
+micro/macro shake with:
 
 ```sh
 scripts/stabilizer_fcp_screen_capture_e2e.sh run \
-  --case tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json
+  --case tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json
 ```
 
 To normalize the Final Cut Pro UI without recording, run:
 
 ```sh
 scripts/stabilizer_fcp_screen_capture_e2e.sh prepare \
-  --case tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json
+  --case tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json
 ```
 
 `prepare` opens the case library, opens the target project when the Browser exposes it,
@@ -33,8 +34,11 @@ ROI is recordable. Use `assert-prepared` to re-check the current FCP state, or
 `--assume-prepared-fcp` when capturing from a state that was already prepared.
 
 The case uses `/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stabilizer_super_smoother.fcpbundle`,
-`P1000307 Stabilized Review`, and the `P1000307.mov` `00:01:26` to `00:01:46`
-turn section in proxy with Remove Black Edges / crop enabled. The script records the
+`P1000307 Stabilized Review`, and the `P1000307.mov` `00:01:44` to `00:01:56`
+section in proxy. The default P1000307 case keeps Remove Black Edges off so
+exposed edges remain diagnostic evidence; use
+`p1000307_micro_macro_1m44_1m56_crop_on.json` for the matching crop-on pass, and
+`p1000307_turn_1m26_1m46.json` for the older turn regression. The script records the
 Final Cut Pro Viewer, then `tests/stabilizer_video_quality.py` evaluates apparent zoom
 pulse, black-edge breathing, and tracking confidence from the captured frames.
 
@@ -76,8 +80,8 @@ To evaluate an existing recording without driving Final Cut Pro:
 
 ```sh
 scripts/stabilizer_fcp_screen_capture_e2e.sh evaluate \
-  --case tests/stabilizer_e2e_cases/p1000307_turn_1m26_1m46.json \
-  --video /tmp/stabilizer_screen_capture/p1000307_turn_129_v1021_proxy_crop_on_fcp.mov
+  --case tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json \
+  --video /tmp/stabilizer_screen_capture/p1000307_micro_macro_proxy_fcp.mov
 ```
 
 If the FCP window layout changes, pass `--viewer-roi x,y,w,h` for the absolute Viewer
