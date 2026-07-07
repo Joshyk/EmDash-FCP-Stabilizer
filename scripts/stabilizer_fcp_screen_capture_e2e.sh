@@ -111,6 +111,15 @@ end tell
 APPLESCRIPT
 }
 
+fail_if_fcp_windowless() {
+	local label="$1"
+	local summary
+	summary="$(fcp_ax_window_summary)"
+	if [[ "$summary" == *"windows=0"* || "$summary" == "process=missing" || -z "$summary" ]]; then
+		fail "Final Cut Pro is not in a usable window state during ${label}; AX state: ${summary:-unavailable}. Open FCP visibly, open the target project, then retry with --assume-current-fcp-state."
+	fi
+}
+
 recover_fcp_standard_window_via_ax() {
 	local label="$1"
 	printf 'Final Cut Pro AX window recovery: activate/reopen/frontmost during %s.\n' "$label" >&2
@@ -4812,7 +4821,9 @@ open_case_project() {
 		printf 'Opened Final Cut Pro project via non-coordinate keyboard/menu path: %s\n' "$project"
 	else
 		printf 'Primary project open paths failed; enabling Browser for explicit AX/menu project-open retry.\n' >&2
+		fail_if_fcp_windowless "project-open retry before enabling Browser"
 		if ! set_fcp_toolbar_checkbox "Show or hide the Browser" 1 >/dev/null; then
+			fail_if_fcp_windowless "project-open retry after Browser toolbar failure"
 			sleep 0.5
 			wait_for_fcp_standard_window 300 \
 				|| fail "Final Cut Pro standard window was not readable while enabling Browser"
