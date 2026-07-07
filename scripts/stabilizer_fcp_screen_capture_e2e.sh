@@ -1699,15 +1699,15 @@ on run argv
 			set optionsButton to my viewOptionsButton()
 			if optionsButton is missing value then error "View Options Menu Button not found"
 			set menuRef to my showViewOptionsMenu(optionsButton)
-			set targetElement to my firstMenuItemNamed(menuRef, targetValue)
-			if targetElement is missing value then error "View Options item not found: " & targetValue
+			set targetElement to my viewOptionsTargetItem(menuRef, settingKind, targetValue)
+			if targetElement is missing value then error "View Options item not found: " & targetValue & ". Visible menu tree: " & my menuTree(menuRef, 0, 4)
 			click targetElement
 			delay 0.25
 			key code 53
 			delay 0.1
 			set verifyMenu to my showViewOptionsMenu(optionsButton)
-			set verifyElement to my firstMenuItemNamed(verifyMenu, targetValue)
-			if verifyElement is missing value then error "View Options verify item not found: " & targetValue
+			set verifyElement to my viewOptionsTargetItem(verifyMenu, settingKind, targetValue)
+			if verifyElement is missing value then error "View Options verify item not found: " & targetValue & ". Visible menu tree: " & my menuTree(verifyMenu, 0, 4)
 			if not my menuItemLooksChecked(verifyElement) then error "View Options item did not become checked: " & targetValue
 			key code 53
 		end tell
@@ -1751,16 +1751,95 @@ on showViewOptionsMenu(optionsButton)
 	end tell
 end showViewOptionsMenu
 
-on firstMenuItemNamed(menuRef, requiredName)
+on viewOptionsTargetItem(menuRef, settingKind, requiredName)
+	set directItem to my firstDirectMenuItemNamed(menuRef, requiredName)
+	if directItem is not missing value then return directItem
+	set parentNames to my viewOptionsParentNames(settingKind)
 	tell application "System Events"
 		repeat with itemRef in menu items of menuRef
 			try
-				if (name of itemRef as text) is requiredName then return itemRef
+				set parentName to name of itemRef as text
+				if my textListContains(parentNames, parentName) then
+					set nestedItem to my firstDescendantMenuItemNamed(itemRef, requiredName, 4)
+					if nestedItem is not missing value then return nestedItem
+				end if
 			end try
 		end repeat
 	end tell
 	return missing value
-end firstMenuItemNamed
+end viewOptionsTargetItem
+
+on viewOptionsParentNames(settingKind)
+	if settingKind is "media-playback" then
+		return {"Media Playback", "Playback", "Playback Media", "Viewer Media Playback"}
+	else if settingKind is "channel" then
+		return {"Color Channels", "Channels", "Channel"}
+	end if
+	return {}
+end viewOptionsParentNames
+
+on firstDirectMenuItemNamed(menuRef, requiredName)
+	tell application "System Events"
+		try
+			repeat with itemRef in menu items of menuRef
+				try
+					if (name of itemRef as text) is requiredName then return itemRef
+				end try
+			end repeat
+		end try
+	end tell
+	return missing value
+end firstDirectMenuItemNamed
+
+on firstDescendantMenuItemNamed(rootItem, requiredName, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			if (name of rootItem as text) is requiredName then return rootItem
+		end try
+		try
+			set childMenu to menu 1 of rootItem
+			repeat with childItem in menu items of childMenu
+				set foundItem to my firstDescendantMenuItemNamed(childItem, requiredName, remainingDepth - 1)
+				if foundItem is not missing value then return foundItem
+			end repeat
+		end try
+	end tell
+	return missing value
+end firstDescendantMenuItemNamed
+
+on textListContains(textItems, candidateText)
+	repeat with textItem in textItems
+		if (textItem as text) is candidateText then return true
+	end repeat
+	return false
+end textListContains
+
+on menuTree(menuRef, depth, remainingDepth)
+	if remainingDepth < 0 then return ""
+	set indentText to ""
+	repeat depth times
+		set indentText to indentText & "  "
+	end repeat
+	set lines to {}
+	tell application "System Events"
+		try
+			repeat with itemRef in menu items of menuRef
+				set itemName to "<unnamed>"
+				try
+					set itemName to name of itemRef as text
+				end try
+				set end of lines to indentText & itemName
+				try
+					set childMenu to menu 1 of itemRef
+					set childTree to my menuTree(childMenu, depth + 1, remainingDepth - 1)
+					if childTree is not "" then set end of lines to childTree
+				end try
+			end repeat
+		end try
+	end tell
+	return my joinTextList(lines, " | ")
+end menuTree
 
 on menuItemLooksChecked(menuItemRef)
 	tell application "System Events"
