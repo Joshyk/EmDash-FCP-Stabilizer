@@ -222,6 +222,61 @@ def classify_residual_model(row: dict[str, Any], window_frames: int) -> tuple[st
     return "unknown", component, band_component
 
 
+def correction_model_covers(residual_model: str, correction_model: str) -> bool:
+    required = {
+        "rowPhaseWarp": "rowPhase",
+        "columnPhaseWarp": "columnPhase",
+        "regionClusterWarp": "regionCluster",
+        "localRollWarp": "localRoll",
+    }.get(residual_model)
+    if required is None:
+        return residual_model == "noSignal"
+    return required in {
+        item.strip() for item in str(correction_model).split(",") if item.strip()
+    }
+
+
+def runtime_model_applied(row: dict[str, Any], residual_model: str) -> bool:
+    if finite_float(row.get("lensBandWarpApplied")) <= 0.5:
+        return False
+    if not correction_model_covers(residual_model, str(row.get("lensBandCorrectionModel", ""))):
+        return False
+
+    def max_vector_magnitude(columns: tuple[tuple[str, str], ...]) -> float:
+        return max(
+            [
+                math.hypot(finite_float(row.get(x_column)), finite_float(row.get(y_column)))
+                for x_column, y_column in columns
+            ] or [0.0]
+        )
+
+    if residual_model == "rowPhaseWarp":
+        return max_vector_magnitude(
+            (
+                ("lensBandTopRowPhaseX", "lensBandTopRowPhaseY"),
+                ("lensBandRidgeRowPhaseX", "lensBandRidgeRowPhaseY"),
+                ("lensBandMidRowPhaseX", "lensBandMidRowPhaseY"),
+            )
+        ) >= 0.02
+    if residual_model == "columnPhaseWarp":
+        return max_vector_magnitude(
+            (
+                ("lensBandTopColumnX", "lensBandTopColumnY"),
+                ("lensBandRidgeColumnX", "lensBandRidgeColumnY"),
+                ("lensBandMidColumnX", "lensBandMidColumnY"),
+            )
+        ) >= 0.02
+    if residual_model == "regionClusterWarp":
+        return False
+    if residual_model == "localRollWarp":
+        return max(
+            abs(finite_float(row.get("lensBandTopLocalRoll"))),
+            abs(finite_float(row.get("lensBandRidgeLocalRoll"))),
+            abs(finite_float(row.get("lensBandMidLocalRoll"))),
+        ) >= 0.00001
+    return residual_model == "noSignal"
+
+
 def add_region_phase_metrics(row: dict[str, float], band_name: str) -> None:
     left_dx = finite_float(row.get(f"{band_name}.left.dx"))
     right_dx = finite_float(row.get(f"{band_name}.right.dx"))
@@ -424,6 +479,7 @@ def main() -> None:
         "lensShakeShearY",
         "lensShakePerspectiveX",
         "lensShakePerspectiveY",
+        "lensBandCorrectionModel",
         "lensBandTopX",
         "lensBandTopY",
         "lensBandRidgeX",
@@ -436,6 +492,15 @@ def main() -> None:
         "lensBandRidgeColumnY",
         "lensBandMidColumnX",
         "lensBandMidColumnY",
+        "lensBandTopRowPhaseX",
+        "lensBandTopRowPhaseY",
+        "lensBandRidgeRowPhaseX",
+        "lensBandRidgeRowPhaseY",
+        "lensBandMidRowPhaseX",
+        "lensBandMidRowPhaseY",
+        "lensBandTopLocalRoll",
+        "lensBandRidgeLocalRoll",
+        "lensBandMidLocalRoll",
         "lensBandWarpSupport",
         "lensBandWarpApplied",
         "lensBandRollingShutterScore",
@@ -587,11 +652,33 @@ def main() -> None:
     }
     dominant_model, dominant_model_value = dominant_key(focus_model_p95)
     summary["focusLensBandResidualModelCounts"] = dict(focus_models)
+    summary["focusLensBandCorrectionModelCounts"] = dict(
+        Counter(str(row.get("lensBandCorrectionModel", "")) for row in focus_joined if row.get("lensBandCorrectionModel"))
+    )
+    covered_rows = sum(
+        1 for row in focus_joined
+        if correction_model_covers(dominant_model, str(row.get("lensBandCorrectionModel", "")))
+    )
+    applied_covered_rows = sum(
+        1 for row in focus_joined
+        if runtime_model_applied(row, dominant_model)
+    )
+    summary["focusLensBandDominantModelCoveredRows"] = covered_rows
+    summary["focusLensBandDominantModelCoveredRatio"] = (
+        covered_rows / len(focus_joined) if focus_joined else 0.0
+    )
+    summary["focusLensBandDominantModelAppliedRows"] = applied_covered_rows
+    summary["focusLensBandDominantModelAppliedRatio"] = (
+        applied_covered_rows / len(focus_joined) if focus_joined else 0.0
+    )
     summary["focusLensBandResidualDominantModel"] = dominant_model
     summary["focusLensBandResidualDominantModelP95"] = dominant_model_value
     summary["focusLensBandResidualEvidence"] = (
         f"{dominant_model} p95={dominant_model_value:.3f}; "
         f"models={dict(focus_models)}; "
+        f"correctionModels={summary.get('focusLensBandCorrectionModelCounts', {})}; "
+        f"coveredRatio={summary.get('focusLensBandDominantModelCoveredRatio', 0.0):.3f}; "
+        f"appliedRatio={summary.get('focusLensBandDominantModelAppliedRatio', 0.0):.3f}; "
         f"reasonCounts={summary.get('focusLensReasonCounts', {})}; "
         f"bandWarpAppliedRows={summary.get('focusLensBandWarpAppliedRows', 0)}"
     )
@@ -615,6 +702,7 @@ def main() -> None:
             "localRollHF",
             "dominantLocalModel",
             "runtimeReason",
+            "runtimeCorrectionModel",
             "runtimeBandWarpApplied",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -640,6 +728,7 @@ def main() -> None:
                         "localRollHF": row.get(f"{band_name}.localRollSpreadHF{args.window_frames}", ""),
                         "dominantLocalModel": local_model,
                         "runtimeReason": row.get("lensShakeReason", ""),
+                        "runtimeCorrectionModel": row.get("lensBandCorrectionModel", ""),
                         "runtimeBandWarpApplied": row.get("lensBandWarpApplied", ""),
                     }
                 )
@@ -649,6 +738,16 @@ def main() -> None:
         raise SystemExit(
             "lens band diagnostics failed: target focus window had no rollingRowWarp band application; "
             f"summary={args.output_dir / 'lens_band_source_summary.json'} csv={csv_path}"
+        )
+    if (
+        args.require_band_warp
+        and dominant_model_value >= 0.35
+        and dominant_model != "noSignal"
+        and summary["focusLensBandDominantModelAppliedRatio"] < 0.55
+    ):
+        raise SystemExit(
+            "lens band diagnostics failed: dominant residual model was not consistently applied by runtime correction; "
+            f"model={dominant_model} evidence={summary['focusLensBandResidualEvidence']} csv={csv_path}"
         )
     if args.forbid_global_lens and summary["focusGlobalLensAppliedRows"] > 0:
         raise SystemExit(

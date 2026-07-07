@@ -65,14 +65,23 @@ private struct PersistedHostAnalysisCache: Decodable {
     let lensBandTopPathY: [Float]?
     let lensBandTopColumnPathX: [Float]?
     let lensBandTopColumnPathY: [Float]?
+    let lensBandTopRowPhasePathX: [Float]?
+    let lensBandTopRowPhasePathY: [Float]?
+    let lensBandTopLocalRollPath: [Float]?
     let lensBandRidgePathX: [Float]?
     let lensBandRidgePathY: [Float]?
     let lensBandRidgeColumnPathX: [Float]?
     let lensBandRidgeColumnPathY: [Float]?
+    let lensBandRidgeRowPhasePathX: [Float]?
+    let lensBandRidgeRowPhasePathY: [Float]?
+    let lensBandRidgeLocalRollPath: [Float]?
     let lensBandMidPathX: [Float]?
     let lensBandMidPathY: [Float]?
     let lensBandMidColumnPathX: [Float]?
     let lensBandMidColumnPathY: [Float]?
+    let lensBandMidRowPhasePathX: [Float]?
+    let lensBandMidRowPhasePathY: [Float]?
+    let lensBandMidLocalRollPath: [Float]?
     let lensBandTopConfidence: [Float]?
     let lensBandRidgeConfidence: [Float]?
     let lensBandMidConfidence: [Float]?
@@ -150,14 +159,23 @@ private struct Analysis {
     let lensBandTopPathY: [Float]
     let lensBandTopColumnPathX: [Float]
     let lensBandTopColumnPathY: [Float]
+    let lensBandTopRowPhasePathX: [Float]
+    let lensBandTopRowPhasePathY: [Float]
+    let lensBandTopLocalRollPath: [Float]
     let lensBandRidgePathX: [Float]
     let lensBandRidgePathY: [Float]
     let lensBandRidgeColumnPathX: [Float]
     let lensBandRidgeColumnPathY: [Float]
+    let lensBandRidgeRowPhasePathX: [Float]
+    let lensBandRidgeRowPhasePathY: [Float]
+    let lensBandRidgeLocalRollPath: [Float]
     let lensBandMidPathX: [Float]
     let lensBandMidPathY: [Float]
     let lensBandMidColumnPathX: [Float]
     let lensBandMidColumnPathY: [Float]
+    let lensBandMidRowPhasePathX: [Float]
+    let lensBandMidRowPhasePathY: [Float]
+    let lensBandMidLocalRollPath: [Float]
     let lensBandTopConfidence: [Float]
     let lensBandRidgeConfidence: [Float]
     let lensBandMidConfidence: [Float]
@@ -238,14 +256,23 @@ private struct Analysis {
         lensBandTopPathY = try requireFloatArray(cache.lensBandTopPathY, "lensBandTopPathY")
         lensBandTopColumnPathX = try requireFloatArray(cache.lensBandTopColumnPathX, "lensBandTopColumnPathX")
         lensBandTopColumnPathY = try requireFloatArray(cache.lensBandTopColumnPathY, "lensBandTopColumnPathY")
+        lensBandTopRowPhasePathX = try requireFloatArray(cache.lensBandTopRowPhasePathX, "lensBandTopRowPhasePathX")
+        lensBandTopRowPhasePathY = try requireFloatArray(cache.lensBandTopRowPhasePathY, "lensBandTopRowPhasePathY")
+        lensBandTopLocalRollPath = try requireFloatArray(cache.lensBandTopLocalRollPath, "lensBandTopLocalRollPath")
         lensBandRidgePathX = try requireFloatArray(cache.lensBandRidgePathX, "lensBandRidgePathX")
         lensBandRidgePathY = try requireFloatArray(cache.lensBandRidgePathY, "lensBandRidgePathY")
         lensBandRidgeColumnPathX = try requireFloatArray(cache.lensBandRidgeColumnPathX, "lensBandRidgeColumnPathX")
         lensBandRidgeColumnPathY = try requireFloatArray(cache.lensBandRidgeColumnPathY, "lensBandRidgeColumnPathY")
+        lensBandRidgeRowPhasePathX = try requireFloatArray(cache.lensBandRidgeRowPhasePathX, "lensBandRidgeRowPhasePathX")
+        lensBandRidgeRowPhasePathY = try requireFloatArray(cache.lensBandRidgeRowPhasePathY, "lensBandRidgeRowPhasePathY")
+        lensBandRidgeLocalRollPath = try requireFloatArray(cache.lensBandRidgeLocalRollPath, "lensBandRidgeLocalRollPath")
         lensBandMidPathX = try requireFloatArray(cache.lensBandMidPathX, "lensBandMidPathX")
         lensBandMidPathY = try requireFloatArray(cache.lensBandMidPathY, "lensBandMidPathY")
         lensBandMidColumnPathX = try requireFloatArray(cache.lensBandMidColumnPathX, "lensBandMidColumnPathX")
         lensBandMidColumnPathY = try requireFloatArray(cache.lensBandMidColumnPathY, "lensBandMidColumnPathY")
+        lensBandMidRowPhasePathX = try requireFloatArray(cache.lensBandMidRowPhasePathX, "lensBandMidRowPhasePathX")
+        lensBandMidRowPhasePathY = try requireFloatArray(cache.lensBandMidRowPhasePathY, "lensBandMidRowPhasePathY")
+        lensBandMidLocalRollPath = try requireFloatArray(cache.lensBandMidLocalRollPath, "lensBandMidLocalRollPath")
         lensBandConfidence = try requireFloatArray(cache.lensBandConfidence, "lensBandConfidence")
         lensBandTopConfidence = try requireFloatArray(cache.lensBandTopConfidence, "lensBandTopConfidence")
         lensBandRidgeConfidence = try requireFloatArray(cache.lensBandRidgeConfidence, "lensBandRidgeConfidence")
@@ -685,7 +712,7 @@ private let lensShakePerspectiveFull: Float = 0.000095
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [35]
+private let supportedCacheSchemaVersions: Set<Int> = [36]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
@@ -829,14 +856,23 @@ private func floatComparisonInputs(baseline: Analysis, compared: Analysis) -> [(
         ("lensBandTopPathY", baseline.lensBandTopPathY, compared.lensBandTopPathY),
         ("lensBandTopColumnPathX", baseline.lensBandTopColumnPathX, compared.lensBandTopColumnPathX),
         ("lensBandTopColumnPathY", baseline.lensBandTopColumnPathY, compared.lensBandTopColumnPathY),
+        ("lensBandTopRowPhasePathX", baseline.lensBandTopRowPhasePathX, compared.lensBandTopRowPhasePathX),
+        ("lensBandTopRowPhasePathY", baseline.lensBandTopRowPhasePathY, compared.lensBandTopRowPhasePathY),
+        ("lensBandTopLocalRollPath", baseline.lensBandTopLocalRollPath, compared.lensBandTopLocalRollPath),
         ("lensBandRidgePathX", baseline.lensBandRidgePathX, compared.lensBandRidgePathX),
         ("lensBandRidgePathY", baseline.lensBandRidgePathY, compared.lensBandRidgePathY),
         ("lensBandRidgeColumnPathX", baseline.lensBandRidgeColumnPathX, compared.lensBandRidgeColumnPathX),
         ("lensBandRidgeColumnPathY", baseline.lensBandRidgeColumnPathY, compared.lensBandRidgeColumnPathY),
+        ("lensBandRidgeRowPhasePathX", baseline.lensBandRidgeRowPhasePathX, compared.lensBandRidgeRowPhasePathX),
+        ("lensBandRidgeRowPhasePathY", baseline.lensBandRidgeRowPhasePathY, compared.lensBandRidgeRowPhasePathY),
+        ("lensBandRidgeLocalRollPath", baseline.lensBandRidgeLocalRollPath, compared.lensBandRidgeLocalRollPath),
         ("lensBandMidPathX", baseline.lensBandMidPathX, compared.lensBandMidPathX),
         ("lensBandMidPathY", baseline.lensBandMidPathY, compared.lensBandMidPathY),
         ("lensBandMidColumnPathX", baseline.lensBandMidColumnPathX, compared.lensBandMidColumnPathX),
         ("lensBandMidColumnPathY", baseline.lensBandMidColumnPathY, compared.lensBandMidColumnPathY),
+        ("lensBandMidRowPhasePathX", baseline.lensBandMidRowPhasePathX, compared.lensBandMidRowPhasePathX),
+        ("lensBandMidRowPhasePathY", baseline.lensBandMidRowPhasePathY, compared.lensBandMidRowPhasePathY),
+        ("lensBandMidLocalRollPath", baseline.lensBandMidLocalRollPath, compared.lensBandMidLocalRollPath),
         ("lensBandTopConfidence", baseline.lensBandTopConfidence, compared.lensBandTopConfidence),
         ("lensBandRidgeConfidence", baseline.lensBandRidgeConfidence, compared.lensBandRidgeConfidence),
         ("lensBandMidConfidence", baseline.lensBandMidConfidence, compared.lensBandMidConfidence),
@@ -1057,14 +1093,23 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         ("lensBandTopPathY", cache.lensBandTopPathY),
         ("lensBandTopColumnPathX", cache.lensBandTopColumnPathX),
         ("lensBandTopColumnPathY", cache.lensBandTopColumnPathY),
+        ("lensBandTopRowPhasePathX", cache.lensBandTopRowPhasePathX),
+        ("lensBandTopRowPhasePathY", cache.lensBandTopRowPhasePathY),
+        ("lensBandTopLocalRollPath", cache.lensBandTopLocalRollPath),
         ("lensBandRidgePathX", cache.lensBandRidgePathX),
         ("lensBandRidgePathY", cache.lensBandRidgePathY),
         ("lensBandRidgeColumnPathX", cache.lensBandRidgeColumnPathX),
         ("lensBandRidgeColumnPathY", cache.lensBandRidgeColumnPathY),
+        ("lensBandRidgeRowPhasePathX", cache.lensBandRidgeRowPhasePathX),
+        ("lensBandRidgeRowPhasePathY", cache.lensBandRidgeRowPhasePathY),
+        ("lensBandRidgeLocalRollPath", cache.lensBandRidgeLocalRollPath),
         ("lensBandMidPathX", cache.lensBandMidPathX),
         ("lensBandMidPathY", cache.lensBandMidPathY),
         ("lensBandMidColumnPathX", cache.lensBandMidColumnPathX),
         ("lensBandMidColumnPathY", cache.lensBandMidColumnPathY),
+        ("lensBandMidRowPhasePathX", cache.lensBandMidRowPhasePathX),
+        ("lensBandMidRowPhasePathY", cache.lensBandMidRowPhasePathY),
+        ("lensBandMidLocalRollPath", cache.lensBandMidLocalRollPath),
         ("lensBandTopConfidence", cache.lensBandTopConfidence),
         ("lensBandRidgeConfidence", cache.lensBandRidgeConfidence),
         ("lensBandMidConfidence", cache.lensBandMidConfidence),
@@ -3375,14 +3420,29 @@ private func sourceSpaceLensShakeBand(
         x: residual(analysis.lensBandTopColumnPathX) * xScale,
         y: residual(analysis.lensBandTopColumnPathY) * yScale
     )
+    let topRowResidual = (
+        x: residual(analysis.lensBandTopRowPhasePathX) * xScale,
+        y: residual(analysis.lensBandTopRowPhasePathY) * yScale
+    )
+    let topLocalRoll = residual(analysis.lensBandTopLocalRollPath)
     let ridgeColumnResidual = (
         x: residual(analysis.lensBandRidgeColumnPathX) * xScale,
         y: residual(analysis.lensBandRidgeColumnPathY) * yScale
     )
+    let ridgeRowResidual = (
+        x: residual(analysis.lensBandRidgeRowPhasePathX) * xScale,
+        y: residual(analysis.lensBandRidgeRowPhasePathY) * yScale
+    )
+    let ridgeLocalRoll = residual(analysis.lensBandRidgeLocalRollPath)
     let midColumnResidual = (
         x: residual(analysis.lensBandMidColumnPathX) * xScale,
         y: residual(analysis.lensBandMidColumnPathY) * yScale
     )
+    let midRowResidual = (
+        x: residual(analysis.lensBandMidRowPhasePathX) * xScale,
+        y: residual(analysis.lensBandMidRowPhasePathY) * yScale
+    )
+    let midLocalRoll = residual(analysis.lensBandMidLocalRollPath)
     let bandMagnitude = max(
         hypotf(topResidual.x, topResidual.y),
         max(hypotf(ridgeResidual.x, ridgeResidual.y), hypotf(midResidual.x, midResidual.y))
@@ -3390,6 +3450,25 @@ private func sourceSpaceLensShakeBand(
     let columnMagnitude = max(
         hypotf(topColumnResidual.x, topColumnResidual.y),
         max(hypotf(ridgeColumnResidual.x, ridgeColumnResidual.y), hypotf(midColumnResidual.x, midColumnResidual.y))
+    )
+    let rowMagnitude = max(
+        hypotf(topRowResidual.x, topRowResidual.y),
+        max(hypotf(ridgeRowResidual.x, ridgeRowResidual.y), hypotf(midRowResidual.x, midRowResidual.y))
+    )
+    let localRollMagnitude = max(abs(topLocalRoll), max(abs(ridgeLocalRoll), abs(midLocalRoll)))
+    let bandDisagreement = max(
+        hypotf(topResidual.x - ridgeResidual.x, topResidual.y - ridgeResidual.y),
+        max(
+            hypotf(topResidual.x - midResidual.x, topResidual.y - midResidual.y),
+            hypotf(ridgeResidual.x - midResidual.x, ridgeResidual.y - midResidual.y)
+        )
+    )
+    let columnDisagreement = max(
+        hypotf(topColumnResidual.x - ridgeColumnResidual.x, topColumnResidual.y - ridgeColumnResidual.y),
+        max(
+            hypotf(topColumnResidual.x - midColumnResidual.x, topColumnResidual.y - midColumnResidual.y),
+            hypotf(ridgeColumnResidual.x - midColumnResidual.x, ridgeColumnResidual.y - midColumnResidual.y)
+        )
     )
     func bandConfidence(_ values: [Float]) -> Float {
         values.indices.contains(index) ? values[index] : 0.0
@@ -3409,11 +3488,38 @@ private func sourceSpaceLensShakeBand(
     let topColumnSupport = bandSupport(residual: topColumnResidual, confidence: topConfidence)
     let ridgeColumnSupport = bandSupport(residual: ridgeColumnResidual, confidence: ridgeConfidence)
     let midColumnSupport = bandSupport(residual: midColumnResidual, confidence: midConfidence)
+    let topRowSupport = bandSupport(residual: topRowResidual, confidence: topConfidence)
+    let ridgeRowSupport = bandSupport(residual: ridgeRowResidual, confidence: ridgeConfidence)
+    let midRowSupport = bandSupport(residual: midRowResidual, confidence: midConfidence)
     let bandConfidence = max(topConfidence, max(ridgeConfidence, midConfidence))
     let bandSupport = max(
-        max(topSupport, max(ridgeSupport, midSupport)),
-        max(topColumnSupport, max(ridgeColumnSupport, midColumnSupport))
+        max(max(topSupport, max(ridgeSupport, midSupport)), max(topRowSupport, max(ridgeRowSupport, midRowSupport))),
+        max(max(topColumnSupport, max(ridgeColumnSupport, midColumnSupport)), support(localRollMagnitude, start: lensShakeRollStartDegrees * 0.25, full: lensShakeRollFullDegrees * 0.75))
     )
+    let bandDisagreementSupport = confidenceRamp(bandDisagreement, start: 0.20, full: 1.50)
+        * confidenceRamp(max(topSupport, max(ridgeSupport, midSupport)), start: 0.04, full: 0.20)
+    let columnSupport = max(topColumnSupport, max(ridgeColumnSupport, midColumnSupport))
+    let columnPhaseSupport = max(
+        confidenceRamp(columnMagnitude, start: 0.12, full: 1.10),
+        confidenceRamp(columnDisagreement, start: 0.16, full: 1.35)
+    ) * confidenceRamp(columnSupport, start: 0.04, full: 0.20)
+    let rowPhaseSupport = confidenceRamp(rowMagnitude, start: 0.12, full: 1.10)
+        * confidenceRamp(max(topRowSupport, max(ridgeRowSupport, midRowSupport)), start: 0.04, full: 0.20)
+    let localRollSupport = support(localRollMagnitude, start: lensShakeRollStartDegrees * 0.25, full: lensShakeRollFullDegrees * 0.75)
+    var correctionModels: [String] = []
+    if bandSupport >= lensShakeMinimumSupport && rowPhaseSupport >= lensShakeMinimumSupport {
+        correctionModels.append("rowPhase")
+    }
+    if bandSupport >= lensShakeMinimumSupport && bandDisagreementSupport >= lensShakeMinimumSupport {
+        correctionModels.append("regionCluster")
+    }
+    if bandSupport >= lensShakeMinimumSupport && columnPhaseSupport >= lensShakeMinimumSupport {
+        correctionModels.append("columnPhase")
+    }
+    if bandSupport >= lensShakeMinimumSupport && localRollSupport >= lensShakeMinimumSupport {
+        correctionModels.append("localRoll")
+    }
+    let correctionModel = correctionModels.isEmpty ? "none" : correctionModels.joined(separator: ",")
     let detected = hypotf(residualX, residualY)
         + (abs(residualRoll) * 12.0)
     let diagnosticDetected = detected
@@ -3445,7 +3551,7 @@ private func sourceSpaceLensShakeBand(
         applied: applied,
         remaining: max(0.0, diagnosticDetected - applied),
         confidence: max(affineSupport, projectiveSupport),
-        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f bandConf %.2f q %.2f rolling %.2f band %.2f reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, bandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, reason)
+        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f rowT %.3f %.3f rowR %.3f %.3f rowM %.3f %.3f localRoll %.6f %.6f %.6f bandConf %.2f q %.2f rolling %.2f band %.2f model %@ reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, topRowResidual.x, topRowResidual.y, ridgeRowResidual.x, ridgeRowResidual.y, midRowResidual.x, midRowResidual.y, topLocalRoll, ridgeLocalRoll, midLocalRoll, bandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, correctionModel, reason)
     )
 }
 

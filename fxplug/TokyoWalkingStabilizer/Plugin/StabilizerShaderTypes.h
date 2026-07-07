@@ -117,6 +117,12 @@ typedef struct TokyoWalkingStabilizerTransformUniforms {
     vector_float2 lensBandTopColumnOffset;
     vector_float2 lensBandRidgeColumnOffset;
     vector_float2 lensBandMidColumnOffset;
+    vector_float2 lensBandTopRowPhaseOffset;
+    vector_float2 lensBandRidgeRowPhaseOffset;
+    vector_float2 lensBandMidRowPhaseOffset;
+    float lensBandTopLocalRoll;
+    float lensBandRidgeLocalRoll;
+    float lensBandMidLocalRoll;
     float lensBandWarpSupport;
     float lensBandWarpApplied;
 } TokyoWalkingStabilizerTransformUniforms;

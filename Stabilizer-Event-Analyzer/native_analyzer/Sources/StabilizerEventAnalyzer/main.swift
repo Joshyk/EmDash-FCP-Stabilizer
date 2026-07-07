@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 35
+private let cacheSchemaVersion = 36
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -182,14 +182,23 @@ struct PairMotion {
     let lensBandTopDy: Float
     let lensBandTopColumnDx: Float
     let lensBandTopColumnDy: Float
+    let lensBandTopRowPhaseDx: Float
+    let lensBandTopRowPhaseDy: Float
+    let lensBandTopLocalRoll: Float
     let lensBandRidgeDx: Float
     let lensBandRidgeDy: Float
     let lensBandRidgeColumnDx: Float
     let lensBandRidgeColumnDy: Float
+    let lensBandRidgeRowPhaseDx: Float
+    let lensBandRidgeRowPhaseDy: Float
+    let lensBandRidgeLocalRoll: Float
     let lensBandMidDx: Float
     let lensBandMidDy: Float
     let lensBandMidColumnDx: Float
     let lensBandMidColumnDy: Float
+    let lensBandMidRowPhaseDx: Float
+    let lensBandMidRowPhaseDy: Float
+    let lensBandMidLocalRoll: Float
     let lensBandTopConfidence: Float
     let lensBandRidgeConfidence: Float
     let lensBandMidConfidence: Float
@@ -221,14 +230,23 @@ struct PairMotion {
         lensBandTopDy: 0.0,
         lensBandTopColumnDx: 0.0,
         lensBandTopColumnDy: 0.0,
+        lensBandTopRowPhaseDx: 0.0,
+        lensBandTopRowPhaseDy: 0.0,
+        lensBandTopLocalRoll: 0.0,
         lensBandRidgeDx: 0.0,
         lensBandRidgeDy: 0.0,
         lensBandRidgeColumnDx: 0.0,
         lensBandRidgeColumnDy: 0.0,
+        lensBandRidgeRowPhaseDx: 0.0,
+        lensBandRidgeRowPhaseDy: 0.0,
+        lensBandRidgeLocalRoll: 0.0,
         lensBandMidDx: 0.0,
         lensBandMidDy: 0.0,
         lensBandMidColumnDx: 0.0,
         lensBandMidColumnDy: 0.0,
+        lensBandMidRowPhaseDx: 0.0,
+        lensBandMidRowPhaseDy: 0.0,
+        lensBandMidLocalRoll: 0.0,
         lensBandTopConfidence: 0.0,
         lensBandRidgeConfidence: 0.0,
         lensBandMidConfidence: 0.0,
@@ -673,14 +691,23 @@ struct PreparedAnalysis {
     let lensBandTopPathY: [Float]
     let lensBandTopColumnPathX: [Float]
     let lensBandTopColumnPathY: [Float]
+    let lensBandTopRowPhasePathX: [Float]
+    let lensBandTopRowPhasePathY: [Float]
+    let lensBandTopLocalRollPath: [Float]
     let lensBandRidgePathX: [Float]
     let lensBandRidgePathY: [Float]
     let lensBandRidgeColumnPathX: [Float]
     let lensBandRidgeColumnPathY: [Float]
+    let lensBandRidgeRowPhasePathX: [Float]
+    let lensBandRidgeRowPhasePathY: [Float]
+    let lensBandRidgeLocalRollPath: [Float]
     let lensBandMidPathX: [Float]
     let lensBandMidPathY: [Float]
     let lensBandMidColumnPathX: [Float]
     let lensBandMidColumnPathY: [Float]
+    let lensBandMidRowPhasePathX: [Float]
+    let lensBandMidRowPhasePathY: [Float]
+    let lensBandMidLocalRollPath: [Float]
     let lensBandTopConfidence: [Float]
     let lensBandRidgeConfidence: [Float]
     let lensBandMidConfidence: [Float]
@@ -728,14 +755,23 @@ struct PersistedHostAnalysisCache: Encodable {
     let lensBandTopPathY: [Float]?
     let lensBandTopColumnPathX: [Float]?
     let lensBandTopColumnPathY: [Float]?
+    let lensBandTopRowPhasePathX: [Float]?
+    let lensBandTopRowPhasePathY: [Float]?
+    let lensBandTopLocalRollPath: [Float]?
     let lensBandRidgePathX: [Float]?
     let lensBandRidgePathY: [Float]?
     let lensBandRidgeColumnPathX: [Float]?
     let lensBandRidgeColumnPathY: [Float]?
+    let lensBandRidgeRowPhasePathX: [Float]?
+    let lensBandRidgeRowPhasePathY: [Float]?
+    let lensBandRidgeLocalRollPath: [Float]?
     let lensBandMidPathX: [Float]?
     let lensBandMidPathY: [Float]?
     let lensBandMidColumnPathX: [Float]?
     let lensBandMidColumnPathY: [Float]?
+    let lensBandMidRowPhasePathX: [Float]?
+    let lensBandMidRowPhasePathY: [Float]?
+    let lensBandMidLocalRollPath: [Float]?
     let lensBandTopConfidence: [Float]?
     let lensBandRidgeConfidence: [Float]?
     let lensBandMidConfidence: [Float]?
@@ -1781,21 +1817,30 @@ private final class MetalMotionWorkspace {
         topDy: Float,
         topColumnDx: Float,
         topColumnDy: Float,
+        topRowPhaseDx: Float,
+        topRowPhaseDy: Float,
+        topLocalRoll: Float,
         ridgeDx: Float,
         ridgeDy: Float,
         ridgeColumnDx: Float,
         ridgeColumnDy: Float,
+        ridgeRowPhaseDx: Float,
+        ridgeRowPhaseDy: Float,
+        ridgeLocalRoll: Float,
         midDx: Float,
         midDy: Float,
         midColumnDx: Float,
         midColumnDy: Float,
+        midRowPhaseDx: Float,
+        midRowPhaseDy: Float,
+        midLocalRoll: Float,
         topConfidence: Float,
         ridgeConfidence: Float,
         midConfidence: Float,
         confidence: Float
     ) {
         guard shifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
-            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         }
         func band(_ minY: Float, _ maxY: Float, minX: Float = 0.0, maxX: Float = 1.0) -> (dx: Float, dy: Float, support: Float) {
             let candidates = shifts.filter { shift in
@@ -1828,6 +1873,38 @@ private final class MetalMotionWorkspace {
             let coverage = confidenceRamp(Float(candidates.count), start: Float(minimumFarFieldMotionBlocks), full: Float(minimumFarFieldMotionBlocks * 3))
             return (dx, dy, clamp(analysisConfidence * coherence * coverage, 0.0, 1.0))
         }
+        func localRoll(_ minY: Float, _ maxY: Float, bandMotion: (dx: Float, dy: Float, support: Float)) -> Float {
+            let centerY = (minY + maxY) * 0.5 * Float(max(1, height))
+            let centerX = Float(max(1, width)) * 0.5
+            let candidates = shifts.compactMap { shift -> (value: Float, weight: Float)? in
+                let normalizedY = shift.block.centerY / Float(max(1, height))
+                guard normalizedY >= minY,
+                      normalizedY <= maxY,
+                      shift.block.farFieldWeight >= farFieldPlaneBroadThreshold,
+                      shift.score.isFinite,
+                      shift.dx.isFinite,
+                      shift.dy.isFinite
+                else {
+                    return nil
+                }
+                let x = shift.block.centerX - centerX
+                let y = shift.block.centerY - centerY
+                let denominator = (x * x) + (y * y)
+                guard denominator > 1.0 else {
+                    return nil
+                }
+                let residualX = shift.dx - bandMotion.dx
+                let residualY = shift.dy - bandMotion.dy
+                let roll = ((x * residualY) - (y * residualX)) / denominator
+                let scoreQuality = clamp(1.0 - (shift.score * 1.8), 0.05, 1.0)
+                let searchHeadroom: Float = shift.searchRadiusHit ? 0.55 : 1.0
+                return (roll, farFieldPriorityWeight(shift.block.farFieldWeight) * scoreQuality * searchHeadroom)
+            }
+            guard candidates.count >= minimumFarFieldMotionBlocks else {
+                return 0.0
+            }
+            return (weightedMedian(candidates) ?? 0.0) * bandMotion.support
+        }
         let top = band(0.04, 0.22)
         let ridge = band(0.14, 0.34)
         let mid = band(0.28, 0.50)
@@ -1837,28 +1914,52 @@ private final class MetalMotionWorkspace {
         let ridgeRight = band(0.14, 0.34, minX: 0.54, maxX: 1.00)
         let midLeft = band(0.28, 0.50, minX: 0.00, maxX: 0.46)
         let midRight = band(0.28, 0.50, minX: 0.54, maxX: 1.00)
+        let topUpper = band(0.04, 0.13)
+        let topLower = band(0.13, 0.22)
+        let ridgeUpper = band(0.14, 0.24)
+        let ridgeLower = band(0.24, 0.34)
+        let midUpper = band(0.28, 0.39)
+        let midLower = band(0.39, 0.50)
         func columnDelta(_ left: (dx: Float, dy: Float, support: Float), _ right: (dx: Float, dy: Float, support: Float)) -> (dx: Float, dy: Float) {
             guard left.support > 0.0, right.support > 0.0 else {
                 return (0.0, 0.0)
             }
             return (right.dx - left.dx, right.dy - left.dy)
         }
+        func rowDelta(_ upper: (dx: Float, dy: Float, support: Float), _ lower: (dx: Float, dy: Float, support: Float)) -> (dx: Float, dy: Float) {
+            guard upper.support > 0.0, lower.support > 0.0 else {
+                return (0.0, 0.0)
+            }
+            return (upper.dx - lower.dx, upper.dy - lower.dy)
+        }
         let topColumn = columnDelta(topLeft, topRight)
         let ridgeColumn = columnDelta(ridgeLeft, ridgeRight)
         let midColumn = columnDelta(midLeft, midRight)
+        let topRow = rowDelta(topUpper, topLower)
+        let ridgeRow = rowDelta(ridgeUpper, ridgeLower)
+        let midRow = rowDelta(midUpper, midLower)
         return (
             topDx: top.dx,
             topDy: top.dy,
             topColumnDx: topColumn.dx,
             topColumnDy: topColumn.dy,
+            topRowPhaseDx: topRow.dx,
+            topRowPhaseDy: topRow.dy,
+            topLocalRoll: localRoll(0.04, 0.22, bandMotion: top),
             ridgeDx: ridge.dx,
             ridgeDy: ridge.dy,
             ridgeColumnDx: ridgeColumn.dx,
             ridgeColumnDy: ridgeColumn.dy,
+            ridgeRowPhaseDx: ridgeRow.dx,
+            ridgeRowPhaseDy: ridgeRow.dy,
+            ridgeLocalRoll: localRoll(0.14, 0.34, bandMotion: ridge),
             midDx: mid.dx,
             midDy: mid.dy,
             midColumnDx: midColumn.dx,
             midColumnDy: midColumn.dy,
+            midRowPhaseDx: midRow.dx,
+            midRowPhaseDy: midRow.dy,
+            midLocalRoll: localRoll(0.28, 0.50, bandMotion: mid),
             topConfidence: top.support,
             ridgeConfidence: ridge.support,
             midConfidence: mid.support,
@@ -2075,14 +2176,23 @@ private final class MetalMotionWorkspace {
             lensBandTopDy: lensBandMotion.topDy,
             lensBandTopColumnDx: lensBandMotion.topColumnDx,
             lensBandTopColumnDy: lensBandMotion.topColumnDy,
+            lensBandTopRowPhaseDx: lensBandMotion.topRowPhaseDx,
+            lensBandTopRowPhaseDy: lensBandMotion.topRowPhaseDy,
+            lensBandTopLocalRoll: lensBandMotion.topLocalRoll,
             lensBandRidgeDx: lensBandMotion.ridgeDx,
             lensBandRidgeDy: lensBandMotion.ridgeDy,
             lensBandRidgeColumnDx: lensBandMotion.ridgeColumnDx,
             lensBandRidgeColumnDy: lensBandMotion.ridgeColumnDy,
+            lensBandRidgeRowPhaseDx: lensBandMotion.ridgeRowPhaseDx,
+            lensBandRidgeRowPhaseDy: lensBandMotion.ridgeRowPhaseDy,
+            lensBandRidgeLocalRoll: lensBandMotion.ridgeLocalRoll,
             lensBandMidDx: lensBandMotion.midDx,
             lensBandMidDy: lensBandMotion.midDy,
             lensBandMidColumnDx: lensBandMotion.midColumnDx,
             lensBandMidColumnDy: lensBandMotion.midColumnDy,
+            lensBandMidRowPhaseDx: lensBandMotion.midRowPhaseDx,
+            lensBandMidRowPhaseDy: lensBandMotion.midRowPhaseDy,
+            lensBandMidLocalRoll: lensBandMotion.midLocalRoll,
             lensBandTopConfidence: lensBandMotion.topConfidence,
             lensBandRidgeConfidence: lensBandMotion.ridgeConfidence,
             lensBandMidConfidence: lensBandMotion.midConfidence,
@@ -2939,14 +3049,23 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var lensBandTopPathY: [Float] = []
     var lensBandTopColumnPathX: [Float] = []
     var lensBandTopColumnPathY: [Float] = []
+    var lensBandTopRowPhasePathX: [Float] = []
+    var lensBandTopRowPhasePathY: [Float] = []
+    var lensBandTopLocalRollPath: [Float] = []
     var lensBandRidgePathX: [Float] = []
     var lensBandRidgePathY: [Float] = []
     var lensBandRidgeColumnPathX: [Float] = []
     var lensBandRidgeColumnPathY: [Float] = []
+    var lensBandRidgeRowPhasePathX: [Float] = []
+    var lensBandRidgeRowPhasePathY: [Float] = []
+    var lensBandRidgeLocalRollPath: [Float] = []
     var lensBandMidPathX: [Float] = []
     var lensBandMidPathY: [Float] = []
     var lensBandMidColumnPathX: [Float] = []
     var lensBandMidColumnPathY: [Float] = []
+    var lensBandMidRowPhasePathX: [Float] = []
+    var lensBandMidRowPhasePathY: [Float] = []
+    var lensBandMidLocalRollPath: [Float] = []
     var x: Float = 0
     var y: Float = 0
     var roll: Float = 0
@@ -2963,14 +3082,23 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     var lensBandTopY: Float = 0
     var lensBandTopColumnX: Float = 0
     var lensBandTopColumnY: Float = 0
+    var lensBandTopRowPhaseX: Float = 0
+    var lensBandTopRowPhaseY: Float = 0
+    var lensBandTopLocalRoll: Float = 0
     var lensBandRidgeX: Float = 0
     var lensBandRidgeY: Float = 0
     var lensBandRidgeColumnX: Float = 0
     var lensBandRidgeColumnY: Float = 0
+    var lensBandRidgeRowPhaseX: Float = 0
+    var lensBandRidgeRowPhaseY: Float = 0
+    var lensBandRidgeLocalRoll: Float = 0
     var lensBandMidX: Float = 0
     var lensBandMidY: Float = 0
     var lensBandMidColumnX: Float = 0
     var lensBandMidColumnY: Float = 0
+    var lensBandMidRowPhaseX: Float = 0
+    var lensBandMidRowPhaseY: Float = 0
+    var lensBandMidLocalRoll: Float = 0
     for motion in motions {
         x += motion.dx
         y += motion.dy
@@ -2988,14 +3116,23 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandTopY += motion.lensBandTopDy
         lensBandTopColumnX += motion.lensBandTopColumnDx
         lensBandTopColumnY += motion.lensBandTopColumnDy
+        lensBandTopRowPhaseX += motion.lensBandTopRowPhaseDx
+        lensBandTopRowPhaseY += motion.lensBandTopRowPhaseDy
+        lensBandTopLocalRoll += motion.lensBandTopLocalRoll
         lensBandRidgeX += motion.lensBandRidgeDx
         lensBandRidgeY += motion.lensBandRidgeDy
         lensBandRidgeColumnX += motion.lensBandRidgeColumnDx
         lensBandRidgeColumnY += motion.lensBandRidgeColumnDy
+        lensBandRidgeRowPhaseX += motion.lensBandRidgeRowPhaseDx
+        lensBandRidgeRowPhaseY += motion.lensBandRidgeRowPhaseDy
+        lensBandRidgeLocalRoll += motion.lensBandRidgeLocalRoll
         lensBandMidX += motion.lensBandMidDx
         lensBandMidY += motion.lensBandMidDy
         lensBandMidColumnX += motion.lensBandMidColumnDx
         lensBandMidColumnY += motion.lensBandMidColumnDy
+        lensBandMidRowPhaseX += motion.lensBandMidRowPhaseDx
+        lensBandMidRowPhaseY += motion.lensBandMidRowPhaseDy
+        lensBandMidLocalRoll += motion.lensBandMidLocalRoll
         pathX.append(x)
         pathY.append(y)
         rawRoll.append(roll)
@@ -3012,14 +3149,23 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandTopPathY.append(lensBandTopY)
         lensBandTopColumnPathX.append(lensBandTopColumnX)
         lensBandTopColumnPathY.append(lensBandTopColumnY)
+        lensBandTopRowPhasePathX.append(lensBandTopRowPhaseX)
+        lensBandTopRowPhasePathY.append(lensBandTopRowPhaseY)
+        lensBandTopLocalRollPath.append(lensBandTopLocalRoll)
         lensBandRidgePathX.append(lensBandRidgeX)
         lensBandRidgePathY.append(lensBandRidgeY)
         lensBandRidgeColumnPathX.append(lensBandRidgeColumnX)
         lensBandRidgeColumnPathY.append(lensBandRidgeColumnY)
+        lensBandRidgeRowPhasePathX.append(lensBandRidgeRowPhaseX)
+        lensBandRidgeRowPhasePathY.append(lensBandRidgeRowPhaseY)
+        lensBandRidgeLocalRollPath.append(lensBandRidgeLocalRoll)
         lensBandMidPathX.append(lensBandMidX)
         lensBandMidPathY.append(lensBandMidY)
         lensBandMidColumnPathX.append(lensBandMidColumnX)
         lensBandMidColumnPathY.append(lensBandMidColumnY)
+        lensBandMidRowPhasePathX.append(lensBandMidRowPhaseX)
+        lensBandMidRowPhasePathY.append(lensBandMidRowPhaseY)
+        lensBandMidLocalRollPath.append(lensBandMidLocalRoll)
     }
     return PreparedAnalysis(
         frames: frames,
@@ -3045,14 +3191,23 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         lensBandTopPathY: lensBandTopPathY,
         lensBandTopColumnPathX: lensBandTopColumnPathX,
         lensBandTopColumnPathY: lensBandTopColumnPathY,
+        lensBandTopRowPhasePathX: lensBandTopRowPhasePathX,
+        lensBandTopRowPhasePathY: lensBandTopRowPhasePathY,
+        lensBandTopLocalRollPath: lensBandTopLocalRollPath,
         lensBandRidgePathX: lensBandRidgePathX,
         lensBandRidgePathY: lensBandRidgePathY,
         lensBandRidgeColumnPathX: lensBandRidgeColumnPathX,
         lensBandRidgeColumnPathY: lensBandRidgeColumnPathY,
+        lensBandRidgeRowPhasePathX: lensBandRidgeRowPhasePathX,
+        lensBandRidgeRowPhasePathY: lensBandRidgeRowPhasePathY,
+        lensBandRidgeLocalRollPath: lensBandRidgeLocalRollPath,
         lensBandMidPathX: lensBandMidPathX,
         lensBandMidPathY: lensBandMidPathY,
         lensBandMidColumnPathX: lensBandMidColumnPathX,
         lensBandMidColumnPathY: lensBandMidColumnPathY,
+        lensBandMidRowPhasePathX: lensBandMidRowPhasePathX,
+        lensBandMidRowPhasePathY: lensBandMidRowPhasePathY,
+        lensBandMidLocalRollPath: lensBandMidLocalRollPath,
         lensBandTopConfidence: motions.map(\.lensBandTopConfidence),
         lensBandRidgeConfidence: motions.map(\.lensBandRidgeConfidence),
         lensBandMidConfidence: motions.map(\.lensBandMidConfidence),
@@ -3803,14 +3958,23 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         lensBandTopPathY: prepared.lensBandTopPathY,
         lensBandTopColumnPathX: prepared.lensBandTopColumnPathX,
         lensBandTopColumnPathY: prepared.lensBandTopColumnPathY,
+        lensBandTopRowPhasePathX: prepared.lensBandTopRowPhasePathX,
+        lensBandTopRowPhasePathY: prepared.lensBandTopRowPhasePathY,
+        lensBandTopLocalRollPath: prepared.lensBandTopLocalRollPath,
         lensBandRidgePathX: prepared.lensBandRidgePathX,
         lensBandRidgePathY: prepared.lensBandRidgePathY,
         lensBandRidgeColumnPathX: prepared.lensBandRidgeColumnPathX,
         lensBandRidgeColumnPathY: prepared.lensBandRidgeColumnPathY,
+        lensBandRidgeRowPhasePathX: prepared.lensBandRidgeRowPhasePathX,
+        lensBandRidgeRowPhasePathY: prepared.lensBandRidgeRowPhasePathY,
+        lensBandRidgeLocalRollPath: prepared.lensBandRidgeLocalRollPath,
         lensBandMidPathX: prepared.lensBandMidPathX,
         lensBandMidPathY: prepared.lensBandMidPathY,
         lensBandMidColumnPathX: prepared.lensBandMidColumnPathX,
         lensBandMidColumnPathY: prepared.lensBandMidColumnPathY,
+        lensBandMidRowPhasePathX: prepared.lensBandMidRowPhasePathX,
+        lensBandMidRowPhasePathY: prepared.lensBandMidRowPhasePathY,
+        lensBandMidLocalRollPath: prepared.lensBandMidLocalRollPath,
         lensBandTopConfidence: prepared.lensBandTopConfidence,
         lensBandRidgeConfidence: prepared.lensBandRidgeConfidence,
         lensBandMidConfidence: prepared.lensBandMidConfidence,
@@ -4070,14 +4234,23 @@ private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationU
         try writeOptionalFloatArrayField("lensBandTopPathY", cache.lensBandTopPathY)
         try writeOptionalFloatArrayField("lensBandTopColumnPathX", cache.lensBandTopColumnPathX)
         try writeOptionalFloatArrayField("lensBandTopColumnPathY", cache.lensBandTopColumnPathY)
+        try writeOptionalFloatArrayField("lensBandTopRowPhasePathX", cache.lensBandTopRowPhasePathX)
+        try writeOptionalFloatArrayField("lensBandTopRowPhasePathY", cache.lensBandTopRowPhasePathY)
+        try writeOptionalFloatArrayField("lensBandTopLocalRollPath", cache.lensBandTopLocalRollPath)
         try writeOptionalFloatArrayField("lensBandRidgePathX", cache.lensBandRidgePathX)
         try writeOptionalFloatArrayField("lensBandRidgePathY", cache.lensBandRidgePathY)
         try writeOptionalFloatArrayField("lensBandRidgeColumnPathX", cache.lensBandRidgeColumnPathX)
         try writeOptionalFloatArrayField("lensBandRidgeColumnPathY", cache.lensBandRidgeColumnPathY)
+        try writeOptionalFloatArrayField("lensBandRidgeRowPhasePathX", cache.lensBandRidgeRowPhasePathX)
+        try writeOptionalFloatArrayField("lensBandRidgeRowPhasePathY", cache.lensBandRidgeRowPhasePathY)
+        try writeOptionalFloatArrayField("lensBandRidgeLocalRollPath", cache.lensBandRidgeLocalRollPath)
         try writeOptionalFloatArrayField("lensBandMidPathX", cache.lensBandMidPathX)
         try writeOptionalFloatArrayField("lensBandMidPathY", cache.lensBandMidPathY)
         try writeOptionalFloatArrayField("lensBandMidColumnPathX", cache.lensBandMidColumnPathX)
         try writeOptionalFloatArrayField("lensBandMidColumnPathY", cache.lensBandMidColumnPathY)
+        try writeOptionalFloatArrayField("lensBandMidRowPhasePathX", cache.lensBandMidRowPhasePathX)
+        try writeOptionalFloatArrayField("lensBandMidRowPhasePathY", cache.lensBandMidRowPhasePathY)
+        try writeOptionalFloatArrayField("lensBandMidLocalRollPath", cache.lensBandMidLocalRollPath)
         try writeOptionalFloatArrayField("lensBandTopConfidence", cache.lensBandTopConfidence)
         try writeOptionalFloatArrayField("lensBandRidgeConfidence", cache.lensBandRidgeConfidence)
         try writeOptionalFloatArrayField("lensBandMidConfidence", cache.lensBandMidConfidence)

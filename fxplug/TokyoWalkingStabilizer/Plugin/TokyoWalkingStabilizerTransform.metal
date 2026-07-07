@@ -286,10 +286,10 @@ fragment float4 fragmentShader(
     float lensBandSupport = saturate(transform->lensBandWarpSupport * transform->lensBandWarpApplied);
     if (lensBandSupport > 0.0001) {
         float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
-        float farFieldFade = 1.0 - smoothstep(0.42, 0.56, sourceY);
+        float farFieldFade = 1.0 - smoothstep(0.36, 0.46, sourceY);
         float topWeight = lensBandWeight(sourceY, 0.12, 0.13);
         float ridgeWeight = lensBandWeight(sourceY, 0.23, 0.13);
-        float midWeight = lensBandWeight(sourceY, 0.35, 0.12);
+        float midWeight = lensBandWeight(sourceY, 0.33, 0.10);
         float totalWeight = topWeight + ridgeWeight + midWeight;
         if (totalWeight > 0.0001) {
             float2 bandOffset = (
@@ -304,7 +304,26 @@ fragment float4 fragmentShader(
                 + (transform->lensBandRidgeColumnOffset * ridgeWeight)
                 + (transform->lensBandMidColumnOffset * midWeight)
             ) / totalWeight;
+            float topRowPhase = clamp((0.12 - sourceY) / 0.13, -1.0, 1.0);
+            float ridgeRowPhase = clamp((0.23 - sourceY) / 0.13, -1.0, 1.0);
+            float midRowPhase = clamp((0.33 - sourceY) / 0.10, -1.0, 1.0);
+            float2 rowPhaseOffset = (
+                (transform->lensBandTopRowPhaseOffset * topWeight * topRowPhase)
+                + (transform->lensBandRidgeRowPhaseOffset * ridgeWeight * ridgeRowPhase)
+                + (transform->lensBandMidRowPhaseOffset * midWeight * midRowPhase)
+            ) / totalWeight;
+            float topYLocal = (sourceY - 0.12) * transform->outputSize.y;
+            float ridgeYLocal = (sourceY - 0.23) * transform->outputSize.y;
+            float midYLocal = (sourceY - 0.33) * transform->outputSize.y;
+            float xLocal = stabilizedPixels.x;
+            float2 localRollOffset = (
+                (float2(-(transform->lensBandTopLocalRoll * topYLocal), transform->lensBandTopLocalRoll * xLocal) * topWeight)
+                + (float2(-(transform->lensBandRidgeLocalRoll * ridgeYLocal), transform->lensBandRidgeLocalRoll * xLocal) * ridgeWeight)
+                + (float2(-(transform->lensBandMidLocalRoll * midYLocal), transform->lensBandMidLocalRoll * xLocal) * midWeight)
+            ) / totalWeight;
             bandOffset += columnOffset * columnPhase;
+            bandOffset += rowPhaseOffset;
+            bandOffset += localRollOffset;
             stabilizedPixels -= bandOffset * lensBandSupport * farFieldFade * transform->strength;
         }
     }
