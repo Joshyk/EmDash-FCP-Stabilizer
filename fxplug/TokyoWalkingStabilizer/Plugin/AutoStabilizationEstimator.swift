@@ -11642,6 +11642,46 @@ enum AutoStabilizationEstimator {
             }
             return (weightedMedian(candidates) ?? 0.0) * bandMotion.support
         }
+        func ridgeLineImpulseDy(_ bandMotion: (dx: Float, dy: Float, support: Float)) -> (dy: Float, support: Float) {
+            guard bandMotion.support > 0.0 else {
+                return (0.0, 0.0)
+            }
+            let candidates = shifts.compactMap { shift -> (value: Float, weight: Float)? in
+                let normalizedY = shift.block.centerY / Float(max(1, sampleHeight))
+                guard normalizedY >= 0.16,
+                      normalizedY <= 0.30,
+                      shift.block.farFieldWeight >= farFieldPlaneBroadThreshold,
+                      shift.score.isFinite,
+                      shift.dy.isFinite
+                else {
+                    return nil
+                }
+                let residual = shift.dy - bandMotion.dy
+                let scoreQuality = clamp(1.0 - (shift.score * 1.8), min: 0.05, max: 1.0)
+                let searchHeadroom: Float = shift.searchRadiusHit ? 0.55 : 1.0
+                let weight = farFieldPriorityWeight(shift.block.farFieldWeight) * scoreQuality * searchHeadroom
+                return (residual, weight)
+            }
+            guard candidates.count >= minimumFarFieldMotionBlocks else {
+                return (0.0, 0.0)
+            }
+            let positive = candidates.filter { $0.value > 0.0 }
+            let negative = candidates.filter { $0.value < 0.0 }
+            let positiveEvidence = positive.reduce(Float(0.0)) { $0 + ($1.value * $1.weight) }
+            let negativeEvidence = negative.reduce(Float(0.0)) { $0 + (-$1.value * $1.weight) }
+            let selected = positiveEvidence >= negativeEvidence ? positive : negative
+            guard selected.count >= minimumFarFieldMotionBlocks,
+                  let impulse = weightedMedian(selected),
+                  abs(impulse) > 0.0
+            else {
+                return (0.0, 0.0)
+            }
+            let selectedWeight = selected.reduce(Float(0.0)) { $0 + $1.weight }
+            let support = bandMotion.support
+                * confidenceRamp(abs(impulse), start: 0.35, full: 1.45)
+                * confidenceRamp(selectedWeight, start: 0.80, full: 3.0)
+            return (impulse * support, support)
+        }
         let top = band(0.04, 0.22)
         let ridge = band(0.14, 0.34)
         let mid = band(0.28, 0.50)
@@ -11675,6 +11715,7 @@ enum AutoStabilizationEstimator {
         let topRow = rowDelta(topUpper, topLower)
         let ridgeRow = rowDelta(ridgeUpper, ridgeLower)
         let midRow = rowDelta(midUpper, midLower)
+        let ridgeImpulse = ridgeLineImpulseDy(ridge)
         return (
             topDx: top.dx,
             topDy: top.dy,
@@ -11684,7 +11725,7 @@ enum AutoStabilizationEstimator {
             topRowPhaseDy: topRow.dy,
             topLocalRoll: localRoll(0.04, 0.22, bandMotion: top),
             ridgeDx: ridge.dx,
-            ridgeDy: ridge.dy,
+            ridgeDy: ridge.dy + ridgeImpulse.dy,
             ridgeColumnDx: ridgeColumn.dx,
             ridgeColumnDy: ridgeColumn.dy,
             ridgeRowPhaseDx: ridgeRow.dx,
@@ -11698,9 +11739,9 @@ enum AutoStabilizationEstimator {
             midRowPhaseDy: midRow.dy,
             midLocalRoll: localRoll(0.28, 0.50, bandMotion: mid),
             topConfidence: top.support,
-            ridgeConfidence: ridge.support,
+            ridgeConfidence: max(ridge.support, ridgeImpulse.support),
             midConfidence: mid.support,
-            confidence: max(top.support, max(ridge.support, mid.support))
+            confidence: max(top.support, max(max(ridge.support, ridgeImpulse.support), mid.support))
         )
     }
 
