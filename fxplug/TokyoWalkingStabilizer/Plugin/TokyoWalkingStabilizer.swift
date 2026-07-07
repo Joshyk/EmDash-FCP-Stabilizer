@@ -116,15 +116,15 @@ private let stabilizerAutoCropPlaybackVisualScaleKnee: Float = 1.35
 private let stabilizerAutoCropPlaybackVisualScaleMaximum: Float = 1.85
 private let stabilizerAutoCropPlaybackVisualScaleCompression: Float = 0.55
 private let stabilizerAutoCropPlaybackStablePositionFloorMaxDelta: Float = 0.003
-private let stabilizerAutoCropPlaybackScaleRateLimitPerSecond: Float = 0.010
+private let stabilizerAutoCropPlaybackScaleRateLimitPerSecond: Float = 0.012
 private let stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds = 1.90
 private let stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds = 2.90
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveStartDelta: Float = 0.060
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveFullDelta: Float = 0.090
-private let stabilizerAutoCropTurnSmoothingZoomDeltaPerUnit: Float = 0.14
-private let stabilizerAutoCropTurnSmoothingZoomStartPixels: Float = 48.0
+private let stabilizerAutoCropTurnSmoothingZoomDeltaPerUnit: Float = 0.08
+private let stabilizerAutoCropTurnSmoothingZoomStartPixels: Float = 96.0
 private let stabilizerAutoCropTurnSmoothingZoomFullPixels: Float = 220.0
-private let stabilizerAutoCropTurnSmoothingZoomConfidenceStart: Float = 0.12
+private let stabilizerAutoCropTurnSmoothingZoomConfidenceStart: Float = 0.30
 private let stabilizerAutoCropTurnSmoothingZoomConfidenceFull: Float = 0.55
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
@@ -5404,10 +5404,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard zoomStrength > Float.ulpOfOne else {
             return 1.0
         }
-        let turnPixels = max(
-            abs(transform.turnDetectedPixelOffset.x),
-            abs(transform.macroPixelOffset.x)
-        ) * max(0.0, masterStrength)
+        let turnPixels = abs(transform.turnDetectedPixelOffset.x) * max(0.0, masterStrength)
         let travelSupport = thresholdRamp(
             turnPixels,
             start: stabilizerAutoCropTurnSmoothingZoomStartPixels,
@@ -5421,7 +5418,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             start: stabilizerAutoCropTurnSmoothingZoomConfidenceStart,
             full: stabilizerAutoCropTurnSmoothingZoomConfidenceFull
         )
-        let support = travelSupport * (0.35 + (turnConfidenceSupport * 0.65))
+        guard turnConfidenceSupport > Float.ulpOfOne else {
+            return 1.0
+        }
+        let support = travelSupport * turnConfidenceSupport
         let delta = zoomStrength * stabilizerAutoCropTurnSmoothingZoomDeltaPerUnit * support
         return max(1.0, 1.0 + delta)
     }

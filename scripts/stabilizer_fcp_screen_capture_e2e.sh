@@ -3147,7 +3147,7 @@ on run argv
 			keystroke "1" using {command down}
 			delay 0.2
 			set frontWindow to my frontFinalCutProWindow()
-			set openableElement to my firstBrowserRowContainingExactText(frontWindow, projectName, 18)
+			set openableElement to my firstBrowserOpenableElementContainingExactText(frontWindow, projectName, 18)
 			if openableElement is missing value then error "visible Browser row not found: " & projectName
 			try
 				set selected of openableElement to true
@@ -3343,7 +3343,7 @@ on elementContainsText(candidateElement, requiredText)
 	return false
 end elementContainsText
 
-on firstBrowserRowContainingExactText(rootElement, requiredText, remainingDepth)
+on firstBrowserOpenableElementContainingExactText(rootElement, requiredText, remainingDepth)
 	if remainingDepth < 0 then return missing value
 	tell application "System Events"
 		try
@@ -3352,7 +3352,7 @@ on firstBrowserRowContainingExactText(rootElement, requiredText, remainingDepth)
 			set roleName to ""
 		end try
 	end tell
-	if roleName is "AXRow" and my rowAppearsInsideBrowser(rootElement) and my subtreeContainsExactText(rootElement, requiredText, 5) then return rootElement
+	if (roleName is "AXRow" or roleName is "AXCell" or roleName is "AXGroup") and my elementAppearsInsideBrowser(rootElement) and my subtreeContainsExactText(rootElement, requiredText, 7) then return rootElement
 	set childElements to {}
 	tell application "System Events"
 		try
@@ -3362,26 +3362,26 @@ on firstBrowserRowContainingExactText(rootElement, requiredText, remainingDepth)
 		end try
 	end tell
 	repeat with childElement in childElements
-		set foundElement to my firstBrowserRowContainingExactText(childElement, requiredText, remainingDepth - 1)
+		set foundElement to my firstBrowserOpenableElementContainingExactText(childElement, requiredText, remainingDepth - 1)
 		if foundElement is not missing value then return foundElement
 	end repeat
 	return missing value
-end firstBrowserRowContainingExactText
+end firstBrowserOpenableElementContainingExactText
 
-on rowAppearsInsideBrowser(rowElement)
+on elementAppearsInsideBrowser(candidateElement)
 	tell application "System Events"
 		try
-			set rowPosition to position of rowElement
-			set rowSize to size of rowElement
-			if (item 1 of rowPosition) < 220 then return false
-			if (item 2 of rowPosition) < 180 then return false
-			if (item 1 of rowSize) < 80 then return false
+			set elementPosition to position of candidateElement
+			set elementSize to size of candidateElement
+			if (item 1 of elementPosition) < 220 then return false
+			if (item 2 of elementPosition) < 180 then return false
+			if (item 1 of elementSize) < 40 then return false
 			return true
 		on error
 			return false
 	end try
 	end tell
-end rowAppearsInsideBrowser
+end elementAppearsInsideBrowser
 APPLESCRIPT
 	local osascript_pid=$!
 	if ! wait_for_ui_osascript "$osascript_pid" "visible Browser project ${project_name}" 100 0; then
@@ -3425,14 +3425,13 @@ on run argv
 				set focused of searchField to true
 			end try
 			try
-				set value of searchField to searchText
-			on error valueError
-				try
-					perform action "AXPress" of searchField
-				end try
-				keystroke "a" using command down
-				keystroke searchText
+				perform action "AXPress" of searchField
 			end try
+			delay 0.1
+			keystroke "a" using {command down}
+			delay 0.05
+			keystroke searchText
+			delay 0.25
 			key code 36
 		end tell
 	end tell
