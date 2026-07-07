@@ -269,12 +269,14 @@ private struct BandAssessment {
 
 private struct TurnCorrectionSample {
     let bandX: Float
+    let bandY: Float
     let detected: Float
     let applied: Float
     let macroPixelOffsetX: Float
     let confidence: Float
     let rawConfidence: Float
     let ownership: Float
+    let ownershipY: Float
     let trackingConfidence: Float
     let walkingTrackingConfidence: Float
     let edgeQuality: Float
@@ -353,6 +355,7 @@ private struct AssessmentContext {
     let strideSmoothedYPath: [Float]
     let strideSmoothedRPath: [Float]
     let turnStrideSmoothedXPath: [Float]
+    let turnStrideSmoothedYPath: [Float]
     let footstepXTurnGateScales: [Int: Float]
     let warpMagnitudes: [Float]
 
@@ -382,6 +385,12 @@ private struct AssessmentContext {
         )
         let turnStrideSmoothedX = locallyTimeWeightedAveragePath(
             baselineX,
+            frames: analysis.frames,
+            targetIndices: allIndices,
+            windowSeconds: strideWindowSeconds
+        )
+        let turnStrideSmoothedY = locallyTimeWeightedAveragePath(
+            baselineY,
             frames: analysis.frames,
             targetIndices: allIndices,
             windowSeconds: strideWindowSeconds
@@ -439,6 +448,7 @@ private struct AssessmentContext {
             windowSeconds: strideWindowSeconds
         )
         turnStrideSmoothedXPath = turnStrideSmoothedX
+        turnStrideSmoothedYPath = turnStrideSmoothedY
         self.footstepXTurnGateScales = footstepXTurnGateScales
 
         let baselineYaw = outerLinearPredictionPath(
@@ -522,23 +532,23 @@ private let footstepLowEvidenceLargeXMinimumScale: Float = 0.30
 private let farFieldFootstepConfidenceFloorMax: Float = 0.24
 private let farFieldFootstepConfidenceFloorStartPixels: Float = 0.45
 private let farFieldFootstepConfidenceFloorFullPixels: Float = 3.4
-private let farFieldFootstepVerticalConfidenceFloorMax: Float = 0.36
+private let farFieldFootstepVerticalConfidenceFloorMax: Float = 0.44
 private let farFieldFootstepVerticalConfidenceFloorStartPixels: Float = 0.28
 private let farFieldFootstepVerticalConfidenceFloorFullPixels: Float = 2.2
-private let farFieldFootstepRollConfidenceFloorMax: Float = 0.26
+private let farFieldFootstepRollConfidenceFloorMax: Float = 0.30
 private let farFieldFootstepRollConfidenceFloorStartDegrees: Float = 0.018
 private let farFieldFootstepRollConfidenceFloorFullDegrees: Float = 0.11
-private let farFieldStrideVerticalConfidenceFloorScale: Float = 0.66
-private let farFieldStrideRollConfidenceFloorScale: Float = 0.75
+private let farFieldStrideVerticalConfidenceFloorScale: Float = 0.78
+private let farFieldStrideRollConfidenceFloorScale: Float = 0.84
 private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
 private let strideFullResponseScale: Float = 0.55
 private let turnFullScalePixels: Float = 2.0
 private let turnOwnershipFootstepXSuppression: Float = 1.0
-private let turnOwnershipFootstepYSuppression: Float = 0.45
+private let turnOwnershipFootstepYSuppression: Float = 0.65
 private let turnOwnershipFootstepRollSuppression: Float = 0.55
 private let turnOwnershipStrideXSuppression: Float = 1.0
-private let turnOwnershipStrideYSuppression: Float = 0.38
+private let turnOwnershipStrideYSuppression: Float = 0.55
 private let turnOwnershipStrideRollSuppression: Float = 0.50
 private let turnOwnershipFarFieldWarpSuppression: Float = 0.10
 private let turnOwnedWalkingXGateFloorMax: Float = 0.82
@@ -551,6 +561,17 @@ private let turnOwnedFarFieldXConfidenceFloorMax: Float = 0.50
 private let turnOwnedFarFieldXConfidenceFloorStartPixels: Float = 1.0
 private let turnOwnedFarFieldXConfidenceFloorFullPixels: Float = 10.0
 private let turnOwnedFarFieldXMacroGateFloorMax: Float = 1.0
+private let turnOwnedFarFieldStrideRescueConfidenceFloorMax: Float = 0.46
+private let turnOwnedFarFieldStrideRescueBandStartPixels: Float = 1.1
+private let turnOwnedFarFieldStrideRescueBandFullPixels: Float = 4.2
+private let turnOwnedFarFieldStrideRescueSupportStart: Float = 0.16
+private let turnOwnedFarFieldStrideRescueSupportFull: Float = 0.48
+private let turnOwnedFarFieldStrideRescueWarpStart: Float = 0.55
+private let turnOwnedFarFieldStrideRescueWarpFull: Float = 0.88
+private let turnOwnedFarFieldStrideRescueTrackingStart: Float = 0.24
+private let turnOwnedFarFieldStrideRescueTrackingFull: Float = 0.56
+private let turnOwnedFarFieldStrideRescueFarFieldStart: Float = 0.04
+private let turnOwnedFarFieldStrideRescueFarFieldFull: Float = 0.22
 private let turnOwnedFootstepXFineFadeStartPixels: Float = 28.0
 private let turnOwnedFootstepXFineFadeFullPixels: Float = 72.0
 private let turnOwnedFootstepXRescueConfidenceFloorMax: Float = 0.34
@@ -1107,12 +1128,14 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
     else {
         return TurnCorrectionSample(
             bandX: 0.0,
+            bandY: 0.0,
             detected: 0.0,
             applied: 0.0,
             macroPixelOffsetX: 0.0,
             confidence: 0.0,
             rawConfidence: 0.0,
             ownership: 0.0,
+            ownershipY: 0.0,
             trackingConfidence: 0.0,
             walkingTrackingConfidence: 0.0,
             edgeQuality: 0.0
@@ -1163,12 +1186,33 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
         outputScale: xScale,
         usesAutoCropTurnSpace: true
     )
+    let turnSmoothY = timeWeightedMonotonicSCurveValue(
+        context.turnStrideSmoothedYPath,
+        frames: analysis.frames,
+        indices: turnIndices,
+        centerTime: frame.time,
+        windowSeconds: turnWindowSeconds
+    ) ?? timeWeightedAverage(
+        context.turnStrideSmoothedYPath,
+        frames: analysis.frames,
+        indices: turnIndices,
+        centerTime: frame.time,
+        windowSeconds: turnWindowSeconds
+    )
     let turnBandX = context.turnStrideSmoothedXPath[index] - turnSmoothX
+    let turnBandY = context.turnStrideSmoothedYPath[index] - turnSmoothY
     let turnOwnershipX = turnOwnershipConfidence(
         values: context.turnStrideSmoothedXPath,
         frames: analysis.frames,
         indices: turnIndices,
         turnBandValue: turnBandX,
+        trackingConfidence: turnTracking
+    )
+    let turnOwnershipY = turnOwnershipConfidence(
+        values: context.turnStrideSmoothedYPath,
+        frames: analysis.frames,
+        indices: turnIndices,
+        turnBandValue: turnBandY,
         trackingConfidence: turnTracking
     )
     let rawTurnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
@@ -1178,12 +1222,14 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
     let macroPixelOffsetX = -(turnBandX * xScale) * correction
     return TurnCorrectionSample(
         bandX: turnBandX,
+        bandY: turnBandY,
         detected: detected,
         applied: detected * correction,
         macroPixelOffsetX: macroPixelOffsetX,
         confidence: turnQ,
         rawConfidence: rawTurnQ,
         ownership: turnOwnershipX,
+        ownershipY: turnOwnershipY,
         trackingConfidence: tracking,
         walkingTrackingConfidence: walkingTracking,
         edgeQuality: edgeQuality
@@ -1575,7 +1621,9 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     )
     let turnSample = turnCorrectionSample(for: context, index: index, options: options)
     let turnBandX = turnSample.bandX
+    let turnBandY = turnSample.bandY
     let turnOwnershipX = turnSample.ownership
+    let turnOwnershipY = turnSample.ownershipY
     let rawTurnQ = turnSample.rawConfidence
     let turnQ = turnSample.confidence
     let rawTurnShakeSuppression = turnStabilizerShakeSuppression(
@@ -1602,7 +1650,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let rawStrideQY = strideConfidence(bandValue: strideY, trackingConfidence: strideTracking, fullScale: strideFullScalePixels)
     let rawStrideQR = strideConfidence(bandValue: strideR, trackingConfidence: strideTracking, fullScale: strideFullScaleDegrees)
     let farFieldTurnOwnedXSupport = farFieldTurnOwnedWalkingXSupport(
-        warpConfidence: analysis.warpConfidence[index],
+        warpConfidence: max(analysis.warpConfidence[index], analysis.farFieldConfidence[index]),
         trackingConfidence: walkingTracking,
         edgeQuality: searchRadiusEdgeQuality(
             hitCount: analysis.searchRadiusHitCounts[index],
@@ -1612,9 +1660,10 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let baseFootstepXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
     let baseStrideXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
     let turnXMacroPixels = abs(turnBandX * xScale)
+    let turnYMacroPixels = abs(turnBandY * yScale)
     let footstepXTurnGateFloor = turnOwnedWalkingXGateFloor(
         rawConfidence: rawFootQX,
-        bandMagnitude: abs(footX),
+        bandMagnitude: abs(footX * xScale),
         turnShakeSuppression: turnShakeSuppression,
         turnOwnership: turnOwnershipX,
         turnMacroMagnitude: turnXMacroPixels,
@@ -1622,7 +1671,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     )
     let strideXTurnGateFloor = turnOwnedWalkingXGateFloor(
         rawConfidence: rawStrideQX,
-        bandMagnitude: abs(strideX),
+        bandMagnitude: abs(strideX * xScale),
         turnShakeSuppression: turnShakeSuppression,
         turnOwnership: turnOwnershipX,
         turnMacroMagnitude: turnXMacroPixels,
@@ -1635,12 +1684,32 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideYSuppression), min: 0.0, max: 1.0)
     let strideRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideRollSuppression), min: 0.0, max: 1.0)
     let turnOwnedFootstepXFineGate = turnOwnedFootstepXFineBandGate(
-        bandPixels: footX,
+        bandPixels: footX * xScale,
         turnOwnership: turnOwnershipX
+    )
+    let footstepXWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+        bandPixels: footX * xScale,
+        turnShakeSuppression: turnShakeSuppression,
+        turnOwnership: turnOwnershipX,
+        turnMacroMagnitude: turnXMacroPixels,
+        farFieldSupport: farFieldTurnOwnedXSupport,
+        warpConfidence: max(analysis.warpConfidence[index], analysis.farFieldConfidence[index]),
+        trackingConfidence: strideTracking,
+        farFieldConfidence: analysis.farFieldConfidence[index]
+    ) * turnOwnedFootstepXFineGate
+    let footstepYWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+        bandPixels: footY * yScale,
+        turnShakeSuppression: turnShakeSuppression,
+        turnOwnership: turnOwnershipY,
+        turnMacroMagnitude: turnYMacroPixels,
+        farFieldSupport: farFieldTurnOwnedXSupport,
+        warpConfidence: max(analysis.warpConfidence[index], analysis.farFieldConfidence[index]),
+        trackingConfidence: strideTracking,
+        farFieldConfidence: analysis.farFieldConfidence[index]
     )
     let footstepXFarFieldConfidenceFloor = max(
         turnOwnedFarFieldWalkingXConfidenceFloor(
-            bandMagnitude: abs(footX),
+            bandMagnitude: abs(footX * xScale),
             turnShakeSuppression: turnShakeSuppression,
             turnOwnership: turnOwnershipX,
             turnMacroMagnitude: turnXMacroPixels,
@@ -1648,37 +1717,65 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         ) * turnOwnedFootstepXFineGate,
         max(
             farFieldFootstepConfidenceFloor(
-                bandPixels: footX,
+                bandPixels: footX * xScale,
                 farFieldSupport: farFieldTurnOwnedXSupport
             ) * turnOwnedFootstepXFineGate,
-            turnOwnedFootstepXRescueConfidenceFloor(
-                bandPixels: footX,
-                turnShakeSuppression: turnShakeSuppression,
-                turnOwnership: turnOwnershipX,
-                farFieldSupport: farFieldTurnOwnedXSupport,
-                fineGate: turnOwnedFootstepXFineGate
+            max(
+                turnOwnedFootstepXRescueConfidenceFloor(
+                    bandPixels: footX * xScale,
+                    turnShakeSuppression: turnShakeSuppression,
+                    turnOwnership: turnOwnershipX,
+                    farFieldSupport: farFieldTurnOwnedXSupport,
+                    fineGate: turnOwnedFootstepXFineGate
+                ),
+                footstepXWalkingRescueConfidenceFloor
             )
         )
     )
-    let strideXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
-        bandMagnitude: abs(strideX),
+    let strideXBaseFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
+        bandMagnitude: abs(strideX * xScale),
         turnShakeSuppression: turnShakeSuppression,
         turnOwnership: turnOwnershipX,
         turnMacroMagnitude: turnXMacroPixels,
         farFieldSupport: farFieldTurnOwnedXSupport
     ) * turnOwnedStrideXGateFloorScale
-    let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
-        bandPixels: footY * yScale,
-        farFieldSupport: farFieldTurnOwnedXSupport
+    let strideXRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+        bandPixels: strideX * xScale,
+        turnShakeSuppression: turnShakeSuppression,
+        turnOwnership: turnOwnershipX,
+        turnMacroMagnitude: turnXMacroPixels,
+        farFieldSupport: farFieldTurnOwnedXSupport,
+        warpConfidence: max(analysis.warpConfidence[index], analysis.farFieldConfidence[index]),
+        trackingConfidence: strideTracking,
+        farFieldConfidence: analysis.farFieldConfidence[index]
+    )
+    let footstepYFarFieldConfidenceFloor = max(
+        farFieldFootstepVerticalConfidenceFloor(
+            bandPixels: footY * yScale,
+            farFieldSupport: farFieldTurnOwnedXSupport
+        ),
+        footstepYWalkingRescueConfidenceFloor
     )
     let footstepRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
         bandDegrees: footR,
         farFieldSupport: farFieldTurnOwnedXSupport
     )
-    let strideYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+    let strideYBaseFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
         bandPixels: strideY * yScale,
         farFieldSupport: farFieldTurnOwnedXSupport
     ) * farFieldStrideVerticalConfidenceFloorScale
+    let strideYRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+        bandPixels: strideY * yScale,
+        turnShakeSuppression: turnShakeSuppression,
+        turnOwnership: turnOwnershipY,
+        turnMacroMagnitude: turnYMacroPixels,
+        farFieldSupport: farFieldTurnOwnedXSupport,
+        warpConfidence: max(analysis.warpConfidence[index], analysis.farFieldConfidence[index]),
+        trackingConfidence: strideTracking,
+        farFieldConfidence: analysis.farFieldConfidence[index]
+    )
+    let strideXFarFieldConfidenceFloor = max(strideXBaseFarFieldConfidenceFloor, strideXRescueConfidenceFloor)
+    let strideYFarFieldConfidenceFloor = max(strideYBaseFarFieldConfidenceFloor, strideYRescueConfidenceFloor)
     let strideRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
         bandDegrees: strideR,
         farFieldSupport: farFieldTurnOwnedXSupport
@@ -1788,7 +1885,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             applied: footApplied,
             remaining: max(0.0, footDetected - footApplied),
             confidence: (footQX + footQY + footQR) / 3.0,
-            note: String(format: "foot raw X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f ffX %.2f ffY %.2f ffR %.2f corr %.3f %.3f limited %.3f %.3f", footX, footY, footR, footQX, footQY, footQR, footstepXFarFieldConfidenceFloor, footstepYFarFieldConfidenceFloor, footstepRollFarFieldConfidenceFloor, rawFootCorrectionX, rawFootCorrectionY, limitedFootCorrectionX, limitedFootCorrectionY)
+            note: String(format: "foot raw X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f ffX %.2f ffY %.2f ffR %.2f rescue %.2f %.2f corr %.3f %.3f limited %.3f %.3f", footX, footY, footR, footQX, footQY, footQR, footstepXFarFieldConfidenceFloor, footstepYFarFieldConfidenceFloor, footstepRollFarFieldConfidenceFloor, footstepXWalkingRescueConfidenceFloor, footstepYWalkingRescueConfidenceFloor, rawFootCorrectionX, rawFootCorrectionY, limitedFootCorrectionX, limitedFootCorrectionY)
         ),
         BandAssessment(
             name: "SWOB",
@@ -1796,7 +1893,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             applied: strideApplied,
             remaining: max(0.0, strideDetected - strideApplied),
             confidence: (strideQX + strideQY + strideQR) / 3.0,
-            note: String(format: "stride band X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f ffX %.2f ffY %.2f ffR %.2f", strideX, strideY, strideR, strideQX, strideQY, strideQR, strideXFarFieldConfidenceFloor, strideYFarFieldConfidenceFloor, strideRollFarFieldConfidenceFloor)
+            note: String(format: "stride band X %.3f Y %.3f R %.3f rawQ %.2f %.2f %.2f qX %.2f qY %.2f qR %.2f ffX %.2f ffY %.2f ffR %.2f rescue %.2f %.2f", strideX, strideY, strideR, rawStrideQX, rawStrideQY, rawStrideQR, strideQX, strideQY, strideQR, strideXFarFieldConfidenceFloor, strideYFarFieldConfidenceFloor, strideRollFarFieldConfidenceFloor, strideXRescueConfidenceFloor, strideYRescueConfidenceFloor)
         ),
         BandAssessment(
             name: "WARP",
@@ -2531,6 +2628,65 @@ private func turnOwnedFarFieldWalkingXConfidenceFloor(
         turnOwnedFarFieldXConfidenceFloorMax * turnSupport * bandSupport * evidenceSupport * macroGate,
         min: 0.0,
         max: turnOwnedFarFieldXConfidenceFloorMax
+    )
+}
+
+private func turnOwnedFarFieldWalkingRescueConfidenceFloor(
+    bandPixels: Float,
+    turnShakeSuppression: Float,
+    turnOwnership: Float,
+    turnMacroMagnitude: Float,
+    farFieldSupport: Float,
+    warpConfidence: Float,
+    trackingConfidence: Float,
+    farFieldConfidence: Float
+) -> Float {
+    guard bandPixels.isFinite else {
+        return 0.0
+    }
+    let turnSupport = max(
+        confidenceRamp(turnShakeSuppression, start: 0.28, full: 0.66),
+        confidenceRamp(turnOwnership, start: 0.28, full: 0.66)
+    )
+    let macroSupport = confidenceRamp(
+        turnMacroMagnitude,
+        start: turnMacroOwnershipBandStartPixels,
+        full: turnMacroOwnershipBandFullPixels
+    )
+    let bandSupport = confidenceRamp(
+        abs(bandPixels),
+        start: turnOwnedFarFieldStrideRescueBandStartPixels,
+        full: turnOwnedFarFieldStrideRescueBandFullPixels
+    )
+    let directFarFieldSupport = confidenceRamp(
+        farFieldSupport,
+        start: turnOwnedFarFieldStrideRescueSupportStart,
+        full: turnOwnedFarFieldStrideRescueSupportFull
+    )
+    let warpSupport = confidenceRamp(
+        clamp(warpConfidence, min: 0.0, max: 1.0),
+        start: turnOwnedFarFieldStrideRescueWarpStart,
+        full: turnOwnedFarFieldStrideRescueWarpFull
+    )
+    let trackingSupport = confidenceRamp(
+        clamp(trackingConfidence, min: 0.0, max: 1.0),
+        start: turnOwnedFarFieldStrideRescueTrackingStart,
+        full: turnOwnedFarFieldStrideRescueTrackingFull
+    )
+    let farFieldPathSupport = confidenceRamp(
+        clamp(farFieldConfidence, min: 0.0, max: 1.0),
+        start: turnOwnedFarFieldStrideRescueFarFieldStart,
+        full: turnOwnedFarFieldStrideRescueFarFieldFull
+    )
+    let evidenceSupport = warpSupport * trackingSupport * max(farFieldPathSupport, directFarFieldSupport)
+    return clamp(
+        turnOwnedFarFieldStrideRescueConfidenceFloorMax
+            * turnSupport
+            * macroSupport
+            * bandSupport
+            * evidenceSupport,
+        min: 0.0,
+        max: turnOwnedFarFieldStrideRescueConfidenceFloorMax
     )
 }
 

@@ -704,6 +704,17 @@ enum AutoStabilizationEstimator {
     private static let turnOwnedFarFieldXConfidenceFloorStartPixels: Float = 1.0
     private static let turnOwnedFarFieldXConfidenceFloorFullPixels: Float = 10.0
     private static let turnOwnedFarFieldXMacroGateFloorMax: Float = 1.0
+    private static let turnOwnedFarFieldStrideRescueConfidenceFloorMax: Float = 0.46
+    private static let turnOwnedFarFieldStrideRescueBandStartPixels: Float = 1.1
+    private static let turnOwnedFarFieldStrideRescueBandFullPixels: Float = 4.2
+    private static let turnOwnedFarFieldStrideRescueSupportStart: Float = 0.16
+    private static let turnOwnedFarFieldStrideRescueSupportFull: Float = 0.48
+    private static let turnOwnedFarFieldStrideRescueWarpStart: Float = 0.55
+    private static let turnOwnedFarFieldStrideRescueWarpFull: Float = 0.88
+    private static let turnOwnedFarFieldStrideRescueTrackingStart: Float = 0.24
+    private static let turnOwnedFarFieldStrideRescueTrackingFull: Float = 0.56
+    private static let turnOwnedFarFieldStrideRescueFarFieldStart: Float = 0.04
+    private static let turnOwnedFarFieldStrideRescueFarFieldFull: Float = 0.22
     private static let turnOwnedFootstepXFineFadeStartPixels: Float = 28.0
     private static let turnOwnedFootstepXFineFadeFullPixels: Float = 72.0
     private static let turnOwnedFootstepXRescueConfidenceFloorMax: Float = 0.34
@@ -859,7 +870,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 74
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 75
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -2602,6 +2613,12 @@ enum AutoStabilizationEstimator {
             full: turnMacroOwnershipBandFullPixels
         ) * turnTrackingConfidence
         let turnXMacroPixels = abs(panBandX * xScale)
+        let playbackTurnOwnershipY = confidenceRamp(
+            abs(panBandY * yScale),
+            start: turnMacroOwnershipBandStartPixels,
+            full: turnMacroOwnershipBandFullPixels
+        ) * turnTrackingConfidence
+        let turnYMacroPixels = abs(panBandY * yScale)
         let playbackTurnShakeSuppression = turnStabilizerShakeSuppression(
             turnOwnership: playbackTurnOwnershipX,
             turnConfidence: playbackTurnOwnershipX
@@ -2670,6 +2687,26 @@ enum AutoStabilizationEstimator {
             min: 0.0,
             max: turnOwnedFarFieldXConfidenceFloorMax
         )
+        let footstepXWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: microBandX * xScale,
+            turnShakeSuppression: playbackTurnShakeSuppression,
+            turnOwnership: playbackTurnOwnershipX,
+            turnMacroMagnitude: turnXMacroPixels,
+            farFieldSupport: farFieldWalkingXSupport,
+            warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+            trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+            farFieldConfidence: farFieldMacroConfidence
+        ) * turnOwnedFootstepXFineGate
+        let footstepYWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: microBandY * yScale,
+            turnShakeSuppression: playbackTurnShakeSuppression,
+            turnOwnership: playbackTurnOwnershipY,
+            turnMacroMagnitude: turnYMacroPixels,
+            farFieldSupport: farFieldWalkingXSupport,
+            warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+            trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+            farFieldConfidence: farFieldMacroConfidence
+        )
         let farFieldFootstepXConfidenceFloor = max(
             turnOwnedFootstepXConfidenceFloor,
             max(
@@ -2677,34 +2714,62 @@ enum AutoStabilizationEstimator {
                     bandPixels: microBandX * xScale,
                     farFieldSupport: farFieldWalkingXSupport
                 ) * turnOwnedFootstepXFineGate,
-                turnOwnedFootstepXRescueConfidenceFloor(
-                    bandPixels: microBandX * xScale,
-                    turnShakeSuppression: playbackTurnShakeSuppression,
-                    turnOwnership: playbackTurnOwnershipX,
-                    farFieldSupport: farFieldWalkingXSupport,
-                    fineGate: turnOwnedFootstepXFineGate
+                max(
+                    turnOwnedFootstepXRescueConfidenceFloor(
+                        bandPixels: microBandX * xScale,
+                        turnShakeSuppression: playbackTurnShakeSuppression,
+                        turnOwnership: playbackTurnOwnershipX,
+                        farFieldSupport: farFieldWalkingXSupport,
+                        fineGate: turnOwnedFootstepXFineGate
+                    ),
+                    footstepXWalkingRescueConfidenceFloor
                 )
             )
         )
-        let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
-            bandPixels: microBandY * yScale,
-            farFieldSupport: farFieldWalkingXSupport
+        let footstepYFarFieldConfidenceFloor = max(
+            farFieldFootstepVerticalConfidenceFloor(
+                bandPixels: microBandY * yScale,
+                farFieldSupport: farFieldWalkingXSupport
+            ),
+            footstepYWalkingRescueConfidenceFloor
         )
         let footstepRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
             bandDegrees: microBandRoll,
             farFieldSupport: farFieldWalkingXSupport
         )
-        let strideXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
+        let strideXBaseFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
             bandMagnitude: abs(strideBandX * xScale),
             turnShakeSuppression: playbackTurnShakeSuppression,
             turnOwnership: playbackTurnOwnershipX,
             turnMacroMagnitude: turnXMacroPixels,
             farFieldSupport: farFieldWalkingXSupport
         ) * turnOwnedStrideXGateFloorScale
-        let strideYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+        let strideXRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: strideBandX * xScale,
+            turnShakeSuppression: playbackTurnShakeSuppression,
+            turnOwnership: playbackTurnOwnershipX,
+            turnMacroMagnitude: turnXMacroPixels,
+            farFieldSupport: farFieldWalkingXSupport,
+            warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+            trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let strideYBaseFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
             bandPixels: strideBandY * yScale,
             farFieldSupport: farFieldWalkingXSupport
         ) * farFieldStrideVerticalConfidenceFloorScale
+        let strideYRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: strideBandY * yScale,
+            turnShakeSuppression: playbackTurnShakeSuppression,
+            turnOwnership: playbackTurnOwnershipY,
+            turnMacroMagnitude: turnYMacroPixels,
+            farFieldSupport: farFieldWalkingXSupport,
+            warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+            trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let strideXFarFieldConfidenceFloor = max(strideXBaseFarFieldConfidenceFloor, strideXRescueConfidenceFloor)
+        let strideYFarFieldConfidenceFloor = max(strideYBaseFarFieldConfidenceFloor, strideYRescueConfidenceFloor)
         let strideRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
             bandDegrees: strideBandRoll,
             farFieldSupport: farFieldWalkingXSupport
@@ -5963,6 +6028,12 @@ enum AutoStabilizationEstimator {
                 full: turnMacroOwnershipBandFullPixels
             ) * turnTrackingConfidence
             let turnXMacroPixels = abs(panBandX * xScale)
+            let playbackTurnOwnershipY = confidenceRamp(
+                abs(panBandY * yScale),
+                start: turnMacroOwnershipBandStartPixels,
+                full: turnMacroOwnershipBandFullPixels
+            ) * turnTrackingConfidence
+            let turnYMacroPixels = abs(panBandY * yScale)
             let playbackTurnShakeSuppression = turnStabilizerShakeSuppression(
                 turnOwnership: playbackTurnOwnershipX,
                 turnConfidence: playbackTurnOwnershipX
@@ -6049,6 +6120,26 @@ enum AutoStabilizationEstimator {
                 min: 0.0,
                 max: turnOwnedFarFieldXConfidenceFloorMax
             )
+            let footstepXWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+                bandPixels: microBandX * xScale,
+                turnShakeSuppression: playbackTurnShakeSuppression,
+                turnOwnership: playbackTurnOwnershipX,
+                turnMacroMagnitude: turnXMacroPixels,
+                farFieldSupport: farFieldWalkingXSupport,
+                warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+                trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+                farFieldConfidence: farFieldMacroConfidence
+            ) * turnOwnedFootstepXFineGate
+            let footstepYWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+                bandPixels: microBandY * yScale,
+                turnShakeSuppression: playbackTurnShakeSuppression,
+                turnOwnership: playbackTurnOwnershipY,
+                turnMacroMagnitude: turnYMacroPixels,
+                farFieldSupport: farFieldWalkingXSupport,
+                warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+                trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+                farFieldConfidence: farFieldMacroConfidence
+            )
             let farFieldFootstepXConfidenceFloor = max(
                 turnOwnedFootstepXConfidenceFloor,
                 max(
@@ -6056,18 +6147,24 @@ enum AutoStabilizationEstimator {
                         bandPixels: microBandX * xScale,
                         farFieldSupport: farFieldWalkingXSupport
                     ) * turnOwnedFootstepXFineGate,
-                    turnOwnedFootstepXRescueConfidenceFloor(
-                        bandPixels: microBandX * xScale,
-                        turnShakeSuppression: playbackTurnShakeSuppression,
-                        turnOwnership: playbackTurnOwnershipX,
-                        farFieldSupport: farFieldWalkingXSupport,
-                        fineGate: turnOwnedFootstepXFineGate
+                    max(
+                        turnOwnedFootstepXRescueConfidenceFloor(
+                            bandPixels: microBandX * xScale,
+                            turnShakeSuppression: playbackTurnShakeSuppression,
+                            turnOwnership: playbackTurnOwnershipX,
+                            farFieldSupport: farFieldWalkingXSupport,
+                            fineGate: turnOwnedFootstepXFineGate
+                        ),
+                        footstepXWalkingRescueConfidenceFloor
                     )
                 )
             )
-            let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
-                bandPixels: microBandY * yScale,
-                farFieldSupport: farFieldWalkingXSupport
+            let footstepYFarFieldConfidenceFloor = max(
+                farFieldFootstepVerticalConfidenceFloor(
+                    bandPixels: microBandY * yScale,
+                    farFieldSupport: farFieldWalkingXSupport
+                ),
+                footstepYWalkingRescueConfidenceFloor
             )
             let footstepRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
                 bandDegrees: microBandRoll,
@@ -6076,17 +6173,39 @@ enum AutoStabilizationEstimator {
             let footstepXConfidence = max(rawFootstepXConfidence * footstepXTurnGate, farFieldFootstepXConfidenceFloor)
             let footstepYConfidence = max(rawFootstepYConfidence * footstepYTurnGate, footstepYFarFieldConfidenceFloor)
             let footstepRollConfidence = max(rawFootstepRollConfidence * footstepRollTurnGate, footstepRollFarFieldConfidenceFloor)
-            let strideXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
+            let strideXBaseFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
                 bandMagnitude: abs(strideBandX * xScale),
                 turnShakeSuppression: playbackTurnShakeSuppression,
                 turnOwnership: playbackTurnOwnershipX,
                 turnMacroMagnitude: turnXMacroPixels,
                 farFieldSupport: farFieldWalkingXSupport
             ) * turnOwnedStrideXGateFloorScale
-            let strideYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+            let strideXRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+                bandPixels: strideBandX * xScale,
+                turnShakeSuppression: playbackTurnShakeSuppression,
+                turnOwnership: playbackTurnOwnershipX,
+                turnMacroMagnitude: turnXMacroPixels,
+                farFieldSupport: farFieldWalkingXSupport,
+                warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+                trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+                farFieldConfidence: farFieldMacroConfidence
+            )
+            let strideYBaseFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
                 bandPixels: strideBandY * yScale,
                 farFieldSupport: farFieldWalkingXSupport
             ) * farFieldStrideVerticalConfidenceFloorScale
+            let strideYRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+                bandPixels: strideBandY * yScale,
+                turnShakeSuppression: playbackTurnShakeSuppression,
+                turnOwnership: playbackTurnOwnershipY,
+                turnMacroMagnitude: turnYMacroPixels,
+                farFieldSupport: farFieldWalkingXSupport,
+                warpConfidence: max(smoothedWarpConfidence, farFieldMacroConfidence),
+                trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+                farFieldConfidence: farFieldMacroConfidence
+            )
+            let strideXFarFieldConfidenceFloor = max(strideXBaseFarFieldConfidenceFloor, strideXRescueConfidenceFloor)
+            let strideYFarFieldConfidenceFloor = max(strideYBaseFarFieldConfidenceFloor, strideYRescueConfidenceFloor)
             let strideRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
                 bandDegrees: strideBandRoll,
                 farFieldSupport: farFieldWalkingXSupport
@@ -7479,6 +7598,7 @@ enum AutoStabilizationEstimator {
             turnConfidence: confidence
         )
         let turnXMacroPixels = abs(panBandX * xScale)
+        let turnYMacroPixels = abs(panBandY * yScale)
         let footstepXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
         let footstepYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepYSuppression), min: 0.0, max: 1.0)
         let footstepRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepRollSuppression), min: 0.0, max: 1.0)
@@ -7489,41 +7609,89 @@ enum AutoStabilizationEstimator {
             bandPixels: footstepImpulseX * xScale,
             turnOwnership: turnOwnershipX
         )
+        let footstepXWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: footstepImpulseX * xScale,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: turnOwnershipX,
+            turnMacroMagnitude: turnXMacroPixels,
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        ) * turnOwnedFootstepXFineGate
+        let footstepYWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: footstepImpulseY * yScale,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: turnOwnershipY,
+            turnMacroMagnitude: turnYMacroPixels,
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        )
         let footstepXFarFieldConfidenceFloor = max(
             turnOwnedFarFieldWalkingXConfidenceFloor(
-                bandMagnitude: abs(footstepImpulseX),
+                bandMagnitude: abs(footstepImpulseX * xScale),
                 turnShakeSuppression: turnShakeSuppression,
                 turnOwnership: turnOwnershipX,
                 turnMacroMagnitude: turnXMacroPixels,
                 farFieldSupport: farFieldTurnOwnedXSupport
             ),
-            turnOwnedFootstepXRescueConfidenceFloor(
-                bandPixels: footstepImpulseX * xScale,
-                turnShakeSuppression: turnShakeSuppression,
-                turnOwnership: turnOwnershipX,
-                farFieldSupport: farFieldTurnOwnedXSupport,
-                fineGate: turnOwnedFootstepXFineGate
+            max(
+                turnOwnedFootstepXRescueConfidenceFloor(
+                    bandPixels: footstepImpulseX * xScale,
+                    turnShakeSuppression: turnShakeSuppression,
+                    turnOwnership: turnOwnershipX,
+                    farFieldSupport: farFieldTurnOwnedXSupport,
+                    fineGate: turnOwnedFootstepXFineGate
+                ),
+                footstepXWalkingRescueConfidenceFloor
             )
         )
         let footstepRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
             bandDegrees: footstepPathRollAtRender - microImpulseBaselineRoll,
             farFieldSupport: farFieldTurnOwnedXSupport
         )
-        let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
-            bandPixels: footstepImpulseY * yScale,
-            farFieldSupport: farFieldTurnOwnedXSupport
+        let footstepYFarFieldConfidenceFloor = max(
+            farFieldFootstepVerticalConfidenceFloor(
+                bandPixels: footstepImpulseY * yScale,
+                farFieldSupport: farFieldTurnOwnedXSupport
+            ),
+            footstepYWalkingRescueConfidenceFloor
         )
-        let strideXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
-            bandMagnitude: abs(strideBandX),
+        let strideXBaseFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
+            bandMagnitude: abs(strideBandX * xScale),
             turnShakeSuppression: turnShakeSuppression,
             turnOwnership: turnOwnershipX,
             turnMacroMagnitude: turnXMacroPixels,
             farFieldSupport: farFieldTurnOwnedXSupport
         ) * turnOwnedStrideXGateFloorScale
-        let strideYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+        let strideXRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: strideBandX * xScale,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: turnOwnershipX,
+            turnMacroMagnitude: turnXMacroPixels,
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let strideYBaseFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
             bandPixels: strideBandY * yScale,
             farFieldSupport: farFieldTurnOwnedXSupport
         ) * farFieldStrideVerticalConfidenceFloorScale
+        let strideYRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: strideBandY * yScale,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: turnOwnershipY,
+            turnMacroMagnitude: turnYMacroPixels,
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let strideXFarFieldConfidenceFloor = max(strideXBaseFarFieldConfidenceFloor, strideXRescueConfidenceFloor)
+        let strideYFarFieldConfidenceFloor = max(strideYBaseFarFieldConfidenceFloor, strideYRescueConfidenceFloor)
         let strideRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
             bandDegrees: strideBandRoll,
             farFieldSupport: farFieldTurnOwnedXSupport
@@ -8329,11 +8497,12 @@ enum AutoStabilizationEstimator {
         )
         let footstepImpulseX = footstepPathXAtRender - microImpulseBaselineX
         let turnXMacroPixels = abs(panBandX * xScale)
+        let turnYMacroPixels = abs(panBandY * yScale)
         let baseFootstepXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFootstepXSuppression), min: 0.0, max: 1.0)
         let baseStrideXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipStrideXSuppression), min: 0.0, max: 1.0)
         let footstepXTurnGateFloor = turnOwnedWalkingXGateFloor(
             rawConfidence: rawFootstepXConfidence,
-            bandMagnitude: abs(footstepImpulseX),
+            bandMagnitude: abs(footstepImpulseX * xScale),
             turnShakeSuppression: turnShakeSuppression,
             turnOwnership: turnOwnershipX,
             turnMacroMagnitude: turnXMacroPixels,
@@ -8341,7 +8510,7 @@ enum AutoStabilizationEstimator {
         )
         let strideXTurnGateFloor = turnOwnedWalkingXGateFloor(
             rawConfidence: rawStrideXConfidence,
-            bandMagnitude: abs(strideBandX),
+            bandMagnitude: abs(strideBandX * xScale),
             turnShakeSuppression: turnShakeSuppression,
             turnOwnership: turnOwnershipX,
             turnMacroMagnitude: turnXMacroPixels,
@@ -8357,41 +8526,89 @@ enum AutoStabilizationEstimator {
             bandPixels: footstepImpulseX * xScale,
             turnOwnership: turnOwnershipX
         )
+        let footstepXWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: footstepImpulseX * xScale,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: turnOwnershipX,
+            turnMacroMagnitude: turnXMacroPixels,
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        ) * turnOwnedFootstepXFineGate
+        let footstepYWalkingRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: (footstepPathYAtRender - footstepBaselineY) * yScale,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: turnOwnershipY,
+            turnMacroMagnitude: turnYMacroPixels,
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        )
         let footstepXFarFieldConfidenceFloor = max(
             turnOwnedFarFieldWalkingXConfidenceFloor(
-                bandMagnitude: abs(footstepImpulseX),
+                bandMagnitude: abs(footstepImpulseX * xScale),
                 turnShakeSuppression: turnShakeSuppression,
                 turnOwnership: turnOwnershipX,
                 turnMacroMagnitude: turnXMacroPixels,
                 farFieldSupport: farFieldTurnOwnedXSupport
             ),
-            turnOwnedFootstepXRescueConfidenceFloor(
-                bandPixels: footstepImpulseX * xScale,
-                turnShakeSuppression: turnShakeSuppression,
-                turnOwnership: turnOwnershipX,
-                farFieldSupport: farFieldTurnOwnedXSupport,
-                fineGate: turnOwnedFootstepXFineGate
+            max(
+                turnOwnedFootstepXRescueConfidenceFloor(
+                    bandPixels: footstepImpulseX * xScale,
+                    turnShakeSuppression: turnShakeSuppression,
+                    turnOwnership: turnOwnershipX,
+                    farFieldSupport: farFieldTurnOwnedXSupport,
+                    fineGate: turnOwnedFootstepXFineGate
+                ),
+                footstepXWalkingRescueConfidenceFloor
             )
         )
         let footstepRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
             bandDegrees: footstepPathRollAtRender - microImpulseBaselineRoll,
             farFieldSupport: farFieldTurnOwnedXSupport
         )
-        let footstepYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
-            bandPixels: (footstepPathYAtRender - footstepBaselineY) * yScale,
-            farFieldSupport: farFieldTurnOwnedXSupport
+        let footstepYFarFieldConfidenceFloor = max(
+            farFieldFootstepVerticalConfidenceFloor(
+                bandPixels: (footstepPathYAtRender - footstepBaselineY) * yScale,
+                farFieldSupport: farFieldTurnOwnedXSupport
+            ),
+            footstepYWalkingRescueConfidenceFloor
         )
-        let strideXFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
-            bandMagnitude: abs(strideBandX),
+        let strideXBaseFarFieldConfidenceFloor = turnOwnedFarFieldWalkingXConfidenceFloor(
+            bandMagnitude: abs(strideBandX * xScale),
             turnShakeSuppression: turnShakeSuppression,
             turnOwnership: turnOwnershipX,
             turnMacroMagnitude: turnXMacroPixels,
             farFieldSupport: farFieldTurnOwnedXSupport
         ) * turnOwnedStrideXGateFloorScale
-        let strideYFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
+        let strideXRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: strideBandX * xScale,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: turnOwnershipX,
+            turnMacroMagnitude: turnXMacroPixels,
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let strideYBaseFarFieldConfidenceFloor = farFieldFootstepVerticalConfidenceFloor(
             bandPixels: strideBandY * yScale,
             farFieldSupport: farFieldTurnOwnedXSupport
         ) * farFieldStrideVerticalConfidenceFloorScale
+        let strideYRescueConfidenceFloor = turnOwnedFarFieldWalkingRescueConfidenceFloor(
+            bandPixels: strideBandY * yScale,
+            turnShakeSuppression: turnShakeSuppression,
+            turnOwnership: turnOwnershipY,
+            turnMacroMagnitude: turnYMacroPixels,
+            farFieldSupport: farFieldTurnOwnedXSupport,
+            warpConfidence: max(warpConfidence, farFieldMacroConfidence),
+            trackingConfidence: strideTrackingConfidence,
+            farFieldConfidence: farFieldMacroConfidence
+        )
+        let strideXFarFieldConfidenceFloor = max(strideXBaseFarFieldConfidenceFloor, strideXRescueConfidenceFloor)
+        let strideYFarFieldConfidenceFloor = max(strideYBaseFarFieldConfidenceFloor, strideYRescueConfidenceFloor)
         let strideRollFarFieldConfidenceFloor = farFieldFootstepRollConfidenceFloor(
             bandDegrees: strideBandRoll,
             farFieldSupport: farFieldTurnOwnedXSupport
@@ -12904,6 +13121,65 @@ enum AutoStabilizationEstimator {
             turnOwnedFarFieldXConfidenceFloorMax * turnSupport * bandSupport * evidenceSupport * macroGate,
             min: 0.0,
             max: turnOwnedFarFieldXConfidenceFloorMax
+        )
+    }
+
+    private static func turnOwnedFarFieldWalkingRescueConfidenceFloor(
+        bandPixels: Float,
+        turnShakeSuppression: Float,
+        turnOwnership: Float,
+        turnMacroMagnitude: Float,
+        farFieldSupport: Float,
+        warpConfidence: Float,
+        trackingConfidence: Float,
+        farFieldConfidence: Float
+    ) -> Float {
+        guard bandPixels.isFinite else {
+            return 0.0
+        }
+        let turnSupport = max(
+            confidenceRamp(turnShakeSuppression, start: 0.28, full: 0.66),
+            confidenceRamp(turnOwnership, start: 0.28, full: 0.66)
+        )
+        let macroSupport = confidenceRamp(
+            turnMacroMagnitude,
+            start: turnMacroOwnershipBandStartPixels,
+            full: turnMacroOwnershipBandFullPixels
+        )
+        let bandSupport = confidenceRamp(
+            abs(bandPixels),
+            start: turnOwnedFarFieldStrideRescueBandStartPixels,
+            full: turnOwnedFarFieldStrideRescueBandFullPixels
+        )
+        let directFarFieldSupport = confidenceRamp(
+            farFieldSupport,
+            start: turnOwnedFarFieldStrideRescueSupportStart,
+            full: turnOwnedFarFieldStrideRescueSupportFull
+        )
+        let warpSupport = confidenceRamp(
+            clamp(warpConfidence, min: 0.0, max: 1.0),
+            start: turnOwnedFarFieldStrideRescueWarpStart,
+            full: turnOwnedFarFieldStrideRescueWarpFull
+        )
+        let trackingSupport = confidenceRamp(
+            clamp(trackingConfidence, min: 0.0, max: 1.0),
+            start: turnOwnedFarFieldStrideRescueTrackingStart,
+            full: turnOwnedFarFieldStrideRescueTrackingFull
+        )
+        let farFieldPathSupport = confidenceRamp(
+            clamp(farFieldConfidence, min: 0.0, max: 1.0),
+            start: turnOwnedFarFieldStrideRescueFarFieldStart,
+            full: turnOwnedFarFieldStrideRescueFarFieldFull
+        )
+        let evidenceSupport = warpSupport * trackingSupport * max(farFieldPathSupport, directFarFieldSupport)
+        return clamp(
+            turnOwnedFarFieldStrideRescueConfidenceFloorMax
+                * turnSupport
+                * macroSupport
+                * bandSupport
+                * evidenceSupport,
+            min: 0.0,
+            max: turnOwnedFarFieldStrideRescueConfidenceFloorMax
         )
     }
 
