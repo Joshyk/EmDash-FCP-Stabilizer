@@ -3567,7 +3567,7 @@ private func sourceSpaceLensShakeBand(
         * confidenceRamp(sourceRidgePreparedSupport, start: 0.08, full: 0.45)
         * qualitySupport
         * turnScale
-    let sourceRidgeLineSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
+    let sourceRidgeLineDirectSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
         * confidenceRamp(sourceRidgeLinePreparedSupport, start: 0.08, full: 0.45)
         * qualitySupport
         * turnScale
@@ -3601,6 +3601,15 @@ private func sourceSpaceLensShakeBand(
         sourceLocalMagnitude = max(sourceLocalMagnitude, localMagnitude)
         sourceLocalSupport = max(sourceLocalSupport, localSupport)
     }
+    let sourceRidgeLineBandEvidenceSupport = max(
+        max(ridgeSupport, max(ridgeColumnSupport, ridgeRowSupport)),
+        sourceLocalSupport
+    )
+    let sourceRidgeLineBandSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
+        * confidenceRamp(sourceRidgeLineBandEvidenceSupport, start: 0.08, full: 0.36)
+        * qualitySupport
+        * turnScale
+    let sourceRidgeLineSupport = max(sourceRidgeLineDirectSupport, sourceRidgeLineBandSupport)
     let bandSupport = max(
         max(max(topSupport, max(ridgeSupport, midSupport)), max(topRowSupport, max(ridgeRowSupport, midRowSupport))),
         max(max(topColumnSupport, max(ridgeColumnSupport, midColumnSupport)), max(max(max(sourceRidgeSupport, sourceRidgeLineSupport), sourceLocalSupport), support(localRollMagnitude, start: lensShakeRollStartDegrees * 0.25, full: lensShakeRollFullDegrees * 0.75)))
@@ -3673,7 +3682,7 @@ private func sourceSpaceLensShakeBand(
         applied: applied,
         remaining: max(0.0, diagnosticDetected - applied),
         confidence: max(affineSupport, projectiveSupport),
-        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f rowT %.3f %.3f rowR %.3f %.3f rowM %.3f %.3f localRoll %.6f %.6f %.6f sourceRidgeY %.3f sourceRidgeSupport %.2f sourceRidgeLineY %.3f sourceRidgeLineSupport %.2f sourceLocalMag %.3f sourceLocalSupport %.2f bandConf %.2f q %.2f rolling %.2f band %.2f model %@ reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, topRowResidual.x, topRowResidual.y, ridgeRowResidual.x, ridgeRowResidual.y, midRowResidual.x, midRowResidual.y, topLocalRoll, ridgeLocalRoll, midLocalRoll, sourceRidgeResidualY, sourceRidgeSupport, sourceRidgeLineResidualY, sourceRidgeLineSupport, sourceLocalMagnitude, sourceLocalSupport, maxBandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, correctionModel, reason)
+        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f bandT %.3f %.3f bandR %.3f %.3f bandM %.3f %.3f colT %.3f %.3f colR %.3f %.3f colM %.3f %.3f rowT %.3f %.3f rowR %.3f %.3f rowM %.3f %.3f localRoll %.6f %.6f %.6f sourceRidgeY %.3f sourceRidgeSupport %.2f sourceRidgeLineY %.3f sourceRidgeLineSupport %.2f sourceRidgeLineBandSupport %.2f sourceLocalMag %.3f sourceLocalSupport %.2f bandConf %.2f q %.2f rolling %.2f band %.2f model %@ reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, topResidual.x, topResidual.y, ridgeResidual.x, ridgeResidual.y, midResidual.x, midResidual.y, topColumnResidual.x, topColumnResidual.y, ridgeColumnResidual.x, ridgeColumnResidual.y, midColumnResidual.x, midColumnResidual.y, topRowResidual.x, topRowResidual.y, ridgeRowResidual.x, ridgeRowResidual.y, midRowResidual.x, midRowResidual.y, topLocalRoll, ridgeLocalRoll, midLocalRoll, sourceRidgeResidualY, sourceRidgeSupport, sourceRidgeLineResidualY, sourceRidgeLineSupport, sourceRidgeLineBandSupport, sourceLocalMagnitude, sourceLocalSupport, maxBandConfidence, max(affineSupport, projectiveSupport), rollingShutterCandidate, bandSupport, correctionModel, reason)
     )
 }
 

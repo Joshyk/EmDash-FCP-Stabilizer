@@ -7468,7 +7468,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 lensBandMessage
             )
             let lensRidgeLineMessage = String(
-                format: "Render lens ridge line csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ sourceLensShakeRidgeLineRawY=%.5f sourceLensShakeRidgeLineY=%.5f sourceLensShakeRidgeLineSupport=%.5f sourceLensShakeRidgeLineApplied=%.2f sourceLensShakeRidgeCombinedY=%.5f",
+                format: "Render lens ridge line csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ sourceLensShakeRidgeLineRawY=%.5f sourceLensShakeRidgeLineY=%.5f sourceLensShakeRidgeLineSupport=%.5f sourceLensShakeRidgeLineBandSupported=%.2f sourceLensShakeRidgeLineApplied=%.2f sourceLensShakeRidgeCombinedY=%.5f",
                 analysisSeconds,
                 samplePosition,
                 frames.count,
@@ -7478,6 +7478,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoTransform.sourceLensShakeRidgeLineResidual.y * masterStrength,
                 appliedSourceLensShakeRidgeLineOffset.y,
                 autoTransform.sourceLensShakeRidgeLineSupport,
+                autoTransform.sourceLensShakeRidgeLineBandSupported,
                 autoTransform.sourceLensShakeRidgeLineApplied,
                 autoTransform.sourceLensShakeRidgeOffset.y * masterStrength
             )

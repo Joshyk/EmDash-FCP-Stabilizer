@@ -47,6 +47,7 @@ struct StabilizerAutoTransform {
     var sourceLensShakeRidgeLineResidual: vector_float2
     var sourceLensShakeRidgeLineOffset: vector_float2
     var sourceLensShakeRidgeLineSupport: Float
+    var sourceLensShakeRidgeLineBandSupported: Float
     var sourceLensShakeRidgeLineApplied: Float
     var sourceLensShakeLocalTopLeftOffset: vector_float2
     var sourceLensShakeLocalTopCenterOffset: vector_float2
@@ -132,6 +133,7 @@ struct StabilizerAutoTransform {
         sourceLensShakeRidgeLineResidual: vector_float2(0.0, 0.0),
         sourceLensShakeRidgeLineOffset: vector_float2(0.0, 0.0),
         sourceLensShakeRidgeLineSupport: 0.0,
+        sourceLensShakeRidgeLineBandSupported: 0.0,
         sourceLensShakeRidgeLineApplied: 0.0,
         sourceLensShakeLocalTopLeftOffset: vector_float2(0.0, 0.0),
         sourceLensShakeLocalTopCenterOffset: vector_float2(0.0, 0.0),
@@ -1175,6 +1177,7 @@ enum AutoStabilizationEstimator {
         var sourceRidgeLineResidual: vector_float2 = vector_float2(0.0, 0.0)
         var sourceRidgeLineOffset: vector_float2 = vector_float2(0.0, 0.0)
         var sourceRidgeLineSupport: Float = 0.0
+        var sourceRidgeLineBandSupported: Float = 0.0
         var sourceRidgeLineApplied: Float = 0.0
         var localTopLeftOffset: vector_float2 = vector_float2(0.0, 0.0)
         var localTopCenterOffset: vector_float2 = vector_float2(0.0, 0.0)
@@ -3444,6 +3447,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeRidgeLineResidual: lensShake.sourceRidgeLineResidual,
             sourceLensShakeRidgeLineOffset: lensShake.sourceRidgeLineOffset,
             sourceLensShakeRidgeLineSupport: lensShake.sourceRidgeLineSupport,
+            sourceLensShakeRidgeLineBandSupported: lensShake.sourceRidgeLineBandSupported,
             sourceLensShakeRidgeLineApplied: lensShake.sourceRidgeLineApplied,
             sourceLensShakeLocalTopLeftOffset: lensShake.localTopLeftOffset,
             sourceLensShakeLocalTopCenterOffset: lensShake.localTopCenterOffset,
@@ -6971,6 +6975,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeRidgeLineResidual: lensShake.sourceRidgeLineResidual,
             sourceLensShakeRidgeLineOffset: lensShake.sourceRidgeLineOffset,
             sourceLensShakeRidgeLineSupport: lensShake.sourceRidgeLineSupport,
+            sourceLensShakeRidgeLineBandSupported: lensShake.sourceRidgeLineBandSupported,
             sourceLensShakeRidgeLineApplied: lensShake.sourceRidgeLineApplied,
             sourceLensShakeLocalTopLeftOffset: lensShake.localTopLeftOffset,
             sourceLensShakeLocalTopCenterOffset: lensShake.localTopCenterOffset,
@@ -8586,6 +8591,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeRidgeLineResidual: lensShake.sourceRidgeLineResidual,
             sourceLensShakeRidgeLineOffset: lensShake.sourceRidgeLineOffset,
             sourceLensShakeRidgeLineSupport: lensShake.sourceRidgeLineSupport,
+            sourceLensShakeRidgeLineBandSupported: lensShake.sourceRidgeLineBandSupported,
             sourceLensShakeRidgeLineApplied: lensShake.sourceRidgeLineApplied,
             sourceLensShakeLocalTopLeftOffset: lensShake.localTopLeftOffset,
             sourceLensShakeLocalTopCenterOffset: lensShake.localTopCenterOffset,
@@ -9629,6 +9635,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeRidgeLineResidual: lensShake.sourceRidgeLineResidual,
             sourceLensShakeRidgeLineOffset: lensShake.sourceRidgeLineOffset,
             sourceLensShakeRidgeLineSupport: lensShake.sourceRidgeLineSupport,
+            sourceLensShakeRidgeLineBandSupported: lensShake.sourceRidgeLineBandSupported,
             sourceLensShakeRidgeLineApplied: lensShake.sourceRidgeLineApplied,
             sourceLensShakeLocalTopLeftOffset: lensShake.localTopLeftOffset,
             sourceLensShakeLocalTopCenterOffset: lensShake.localTopCenterOffset,
@@ -10445,6 +10452,7 @@ enum AutoStabilizationEstimator {
         var sourceLensShakeRidgeLineResidual = vector_float2(0.0, 0.0)
         var sourceLensShakeRidgeLineOffset = vector_float2(0.0, 0.0)
         var sourceLensShakeRidgeLineSupport: Float = 0.0
+        var sourceLensShakeRidgeLineBandSupported: Float = 0.0
         var sourceLensShakeRidgeLineApplied: Float = 0.0
         var sourceLensShakeLocalTopLeftOffset = vector_float2(0.0, 0.0)
         var sourceLensShakeLocalTopCenterOffset = vector_float2(0.0, 0.0)
@@ -10532,6 +10540,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeRidgeLineResidual += transform.sourceLensShakeRidgeLineResidual * weight
             sourceLensShakeRidgeLineOffset += transform.sourceLensShakeRidgeLineOffset * weight
             sourceLensShakeRidgeLineSupport += transform.sourceLensShakeRidgeLineSupport * weight
+            sourceLensShakeRidgeLineBandSupported += transform.sourceLensShakeRidgeLineBandSupported * weight
             sourceLensShakeRidgeLineApplied += transform.sourceLensShakeRidgeLineApplied * weight
             sourceLensShakeLocalTopLeftOffset += transform.sourceLensShakeLocalTopLeftOffset * weight
             sourceLensShakeLocalTopCenterOffset += transform.sourceLensShakeLocalTopCenterOffset * weight
@@ -10630,6 +10639,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeRidgeLineResidual: sourceLensShakeRidgeLineResidual / totalWeight,
             sourceLensShakeRidgeLineOffset: sourceLensShakeRidgeLineOffset / totalWeight,
             sourceLensShakeRidgeLineSupport: sourceLensShakeRidgeLineSupport / totalWeight,
+            sourceLensShakeRidgeLineBandSupported: sourceLensShakeRidgeLineBandSupported / totalWeight,
             sourceLensShakeRidgeLineApplied: sourceLensShakeRidgeLineApplied / totalWeight,
             sourceLensShakeLocalTopLeftOffset: sourceLensShakeLocalTopLeftOffset / totalWeight,
             sourceLensShakeLocalTopCenterOffset: sourceLensShakeLocalTopCenterOffset / totalWeight,
@@ -13416,7 +13426,7 @@ enum AutoStabilizationEstimator {
                 * qualitySupport
                 * turnScale
             let sourceRidgeLinePreparedSupport = interpolatedValue(analysis.sourceLensShakeRidgeLineSupport, using: interpolation)
-            let sourceRidgeLineSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
+            let sourceRidgeLineDirectSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
                 * confidenceRamp(sourceRidgeLinePreparedSupport, start: 0.08, full: 0.45)
                 * qualitySupport
                 * turnScale
@@ -13443,6 +13453,17 @@ enum AutoStabilizationEstimator {
             let localBinSupport = localSupports.max() ?? 0.0
             let localBinMagnitude = localResiduals.map { simd_length($0) }.max() ?? 0.0
             _ = localPreparedSupports
+            let sourceRidgeLineBandEvidenceSupport = max(
+                max(ridgeSupport, max(ridgeColumnSupport, ridgeRowSupport)),
+                localBinSupport
+            )
+            let sourceRidgeLineBandSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
+                * confidenceRamp(sourceRidgeLineBandEvidenceSupport, start: 0.08, full: 0.36)
+                * qualitySupport
+                * turnScale
+            let sourceRidgeLineSupport = max(sourceRidgeLineDirectSupport, sourceRidgeLineBandSupport)
+            let sourceRidgeLineBandSupported: Float = sourceRidgeLineBandSupport > sourceRidgeLineDirectSupport
+                && sourceRidgeLineBandSupport >= lensShakeMinimumSupport ? 1.0 : 0.0
             let bandSupport = max(
                 max(max(topSupport, max(ridgeSupport, midSupport)), max(topRowSupport, max(ridgeRowSupport, midRowSupport))),
                 max(max(topColumnSupport, max(ridgeColumnSupport, midColumnSupport)), max(localRollSupport, max(max(sourceRidgeSupport, sourceRidgeLineSupport), localBinSupport)))
@@ -13545,6 +13566,7 @@ enum AutoStabilizationEstimator {
                     )
                     result.sourceRidgeLineOffset = lineOffset
                     result.sourceRidgeLineSupport = clamp(sourceRidgeLineSupport, min: 0.0, max: 1.0)
+                    result.sourceRidgeLineBandSupported = sourceRidgeLineBandSupported
                     result.sourceRidgeLineApplied = 1.0
                     result.sourceRidgeOffset = vector_float2(
                         0.0,

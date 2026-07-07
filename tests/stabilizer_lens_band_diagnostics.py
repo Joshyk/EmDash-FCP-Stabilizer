@@ -10,7 +10,7 @@ import math
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import cv2
 import numpy as np
@@ -219,6 +219,73 @@ def residual_window(values: list[float], index: int, radius: int) -> float:
 def percentile_abs(rows: list[dict[str, Any]], key: str, percentile: float) -> float:
     values = [abs(finite_float(row.get(key))) for row in rows]
     return float(np.percentile(values, percentile)) if values else 0.0
+
+
+def bool_value(raw: Any) -> bool:
+    return str(raw).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def read_csv_by_frame(path: Path) -> dict[int, dict[str, str]]:
+    if not path.exists():
+        return {}
+    rows: dict[int, dict[str, str]] = {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            try:
+                frame = int(float(row.get("frame", "")))
+            except (TypeError, ValueError):
+                continue
+            rows[frame] = row
+    return rows
+
+
+def longest_true_run(values: Iterable[bool]) -> int:
+    longest = 0
+    current = 0
+    for value in values:
+        if value:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def runtime_decision(row: dict[str, Any]) -> str:
+    reason = str(row.get("lensShakeReason", ""))
+    correction_model = str(row.get("lensBandCorrectionModel", ""))
+    if reason == "applied":
+        return "globalApplied"
+    if reason == "rollingRowWarp":
+        return "bandApplied" if correction_model else "bandReasonNoModel"
+    if reason == "rollingShutterCandidate":
+        return "detectedRollingCandidateNoOp"
+    if reason:
+        return reason
+    return "noRuntimeSignal"
+
+
+def failure_class(row: dict[str, Any], window_frames: int) -> str:
+    if bool_value(row.get("ptsCadenceAffectedFrame")) or bool_value(row.get("captureHoldAffectedFrame")):
+        return "cadenceAffected"
+    if abs(finite_float(row.get("scalePulseDerivativePercent"))) >= 0.25:
+        return "scalePulseDerivative"
+    if (
+        abs(finite_float(row.get("sourceLensShakeRidgeLineRawY"))) >= 0.35
+        and finite_float(row.get("sourceLensShakeRidgeLineSupport")) <= 0.05
+        and finite_float(row.get("sourceLensShakeRidgeLineApplied")) <= 0.0
+    ):
+        return "ridgeLineDetectedSupportNoOp"
+    decision = runtime_decision(row)
+    residual_model = str(row.get("lensBandResidualModel", ""))
+    residual_strength = abs(finite_float(row.get(f"lensBandRollingShutterScoreHF{window_frames}")))
+    if decision == "detectedRollingCandidateNoOp" and residual_strength >= 0.35:
+        return "rollingCandidateDetectedNoBandCorrection"
+    if decision == "bandApplied" and residual_model != "noSignal" and residual_strength >= 0.35:
+        return "bandCorrectionResidual"
+    if residual_model != "noSignal" and residual_strength >= 0.35:
+        return "detectedBandSignalNoRuntimeCorrection"
+    return "noDominantFailureSignal"
 
 
 def dominant_key(values: dict[str, float]) -> tuple[str, float]:
@@ -508,6 +575,11 @@ def main() -> None:
     parser.add_argument("--render-log", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--window-frames", type=int, default=10)
+    parser.add_argument(
+        "--quality-dir",
+        type=Path,
+        help="Optional stabilizer_video_quality.py output directory with scale_stats.csv/ridge_stats.csv.",
+    )
     parser.add_argument("--require-band-warp", action="store_true")
     parser.add_argument("--forbid-global-lens", action="store_true")
     args = parser.parse_args()
@@ -516,9 +588,15 @@ def main() -> None:
     render_rows = parse_render_log(args.render_log)
     if not render_rows:
         raise SystemExit(f"lens band diagnostics found no render component rows: {args.render_log}")
+    quality_dir = args.quality_dir
+    scale_rows = read_csv_by_frame(quality_dir / "scale_stats.csv") if quality_dir else {}
+    ridge_rows = read_csv_by_frame(quality_dir / "ridge_stats.csv") if quality_dir else {}
     video_rows, summary = analyze_video(args.video, args.window_frames)
     summary["renderLog"] = str(args.render_log)
     summary["renderRows"] = len(render_rows)
+    summary["qualityDir"] = str(quality_dir) if quality_dir else ""
+    summary["scaleStatsRows"] = len(scale_rows)
+    summary["ridgeStatsRows"] = len(ridge_rows)
     summary["lensReasonCounts"] = dict(Counter(row.get("lensShakeReason", "") for row in render_rows if row.get("lensShakeReason")))
     summary["lensBandWarpAppliedRows"] = sum(
         1 for row in render_rows if finite_float(row.get("lensBandWarpApplied")) > 0.5
@@ -569,6 +647,7 @@ def main() -> None:
         "sourceLensShakeRidgeLineRawY",
         "sourceLensShakeRidgeLineY",
         "sourceLensShakeRidgeLineSupport",
+        "sourceLensShakeRidgeLineBandSupported",
         "sourceLensShakeRidgeLineApplied",
         "sourceLensShakeRidgeCombinedY",
         "sourceLensShakeLocalSupport",
@@ -629,6 +708,24 @@ def main() -> None:
                 ]
             )
     derived_columns = [
+        "runtimeDecision",
+        "failureClass",
+        "scaleResidualPercent",
+        "scalePulseResidualPercent",
+        "scalePulseDerivativePercent",
+        "scaleQualityOk",
+        "scalePulseExcludedForPtsCadence",
+        "ptsCadenceAffectedFrame",
+        "captureHoldAffectedFrame",
+        "cadenceHoldFrame",
+        "ptsIntervalIrregularFrame",
+        "ridgeLineOk",
+        "ridgeLineReason",
+        "ridgeLineDy",
+        "ridgeLineDyMinusAffineDy",
+        "ridgeReferenceTrackingOk",
+        "ridgeMinusReferenceDx",
+        "ridgeMinusReferenceDy",
         "lensBandSupport",
         "lensBandRollingShutterScore",
         "lensBandRollingShutterRowScore",
@@ -656,11 +753,17 @@ def main() -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for index, video_row in enumerate(video_rows):
+            frame = int(video_row["frame"])
             video_time = finite_float(video_row.get("time"))
             render_row = nearest_render_row(render_rows, video_time)
             render_relative_time = finite_float(render_row.get("_relativeTime"), math.nan)
+            scale_row = scale_rows.get(frame, {})
+            ridge_row = ridge_rows.get(frame, {})
+            scale_residual = finite_float(scale_row.get("scaleResidualPercent"), math.nan)
+            scale_pulse_residual = finite_float(scale_row.get("scalePulseResidualPercent"), math.nan)
+            scale_derivative = finite_float(scale_row.get("scalePulseDerivativePercentPerFrame"), math.nan)
             row: dict[str, Any] = {
-                "frame": int(video_row["frame"]),
+                "frame": frame,
                 "time": f"{video_row['time']:.5f}",
                 "renderRow": render_row.get("_renderIndex", ""),
                 "renderRelativeTime": f"{render_relative_time:.5f}" if math.isfinite(render_relative_time) else "",
@@ -668,9 +771,57 @@ def main() -> None:
             }
             for column in runtime_columns:
                 row[column] = render_row.get(column, "")
+            row["runtimeDecision"] = runtime_decision(row)
+            row["scaleResidualPercent"] = (
+                f"{scale_residual:.6f}" if math.isfinite(scale_residual) else ""
+            )
+            row["scalePulseResidualPercent"] = (
+                f"{scale_pulse_residual:.6f}" if math.isfinite(scale_pulse_residual) else ""
+            )
+            row["scalePulseDerivativePercent"] = (
+                f"{scale_derivative:.6f}" if math.isfinite(scale_derivative) else ""
+            )
+            for column in (
+                "scaleQualityOk",
+                "scalePulseExcludedForPtsCadence",
+                "ptsCadenceAffectedFrame",
+                "captureHoldAffectedFrame",
+                "cadenceHoldFrame",
+                "ptsIntervalIrregularFrame",
+            ):
+                row[column] = scale_row.get(column, "")
+            for column in (
+                "ridgeLineOk",
+                "ridgeLineReason",
+                "ridgeLineDy",
+                "ridgeLineDyMinusAffineDy",
+                "ridgeReferenceTrackingOk",
+                "ridgeMinusReferenceDx",
+                "ridgeMinusReferenceDy",
+            ):
+                row[column] = ridge_row.get(column, "")
             row["lensBandSupport"] = render_row.get("lensBandWarpSupport", "")
             for column in derived_columns:
-                if column == "lensBandSupport":
+                if column in {
+                    "runtimeDecision",
+                    "scaleResidualPercent",
+                    "scalePulseResidualPercent",
+                    "scalePulseDerivativePercent",
+                    "scaleQualityOk",
+                    "scalePulseExcludedForPtsCadence",
+                    "ptsCadenceAffectedFrame",
+                    "captureHoldAffectedFrame",
+                    "cadenceHoldFrame",
+                    "ptsIntervalIrregularFrame",
+                    "ridgeLineOk",
+                    "ridgeLineReason",
+                    "ridgeLineDy",
+                    "ridgeLineDyMinusAffineDy",
+                    "ridgeReferenceTrackingOk",
+                    "ridgeMinusReferenceDx",
+                    "ridgeMinusReferenceDy",
+                    "lensBandSupport",
+                }:
                     continue
                 if column in (
                     "lensBandResidualModel",
@@ -689,6 +840,7 @@ def main() -> None:
             for column in band_columns:
                 value = video_row.get(column, "")
                 row[column] = f"{value:.6f}" if isinstance(value, float) else value
+            row["failureClass"] = failure_class(row, args.window_frames)
             joined_rows.append(row)
             writer.writerow(row)
     summary["csv"] = str(csv_path)
@@ -700,6 +852,49 @@ def main() -> None:
     summary["focusLensReasonCounts"] = dict(
         Counter(str(row.get("lensShakeReason", "")) for row in focus_joined if row.get("lensShakeReason"))
     )
+    summary["focusRuntimeDecisionCounts"] = dict(
+        Counter(str(row.get("runtimeDecision", "")) for row in focus_joined if row.get("runtimeDecision"))
+    )
+    summary["focusFailureClassCounts"] = dict(
+        Counter(str(row.get("failureClass", "")) for row in focus_joined if row.get("failureClass"))
+    )
+    summary["focusRollingCandidateRunMax"] = longest_true_run(
+        str(row.get("lensShakeReason", "")) == "rollingShutterCandidate" for row in focus_joined
+    )
+    summary["focusBandAppliedRunMax"] = longest_true_run(
+        str(row.get("runtimeDecision", "")) == "bandApplied" for row in focus_joined
+    )
+    scale_derivatives = [
+        abs(finite_float(row.get("scalePulseDerivativePercent"), math.nan))
+        for row in focus_joined
+        if math.isfinite(finite_float(row.get("scalePulseDerivativePercent"), math.nan))
+    ]
+    summary["focusScalePulseDerivativePercentP95"] = (
+        float(np.percentile(scale_derivatives, 95)) if scale_derivatives else 0.0
+    )
+    summary["focusScalePulseDerivativeRowsOverLimit"] = sum(value >= 0.25 for value in scale_derivatives)
+    summary["focusPtsCadenceAffectedRows"] = sum(
+        bool_value(row.get("ptsCadenceAffectedFrame")) for row in focus_joined
+    )
+    summary["focusCaptureHoldAffectedRows"] = sum(
+        bool_value(row.get("captureHoldAffectedFrame")) for row in focus_joined
+    )
+    summary["focusRidgeLineDetectedSupportNoOpRows"] = sum(
+        str(row.get("failureClass", "")) == "ridgeLineDetectedSupportNoOp" for row in focus_joined
+    )
+    summary["focusRidgeLineSupportGateEvidence"] = {
+        "rawYAbsP95": percentile_abs(focus_joined, "sourceLensShakeRidgeLineRawY", 95),
+        "supportP95": percentile_abs(focus_joined, "sourceLensShakeRidgeLineSupport", 95),
+        "bandSupportedRows": sum(
+            finite_float(row.get("sourceLensShakeRidgeLineBandSupported")) > 0.5 for row in focus_joined
+        ),
+        "appliedRows": sum(
+            finite_float(row.get("sourceLensShakeRidgeLineApplied")) > 0.5 for row in focus_joined
+        ),
+        "rawPresentRows": sum(
+            abs(finite_float(row.get("sourceLensShakeRidgeLineRawY"))) >= 0.35 for row in focus_joined
+        ),
+    }
     summary["focusLensBandWarpAppliedRows"] = sum(
         1 for row in focus_joined if finite_float(row.get("lensBandWarpApplied")) > 0.5
     )
@@ -709,6 +904,27 @@ def main() -> None:
     summary["focusMaxAbsRenderTimeError"] = max(
         [abs(finite_float(row.get("renderTimeError"))) for row in focus_joined] or [0.0]
     )
+    render_row_counts = Counter(
+        str(row.get("renderRow", "")) for row in joined_rows if str(row.get("renderRow", ""))
+    )
+    focus_render_row_counts = Counter(
+        str(row.get("renderRow", "")) for row in focus_joined if str(row.get("renderRow", ""))
+    )
+    summary["renderJoinRows"] = len(joined_rows)
+    summary["renderJoinMissingRows"] = sum(1 for row in joined_rows if not str(row.get("renderRow", "")))
+    summary["renderJoinUniqueRenderRows"] = len(render_row_counts)
+    summary["renderJoinDuplicateVideoRows"] = sum(count - 1 for count in render_row_counts.values() if count > 1)
+    summary["renderJoinMaxAbsTimeError"] = max(
+        [abs(finite_float(row.get("renderTimeError"))) for row in joined_rows] or [0.0]
+    )
+    summary["focusRenderJoinUniqueRenderRows"] = len(focus_render_row_counts)
+    summary["focusRenderJoinDuplicateVideoRows"] = sum(
+        count - 1 for count in focus_render_row_counts.values() if count > 1
+    )
+    summary["focusQualityScaleJoinRows"] = sum(1 for row in focus_joined if str(row.get("scaleResidualPercent", "")))
+    summary["focusQualityRidgeJoinRows"] = sum(1 for row in focus_joined if str(row.get("ridgeLineOk", "")))
+    summary["focusQualityScaleMissingRows"] = len(focus_joined) - summary["focusQualityScaleJoinRows"]
+    summary["focusQualityRidgeMissingRows"] = len(focus_joined) - summary["focusQualityRidgeJoinRows"]
     focus_rolling = [abs(finite_float(row.get(f"lensBandRollingShutterScoreHF{args.window_frames}"))) for row in focus_joined]
     summary[f"focusLensBandRollingShutterScoreHF{args.window_frames}P95"] = (
         float(np.percentile(focus_rolling, 95)) if focus_rolling else 0.0
