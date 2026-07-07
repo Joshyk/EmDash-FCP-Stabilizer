@@ -285,11 +285,11 @@ fragment float4 fragmentShader(
     );
     float lensBandSupport = saturate(transform->lensBandWarpSupport * transform->lensBandWarpApplied);
     if (lensBandSupport > 0.0001) {
-        float y = saturate(uv.y);
-        float farFieldFade = 1.0 - smoothstep(0.42, 0.56, y);
-        float topWeight = lensBandWeight(y, 0.12, 0.13);
-        float ridgeWeight = lensBandWeight(y, 0.23, 0.13);
-        float midWeight = lensBandWeight(y, 0.35, 0.12);
+        float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
+        float farFieldFade = 1.0 - smoothstep(0.42, 0.56, sourceY);
+        float topWeight = lensBandWeight(sourceY, 0.12, 0.13);
+        float ridgeWeight = lensBandWeight(sourceY, 0.23, 0.13);
+        float midWeight = lensBandWeight(sourceY, 0.35, 0.12);
         float totalWeight = topWeight + ridgeWeight + midWeight;
         if (totalWeight > 0.0001) {
             float2 bandOffset = (

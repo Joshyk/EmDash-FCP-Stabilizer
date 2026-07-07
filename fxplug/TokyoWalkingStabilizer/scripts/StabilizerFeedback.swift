@@ -67,6 +67,9 @@ private struct PersistedHostAnalysisCache: Decodable {
     let lensBandRidgePathY: [Float]?
     let lensBandMidPathX: [Float]?
     let lensBandMidPathY: [Float]?
+    let lensBandTopConfidence: [Float]?
+    let lensBandRidgeConfidence: [Float]?
+    let lensBandMidConfidence: [Float]?
     let lensBandConfidence: [Float]?
     let footstepPathX: [Float]?
     let footstepPathY: [Float]?
@@ -143,6 +146,9 @@ private struct Analysis {
     let lensBandRidgePathY: [Float]
     let lensBandMidPathX: [Float]
     let lensBandMidPathY: [Float]
+    let lensBandTopConfidence: [Float]
+    let lensBandRidgeConfidence: [Float]
+    let lensBandMidConfidence: [Float]
     let lensBandConfidence: [Float]
     let footstepPathX: [Float]
     let footstepPathY: [Float]
@@ -224,6 +230,9 @@ private struct Analysis {
         lensBandMidPathX = try requireFloatArray(cache.schemaVersion >= 33 ? cache.lensBandMidPathX : legacyLensBandZeros, "lensBandMidPathX")
         lensBandMidPathY = try requireFloatArray(cache.schemaVersion >= 33 ? cache.lensBandMidPathY : legacyLensBandZeros, "lensBandMidPathY")
         lensBandConfidence = try requireFloatArray(cache.schemaVersion >= 33 ? cache.lensBandConfidence : legacyLensBandZeros, "lensBandConfidence")
+        lensBandTopConfidence = try requireFloatArray(cache.schemaVersion >= 34 ? cache.lensBandTopConfidence : legacyLensBandZeros, "lensBandTopConfidence")
+        lensBandRidgeConfidence = try requireFloatArray(cache.schemaVersion >= 34 ? cache.lensBandRidgeConfidence : legacyLensBandZeros, "lensBandRidgeConfidence")
+        lensBandMidConfidence = try requireFloatArray(cache.schemaVersion >= 34 ? cache.lensBandMidConfidence : legacyLensBandZeros, "lensBandMidConfidence")
         footstepPathX = try requireFloatArray(cache.footstepPathX, "footstepPathX")
         footstepPathY = try requireFloatArray(cache.footstepPathY, "footstepPathY")
         footstepPathRoll = try requireFloatArray(cache.footstepPathRoll, "footstepPathRoll")
@@ -659,7 +668,7 @@ private let lensShakePerspectiveFull: Float = 0.000095
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]
+private let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
@@ -805,6 +814,9 @@ private func floatComparisonInputs(baseline: Analysis, compared: Analysis) -> [(
         ("lensBandRidgePathY", baseline.lensBandRidgePathY, compared.lensBandRidgePathY),
         ("lensBandMidPathX", baseline.lensBandMidPathX, compared.lensBandMidPathX),
         ("lensBandMidPathY", baseline.lensBandMidPathY, compared.lensBandMidPathY),
+        ("lensBandTopConfidence", baseline.lensBandTopConfidence, compared.lensBandTopConfidence),
+        ("lensBandRidgeConfidence", baseline.lensBandRidgeConfidence, compared.lensBandRidgeConfidence),
+        ("lensBandMidConfidence", baseline.lensBandMidConfidence, compared.lensBandMidConfidence),
         ("lensBandConfidence", baseline.lensBandConfidence, compared.lensBandConfidence),
         ("footstepPathX", baseline.footstepPathX, compared.footstepPathX),
         ("footstepPathY", baseline.footstepPathY, compared.footstepPathY),
@@ -1024,6 +1036,9 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         ("lensBandRidgePathY", cache.schemaVersion >= 33 ? cache.lensBandRidgePathY : Array(repeating: Float(0.0), count: frameCount)),
         ("lensBandMidPathX", cache.schemaVersion >= 33 ? cache.lensBandMidPathX : Array(repeating: Float(0.0), count: frameCount)),
         ("lensBandMidPathY", cache.schemaVersion >= 33 ? cache.lensBandMidPathY : Array(repeating: Float(0.0), count: frameCount)),
+        ("lensBandTopConfidence", cache.schemaVersion >= 34 ? cache.lensBandTopConfidence : Array(repeating: Float(0.0), count: frameCount)),
+        ("lensBandRidgeConfidence", cache.schemaVersion >= 34 ? cache.lensBandRidgeConfidence : Array(repeating: Float(0.0), count: frameCount)),
+        ("lensBandMidConfidence", cache.schemaVersion >= 34 ? cache.lensBandMidConfidence : Array(repeating: Float(0.0), count: frameCount)),
         ("lensBandConfidence", cache.schemaVersion >= 33 ? cache.lensBandConfidence : Array(repeating: Float(0.0), count: frameCount)),
         ("footstepPathX", cache.footstepPathX),
         ("footstepPathY", cache.footstepPathY),
@@ -3331,12 +3346,25 @@ private func sourceSpaceLensShakeBand(
         hypotf(topResidual.x, topResidual.y),
         max(hypotf(ridgeResidual.x, ridgeResidual.y), hypotf(midResidual.x, midResidual.y))
     )
-    let bandConfidence = analysis.lensBandConfidence.indices.contains(index) ? analysis.lensBandConfidence[index] : 0.0
-    let bandSupport = confidenceRamp(bandMagnitude, start: 0.08, full: 0.65)
-        * confidenceRamp(bandConfidence, start: 0.08, full: 0.36)
-        * confidenceRamp(rollingShutterCandidate, start: 0.26, full: 0.62)
-        * qualitySupport
-        * turnScale
+    func bandConfidence(_ values: [Float]) -> Float {
+        values.indices.contains(index) ? values[index] : 0.0
+    }
+    let topConfidence = bandConfidence(analysis.lensBandTopConfidence)
+    let ridgeConfidence = bandConfidence(analysis.lensBandRidgeConfidence)
+    let midConfidence = bandConfidence(analysis.lensBandMidConfidence)
+    let rollingSupport = confidenceRamp(rollingShutterCandidate, start: 0.26, full: 0.62)
+    func bandSupport(residual: (x: Float, y: Float), confidence: Float) -> Float {
+        confidenceRamp(hypotf(residual.x, residual.y), start: 0.08, full: 0.65)
+            * confidenceRamp(confidence, start: 0.08, full: 0.36)
+            * rollingSupport
+            * qualitySupport
+            * turnScale
+    }
+    let topSupport = bandSupport(residual: topResidual, confidence: topConfidence)
+    let ridgeSupport = bandSupport(residual: ridgeResidual, confidence: ridgeConfidence)
+    let midSupport = bandSupport(residual: midResidual, confidence: midConfidence)
+    let bandConfidence = max(topConfidence, max(ridgeConfidence, midConfidence))
+    let bandSupport = max(topSupport, max(ridgeSupport, midSupport))
     let detected = hypotf(residualX, residualY)
         + (abs(residualRoll) * 12.0)
     let diagnosticDetected = detected

@@ -62,6 +62,9 @@ private struct PersistedHostAnalysisCache: Codable {
     let lensBandRidgePathY: [Float]?
     let lensBandMidPathX: [Float]?
     let lensBandMidPathY: [Float]?
+    let lensBandTopConfidence: [Float]?
+    let lensBandRidgeConfidence: [Float]?
+    let lensBandMidConfidence: [Float]?
     let lensBandConfidence: [Float]?
     let footstepPathX: [Float]?
     let footstepPathY: [Float]?
@@ -222,8 +225,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 33
-    private static let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]
+    private static let cacheSchemaVersion = 34
+    private static let supportedCacheSchemaVersions: Set<Int> = [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1790,6 +1793,9 @@ final class StabilizerHostAnalysisStore {
             lensBandRidgePathY: prepared.lensBandRidgePathY,
             lensBandMidPathX: prepared.lensBandMidPathX,
             lensBandMidPathY: prepared.lensBandMidPathY,
+            lensBandTopConfidence: prepared.lensBandTopConfidence,
+            lensBandRidgeConfidence: prepared.lensBandRidgeConfidence,
+            lensBandMidConfidence: prepared.lensBandMidConfidence,
             lensBandConfidence: prepared.lensBandConfidence,
             footstepPathX: prepared.footstepPathX,
             footstepPathY: prepared.footstepPathY,
@@ -1930,6 +1936,9 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgePathY: analysis.lensBandRidgePathY,
                 lensBandMidPathX: analysis.lensBandMidPathX,
                 lensBandMidPathY: analysis.lensBandMidPathY,
+                lensBandTopConfidence: analysis.lensBandTopConfidence,
+                lensBandRidgeConfidence: analysis.lensBandRidgeConfidence,
+                lensBandMidConfidence: analysis.lensBandMidConfidence,
                 lensBandConfidence: analysis.lensBandConfidence,
                 analysisConfidence: analysis.analysisConfidence,
                 warpConfidence: analysis.warpConfidence,
@@ -2957,6 +2966,9 @@ final class StabilizerHostAnalysisStore {
         let persistedLensBandMidPathX = cache.schemaVersion >= 33 ? cache.lensBandMidPathX : legacyLensBandZeros
         let persistedLensBandMidPathY = cache.schemaVersion >= 33 ? cache.lensBandMidPathY : legacyLensBandZeros
         let persistedLensBandConfidence = cache.schemaVersion >= 33 ? cache.lensBandConfidence : legacyLensBandZeros
+        let persistedLensBandTopConfidence = cache.schemaVersion >= 34 ? cache.lensBandTopConfidence : legacyLensBandZeros
+        let persistedLensBandRidgeConfidence = cache.schemaVersion >= 34 ? cache.lensBandRidgeConfidence : legacyLensBandZeros
+        let persistedLensBandMidConfidence = cache.schemaVersion >= 34 ? cache.lensBandMidConfidence : legacyLensBandZeros
         let floatArrays = [
             cache.residuals,
             cache.rollMotion,
@@ -2973,6 +2985,9 @@ final class StabilizerHostAnalysisStore {
             persistedLensBandRidgePathY,
             persistedLensBandMidPathX,
             persistedLensBandMidPathY,
+            persistedLensBandTopConfidence,
+            persistedLensBandRidgeConfidence,
+            persistedLensBandMidConfidence,
             persistedLensBandConfidence,
             cache.footstepPathX,
             cache.footstepPathY,
@@ -3010,6 +3025,9 @@ final class StabilizerHostAnalysisStore {
            let lensBandRidgePathY = persistedLensBandRidgePathY,
            let lensBandMidPathX = persistedLensBandMidPathX,
            let lensBandMidPathY = persistedLensBandMidPathY,
+           let lensBandTopConfidence = persistedLensBandTopConfidence,
+           let lensBandRidgeConfidence = persistedLensBandRidgeConfidence,
+           let lensBandMidConfidence = persistedLensBandMidConfidence,
            let lensBandConfidence = persistedLensBandConfidence,
            let footstepPathX = cache.footstepPathX,
            let footstepPathY = cache.footstepPathY,
@@ -3056,6 +3074,9 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgePathY: lensBandRidgePathY,
                 lensBandMidPathX: lensBandMidPathX,
                 lensBandMidPathY: lensBandMidPathY,
+                lensBandTopConfidence: lensBandTopConfidence,
+                lensBandRidgeConfidence: lensBandRidgeConfidence,
+                lensBandMidConfidence: lensBandMidConfidence,
                 lensBandConfidence: lensBandConfidence,
                 analysisConfidence: analysisConfidence,
                 warpConfidence: warpConfidence,
@@ -3090,6 +3111,9 @@ final class StabilizerHostAnalysisStore {
             ("lensBandRidgePathY", cache.schemaVersion >= 33 ? cache.lensBandRidgePathY : Array(repeating: Float(0.0), count: frameCount)),
             ("lensBandMidPathX", cache.schemaVersion >= 33 ? cache.lensBandMidPathX : Array(repeating: Float(0.0), count: frameCount)),
             ("lensBandMidPathY", cache.schemaVersion >= 33 ? cache.lensBandMidPathY : Array(repeating: Float(0.0), count: frameCount)),
+            ("lensBandTopConfidence", cache.schemaVersion >= 34 ? cache.lensBandTopConfidence : Array(repeating: Float(0.0), count: frameCount)),
+            ("lensBandRidgeConfidence", cache.schemaVersion >= 34 ? cache.lensBandRidgeConfidence : Array(repeating: Float(0.0), count: frameCount)),
+            ("lensBandMidConfidence", cache.schemaVersion >= 34 ? cache.lensBandMidConfidence : Array(repeating: Float(0.0), count: frameCount)),
             ("lensBandConfidence", cache.schemaVersion >= 33 ? cache.lensBandConfidence : Array(repeating: Float(0.0), count: frameCount)),
             ("footstepPathX", cache.footstepPathX),
             ("footstepPathY", cache.footstepPathY),
@@ -3361,6 +3385,9 @@ final class StabilizerHostAnalysisStore {
                 lensBandRidgePathY: cache.lensBandRidgePathY,
                 lensBandMidPathX: cache.lensBandMidPathX,
                 lensBandMidPathY: cache.lensBandMidPathY,
+                lensBandTopConfidence: cache.lensBandTopConfidence,
+                lensBandRidgeConfidence: cache.lensBandRidgeConfidence,
+                lensBandMidConfidence: cache.lensBandMidConfidence,
                 lensBandConfidence: cache.lensBandConfidence,
                 footstepPathX: cache.footstepPathX,
                 footstepPathY: cache.footstepPathY,

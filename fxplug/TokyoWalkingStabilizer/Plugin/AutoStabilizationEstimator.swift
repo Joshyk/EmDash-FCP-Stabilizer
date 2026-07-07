@@ -391,6 +391,9 @@ struct StabilizerPreparedAnalysis {
     let lensBandRidgePathY: [Float]
     let lensBandMidPathX: [Float]
     let lensBandMidPathY: [Float]
+    let lensBandTopConfidence: [Float]
+    let lensBandRidgeConfidence: [Float]
+    let lensBandMidConfidence: [Float]
     let lensBandConfidence: [Float]
     let analysisConfidence: [Float]
     let warpConfidence: [Float]
@@ -423,6 +426,9 @@ fileprivate struct PairMotion {
     let lensBandRidgeDy: Float
     let lensBandMidDx: Float
     let lensBandMidDy: Float
+    let lensBandTopConfidence: Float
+    let lensBandRidgeConfidence: Float
+    let lensBandMidConfidence: Float
     let lensBandConfidence: Float
     let analysisConfidence: Float
     let warpConfidence: Float
@@ -1161,6 +1167,9 @@ enum AutoStabilizationEstimator {
         combineFloats(analysis.lensBandRidgePathY)
         combineFloats(analysis.lensBandMidPathX)
         combineFloats(analysis.lensBandMidPathY)
+        combineFloats(analysis.lensBandTopConfidence)
+        combineFloats(analysis.lensBandRidgeConfidence)
+        combineFloats(analysis.lensBandMidConfidence)
         combineFloats(analysis.lensBandConfidence)
         combineFloats(analysis.analysisConfidence)
         combineFloats(analysis.warpConfidence)
@@ -1799,6 +1808,9 @@ enum AutoStabilizationEstimator {
                 lensBandRidgeDy: 0.0,
                 lensBandMidDx: 0.0,
                 lensBandMidDy: 0.0,
+                lensBandTopConfidence: 0.0,
+                lensBandRidgeConfidence: 0.0,
+                lensBandMidConfidence: 0.0,
                 lensBandConfidence: 0.0,
                 analysisConfidence: 1.0,
                 warpConfidence: 0.0,
@@ -10376,6 +10388,9 @@ enum AutoStabilizationEstimator {
             lensBandRidgePathY: rawLensBandRidgePathY,
             lensBandMidPathX: rawLensBandMidPathX,
             lensBandMidPathY: rawLensBandMidPathY,
+            lensBandTopConfidence: motions.map(\.lensBandTopConfidence),
+            lensBandRidgeConfidence: motions.map(\.lensBandRidgeConfidence),
+            lensBandMidConfidence: motions.map(\.lensBandMidConfidence),
             lensBandConfidence: motions.map(\.lensBandConfidence),
             analysisConfidence: motions.map(\.analysisConfidence),
             warpConfidence: motions.map(\.warpConfidence),
@@ -10539,6 +10554,9 @@ enum AutoStabilizationEstimator {
                 lensBandRidgeDy: lensBandMotion.ridgeDy,
                 lensBandMidDx: lensBandMotion.midDx,
                 lensBandMidDy: lensBandMotion.midDy,
+                lensBandTopConfidence: lensBandMotion.topConfidence,
+                lensBandRidgeConfidence: lensBandMotion.ridgeConfidence,
+                lensBandMidConfidence: lensBandMotion.midConfidence,
                 lensBandConfidence: lensBandMotion.confidence,
                 analysisConfidence: analysisConfidence,
                 warpConfidence: warpMotion.confidence,
@@ -11245,9 +11263,20 @@ enum AutoStabilizationEstimator {
         sampleWidth: Int,
         sampleHeight: Int,
         analysisConfidence: Float
-    ) -> (topDx: Float, topDy: Float, ridgeDx: Float, ridgeDy: Float, midDx: Float, midDy: Float, confidence: Float) {
+    ) -> (
+        topDx: Float,
+        topDy: Float,
+        ridgeDx: Float,
+        ridgeDy: Float,
+        midDx: Float,
+        midDy: Float,
+        topConfidence: Float,
+        ridgeConfidence: Float,
+        midConfidence: Float,
+        confidence: Float
+    ) {
         guard shifts.count >= minimumFarFieldMotionBlocks, analysisConfidence > 0.0 else {
-            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         }
         func band(_ minY: Float, _ maxY: Float) -> (dx: Float, dy: Float, support: Float) {
             let candidates = shifts.filter { shift in
@@ -11295,6 +11324,9 @@ enum AutoStabilizationEstimator {
             ridgeDy: ridge.dy,
             midDx: mid.dx,
             midDy: mid.dy,
+            topConfidence: top.support,
+            ridgeConfidence: ridge.support,
+            midConfidence: mid.support,
             confidence: max(top.support, max(ridge.support, mid.support))
         )
     }
@@ -12494,6 +12526,9 @@ enum AutoStabilizationEstimator {
             && analysis.lensBandRidgePathY.count == frames.count
             && analysis.lensBandMidPathX.count == frames.count
             && analysis.lensBandMidPathY.count == frames.count
+            && analysis.lensBandTopConfidence.count == frames.count
+            && analysis.lensBandRidgeConfidence.count == frames.count
+            && analysis.lensBandMidConfidence.count == frames.count
             && analysis.lensBandConfidence.count == frames.count
         if hasLensBandPaths {
             let topResidual = vector_float2(
@@ -12512,25 +12547,31 @@ enum AutoStabilizationEstimator {
                 simd_length(topResidual),
                 max(simd_length(ridgeResidual), simd_length(midResidual))
             )
-            let bandConfidence = interpolatedValue(analysis.lensBandConfidence, using: interpolation)
-            let bandSupport = confidenceRamp(bandMagnitude, start: 0.08, full: 0.65)
-                * confidenceRamp(bandConfidence, start: 0.08, full: 0.36)
-                * confidenceRamp(result.rollingShutterCandidate, start: 0.26, full: 0.62)
-                * qualitySupport
-                * turnScale
+            let rollingSupport = confidenceRamp(result.rollingShutterCandidate, start: 0.26, full: 0.62)
+            func bandSupport(residual: vector_float2, confidenceValues: [Float]) -> Float {
+                let confidence = interpolatedValue(confidenceValues, using: interpolation)
+                return confidenceRamp(simd_length(residual), start: 0.08, full: 0.65)
+                    * confidenceRamp(confidence, start: 0.08, full: 0.36)
+                    * rollingSupport
+                    * qualitySupport
+                    * turnScale
+            }
+            let topSupport = bandSupport(residual: topResidual, confidenceValues: analysis.lensBandTopConfidence)
+            let ridgeSupport = bandSupport(residual: ridgeResidual, confidenceValues: analysis.lensBandRidgeConfidence)
+            let midSupport = bandSupport(residual: midResidual, confidenceValues: analysis.lensBandMidConfidence)
+            let bandSupport = max(topSupport, max(ridgeSupport, midSupport))
+            _ = bandMagnitude
+            func supportedOffset(_ residual: vector_float2, support: Float) -> vector_float2 {
+                let supportRatio = bandSupport > 0.0 ? clamp(support / bandSupport, min: 0.0, max: 1.0) : 0.0
+                return vector_float2(
+                    clamp(-residual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
+                    clamp(-residual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                ) * supportRatio
+            }
             if bandSupport >= lensShakeMinimumSupport {
-                result.bandTopOffset = vector_float2(
-                    clamp(-topResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
-                    clamp(-topResidual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
-                )
-                result.bandRidgeOffset = vector_float2(
-                    clamp(-ridgeResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
-                    clamp(-ridgeResidual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
-                )
-                result.bandMidOffset = vector_float2(
-                    clamp(-midResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
-                    clamp(-midResidual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
-                )
+                result.bandTopOffset = supportedOffset(topResidual, support: topSupport)
+                result.bandRidgeOffset = supportedOffset(ridgeResidual, support: ridgeSupport)
+                result.bandMidOffset = supportedOffset(midResidual, support: midSupport)
                 result.bandWarpSupport = clamp(bandSupport, min: 0.0, max: 1.0)
                 result.bandWarpApplied = 1.0
             }
@@ -15259,6 +15300,9 @@ final class StreamingStabilizationAnalysisBuilder {
                 lensBandRidgeDy: 0.0,
                 lensBandMidDx: 0.0,
                 lensBandMidDy: 0.0,
+                lensBandTopConfidence: 0.0,
+                lensBandRidgeConfidence: 0.0,
+                lensBandMidConfidence: 0.0,
                 lensBandConfidence: 0.0,
                 analysisConfidence: 1.0,
                 warpConfidence: 0.0,
