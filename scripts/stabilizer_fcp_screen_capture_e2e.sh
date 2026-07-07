@@ -714,7 +714,7 @@ collect_render_component_diagnostics() {
 	local component_csv_path="${evidence_dir}/render_components.csv"
 	local component_focus_path="${evidence_dir}/render_components_focus.csv"
 	local component_points_path="${evidence_dir}/render_components_focus_points.csv"
-	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND eventMessage CONTAINS "Render frame components csv v1"'
+	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND (eventMessage CONTAINS "Render frame components csv v1" OR eventMessage CONTAINS "Render lens band csv v1")'
 	if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$component_log_path" 2>&1; then
 		fail "could not read FxPlug render component diagnostics: $component_log_path"
 	fi
@@ -734,6 +734,7 @@ focus_path = Path(sys.argv[4])
 points_path = Path(sys.argv[5])
 
 prefix = "Render frame components csv v1 |"
+lens_prefix = "Render lens band csv v1 |"
 pair_pattern = re.compile(r"([A-Za-z][A-Za-z0-9]*)=([^ |]+)")
 idx_pattern = re.compile(r"idx=(\d+)-(\d+)")
 
@@ -799,7 +800,13 @@ if isinstance(case.get("removeBlackEdges"), bool):
     expected_crop = "yes" if case.get("removeBlackEdges") else "no"
 
 rows = []
+lens_rows = {}
 for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+    if lens_prefix in line:
+        values = dict(pair_pattern.findall(line.split(lens_prefix, 1)[1]))
+        if "analysisTime" in values and "sample" in values:
+            lens_rows[(values["analysisTime"], values["sample"])] = values
+        continue
     if prefix not in line:
         continue
     message = line.split(prefix, 1)[1]
@@ -818,6 +825,11 @@ for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
     values["sourceStartSeconds"] = f"{source_start_seconds:.5f}"
     values["caseId"] = case_id
     rows.append(values)
+
+for row in rows:
+    lens_row = lens_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
+    if lens_row:
+        row.update(lens_row)
 
 if not rows:
     raise SystemExit(f"Render component diagnostics missing: no '{prefix.strip()}' log rows in {log_path}")

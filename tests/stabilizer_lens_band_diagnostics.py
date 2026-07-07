@@ -18,6 +18,7 @@ import numpy as np
 
 PAIR_PATTERN = re.compile(r"([A-Za-z][A-Za-z0-9]*)=([^ |]+)")
 PREFIX = "Render frame components csv v1 |"
+LENS_PREFIX = "Render lens band csv v1 |"
 
 BANDS = {
     "cloud_top": (0.06, 0.22),
@@ -52,15 +53,27 @@ def finite_float(raw: Any, default: float = 0.0) -> float:
 
 def parse_render_log(path: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
+    lens_rows: dict[tuple[str, str], dict[str, str]] = {}
     if not path.exists():
         return rows
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if LENS_PREFIX in line:
+            values = dict(PAIR_PATTERN.findall(line.split(LENS_PREFIX, 1)[1]))
+            analysis_time = values.get("analysisTime")
+            sample = values.get("sample")
+            if analysis_time and sample:
+                lens_rows[(analysis_time, sample)] = values
+            continue
         if PREFIX not in line:
             continue
         values = dict(PAIR_PATTERN.findall(line.split(PREFIX, 1)[1]))
         if "analysisTime" not in values:
             continue
         rows.append(values)
+    for row in rows:
+        lens_row = lens_rows.get((row.get("analysisTime", ""), row.get("sample", "")))
+        if lens_row:
+            row.update(lens_row)
     rows.sort(key=lambda row: finite_float(row.get("analysisTime")))
     first_time = finite_float(rows[0].get("analysisTime")) if rows else 0.0
     for index, row in enumerate(rows):

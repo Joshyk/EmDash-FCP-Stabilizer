@@ -7367,6 +7367,47 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 type: .default,
                 componentMessage
             )
+            let lensBandMessage = String(
+                format: "Render lens band csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f",
+                analysisSeconds,
+                samplePosition,
+                frames.count,
+                renderSourceIsProxy ? "yes" : "no",
+                autoCropEnabled ? "yes" : "no",
+                cacheIdentityShort,
+                Self.lensShakeReasonDescription(autoTransform.lensShakeReasonCode),
+                Self.lensBandCorrectionModelDescription(autoTransform.lensBandModelMask),
+                autoTransform.lensBandWarpSupport,
+                autoTransform.lensBandWarpApplied,
+                autoTransform.lensBandRollingShutterScore,
+                appliedLensBandTopOffset.x,
+                appliedLensBandTopOffset.y,
+                appliedLensBandRidgeOffset.x,
+                appliedLensBandRidgeOffset.y,
+                appliedLensBandMidOffset.x,
+                appliedLensBandMidOffset.y,
+                appliedLensBandTopColumnOffset.x,
+                appliedLensBandTopColumnOffset.y,
+                appliedLensBandRidgeColumnOffset.x,
+                appliedLensBandRidgeColumnOffset.y,
+                appliedLensBandMidColumnOffset.x,
+                appliedLensBandMidColumnOffset.y,
+                appliedLensBandTopRowPhaseOffset.x,
+                appliedLensBandTopRowPhaseOffset.y,
+                appliedLensBandRidgeRowPhaseOffset.x,
+                appliedLensBandRidgeRowPhaseOffset.y,
+                appliedLensBandMidRowPhaseOffset.x,
+                appliedLensBandMidRowPhaseOffset.y,
+                autoTransform.lensBandTopLocalRoll * masterStrength,
+                autoTransform.lensBandRidgeLocalRoll * masterStrength,
+                autoTransform.lensBandMidLocalRoll * masterStrength
+            )
+            os_log(
+                "%{public}@",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                lensBandMessage
+            )
         }
         let motionAnomaly = irregularRenderCadence
             || catchUpAfterTinyStep
