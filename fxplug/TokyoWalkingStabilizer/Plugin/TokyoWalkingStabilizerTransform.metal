@@ -215,6 +215,8 @@ static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeB
         case 17:
             return debugLabelCharAt(index, 67, 82, 79, 80, 0, 90, 79, 79, 77, 0, 0, 0); // CROP ZOOM
         case 18:
+            return debugLabelCharAt(index, 76, 69, 78, 83, 0, 0, 0, 0, 0, 0, 0, 0); // LENS
+        case 19:
             return debugModeLabelChar(debugMode, runtimeBuild, index);
         default:
             return 0;
@@ -296,7 +298,7 @@ fragment float4 fragmentShader(
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;
         float panelWidth = labelWidth + labelGap + barWidth;
-        float panelHeight = 19.0 * rowHeight;
+        float panelHeight = 20.0 * rowHeight;
         if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
@@ -339,6 +341,8 @@ fragment float4 fragmentShader(
             } else if (row == 17) {
                 fill = saturate(transform->diagnostic5.y);
             } else if (row == 18) {
+                fill = saturate(transform->diagnostic5.z);
+            } else if (row == 19) {
                 fill = 1.0;
             }
             float barX = panelX - labelWidth - labelGap;

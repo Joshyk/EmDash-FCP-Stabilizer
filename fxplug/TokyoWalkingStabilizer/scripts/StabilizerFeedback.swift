@@ -619,6 +619,21 @@ private let farFieldWarpEdgeQualityGateFull: Float = 0.86
 private let farFieldWarpConsensusGateStart: Float = 0.04
 private let farFieldWarpConsensusGateFull: Float = 0.28
 private let farFieldConsensusConfidenceFloor: Float = 0.04
+private let lensShakeTargetWindowFrames: Float = 10.0
+private let lensShakeInnerWindowMinimumSeconds = 0.13
+private let lensShakeOuterWindowMinimumSeconds = 0.44
+private let lensShakeOuterWindowMaximumSeconds = 0.90
+private let lensShakeMinimumSupport: Float = 0.08
+private let lensShakePixelStartPixels: Float = 0.10
+private let lensShakePixelFullPixels: Float = 0.85
+private let lensShakeRollStartDegrees: Float = 0.002
+private let lensShakeRollFullDegrees: Float = 0.030
+private let lensShakeYawPitchStart: Float = 0.000006
+private let lensShakeYawPitchFull: Float = 0.000055
+private let lensShakeShearStart: Float = 0.000030
+private let lensShakeShearFull: Float = 0.000320
+private let lensShakePerspectiveStart: Float = 0.000010
+private let lensShakePerspectiveFull: Float = 0.000095
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
@@ -1916,6 +1931,19 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     )
     let warpDetected = context.warpMagnitudes[index] * effectiveFarFieldWarpStrength(Float(options.strengths.warp))
     let warpApplied = warpDetected * appliedWarpConfidence
+    let lensBand = sourceSpaceLensShakeBand(
+        analysis: analysis,
+        index: index,
+        xScale: xScale,
+        yScale: yScale,
+        appliedWarpConfidence: appliedWarpConfidence,
+        farFieldConfidence: analysis.farFieldConfidence[index],
+        trackingConfidence: tracking,
+        edgeQuality: warpEdgeQuality,
+        turnShakeSuppression: turnShakeSuppression,
+        turnOwnershipX: turnOwnershipX,
+        turnOwnershipY: turnOwnershipY
+    )
 
     let bands = [
         BandAssessment(
@@ -1950,6 +1978,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             confidence: appliedWarpConfidence,
             note: String(format: "dimensionless warp band raw q %.2f stable q %.2f gate %.2f trkGate %.2f edgeGate %.2f stableTrk %.2f", rawWarpConfidence, stableWarpConfidence, warpGate, warpGateComponents.trackingGate, warpGateComponents.edgeGate, warpTracking)
         ),
+        lensBand,
         BandAssessment(
             name: "TURN",
             detected: turnDetected,
@@ -3164,6 +3193,119 @@ private func farFieldWarpAppliedConfidence(
     let evidenceSupport = max(safeWarpGate, trackingSupport * edgeSupport)
     let lifted = base + (base * (1.0 - base) * 0.85 * evidenceSupport)
     return clamp(lifted, min: base, max: 1.0)
+}
+
+private func sourceSpaceLensShakeBand(
+    analysis: Analysis,
+    index: Int,
+    xScale: Float,
+    yScale: Float,
+    appliedWarpConfidence: Float,
+    farFieldConfidence: Float,
+    trackingConfidence: Float,
+    edgeQuality: Float,
+    turnShakeSuppression: Float,
+    turnOwnershipX: Float,
+    turnOwnershipY: Float
+) -> BandAssessment {
+    guard analysis.frames.indices.contains(index) else {
+        return BandAssessment(name: "LENS", detected: 0.0, applied: 0.0, remaining: 0.0, confidence: 0.0, note: "no frame")
+    }
+    let previousTime = index > 0 ? analysis.frames[index - 1].time : analysis.frames[index].time
+    let nextTime = index + 1 < analysis.frames.count ? analysis.frames[index + 1].time : analysis.frames[index].time
+    let frameStep = max(1.0 / 240.0, max(nextTime - previousTime, 1.0 / 60.0) * 0.5)
+    let targetWindowSeconds = Double(lensShakeTargetWindowFrames) * frameStep
+    let innerWindowSeconds = max(lensShakeInnerWindowMinimumSeconds, targetWindowSeconds * 0.56)
+    let outerWindowSeconds = min(lensShakeOuterWindowMaximumSeconds, max(lensShakeOuterWindowMinimumSeconds, targetWindowSeconds * 3.0))
+
+    func residual(_ values: [Float]) -> Float {
+        guard values.indices.contains(index) else { return 0.0 }
+        return values[index] - (outerLinearPrediction(
+            values,
+            frames: analysis.frames,
+            centerIndex: index,
+            innerWindowSeconds: innerWindowSeconds,
+            outerWindowSeconds: outerWindowSeconds
+        ) ?? values[index])
+    }
+    let qualitySupport = confidenceRamp(appliedWarpConfidence, start: 0.16, full: 0.55)
+        * confidenceRamp(trackingConfidence, start: 0.14, full: 0.42)
+        * confidenceRamp(edgeQuality, start: 0.46, full: 0.82)
+    let turnScale = 1.0 - (
+        max(
+            confidenceRamp(turnShakeSuppression, start: 0.34, full: 0.76),
+            max(
+                confidenceRamp(abs(turnOwnershipX), start: 0.36, full: 0.88),
+                confidenceRamp(abs(turnOwnershipY), start: 0.36, full: 0.88)
+            )
+        ) * 0.45
+    )
+    func support(_ magnitude: Float, start: Float, full: Float) -> Float {
+        clamp(confidenceRamp(magnitude, start: start, full: full) * qualitySupport * turnScale, min: 0.0, max: 1.0)
+    }
+
+    let residualX = residual(analysis.farFieldPathX) * xScale
+    let residualY = residual(analysis.farFieldPathY) * yScale
+    let residualRoll = residual(analysis.farFieldPathRoll)
+    let yaw = residual(analysis.pathYaw)
+    let pitch = residual(analysis.pathPitch)
+    let shearX = residual(analysis.pathShearX)
+    let shearY = residual(analysis.pathShearY)
+    let perspectiveX = residual(analysis.pathPerspectiveX)
+    let perspectiveY = residual(analysis.pathPerspectiveY)
+    let pixelSupport = max(
+        support(abs(residualX), start: lensShakePixelStartPixels, full: lensShakePixelFullPixels),
+        support(abs(residualY), start: lensShakePixelStartPixels, full: lensShakePixelFullPixels)
+    )
+    let rollSupport = support(abs(residualRoll), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
+    let yawPitchSupport = max(
+        support(abs(yaw), start: lensShakeYawPitchStart, full: lensShakeYawPitchFull),
+        support(abs(pitch), start: lensShakeYawPitchStart, full: lensShakeYawPitchFull)
+    )
+    let shearSupport = max(
+        support(abs(shearX), start: lensShakeShearStart, full: lensShakeShearFull),
+        support(abs(shearY), start: lensShakeShearStart, full: lensShakeShearFull)
+    )
+    let perspectiveSupport = max(
+        support(abs(perspectiveX), start: lensShakePerspectiveStart, full: lensShakePerspectiveFull),
+        support(abs(perspectiveY), start: lensShakePerspectiveStart, full: lensShakePerspectiveFull)
+    )
+    let affineSupport = max(pixelSupport, rollSupport)
+    let projectiveSupport = max(yawPitchSupport, max(shearSupport, perspectiveSupport))
+    let dominantProjectiveCandidate = confidenceRamp(projectiveSupport - affineSupport, start: 0.18, full: 0.55)
+    let mixedProjectiveCandidate = min(
+        confidenceRamp(projectiveSupport, start: 0.35, full: 0.70),
+        confidenceRamp(affineSupport, start: 0.20, full: 0.55)
+    ) * 0.75
+    let rollingShutterCandidate = max(dominantProjectiveCandidate, mixedProjectiveCandidate)
+    let lensSupport = max(pixelSupport, rollSupport)
+    let detected = hypotf(residualX, residualY)
+        + (abs(residualRoll) * 12.0)
+    let diagnosticDetected = detected
+        + (hypotf(yaw, pitch) * 1000.0)
+        + (hypotf(shearX, shearY) * 900.0)
+        + (hypotf(perspectiveX, perspectiveY) * 900.0)
+    let applied = lensSupport >= lensShakeMinimumSupport && rollingShutterCandidate < 0.45 ? detected * lensSupport : 0.0
+    let reason: String
+    if applied > 0.0 {
+        reason = "applied"
+    } else if rollingShutterCandidate >= 0.45 {
+        reason = "rollingShutterCandidate"
+    } else if qualitySupport < 0.12 && detected > 0.0 {
+        reason = "lowConfidence"
+    } else if diagnosticDetected > 0.0 {
+        reason = "belowSupport"
+    } else {
+        reason = "noPreparedSignal"
+    }
+    return BandAssessment(
+        name: "LENS",
+        detected: diagnosticDetected,
+        applied: applied,
+        remaining: max(0.0, diagnosticDetected - applied),
+        confidence: max(affineSupport, projectiveSupport),
+        note: String(format: "source-space 10f residual x %.3f y %.3f r %.4f yaw %.6f pitch %.6f shear %.6f %.6f persp %.6f %.6f q %.2f rolling %.2f reason %@", residualX, residualY, residualRoll, yaw, pitch, shearX, shearY, perspectiveX, perspectiveY, max(affineSupport, projectiveSupport), rollingShutterCandidate, reason)
+    )
 }
 
 private func stableFarFieldWarpTrackingConfidence(

@@ -14,6 +14,17 @@ struct StabilizerAutoTransform {
     var strideWobblePixelOffset: vector_float2
     var trajectoryMicroJitterPixelOffset: vector_float2
     var trajectoryContinuityPixelOffset: vector_float2
+    var lensShakePixelOffset: vector_float2
+    var lensShakeRotationDegrees: Float
+    var lensShakeYawPitch: vector_float2
+    var lensShakeShear: vector_float2
+    var lensShakePerspective: vector_float2
+    var lensShakeScore: Float
+    var lensShakeSupport: Float
+    var lensShakeWindowFrames: Float
+    var lensShakeAxisMask: Int32
+    var lensShakeReasonCode: Int32
+    var lensShakeRollingShutterCandidate: Float
     var footstepJitterRotationDegrees: Float
     var strideWobbleRotationDegrees: Float
     var rotationDegrees: Float
@@ -54,6 +65,17 @@ struct StabilizerAutoTransform {
         strideWobblePixelOffset: vector_float2(0.0, 0.0),
         trajectoryMicroJitterPixelOffset: vector_float2(0.0, 0.0),
         trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
+        lensShakePixelOffset: vector_float2(0.0, 0.0),
+        lensShakeRotationDegrees: 0.0,
+        lensShakeYawPitch: vector_float2(0.0, 0.0),
+        lensShakeShear: vector_float2(0.0, 0.0),
+        lensShakePerspective: vector_float2(0.0, 0.0),
+        lensShakeScore: 0.0,
+        lensShakeSupport: 0.0,
+        lensShakeWindowFrames: 0.0,
+        lensShakeAxisMask: 0,
+        lensShakeReasonCode: 0,
+        lensShakeRollingShutterCandidate: 0.0,
         footstepJitterRotationDegrees: 0.0,
         strideWobbleRotationDegrees: 0.0,
         rotationDegrees: 0.0,
@@ -782,6 +804,23 @@ enum AutoStabilizationEstimator {
     private static let footstepImpulseOuterWindowSeconds = 1.0
     private static let farFieldWarpInnerWindowSeconds = 0.10
     private static let farFieldWarpOuterWindowSeconds = 1.0
+    private static let lensShakeTargetWindowFrames: Float = 10.0
+    private static let lensShakeInnerWindowMinimumSeconds = 0.13
+    private static let lensShakeOuterWindowMinimumSeconds = 0.44
+    private static let lensShakeOuterWindowMaximumSeconds = 0.90
+    private static let lensShakeMinimumSupport: Float = 0.08
+    private static let lensShakePixelStartPixels: Float = 0.10
+    private static let lensShakePixelFullPixels: Float = 0.85
+    private static let lensShakeRollStartDegrees: Float = 0.002
+    private static let lensShakeRollFullDegrees: Float = 0.030
+    private static let lensShakeYawPitchStart: Float = 0.000006
+    private static let lensShakeYawPitchFull: Float = 0.000055
+    private static let lensShakeShearStart: Float = 0.000030
+    private static let lensShakeShearFull: Float = 0.000320
+    private static let lensShakePerspectiveStart: Float = 0.000010
+    private static let lensShakePerspectiveFull: Float = 0.000095
+    private static let lensShakePixelMaximumCorrection: Float = 2.2
+    private static let lensShakeRotationMaximumCorrectionDegrees: Float = 0.11
     private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
@@ -875,7 +914,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 76
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 77
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -938,6 +977,20 @@ enum AutoStabilizationEstimator {
         var isActive: Bool {
             yawPitch > 0.0 || shear > 0.0 || perspective > 0.0
         }
+    }
+
+    private struct SourceSpaceLensShakeCorrection {
+        var pixelOffset: vector_float2 = vector_float2(0.0, 0.0)
+        var rotationDegrees: Float = 0.0
+        var yawPitch: vector_float2 = vector_float2(0.0, 0.0)
+        var shear: vector_float2 = vector_float2(0.0, 0.0)
+        var perspective: vector_float2 = vector_float2(0.0, 0.0)
+        var score: Float = 0.0
+        var support: Float = 0.0
+        var windowFrames: Float = 0.0
+        var axisMask: Int32 = 0
+        var reasonCode: Int32 = 0
+        var rollingShutterCandidate: Float = 0.0
     }
 
     private struct ResidualPercentileCacheKey: Hashable {
@@ -3006,12 +3059,28 @@ enum AutoStabilizationEstimator {
             farFieldConfidence: farFieldMacroConfidence
         )
         let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+        let lensShake = farFieldWarpStrengths.isActive
+            ? sourceSpaceLensShakeCorrection(
+                analysis: analysis,
+                frames: frames,
+                interpolation: interpolation,
+                outputScale: vector_float2(xScale, yScale),
+                warpConfidence: appliedWarpConfidence,
+                farFieldConfidence: farFieldMacroConfidence,
+                trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+                edgeQuality: farFieldWarpEdgeQuality,
+                turnShakeSuppression: playbackTurnShakeSuppression,
+                turnOwnership: vector_float2(playbackTurnOwnershipX, playbackTurnOwnershipY),
+                cache: cache
+            )
+            : SourceSpaceLensShakeCorrection()
         let pixelOffset = macroPixelOffset
             + microPixelOffset
             + stridePixelOffset
             + trajectoryMicroJitterPixelOffset
             + trajectoryContinuityPixelOffset
-        let rotation = macroRotation + microRotation + strideRotation
+            + lensShake.pixelOffset
+        let rotation = macroRotation + microRotation + strideRotation + lensShake.rotationDegrees
         return StabilizerAutoTransform(
             pixelOffset: pixelOffset,
             macroPixelOffset: macroPixelOffset,
@@ -3019,6 +3088,17 @@ enum AutoStabilizationEstimator {
             strideWobblePixelOffset: stridePixelOffset,
             trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
             trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
+            lensShakePixelOffset: lensShake.pixelOffset,
+            lensShakeRotationDegrees: lensShake.rotationDegrees,
+            lensShakeYawPitch: lensShake.yawPitch,
+            lensShakeShear: lensShake.shear,
+            lensShakePerspective: lensShake.perspective,
+            lensShakeScore: lensShake.score,
+            lensShakeSupport: lensShake.support,
+            lensShakeWindowFrames: lensShake.windowFrames,
+            lensShakeAxisMask: lensShake.axisMask,
+            lensShakeReasonCode: lensShake.reasonCode,
+            lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
             footstepJitterRotationDegrees: macroRotation + microRotation,
             strideWobbleRotationDegrees: strideRotation,
             rotationDegrees: rotation,
@@ -3369,6 +3449,7 @@ enum AutoStabilizationEstimator {
         }
         let samples = filteredSamples.count >= 3 ? filteredSamples : rawSamples
         var smoothedTransform = weightedAverageTransform(samples)
+        preserveLensShake(from: centerTransform, into: &smoothedTransform)
         smoothedTransform.microPixelOffset = centerTransform.microPixelOffset
         smoothedTransform.footstepJitterRotationDegrees = centerTransform.footstepJitterRotationDegrees
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
@@ -3376,8 +3457,10 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.trajectoryMicroJitterPixelOffset
             + smoothedTransform.trajectoryContinuityPixelOffset
+            + smoothedTransform.lensShakePixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
+            + smoothedTransform.lensShakeRotationDegrees
         smoothedTransform.turnDetectedPixelOffset = centerTransform.turnDetectedPixelOffset
         smoothedTransform.rawPixelOffset = centerTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = centerTransform.rotationDegrees
@@ -3758,6 +3841,7 @@ enum AutoStabilizationEstimator {
         smoothedTransform.yawPitchProxy = smoothedWarpTransform.yawPitchProxy * temporalWarpScale
         smoothedTransform.shear = smoothedWarpTransform.shear * temporalWarpScale
         smoothedTransform.perspective = smoothedWarpTransform.perspective * temporalWarpScale
+        preserveLensShake(from: rawCenterTransform, into: &smoothedTransform)
 
         let footstep = smoothedFootstepJitter(centerTransform: rawCenterTransform)
         smoothedTransform.microPixelOffset = footstep.microPixelOffset
@@ -3779,8 +3863,10 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.trajectoryMicroJitterPixelOffset
             + smoothedTransform.trajectoryContinuityPixelOffset
+            + smoothedTransform.lensShakePixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
+            + smoothedTransform.lensShakeRotationDegrees
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
         smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - rawCenterTransform.pixelOffset
@@ -4069,6 +4155,7 @@ enum AutoStabilizationEstimator {
         scaled.strideWobblePixelOffset = scalePixelVector(transform.strideWobblePixelOffset, xScale: xScale, yScale: yScale)
         scaled.trajectoryMicroJitterPixelOffset = scalePixelVector(transform.trajectoryMicroJitterPixelOffset, xScale: xScale, yScale: yScale)
         scaled.trajectoryContinuityPixelOffset = scalePixelVector(transform.trajectoryContinuityPixelOffset, xScale: xScale, yScale: yScale)
+        scaled.lensShakePixelOffset = scalePixelVector(transform.lensShakePixelOffset, xScale: xScale, yScale: yScale)
         scaled.turnDetectedPixelOffset = scalePixelVector(transform.turnDetectedPixelOffset, xScale: xScale, yScale: yScale)
         scaled.rawPixelOffset = scalePixelVector(transform.rawPixelOffset, xScale: xScale, yScale: yScale)
         scaled.temporalSmoothingPixelDelta = scalePixelVector(transform.temporalSmoothingPixelDelta, xScale: xScale, yScale: yScale)
@@ -4890,8 +4977,8 @@ enum AutoStabilizationEstimator {
             return stats
         }
 
-        let finalX = transforms.map(\.pixelOffset.x)
-        let finalY = transforms.map(\.pixelOffset.y)
+        let finalX = transforms.map { $0.pixelOffset.x - $0.lensShakePixelOffset.x }
+        let finalY = transforms.map { $0.pixelOffset.y - $0.lensShakePixelOffset.y }
         let xStats = suppressAxis(.x, finalValues: finalX, lowFrequencyValues: lowFrequencyPath(finalX))
         let yStats = suppressAxis(.y, finalValues: finalY, lowFrequencyValues: lowFrequencyPath(finalY))
         let candidateFrameCount = xStats.candidateFrameCount + yStats.candidateFrameCount
@@ -6456,12 +6543,28 @@ enum AutoStabilizationEstimator {
                 farFieldConfidence: farFieldMacroConfidence
             )
             let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+            let lensShake = farFieldWarpStrengths.isActive
+                ? sourceSpaceLensShakeCorrection(
+                    analysis: analysis,
+                    frames: frames,
+                    interpolation: FrameInterpolation(lowerIndex: index, upperIndex: index, fraction: 0.0),
+                    outputScale: vector_float2(xScale, yScale),
+                    warpConfidence: appliedWarpConfidence,
+                    farFieldConfidence: farFieldMacroConfidence,
+                    trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
+                    edgeQuality: farFieldWarpEdgeQuality,
+                    turnShakeSuppression: playbackTurnShakeSuppression,
+                    turnOwnership: vector_float2(playbackTurnOwnershipX, playbackTurnOwnershipY),
+                    cache: cache
+                )
+                : SourceSpaceLensShakeCorrection()
             let pixelOffset = macroPixelOffset
                 + microPixelOffset
                 + stridePixelOffset
                 + trajectoryMicroJitterPixelOffset
                 + trajectoryContinuityPixelOffset
-            let rotation = macroRotation + microRotation + strideRotation
+                + lensShake.pixelOffset
+            let rotation = macroRotation + microRotation + strideRotation + lensShake.rotationDegrees
             return StabilizerAutoTransform(
                 pixelOffset: pixelOffset,
                 macroPixelOffset: macroPixelOffset,
@@ -6469,6 +6572,17 @@ enum AutoStabilizationEstimator {
                 strideWobblePixelOffset: stridePixelOffset,
                 trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
                 trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
+                lensShakePixelOffset: lensShake.pixelOffset,
+                lensShakeRotationDegrees: lensShake.rotationDegrees,
+                lensShakeYawPitch: lensShake.yawPitch,
+                lensShakeShear: lensShake.shear,
+                lensShakePerspective: lensShake.perspective,
+                lensShakeScore: lensShake.score,
+                lensShakeSupport: lensShake.support,
+                lensShakeWindowFrames: lensShake.windowFrames,
+                lensShakeAxisMask: lensShake.axisMask,
+                lensShakeReasonCode: lensShake.reasonCode,
+                lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
                 footstepJitterRotationDegrees: macroRotation + microRotation,
                 strideWobbleRotationDegrees: strideRotation,
                 rotationDegrees: rotation,
@@ -6617,6 +6731,29 @@ enum AutoStabilizationEstimator {
             + transform.strideWobblePixelOffset
             + transform.trajectoryMicroJitterPixelOffset
             + transform.trajectoryContinuityPixelOffset
+            + transform.lensShakePixelOffset
+    }
+
+    private static func playbackTrajectoryComposedNonLensPixelOffset(_ transform: StabilizerAutoTransform) -> vector_float2 {
+        transform.macroPixelOffset
+            + transform.microPixelOffset
+            + transform.strideWobblePixelOffset
+            + transform.trajectoryMicroJitterPixelOffset
+            + transform.trajectoryContinuityPixelOffset
+    }
+
+    private static func preserveLensShake(from source: StabilizerAutoTransform, into target: inout StabilizerAutoTransform) {
+        target.lensShakePixelOffset = source.lensShakePixelOffset
+        target.lensShakeRotationDegrees = source.lensShakeRotationDegrees
+        target.lensShakeYawPitch = source.lensShakeYawPitch
+        target.lensShakeShear = source.lensShakeShear
+        target.lensShakePerspective = source.lensShakePerspective
+        target.lensShakeScore = source.lensShakeScore
+        target.lensShakeSupport = source.lensShakeSupport
+        target.lensShakeWindowFrames = source.lensShakeWindowFrames
+        target.lensShakeAxisMask = source.lensShakeAxisMask
+        target.lensShakeReasonCode = source.lensShakeReasonCode
+        target.lensShakeRollingShutterCandidate = source.lensShakeRollingShutterCandidate
     }
 
     private static func playbackTrajectoryLimitedTransform(
@@ -6681,13 +6818,11 @@ enum AutoStabilizationEstimator {
             previous: previous.strideWobblePixelOffset,
             limit: pixelLimit * 0.65
         )
-        let componentPixelOffset = limited.macroPixelOffset
-            + limited.microPixelOffset
-            + limited.strideWobblePixelOffset
-            + limited.trajectoryMicroJitterPixelOffset
+        let componentPixelOffset = playbackTrajectoryComposedNonLensPixelOffset(limited)
+        let previousNonLensPixelOffset = previous.pixelOffset - previous.lensShakePixelOffset
         let finalPixelOffset = playbackTrajectoryLimitedVector(
             componentPixelOffset,
-            previous: previous.pixelOffset,
+            previous: previousNonLensPixelOffset,
             limit: pixelLimit * finalPixelLimitScale
         )
         limited.trajectoryContinuityPixelOffset = finalPixelOffset - componentPixelOffset
@@ -6703,14 +6838,16 @@ enum AutoStabilizationEstimator {
             previous: previous.strideWobbleRotationDegrees,
             limit: rotationLimit * 0.80
         )
-        let componentRotation = limited.footstepJitterRotationDegrees + limited.strideWobbleRotationDegrees
+        let componentRotation = limited.footstepJitterRotationDegrees
+            + limited.strideWobbleRotationDegrees
+        let previousNonLensRotation = previous.rotationDegrees - previous.lensShakeRotationDegrees
         let finalRotation = playbackTrajectoryLimitedScalar(
             componentRotation,
-            previous: previous.rotationDegrees,
+            previous: previousNonLensRotation,
             limit: rotationLimit * finalRotationLimitScale
         )
         limited.strideWobbleRotationDegrees += finalRotation - componentRotation
-        limited.rotationDegrees = finalRotation
+        limited.rotationDegrees = finalRotation + limited.lensShakeRotationDegrees
 
         limited.yawPitchProxy = playbackTrajectoryLimitedVector(
             current.yawPitchProxy,
@@ -6769,8 +6906,10 @@ enum AutoStabilizationEstimator {
             + transform.strideWobblePixelOffset
             + transform.trajectoryMicroJitterPixelOffset
             + transform.trajectoryContinuityPixelOffset
+            + transform.lensShakePixelOffset
         transform.rotationDegrees = transform.footstepJitterRotationDegrees
             + transform.strideWobbleRotationDegrees
+            + transform.lensShakeRotationDegrees
         return playbackTrajectoryTransformWithDiagnosticMetadata(
             transform,
             rawTransform: rawTransform,
@@ -6905,6 +7044,7 @@ enum AutoStabilizationEstimator {
         var smoothedTransform = broadSamples.isEmpty
             ? centerTransform
             : weightedAverageTransform(broadSamples)
+        preserveLensShake(from: centerTransform, into: &smoothedTransform)
 
         let turnSamples = playbackTrajectoryTurnTransitionSamples(
             centerTransform: centerTransform,
@@ -6990,8 +7130,10 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.trajectoryMicroJitterPixelOffset
             + smoothedTransform.trajectoryContinuityPixelOffset
+            + smoothedTransform.lensShakePixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
+            + smoothedTransform.lensShakeRotationDegrees
         smoothedTransform.rawPixelOffset = centerTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = centerTransform.rotationDegrees
         smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - centerTransform.pixelOffset
@@ -7962,20 +8104,49 @@ enum AutoStabilizationEstimator {
             shear = vector_float2(0.0, 0.0)
             perspective = vector_float2(0.0, 0.0)
         }
+        let lensShake = shouldEstimateFarFieldWarp
+            ? sourceSpaceLensShakeCorrection(
+                analysis: analysis,
+                frames: frames,
+                interpolation: frameInterpolation,
+                outputScale: vector_float2(xScale, yScale),
+                warpConfidence: appliedWarpConfidence,
+                farFieldConfidence: farFieldMacroConfidence,
+                trackingConfidence: trackingConfidence,
+                edgeQuality: searchRadiusEdgeQuality(
+                    hitCount: searchRadiusHitCount,
+                    totalCount: searchRadiusTotalCount
+                ),
+                turnShakeSuppression: turnShakeSuppression,
+                turnOwnership: vector_float2(turnOwnershipX, turnOwnershipY),
+                cache: cache
+            )
+            : SourceSpaceLensShakeCorrection(reasonCode: 0)
 
         return StabilizerAutoTransform(
-            pixelOffset: vector_float2(compensationX, compensationY),
+            pixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
             trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
             trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
+            lensShakePixelOffset: lensShake.pixelOffset,
+            lensShakeRotationDegrees: lensShake.rotationDegrees,
+            lensShakeYawPitch: lensShake.yawPitch,
+            lensShakeShear: lensShake.shear,
+            lensShakePerspective: lensShake.perspective,
+            lensShakeScore: lensShake.score,
+            lensShakeSupport: lensShake.support,
+            lensShakeWindowFrames: lensShake.windowFrames,
+            lensShakeAxisMask: lensShake.axisMask,
+            lensShakeReasonCode: lensShake.reasonCode,
+            lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
-            rotationDegrees: compensationRotation,
+            rotationDegrees: compensationRotation + lensShake.rotationDegrees,
             turnDetectedPixelOffset: vector_float2(-panBandX * xScale, -panBandY * yScale),
-            rawPixelOffset: vector_float2(compensationX, compensationY),
-            rawRotationDegrees: compensationRotation,
+            rawPixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
+            rawRotationDegrees: compensationRotation + lensShake.rotationDegrees,
             temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
             temporalSmoothingRotationDelta: 0.0,
             temporalSmoothingSampleCount: 1,
@@ -8943,19 +9114,48 @@ enum AutoStabilizationEstimator {
             shear = vector_float2(0.0, 0.0)
             perspective = vector_float2(0.0, 0.0)
         }
+        let lensShake = shouldEstimateFarFieldWarp
+            ? sourceSpaceLensShakeCorrection(
+                analysis: analysis,
+                frames: frames,
+                interpolation: frameInterpolation,
+                outputScale: vector_float2(xScale, yScale),
+                warpConfidence: appliedWarpConfidence,
+                farFieldConfidence: farFieldMacroConfidence,
+                trackingConfidence: trackingConfidence,
+                edgeQuality: searchRadiusEdgeQuality(
+                    hitCount: searchRadiusHitCount,
+                    totalCount: searchRadiusTotalCount
+                ),
+                turnShakeSuppression: turnShakeSuppression,
+                turnOwnership: vector_float2(turnOwnershipX, turnOwnershipY),
+                cache: cache
+            )
+            : SourceSpaceLensShakeCorrection()
         return StabilizerAutoTransform(
-            pixelOffset: vector_float2(compensationX, compensationY),
+            pixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
             trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
             trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
+            lensShakePixelOffset: lensShake.pixelOffset,
+            lensShakeRotationDegrees: lensShake.rotationDegrees,
+            lensShakeYawPitch: lensShake.yawPitch,
+            lensShakeShear: lensShake.shear,
+            lensShakePerspective: lensShake.perspective,
+            lensShakeScore: lensShake.score,
+            lensShakeSupport: lensShake.support,
+            lensShakeWindowFrames: lensShake.windowFrames,
+            lensShakeAxisMask: lensShake.axisMask,
+            lensShakeReasonCode: lensShake.reasonCode,
+            lensShakeRollingShutterCandidate: lensShake.rollingShutterCandidate,
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
-            rotationDegrees: compensationRotation,
+            rotationDegrees: compensationRotation + lensShake.rotationDegrees,
             turnDetectedPixelOffset: detectedTurnPixelOffset,
-            rawPixelOffset: vector_float2(compensationX, compensationY),
-            rawRotationDegrees: compensationRotation,
+            rawPixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
+            rawRotationDegrees: compensationRotation + lensShake.rotationDegrees,
             temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
             temporalSmoothingRotationDelta: 0.0,
             temporalSmoothingSampleCount: 1,
@@ -9098,6 +9298,7 @@ enum AutoStabilizationEstimator {
             (transform: sample.transform, weight: sample.weight)
         }
         var smoothedTransform = weightedAverageTransform(broadTransformSamples)
+        preserveLensShake(from: rawCenterTransform, into: &smoothedTransform)
         let turnTransitionSamples = turnTransitionSmoothingSamples(
             centerTransform: rawCenterTransform,
             analysis: analysis,
@@ -9186,8 +9387,10 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.trajectoryMicroJitterPixelOffset
             + smoothedTransform.trajectoryContinuityPixelOffset
+            + smoothedTransform.lensShakePixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
+            + smoothedTransform.lensShakeRotationDegrees
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
         smoothedTransform.temporalSmoothingPixelDelta = smoothedTransform.pixelOffset - rawCenterTransform.pixelOffset
@@ -9718,6 +9921,17 @@ enum AutoStabilizationEstimator {
         var strideWobblePixelOffset = vector_float2(0.0, 0.0)
         var trajectoryMicroJitterPixelOffset = vector_float2(0.0, 0.0)
         var trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+        var lensShakePixelOffset = vector_float2(0.0, 0.0)
+        var lensShakeRotationDegrees: Float = 0.0
+        var lensShakeYawPitch = vector_float2(0.0, 0.0)
+        var lensShakeShear = vector_float2(0.0, 0.0)
+        var lensShakePerspective = vector_float2(0.0, 0.0)
+        var lensShakeScore: Float = 0.0
+        var lensShakeSupport: Float = 0.0
+        var lensShakeWindowFrames: Float = 0.0
+        var lensShakeAxisMask: Int32 = 0
+        var lensShakeReasonCode: Int32 = 0
+        var lensShakeRollingShutterCandidate: Float = 0.0
         var footstepJitterRotationDegrees: Float = 0.0
         var strideWobbleRotationDegrees: Float = 0.0
         var rotationDegrees: Float = 0.0
@@ -9758,6 +9972,19 @@ enum AutoStabilizationEstimator {
             strideWobblePixelOffset += transform.strideWobblePixelOffset * weight
             trajectoryMicroJitterPixelOffset += transform.trajectoryMicroJitterPixelOffset * weight
             trajectoryContinuityPixelOffset += transform.trajectoryContinuityPixelOffset * weight
+            lensShakePixelOffset += transform.lensShakePixelOffset * weight
+            lensShakeRotationDegrees += transform.lensShakeRotationDegrees * weight
+            lensShakeYawPitch += transform.lensShakeYawPitch * weight
+            lensShakeShear += transform.lensShakeShear * weight
+            lensShakePerspective += transform.lensShakePerspective * weight
+            lensShakeScore += transform.lensShakeScore * weight
+            lensShakeSupport += transform.lensShakeSupport * weight
+            lensShakeWindowFrames += transform.lensShakeWindowFrames * weight
+            lensShakeAxisMask |= transform.lensShakeAxisMask
+            if transform.lensShakeReasonCode == 1 || lensShakeReasonCode == 0 {
+                lensShakeReasonCode = transform.lensShakeReasonCode
+            }
+            lensShakeRollingShutterCandidate += transform.lensShakeRollingShutterCandidate * weight
             footstepJitterRotationDegrees += transform.footstepJitterRotationDegrees * weight
             strideWobbleRotationDegrees += transform.strideWobbleRotationDegrees * weight
             rotationDegrees += transform.rotationDegrees * weight
@@ -9797,18 +10024,31 @@ enum AutoStabilizationEstimator {
         let averagedStrideWobblePixelOffset = strideWobblePixelOffset / totalWeight
         let averagedTrajectoryMicroJitterPixelOffset = trajectoryMicroJitterPixelOffset / totalWeight
         let averagedTrajectoryContinuityPixelOffset = trajectoryContinuityPixelOffset / totalWeight
+        let averagedLensShakePixelOffset = lensShakePixelOffset / totalWeight
 
         return StabilizerAutoTransform(
             pixelOffset: averagedMacroPixelOffset
                 + averagedMicroPixelOffset
                 + averagedStrideWobblePixelOffset
                 + averagedTrajectoryMicroJitterPixelOffset
-                + averagedTrajectoryContinuityPixelOffset,
+                + averagedTrajectoryContinuityPixelOffset
+                + averagedLensShakePixelOffset,
             macroPixelOffset: averagedMacroPixelOffset,
             microPixelOffset: averagedMicroPixelOffset,
             strideWobblePixelOffset: averagedStrideWobblePixelOffset,
             trajectoryMicroJitterPixelOffset: averagedTrajectoryMicroJitterPixelOffset,
             trajectoryContinuityPixelOffset: averagedTrajectoryContinuityPixelOffset,
+            lensShakePixelOffset: averagedLensShakePixelOffset,
+            lensShakeRotationDegrees: lensShakeRotationDegrees / totalWeight,
+            lensShakeYawPitch: lensShakeYawPitch / totalWeight,
+            lensShakeShear: lensShakeShear / totalWeight,
+            lensShakePerspective: lensShakePerspective / totalWeight,
+            lensShakeScore: lensShakeScore / totalWeight,
+            lensShakeSupport: lensShakeSupport / totalWeight,
+            lensShakeWindowFrames: lensShakeWindowFrames / totalWeight,
+            lensShakeAxisMask: lensShakeAxisMask,
+            lensShakeReasonCode: lensShakeReasonCode,
+            lensShakeRollingShutterCandidate: lensShakeRollingShutterCandidate / totalWeight,
             footstepJitterRotationDegrees: footstepJitterRotationDegrees / totalWeight,
             strideWobbleRotationDegrees: strideWobbleRotationDegrees / totalWeight,
             rotationDegrees: rotationDegrees / totalWeight,
@@ -11918,6 +12158,190 @@ enum AutoStabilizationEstimator {
             confidence: confidence
         ) * strength
         return clamp(scaledValue, min: -limit * strength, max: limit * strength)
+    }
+
+    private static func sourceSpaceLensShakeCorrection(
+        analysis: StabilizerPreparedAnalysis,
+        frames: [StabilizerAnalysisFrame],
+        interpolation: FrameInterpolation,
+        outputScale: vector_float2,
+        warpConfidence: Float,
+        farFieldConfidence: Float,
+        trackingConfidence: Float,
+        edgeQuality: Float,
+        turnShakeSuppression: Float,
+        turnOwnership: vector_float2,
+        cache: RenderEstimateCache
+    ) -> SourceSpaceLensShakeCorrection {
+        guard frames.count >= 5,
+              interpolation.lowerIndex >= 0,
+              interpolation.lowerIndex < frames.count
+        else {
+            var result = SourceSpaceLensShakeCorrection()
+            result.reasonCode = 4
+            return result
+        }
+
+        let centerIndex = interpolation.fraction < 0.5 ? interpolation.lowerIndex : interpolation.upperIndex
+        let frameStepSeconds = max(
+            1.0 / 240.0,
+            localFrameStepSeconds(frames: frames, centerIndex: max(0, min(frames.count - 1, centerIndex)))
+        )
+        let targetWindowSeconds = Double(lensShakeTargetWindowFrames) * frameStepSeconds
+        let innerWindowSeconds = max(lensShakeInnerWindowMinimumSeconds, targetWindowSeconds * 0.56)
+        let outerWindowSeconds = min(
+            lensShakeOuterWindowMaximumSeconds,
+            max(lensShakeOuterWindowMinimumSeconds, targetWindowSeconds * 3.0)
+        )
+        let activeIndices = indicesWithinTimeRadius(
+            frames,
+            centerTime: frames[max(0, min(frames.count - 1, centerIndex))].time,
+            radiusSeconds: outerWindowSeconds * 0.5
+        )
+        let sampledIndices = uniqueSortedIndices(
+            activeIndices + interpolation.indices,
+            validCount: frames.count
+        )
+        let qualitySupport = confidenceRamp(
+            clamp(warpConfidence, min: 0.0, max: 1.0),
+            start: 0.16,
+            full: 0.55
+        ) * confidenceRamp(
+            clamp(trackingConfidence, min: 0.0, max: 1.0),
+            start: 0.14,
+            full: 0.42
+        ) * confidenceRamp(
+            clamp(edgeQuality, min: 0.0, max: 1.0),
+            start: 0.46,
+            full: 0.82
+        )
+        let turnScale = 1.0 - (
+            max(
+                confidenceRamp(turnShakeSuppression, start: 0.34, full: 0.76),
+                max(
+                    confidenceRamp(abs(turnOwnership.x), start: 0.36, full: 0.88),
+                    confidenceRamp(abs(turnOwnership.y), start: 0.36, full: 0.88)
+                )
+            ) * 0.45
+        )
+
+        func residual(kind: MotionPathKind, values: [Float]) -> Float {
+            guard !values.isEmpty else {
+                return 0.0
+            }
+            let baseline = cachedOuterLinearPredictionPath(
+                kind,
+                analysis: analysis,
+                indices: sampledIndices,
+                innerWindowSeconds: innerWindowSeconds,
+                outerWindowSeconds: outerWindowSeconds,
+                cache: cache
+            )
+            return interpolatedValue(values, using: interpolation)
+                - interpolatedValue(baseline, using: interpolation)
+        }
+
+        var result = SourceSpaceLensShakeCorrection()
+        result.windowFrames = Float(targetWindowSeconds / frameStepSeconds)
+
+        var maximumEvidence = Float(0.0)
+        var maximumAppliedSupport = Float(0.0)
+
+        func supportFor(_ magnitude: Float, start: Float, full: Float) -> Float {
+            let evidence = confidenceRamp(magnitude, start: start, full: full)
+            maximumEvidence = max(maximumEvidence, evidence)
+            return clamp(evidence * qualitySupport * turnScale, min: 0.0, max: 1.0)
+        }
+
+        func recordSupport(_ support: Float, axisBit: Int32) -> Bool {
+            guard support >= lensShakeMinimumSupport else {
+                return false
+            }
+            maximumAppliedSupport = max(maximumAppliedSupport, support)
+            return true
+        }
+
+        let residualX = residual(kind: .farFieldX, values: analysis.farFieldPathX) * outputScale.x
+        let residualY = residual(kind: .farFieldY, values: analysis.farFieldPathY) * outputScale.y
+        let residualRoll = residual(kind: .farFieldRoll, values: analysis.farFieldPathRoll)
+        let yaw = residual(kind: .yaw, values: analysis.pathYaw)
+        let pitch = residual(kind: .pitch, values: analysis.pathPitch)
+        let shearX = residual(kind: .shearX, values: analysis.pathShearX)
+        let shearY = residual(kind: .shearY, values: analysis.pathShearY)
+        let perspectiveX = residual(kind: .perspectiveX, values: analysis.pathPerspectiveX)
+        let perspectiveY = residual(kind: .perspectiveY, values: analysis.pathPerspectiveY)
+
+        let supportX = supportFor(abs(residualX), start: lensShakePixelStartPixels, full: lensShakePixelFullPixels)
+        let supportY = supportFor(abs(residualY), start: lensShakePixelStartPixels, full: lensShakePixelFullPixels)
+        let supportRoll = supportFor(abs(residualRoll), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
+        let supportYaw = supportFor(abs(yaw), start: lensShakeYawPitchStart, full: lensShakeYawPitchFull)
+        let supportPitch = supportFor(abs(pitch), start: lensShakeYawPitchStart, full: lensShakeYawPitchFull)
+        let supportShearX = supportFor(abs(shearX), start: lensShakeShearStart, full: lensShakeShearFull)
+        let supportShearY = supportFor(abs(shearY), start: lensShakeShearStart, full: lensShakeShearFull)
+        let supportPerspectiveX = supportFor(abs(perspectiveX), start: lensShakePerspectiveStart, full: lensShakePerspectiveFull)
+        let supportPerspectiveY = supportFor(abs(perspectiveY), start: lensShakePerspectiveStart, full: lensShakePerspectiveFull)
+
+        let yawPitchSupport = max(supportYaw, supportPitch)
+        let affineSupport = max(max(supportX, supportY), supportRoll)
+        let projectiveSupport = max(yawPitchSupport, max(max(supportShearX, supportShearY), max(supportPerspectiveX, supportPerspectiveY)))
+        let dominantProjectiveCandidate = confidenceRamp(projectiveSupport - affineSupport, start: 0.18, full: 0.55)
+        let mixedProjectiveCandidate = min(
+            confidenceRamp(projectiveSupport, start: 0.35, full: 0.70),
+            confidenceRamp(affineSupport, start: 0.20, full: 0.55)
+        ) * 0.75
+        result.rollingShutterCandidate = max(dominantProjectiveCandidate, mixedProjectiveCandidate)
+        result.score = max(affineSupport, projectiveSupport)
+        if supportX >= lensShakeMinimumSupport { result.axisMask |= 1 }
+        if supportY >= lensShakeMinimumSupport { result.axisMask |= 2 }
+        if supportRoll >= lensShakeMinimumSupport { result.axisMask |= 4 }
+        if supportYaw >= lensShakeMinimumSupport { result.axisMask |= 8 }
+        if supportPitch >= lensShakeMinimumSupport { result.axisMask |= 16 }
+        if supportShearX >= lensShakeMinimumSupport || supportShearY >= lensShakeMinimumSupport { result.axisMask |= 32 }
+        if supportPerspectiveX >= lensShakeMinimumSupport || supportPerspectiveY >= lensShakeMinimumSupport { result.axisMask |= 64 }
+        result.yawPitch = vector_float2(
+            clamp(yaw * supportYaw, min: -maxRenderedFarFieldYawPitchProxy, max: maxRenderedFarFieldYawPitchProxy),
+            clamp(pitch * supportPitch, min: -maxRenderedFarFieldYawPitchProxy, max: maxRenderedFarFieldYawPitchProxy)
+        )
+        result.shear = vector_float2(
+            clamp(shearX * supportShearX, min: -maxRenderedFarFieldShear, max: maxRenderedFarFieldShear),
+            clamp(shearY * supportShearY, min: -maxRenderedFarFieldShear, max: maxRenderedFarFieldShear)
+        )
+        result.perspective = vector_float2(
+            clamp(perspectiveX * supportPerspectiveX, min: -maxRenderedFarFieldPerspective, max: maxRenderedFarFieldPerspective),
+            clamp(perspectiveY * supportPerspectiveY, min: -maxRenderedFarFieldPerspective, max: maxRenderedFarFieldPerspective)
+        )
+
+        guard result.rollingShutterCandidate < 0.45 else {
+            result.support = 0.0
+            result.reasonCode = 5
+            return result
+        }
+
+        if recordSupport(supportX, axisBit: 1) {
+            result.pixelOffset.x = clamp(-residualX * supportX, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+        }
+        if recordSupport(supportY, axisBit: 2) {
+            result.pixelOffset.y = clamp(-residualY * supportY, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+        }
+
+        if recordSupport(supportRoll, axisBit: 4) {
+            result.rotationDegrees = clamp(
+                -residualRoll * supportRoll,
+                min: -lensShakeRotationMaximumCorrectionDegrees,
+                max: lensShakeRotationMaximumCorrectionDegrees
+            )
+        }
+        result.support = maximumAppliedSupport
+        if maximumAppliedSupport > 0.0 {
+            result.reasonCode = 1
+        } else if qualitySupport < 0.12, maximumEvidence > 0.0 {
+            result.reasonCode = 2
+        } else if maximumEvidence > 0.0 {
+            result.reasonCode = 3
+        } else {
+            result.reasonCode = 4
+        }
+        return result
     }
 
     private static func effectiveFarFieldWarpComponentStrengths(_ requestedStrength: Float) -> FarFieldWarpComponentStrengths {
