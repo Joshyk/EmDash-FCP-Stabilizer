@@ -698,6 +698,287 @@ print(
 PY
 }
 
+collect_render_component_diagnostics() {
+	local case_file="$1"
+	local start_epoch="$2"
+	local end_epoch="$3"
+	local output_dir="$4"
+	local evidence_dir
+	if [[ -n "$output_dir" ]]; then
+		evidence_dir="$output_dir"
+	else
+		evidence_dir="${ARTIFACT_ROOT}"
+	fi
+	mkdir -p "$evidence_dir"
+
+	local start_date
+	local end_date
+	start_date="$(log_timestamp_from_epoch "$start_epoch" -3)"
+	end_date="$(log_timestamp_from_epoch "$end_epoch" 3)"
+	local component_log_path="${evidence_dir}/render_components.log"
+	local component_csv_path="${evidence_dir}/render_components.csv"
+	local component_focus_path="${evidence_dir}/render_components_focus.csv"
+	local component_points_path="${evidence_dir}/render_components_focus_points.csv"
+	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND eventMessage CONTAINS "Render frame components csv v1"'
+	if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$component_log_path" 2>&1; then
+		fail "could not read FxPlug render component diagnostics: $component_log_path"
+	fi
+
+	python3 - "$case_file" "$component_log_path" "$component_csv_path" "$component_focus_path" "$component_points_path" <<'PY'
+import csv
+import json
+import math
+import re
+import sys
+from pathlib import Path
+
+case = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+log_path = Path(sys.argv[2])
+csv_path = Path(sys.argv[3])
+focus_path = Path(sys.argv[4])
+points_path = Path(sys.argv[5])
+
+prefix = "Render frame components csv v1 |"
+pair_pattern = re.compile(r"([A-Za-z][A-Za-z0-9]*)=([^ |]+)")
+idx_pattern = re.compile(r"idx=(\d+)-(\d+)")
+
+def source_frame_rate() -> float:
+    raw = str((case.get("source") or {}).get("frameRate", ""))
+    if "/" in raw:
+        numerator, denominator = raw.split("/", 1)
+        try:
+            frame_rate = float(numerator) / float(denominator)
+        except ValueError:
+            raise SystemExit(f"Render component diagnostics cannot parse source frameRate: {raw!r}")
+        if frame_rate <= 0.0 or not math.isfinite(frame_rate):
+            raise SystemExit(f"Render component diagnostics has invalid source frameRate: {raw!r}")
+        return frame_rate
+    try:
+        frame_rate = float(raw)
+    except ValueError:
+        raise SystemExit(f"Render component diagnostics cannot parse source frameRate: {raw!r}")
+    if frame_rate <= 0.0 or not math.isfinite(frame_rate):
+        raise SystemExit(f"Render component diagnostics has invalid source frameRate: {raw!r}")
+    return frame_rate
+
+def timecode_seconds(raw: str) -> float:
+    match = re.match(r"^(\d+):(\d+):(\d+)[;:](\d+)$", raw or "")
+    if not match:
+        raise SystemExit(f"Render component diagnostics cannot parse startTimecode: {raw!r}")
+    hours, minutes, seconds, _frames = [int(part) for part in match.groups()]
+    frame_rate = source_frame_rate()
+    nominal_fps = int(round(frame_rate))
+    frame_number = (((hours * 3600) + (minutes * 60) + seconds) * nominal_fps) + _frames
+    if ";" in raw and nominal_fps in (30, 60):
+        drop_frames = 2 if nominal_fps == 30 else 4
+        total_minutes = (hours * 60) + minutes
+        frame_number -= drop_frames * (total_minutes - (total_minutes // 10))
+    return float(frame_number) / frame_rate
+
+source_start_seconds = timecode_seconds(case.get("startTimecode", ""))
+frame_rate = source_frame_rate()
+case_id = str(case.get("caseId", ""))
+diagnostic_contract = case.get("renderComponentDiagnostics")
+if case_id == "p1000307_turn_1m26_1m46" and not isinstance(diagnostic_contract, dict):
+    raise SystemExit("P1000307 renderComponentDiagnostics contract is required for focus CSV")
+diagnostic_contract = diagnostic_contract if isinstance(diagnostic_contract, dict) else {}
+focus_start = diagnostic_contract.get("focusStartSeconds")
+focus_end = diagnostic_contract.get("focusEndSeconds")
+focus_points = diagnostic_contract.get("focusPointsSeconds", [])
+has_focus_contract = focus_start is not None and focus_end is not None
+if has_focus_contract:
+    focus_start = float(focus_start)
+    focus_end = float(focus_end)
+    if not (math.isfinite(focus_start) and math.isfinite(focus_end) and focus_end > focus_start):
+        raise SystemExit(
+            f"Render component diagnostics has invalid focus window: {focus_start!r}-{focus_end!r}"
+        )
+else:
+    focus_start = 0.0
+    focus_end = -1.0
+
+expected_frame_count = str((case.get("source") or {}).get("frameCount", ""))
+expected_proxy = "yes" if case.get("playbackMode") == "Proxy Only" else None
+expected_crop = None
+if isinstance(case.get("removeBlackEdges"), bool):
+    expected_crop = "yes" if case.get("removeBlackEdges") else "no"
+
+rows = []
+for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+    if prefix not in line:
+        continue
+    message = line.split(prefix, 1)[1]
+    values = dict(pair_pattern.findall(message))
+    idx_match = idx_pattern.search(message)
+    if idx_match:
+        values["lowerIndex"] = idx_match.group(1)
+        values["upperIndex"] = idx_match.group(2)
+    try:
+        analysis_time = float(values["analysisTime"])
+    except (KeyError, ValueError):
+        continue
+    relative_time = analysis_time - source_start_seconds
+    values["analysisTime"] = f"{analysis_time:.5f}"
+    values["time"] = f"{relative_time:.5f}"
+    values["sourceStartSeconds"] = f"{source_start_seconds:.5f}"
+    values["caseId"] = case_id
+    rows.append(values)
+
+if not rows:
+    raise SystemExit(f"Render component diagnostics missing: no '{prefix.strip()}' log rows in {log_path}")
+
+def float_value(row: dict[str, str], key: str) -> float:
+    try:
+        value = float(row.get(key, "nan"))
+    except ValueError:
+        return math.nan
+    return value if math.isfinite(value) else math.nan
+
+target_rows = []
+for row in rows:
+    if expected_frame_count and row.get("frames") != expected_frame_count:
+        continue
+    if expected_proxy is not None and row.get("proxy") != expected_proxy:
+        continue
+    if expected_crop is not None and row.get("crop") != expected_crop:
+        continue
+    target_rows.append(row)
+if not target_rows:
+    raise SystemExit(
+        "Render component diagnostics missing target rows: "
+        f"expected frames={expected_frame_count or '<any>'} proxy={expected_proxy or '<any>'} "
+        f"crop={expected_crop or '<any>'}; parsedRows={len(rows)} log={log_path}"
+    )
+rows = target_rows
+rows.sort(key=lambda row: (float_value(row, "analysisTime"), float_value(row, "sample")))
+columns = [
+    "caseId",
+    "time",
+    "analysisTime",
+    "sourceStartSeconds",
+    "sample",
+    "lowerIndex",
+    "upperIndex",
+    "frac",
+    "frames",
+    "pixelOffset.x",
+    "pixelOffset.y",
+    "macroPixelOffset.x",
+    "macroPixelOffset.y",
+    "microPixelOffset.x",
+    "microPixelOffset.y",
+    "strideWobblePixelOffset.x",
+    "strideWobblePixelOffset.y",
+    "turnDetectedPixelOffset.x",
+    "turnDetectedPixelOffset.y",
+    "cropPosition.x",
+    "cropPosition.y",
+    "cropScale",
+    "turnConfidence",
+    "trackingQuality",
+    "deltaX",
+    "deltaY",
+    "deltaSeconds",
+    "sampleDelta",
+    "proxy",
+    "crop",
+    "identity",
+]
+source_keys = {
+    "pixelOffset.x": "pixelX",
+    "pixelOffset.y": "pixelY",
+    "macroPixelOffset.x": "macroX",
+    "macroPixelOffset.y": "macroY",
+    "microPixelOffset.x": "microX",
+    "microPixelOffset.y": "microY",
+    "strideWobblePixelOffset.x": "strideX",
+    "strideWobblePixelOffset.y": "strideY",
+    "turnDetectedPixelOffset.x": "turnX",
+    "turnDetectedPixelOffset.y": "turnY",
+    "cropPosition.x": "cropX",
+    "cropPosition.y": "cropY",
+}
+
+def output_row(row: dict[str, str]) -> dict[str, str]:
+    return {column: row.get(source_keys.get(column, column), "") for column in columns}
+
+def write_csv(path: Path, selected_rows: list[dict[str, str]]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in selected_rows:
+            writer.writerow(output_row(row))
+
+focus_rows = []
+if has_focus_contract:
+    focus_rows = [
+        row for row in rows
+        if focus_start <= float_value(row, "time") <= focus_end
+    ]
+    if not focus_rows:
+        first_time = float_value(rows[0], "time")
+        last_time = float_value(rows[-1], "time")
+        raise SystemExit(
+            "Render component diagnostics missing focus window rows: "
+            f"requested {focus_start:.2f}-{focus_end:.2f}s, available {first_time:.2f}-{last_time:.2f}s, "
+            f"log={log_path}"
+        )
+    unique_focus_times = sorted({round(float_value(row, "time"), 5) for row in focus_rows})
+    focus_duration = focus_end - focus_start
+    expected_focus_frames = max(1, int(math.floor(focus_duration * frame_rate)))
+    min_coverage_ratio = float(diagnostic_contract.get("minFocusCoverageRatio", 0.85))
+    min_focus_rows = max(1, int(math.floor(expected_focus_frames * min_coverage_ratio)))
+    max_focus_gap = float(diagnostic_contract.get("maxFocusGapSeconds", max(0.05, 3.0 / frame_rate)))
+    max_observed_gap = 0.0
+    if len(unique_focus_times) > 1:
+        max_observed_gap = max(
+            b - a for a, b in zip(unique_focus_times, unique_focus_times[1:])
+        )
+    if len(unique_focus_times) < min_focus_rows or max_observed_gap > max_focus_gap:
+        raise SystemExit(
+            "Render component diagnostics focus coverage failed: "
+            f"uniqueRows={len(unique_focus_times)} expected>={min_focus_rows} "
+            f"maxGap={max_observed_gap:.5f}s limit={max_focus_gap:.5f}s "
+            f"window={focus_start:.2f}-{focus_end:.2f}s log={log_path}"
+        )
+    identities = {row.get("identity", "") for row in focus_rows if row.get("identity")}
+    if len(identities) > 1:
+        raise SystemExit(
+            "Render component diagnostics focus window has multiple cache identities: "
+            f"{sorted(identities)} log={log_path}"
+        )
+write_csv(csv_path, rows)
+write_csv(focus_path, focus_rows)
+
+point_columns = ["targetTime", "timeError"] + columns
+with points_path.open("w", newline="", encoding="utf-8") as handle:
+    writer = csv.DictWriter(handle, fieldnames=point_columns)
+    writer.writeheader()
+    for point in focus_points:
+        point = float(point)
+        search_rows = focus_rows if has_focus_contract else rows
+        nearest = min(search_rows, key=lambda row: abs(float_value(row, "time") - point))
+        time_error = float_value(nearest, "time") - point
+        max_point_error = float(diagnostic_contract.get("maxFocusPointTimeErrorSeconds", max(0.025, 1.5 / frame_rate)))
+        if abs(time_error) > max_point_error:
+            raise SystemExit(
+                "Render component diagnostics focus point coverage failed: "
+                f"target={point:.5f}s nearest={float_value(nearest, 'time'):.5f}s "
+                f"error={time_error:.5f}s limit={max_point_error:.5f}s log={log_path}"
+            )
+        output = output_row(nearest)
+        output["targetTime"] = f"{point:.5f}"
+        output["timeError"] = f"{time_error:.5f}"
+        writer.writerow(output)
+
+print(
+    "Render component diagnostics: "
+    f"rows={len(rows)} focusRows={len(focus_rows)} "
+    f"csv={csv_path} focus={focus_path} points={points_path}"
+)
+PY
+}
+
 fail_if_recent_render_mismatches_case() {
 	local case_file="$1"
 	local context="${2:-prepare}"
@@ -4690,6 +4971,13 @@ case "$command_name" in
 				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
 				exit "$status"
 			fi
+			if collect_render_component_diagnostics "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
 			progress_viewer_roi="${recording_viewer_roi:-$viewer_roi}"
 			if [[ ( "$capture_backend" == "avfoundation-roi" || "$capture_backend" == "screencapturekit-roi" ) && -n "$progress_viewer_roi" ]]; then
 				progress_viewer_roi="$(viewer_roi_zero_origin "$progress_viewer_roi")"
@@ -4755,6 +5043,13 @@ case "$command_name" in
 				exit "$status"
 			fi
 			if assert_no_playback_fallbacks "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
+				:
+			else
+				status=$?
+				write_e2e_benchmark "$output_dir" "$case_file" "$video_path" "$command_name" "$capture_backend" "$total_start" "$capture_start" "$capture_end" "" "" "$status"
+				exit "$status"
+			fi
+			if collect_render_component_diagnostics "$case_file" "$evidence_start" "$evidence_end" "$output_dir"; then
 				:
 			else
 				status=$?

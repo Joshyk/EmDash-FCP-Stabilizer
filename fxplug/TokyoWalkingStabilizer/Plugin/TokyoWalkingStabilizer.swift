@@ -6734,6 +6734,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         autoCropFraming: AutoCropFraming,
         renderSourceIsProxy: Bool,
         autoCropEnabled: Bool,
+        debugOverlayActive: Bool,
+        masterStrength: Float,
         cacheIdentityShort: String
     ) {
         let analysisSeconds = CMTimeGetSeconds(renderTime)
@@ -6878,6 +6880,52 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let repeatedPreparedSample = normalCadence
             && sameIdentity
             && samplePosition <= (previous?.samplePosition ?? -1.0) + 0.05
+        if debugOverlayActive {
+            let trackingQuality = max(autoTransform.walkingTrackingConfidence, autoTransform.trackingConfidence)
+            let appliedPixelOffset = autoTransform.pixelOffset * masterStrength
+            let appliedMacroPixelOffset = autoTransform.macroPixelOffset * masterStrength
+            let appliedMicroPixelOffset = autoTransform.microPixelOffset * masterStrength
+            let appliedStrideWobblePixelOffset = autoTransform.strideWobblePixelOffset * masterStrength
+            let appliedTurnDetectedPixelOffset = autoTransform.turnDetectedPixelOffset * masterStrength
+            let appliedTransformDelta = sameIdentity ? transformDelta * masterStrength : vector_float2(0.0, 0.0)
+            let componentMessage = String(
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f turnX=%.5f turnY=%.5f cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f proxy=%@ crop=%@ identity=%@",
+                analysisSeconds,
+                samplePosition,
+                lowerIndex,
+                upperIndex,
+                fraction,
+                frames.count,
+                appliedPixelOffset.x,
+                appliedPixelOffset.y,
+                appliedMacroPixelOffset.x,
+                appliedMacroPixelOffset.y,
+                appliedMicroPixelOffset.x,
+                appliedMicroPixelOffset.y,
+                appliedStrideWobblePixelOffset.x,
+                appliedStrideWobblePixelOffset.y,
+                appliedTurnDetectedPixelOffset.x,
+                appliedTurnDetectedPixelOffset.y,
+                autoCropFraming.positionPixels.x,
+                autoCropFraming.positionPixels.y,
+                autoCropFraming.scale,
+                autoTransform.turnConfidence,
+                trackingQuality,
+                appliedTransformDelta.x,
+                appliedTransformDelta.y,
+                sameIdentity ? deltaSeconds : 0.0,
+                sameIdentity ? sampleDelta : 0.0,
+                renderSourceIsProxy ? "yes" : "no",
+                autoCropEnabled ? "yes" : "no",
+                cacheIdentityShort
+            )
+            os_log(
+                "%{public}@",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                componentMessage
+            )
+        }
         let motionAnomaly = irregularRenderCadence
             || catchUpAfterTinyStep
             || largeSingleStep
@@ -9794,6 +9842,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoCropFraming: autoCropFraming,
                 renderSourceIsProxy: renderSourceIsProxy,
                 autoCropEnabled: state.autoCropEnabled,
+                debugOverlayActive: debugOverlayActive,
+                masterStrength: masterStrength,
                 cacheIdentityShort: renderCacheIdentityShort
             )
         }

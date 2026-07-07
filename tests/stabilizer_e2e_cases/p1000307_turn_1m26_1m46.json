@@ -61,6 +61,14 @@
     "w": 820,
     "h": 470
   },
+  "renderComponentDiagnostics": {
+    "focusStartSeconds": 7.24,
+    "focusEndSeconds": 8.92,
+    "focusPointsSeconds": [7.24, 7.26, 7.27, 8.06, 8.43, 8.90],
+    "minFocusCoverageRatio": 0.85,
+    "maxFocusGapSeconds": 0.05,
+    "maxFocusPointTimeErrorSeconds": 0.025
+  },
   "ridgeRoi": {
     "x": 240,
     "y": 55,
