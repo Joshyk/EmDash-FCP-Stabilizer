@@ -176,6 +176,8 @@
     "maxRidgeLineVerticalJerkSourceRatio": 0.85,
     "ridgeResidualRunThresholdPixels": 0.60,
     "maxRidgeResidualRunFrames": 14,
+    "farFieldMicroShakeRequired": true,
+    "maxFarFieldMicroShakeScore": 1.0,
     "diagnosticSpikeFramesPerKind": 24,
     "diagnosticContactSheetMaxFrames": 96,
     "writeDiagnosticOverlayVideo": true

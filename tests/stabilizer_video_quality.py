@@ -2087,6 +2087,164 @@ def summarize_failures(
     return not failures, failures, summary
 
 
+def summarize_far_field_micro_shake(
+    motion_summary: dict[str, Any],
+    ridge_summary: dict[str, Any],
+    black_edge_transform_summary: dict[str, Any],
+    pts_metrics: dict[str, Any],
+    quality: dict[str, Any],
+) -> tuple[bool, list[str], dict[str, Any]]:
+    def finite_float(value: Any, default: float = 0.0) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if math.isfinite(parsed) else default
+
+    def finite_limit(*keys: str) -> float | None:
+        for key in keys:
+            if key not in quality:
+                continue
+            parsed = finite_float(quality.get(key), float("inf"))
+            if parsed > 0.0 and math.isfinite(parsed):
+                return parsed
+        return None
+
+    components: dict[str, dict[str, Any]] = {}
+
+    def add_component(name: str, value: Any, limit: float | None, unit: str) -> None:
+        value_float = finite_float(value)
+        ratio = value_float / limit if limit is not None and limit > 0.0 else 0.0
+        components[name] = {
+            "value": value_float,
+            "limit": limit,
+            "ratio": ratio,
+            "unit": unit,
+        }
+
+    add_component(
+        "ridgeOpticalFlowP95",
+        ridge_summary.get("highFrequencyResidualP95Pixels"),
+        finite_limit("maxRidgeHighFrequencyResidualP95Pixels"),
+        "px",
+    )
+    add_component(
+        "ridgeHorizontalP95",
+        ridge_summary.get("horizontalResidualP95Pixels"),
+        finite_limit("maxRidgeHorizontalResidualP95Pixels"),
+        "px",
+    )
+    add_component(
+        "ridgeVerticalP95",
+        ridge_summary.get("verticalResidualP95Pixels"),
+        finite_limit("maxRidgeVerticalResidualP95Pixels"),
+        "px",
+    )
+    add_component(
+        "ridgeLineJerkP95",
+        ridge_summary.get("lineVerticalJerkP95PixelsPerFrame"),
+        finite_limit("maxRidgeLineVerticalJerkP95PixelsPerFrame"),
+        "px/frame",
+    )
+    add_component(
+        "parallaxHorizontalP95",
+        ridge_summary.get("minusReferenceHorizontalP95Pixels"),
+        finite_limit("maxRidgeMinusReferenceHorizontalP95Pixels"),
+        "px",
+    )
+    add_component(
+        "parallaxVerticalP95",
+        ridge_summary.get("minusReferenceVerticalP95Pixels"),
+        finite_limit("maxRidgeMinusReferenceVerticalP95Pixels"),
+        "px",
+    )
+    add_component(
+        "rollResidualP95",
+        black_edge_transform_summary.get("rotationResidualP95Degrees"),
+        finite_limit(
+            "maxFarFieldRollResidualP95Degrees",
+            "maxBlackEdgeTransformRotationResidualP95Degrees",
+        ),
+        "deg",
+    )
+    add_component(
+        "rollJumpP95",
+        black_edge_transform_summary.get("rotationJumpP95Degrees"),
+        finite_limit(
+            "maxFarFieldRollJumpP95Degrees",
+            "maxBlackEdgeTransformRotationJumpP95Degrees",
+        ),
+        "deg",
+    )
+    add_component(
+        "scalePulsePeakToPeak",
+        motion_summary.get("maxScalePulsePeakToPeakPercent"),
+        finite_limit("maxScalePulsePeakToPeakPercent"),
+        "%",
+    )
+    add_component(
+        "scalePulseDerivativeP95",
+        motion_summary.get("maxScalePulseDerivativeP95PercentPerFrame"),
+        finite_limit("maxScalePulseDerivativeP95PercentPerFrame"),
+        "%/frame",
+    )
+    add_component(
+        "ptsIrregularRatio",
+        pts_metrics.get("ptsIntervalIrregularRatio"),
+        finite_limit("maxPtsIntervalIrregularRatio"),
+        "ratio",
+    )
+    add_component(
+        "frameJumpPtsSkippedRatio",
+        motion_summary.get("frameJumpPairSkippedForPtsCadenceRatio"),
+        finite_limit("maxFrameJumpSkippedForPtsCadencePairRatio"),
+        "ratio",
+    )
+
+    scored_components = {
+        name: component
+        for name, component in components.items()
+        if component["limit"] is not None
+    }
+    dominant_name = ""
+    dominant_ratio = 0.0
+    if scored_components:
+        dominant_name, dominant_component = max(
+            scored_components.items(),
+            key=lambda item: finite_float(item[1].get("ratio")),
+        )
+        dominant_ratio = finite_float(dominant_component.get("ratio"))
+
+    score = dominant_ratio
+    score_limit = finite_limit("maxFarFieldMicroShakeScore")
+    failures: list[str] = []
+    if score_limit is not None and score > score_limit:
+        failures.append(
+            "far-field micro-shake score "
+            f"{score:.3f} exceeds {score_limit:.3f} "
+            f"(dominant {dominant_name})"
+        )
+
+    required = bool(quality.get("farFieldMicroShakeRequired", score_limit is not None))
+    enabled = required or bool(ridge_summary.get("enabled")) or bool(scored_components)
+    if required and not bool(ridge_summary.get("enabled")):
+        failures.append("far-field micro-shake required but ridge/far-field ROI diagnostics are unavailable")
+
+    return not failures, failures, {
+        "enabled": enabled,
+        "required": required,
+        "score": score,
+        "scoreLimit": score_limit,
+        "dominantAxis": dominant_name,
+        "dominantRatio": dominant_ratio,
+        "components": components,
+        "definition": (
+            "max normalized far-field residual across ridge optical-flow, jerk, roll, "
+            "scale pulse, parallax, and cadence/PTS axes"
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", required=True, type=Path, help="E2E case JSON file.")
@@ -2739,6 +2897,16 @@ def main() -> int:
                 passed = False
             else:
                 warnings.append(message)
+    far_field_passed, far_field_failures, far_field_summary = summarize_far_field_micro_shake(
+        summary,
+        ridge_summary,
+        black_edge_transform_summary,
+        pts_metrics,
+        quality,
+    )
+    if not far_field_passed:
+        failures.extend(far_field_failures)
+        passed = False
     if captured_fps_ratio + 1e-9 < min_captured_fps_ratio:
         failures.append(f"captured fps ratio {captured_fps_ratio:.3f} below {min_captured_fps_ratio:.3f}")
         passed = False
@@ -2797,6 +2965,7 @@ def main() -> int:
                 else None
             ),
             "ridge": ridge_summary,
+            "farFieldMicroShake": far_field_summary,
             "blackEdgeTransform": black_edge_transform_summary,
             "ignoreStartSeconds": ignore_start,
             "ignoreEndSeconds": ignore_end,
@@ -3136,6 +3305,14 @@ def main() -> int:
             f"max {summary['ridge']['lineVerticalJerkMaxPixelsPerFrame']:.3f}px/frame, "
             f"minus-ref dx p95 {summary['ridge']['minusReferenceHorizontalP95Pixels']:.3f}px, "
             f"dy p95 {summary['ridge']['minusReferenceVerticalP95Pixels']:.3f}px"
+        )
+    if summary["farFieldMicroShake"]["enabled"]:
+        score_limit = summary["farFieldMicroShake"].get("scoreLimit")
+        score_limit_text = f"{float(score_limit):.3f}" if isinstance(score_limit, (int, float)) else "none"
+        print(
+            "  far-field micro-shake: "
+            f"score {summary['farFieldMicroShake']['score']:.3f} "
+            f"(limit {score_limit_text}, dominant {summary['farFieldMicroShake']['dominantAxis'] or 'none'})"
         )
     if bool(summary["pts"].get("available")):
         print(

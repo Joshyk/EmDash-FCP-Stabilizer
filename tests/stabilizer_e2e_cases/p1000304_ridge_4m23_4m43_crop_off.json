@@ -140,6 +140,8 @@
     "maxRidgePtsCadenceExcludedFrameRatio": 0.02,
     "ridgeResidualRunThresholdPixels": 0.45,
     "maxRidgeResidualRunFrames": 10,
+    "farFieldMicroShakeRequired": true,
+    "maxFarFieldMicroShakeScore": 1.0,
     "diagnosticSpikeFramesPerKind": 24,
     "diagnosticContactSheetMaxFrames": 96,
     "writeDiagnosticOverlayVideo": true

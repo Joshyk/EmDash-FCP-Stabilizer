@@ -6900,8 +6900,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 + appliedTrajectoryContinuityPixelOffset
             let componentResidualPixelOffset = appliedPixelOffset - componentPixelOffset
             let appliedTransformDelta = sameIdentity ? transformDelta * masterStrength : vector_float2(0.0, 0.0)
+            let appliedRotationDegrees = autoTransform.rotationDegrees * masterStrength
+            let appliedFootstepRotationDegrees = autoTransform.footstepJitterRotationDegrees * masterStrength
+            let appliedStrideRotationDegrees = autoTransform.strideWobbleRotationDegrees * masterStrength
+            let appliedRawRotationDegrees = autoTransform.rawRotationDegrees * masterStrength
+            let appliedTemporalSmoothingRotationDelta = autoTransform.temporalSmoothingRotationDelta * masterStrength
+            let appliedPerspective = autoTransform.perspective * masterStrength
+            let appliedShear = autoTransform.shear * masterStrength
+            let appliedYawPitchProxy = autoTransform.yawPitchProxy * masterStrength
             let componentMessage = String(
-                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f proxy=%@ crop=%@ identity=%@",
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f proxy=%@ crop=%@ identity=%@",
                 analysisSeconds,
                 samplePosition,
                 lowerIndex,
@@ -6924,6 +6932,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 componentResidualPixelOffset.y,
                 appliedTurnDetectedPixelOffset.x,
                 appliedTurnDetectedPixelOffset.y,
+                appliedRotationDegrees,
+                appliedFootstepRotationDegrees,
+                appliedStrideRotationDegrees,
+                appliedRawRotationDegrees,
+                appliedTemporalSmoothingRotationDelta,
+                appliedPerspective.x,
+                appliedPerspective.y,
+                appliedShear.x,
+                appliedShear.y,
+                appliedYawPitchProxy.x,
+                appliedYawPitchProxy.y,
+                autoTransform.warpConfidence,
+                autoTransform.blurAmount,
+                autoTransform.residual,
+                autoTransform.acceptedBlockCount,
+                autoTransform.totalBlockCount,
                 autoCropFraming.positionPixels.x,
                 autoCropFraming.positionPixels.y,
                 autoCropFraming.scale,
