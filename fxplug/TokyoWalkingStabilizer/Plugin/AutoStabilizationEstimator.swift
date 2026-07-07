@@ -13129,16 +13129,20 @@ enum AutoStabilizationEstimator {
             ) * confidenceRamp(columnSupport, start: 0.04, full: 0.20)
             let rowPhaseSupport = confidenceRamp(rowMagnitude, start: 0.12, full: 1.10)
                 * confidenceRamp(max(topRowSupport, max(ridgeRowSupport, midRowSupport)), start: 0.04, full: 0.20)
+            let localWarpSupport = max(
+                bandSupport,
+                max(max(bandDisagreementSupport, columnPhaseSupport), max(max(rowPhaseSupport, localRollSupport), sourceRidgeSupport))
+            )
             result.bandRollingShutterScore = max(
                 result.rollingShutterCandidate,
-                max(max(bandDisagreementSupport, columnPhaseSupport), max(max(rowPhaseSupport, localRollSupport), sourceRidgeSupport))
+                localWarpSupport
             )
             _ = bandMagnitude
             func supportedOffset(_ residual: vector_float2, support: Float) -> vector_float2 {
                 guard support >= lensShakeMinimumSupport else {
                     return vector_float2(0.0, 0.0)
                 }
-                let supportRatio = bandSupport > 0.0 ? clamp(support / bandSupport, min: 0.0, max: 1.0) : 0.0
+                let supportRatio = localWarpSupport > 0.0 ? clamp(support / localWarpSupport, min: 0.0, max: 1.0) : 0.0
                 return vector_float2(
                     clamp(-residual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
                     clamp(-residual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
@@ -13148,7 +13152,7 @@ enum AutoStabilizationEstimator {
                 guard support >= lensShakeMinimumSupport else {
                     return vector_float2(0.0, 0.0)
                 }
-                let supportRatio = bandSupport > 0.0 ? clamp(support / bandSupport, min: 0.0, max: 1.0) : 0.0
+                let supportRatio = localWarpSupport > 0.0 ? clamp(support / localWarpSupport, min: 0.0, max: 1.0) : 0.0
                 return vector_float2(
                     clamp(-0.5 * residual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
                     clamp(-0.5 * residual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
@@ -13158,7 +13162,7 @@ enum AutoStabilizationEstimator {
                 guard support >= lensShakeMinimumSupport else {
                     return vector_float2(0.0, 0.0)
                 }
-                let supportRatio = bandSupport > 0.0 ? clamp(support / bandSupport, min: 0.0, max: 1.0) : 0.0
+                let supportRatio = localWarpSupport > 0.0 ? clamp(support / localWarpSupport, min: 0.0, max: 1.0) : 0.0
                 let residualDelta = current - neighbor
                 return vector_float2(
                     clamp(-0.5 * residualDelta.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
@@ -13169,14 +13173,14 @@ enum AutoStabilizationEstimator {
                 guard support >= lensShakeMinimumSupport else {
                     return 0.0
                 }
-                let supportRatio = bandSupport > 0.0 ? clamp(support / bandSupport, min: 0.0, max: 1.0) : 0.0
+                let supportRatio = localWarpSupport > 0.0 ? clamp(support / localWarpSupport, min: 0.0, max: 1.0) : 0.0
                 return clamp(
                     -value,
                     min: -lensShakeRotationMaximumCorrectionDegrees * .pi / 180.0,
                     max: lensShakeRotationMaximumCorrectionDegrees * .pi / 180.0
                 ) * supportRatio
             }
-            if bandSupport >= lensShakeMinimumSupport {
+            if localWarpSupport >= lensShakeMinimumSupport {
                 result.bandTopOffset = supportedOffset(topResidual, support: topSupport)
                 result.bandRidgeOffset = supportedOffset(ridgeResidual, support: ridgeSupport)
                 result.bandMidOffset = supportedOffset(midResidual, support: midSupport)
@@ -13193,11 +13197,11 @@ enum AutoStabilizationEstimator {
                     result.sourceRidgeOffset = vector_float2(
                         0.0,
                         clamp(-sourceRidgeResidualY, min: -4.8, max: 4.8)
-                    ) * min(1.0, sourceRidgeSupport / max(bandSupport, Float.ulpOfOne))
+                    )
                     result.sourceRidgeSupport = clamp(sourceRidgeSupport, min: 0.0, max: 1.0)
                     result.sourceRidgeApplied = 1.0
                 }
-                result.bandWarpSupport = clamp(bandSupport, min: 0.0, max: 1.0)
+                result.bandWarpSupport = clamp(localWarpSupport, min: 0.0, max: 1.0)
                 if rowPhaseSupport >= lensShakeMinimumSupport {
                     result.bandModelMask |= 1
                 }
@@ -13214,7 +13218,29 @@ enum AutoStabilizationEstimator {
                 if sourceRidgeSupport >= lensShakeMinimumSupport {
                     result.bandModelMask |= 16
                 }
-                if max(max(topSupport, max(ridgeSupport, midSupport)), max(max(rowPhaseSupport, columnPhaseSupport), max(localRollSupport, sourceRidgeSupport))) >= lensShakeMinimumSupport {
+                let localWarpMagnitude = max(
+                    max(
+                        simd_length(result.bandTopOffset),
+                        max(simd_length(result.bandRidgeOffset), simd_length(result.bandMidOffset))
+                    ),
+                    max(
+                        max(
+                            simd_length(result.bandTopColumnOffset),
+                            max(simd_length(result.bandRidgeColumnOffset), simd_length(result.bandMidColumnOffset))
+                        ),
+                        max(
+                            max(
+                                simd_length(result.bandTopRowPhaseOffset),
+                                max(simd_length(result.bandRidgeRowPhaseOffset), simd_length(result.bandMidRowPhaseOffset))
+                            ),
+                            max(
+                                max(abs(result.bandTopLocalRoll), max(abs(result.bandRidgeLocalRoll), abs(result.bandMidLocalRoll))),
+                                simd_length(result.sourceRidgeOffset)
+                            )
+                        )
+                    )
+                )
+                if localWarpMagnitude >= 0.02 {
                     result.bandWarpApplied = 1.0
                 }
             }
@@ -13223,6 +13249,12 @@ enum AutoStabilizationEstimator {
         if result.bandWarpApplied > 0.5 {
             result.support = result.bandWarpSupport
             result.reasonCode = 6
+            return result
+        }
+
+        if result.bandWarpSupport >= lensShakeMinimumSupport {
+            result.support = result.bandWarpSupport
+            result.reasonCode = 5
             return result
         }
 
