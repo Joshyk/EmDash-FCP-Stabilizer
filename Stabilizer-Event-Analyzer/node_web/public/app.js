@@ -356,12 +356,16 @@ function defaultImportsDirForSource(sourcePath) {
   const name = exportNameForPath(sourcePath);
   const parent = dirname(sourcePath);
   if (isFcpbundlePath(sourcePath)) {
-    return joinPath(joinPath(parent, DEFAULT_ANALYSIS_DIR_NAME), name);
+    return joinPath(joinPath(parent, DEFAULT_ANALYSIS_DIR_NAME), retainedAnalysisBundleDirName(name));
   }
   if (name === "Info.fcpxml" && exportNameForPath(parent).endsWith(".fcpxmld")) {
     return joinPath(dirname(parent), DEFAULT_ANALYSIS_DIR_NAME);
   }
   return joinPath(parent, DEFAULT_ANALYSIS_DIR_NAME);
+}
+
+function retainedAnalysisBundleDirName(name) {
+  return String(name || "").replace(/\.fcpbundle$/i, "_fcpbundle");
 }
 
 function currentExportItem(sourcePath) {

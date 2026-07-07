@@ -151,7 +151,7 @@ test("restorePackageInfoForPath rejects folders without one manifest", async () 
 test("defaultImportsDirForSource writes beside selected export in _walking_stabilizer_analysis", () => {
   assert.equal(
     defaultImportsDirForSource("/Volumes/Edit/Project/Library.fcpbundle"),
-    path.resolve("/Volumes/Edit/Project/_walking_stabilizer_analysis/Library.fcpbundle")
+    path.resolve("/Volumes/Edit/Project/_walking_stabilizer_analysis/Library_fcpbundle")
   );
   assert.equal(
     defaultImportsDirForSource("/Volumes/Edit/Project/Event.fcpxmld"),
@@ -169,7 +169,7 @@ test("defaultImportsDirForSource writes beside selected export in _walking_stabi
 
 test("fcpbundle sources force output and cache beside the bundle", () => {
   const sourcePath = "/Volumes/Edit/Project/Library.fcpbundle";
-  const importsDir = path.resolve("/Volumes/Edit/Project/_walking_stabilizer_analysis/Library.fcpbundle");
+  const importsDir = path.resolve("/Volumes/Edit/Project/_walking_stabilizer_analysis/Library_fcpbundle");
   assert.equal(isFcpBundleSource(sourcePath), true);
   assert.equal(
     outputDirValue("/Volumes/Edit/Project", sourcePath),
@@ -270,8 +270,8 @@ test("normalizeSourceJobs scopes roots per source and still forces fcpbundle out
     ],
   });
   assert.equal(jobs.length, 2);
-  assert.equal(jobs[0].importsDir, path.resolve("/Volumes/Edit/Project/_walking_stabilizer_analysis/Library.fcpbundle"));
-  assert.equal(jobs[0].cacheRoot, path.resolve("/Volumes/Edit/Project/_walking_stabilizer_analysis/Library.fcpbundle"));
+  assert.equal(jobs[0].importsDir, path.resolve("/Volumes/Edit/Project/_walking_stabilizer_analysis/Library_fcpbundle"));
+  assert.equal(jobs[0].cacheRoot, path.resolve("/Volumes/Edit/Project/_walking_stabilizer_analysis/Library_fcpbundle"));
   assert.equal(jobs[1].importsDir, path.resolve("/tmp/custom-imports"));
   assert.equal(jobs[1].cacheRoot, path.resolve("/tmp/custom-cache"));
 });

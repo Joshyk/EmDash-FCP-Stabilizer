@@ -28,6 +28,14 @@ def _fcpbundle_root_for(path: Path) -> Path | None:
     return None
 
 
+def _bundle_name_from_retained_dir_name(name: str) -> str | None:
+    if name.endswith(".fcpbundle"):
+        return name
+    if name.endswith("_fcpbundle"):
+        return f"{name[:-len('_fcpbundle')]}.fcpbundle"
+    return None
+
+
 def _manifest_event_root(manifest: dict) -> Path | None:
     event_root_value = manifest.get("eventRoot")
     if not event_root_value:
@@ -63,8 +71,10 @@ def _bundle_roots_from_manifest(manifest: dict, manifest_path: Path) -> tuple[li
                     relative_parts = manifest_path.relative_to(parent).parts
                 except ValueError:
                     relative_parts = ()
-                if sibling_root.is_dir() and relative_parts and str(relative_parts[0]).endswith(".fcpbundle"):
-                    add(sibling_root / relative_parts[0], "retained analysis bundle name")
+                if sibling_root.is_dir() and relative_parts:
+                    bundle_name = _bundle_name_from_retained_dir_name(str(relative_parts[0]))
+                    if bundle_name:
+                        add(sibling_root / bundle_name, "retained analysis bundle name")
                 break
 
     if not any(root.exists() and root.is_dir() for root in roots):

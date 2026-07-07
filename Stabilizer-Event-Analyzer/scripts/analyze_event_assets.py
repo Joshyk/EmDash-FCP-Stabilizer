@@ -67,6 +67,13 @@ def event_scoped_cache_root(base_root: Path, event_name: str | None) -> Path:
     return base_root / event_label / "Analysis Files" / CACHE_DIR_NAME
 
 
+def retained_analysis_bundle_dir_name(bundle_path: Path) -> str:
+    name = bundle_path.name
+    if name.lower().endswith(".fcpbundle"):
+        name = f"{name[:-len('.fcpbundle')]}_fcpbundle"
+    return safe_file_component(name)
+
+
 def assign_asset_cache_roots(
     assets: list[dict],
     requested_cache_root: Path,
@@ -80,7 +87,8 @@ def assign_asset_cache_roots(
         return cache_root, [cache_root]
 
     requested_root = requested_cache_root.expanduser().resolve()
-    analysis_root = requested_root if requested_root.name == bundle_path.name else requested_root / bundle_path.name
+    retained_bundle_name = retained_analysis_bundle_dir_name(bundle_path)
+    analysis_root = requested_root if requested_root.name in {retained_bundle_name, bundle_path.name} else requested_root / retained_bundle_name
     if analysis_root.resolve(strict=False) == bundle_path.resolve(strict=False):
         raise ValueError("retained analysis cache for .fcpbundle sources must not be inside the source .fcpbundle; use a sibling analysis directory")
     cache_roots: list[Path] = []

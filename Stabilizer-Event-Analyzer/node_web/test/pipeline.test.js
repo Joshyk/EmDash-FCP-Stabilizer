@@ -228,7 +228,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
   const pkg = build.packages[0];
   assert.equal(
     pkg.packageDirectory,
-    path.join(retainedRoot, "Library.fcpbundle", "Event-A", path.basename(pkg.packageDirectory))
+    path.join(retainedRoot, "Library_fcpbundle", "Event-A", path.basename(pkg.packageDirectory))
   );
   assert.match(path.basename(pkg.packageDirectory), /^LibraryClip__schema19__sample10__frames300__[0-9a-f]{8}$/);
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
@@ -259,10 +259,10 @@ print(json.dumps({
 }))
 `);
   const resolvedTmp = fs.realpathSync(tmp);
-  assert.equal(payload.analysisRoot, path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library.fcpbundle"));
+  assert.equal(payload.analysisRoot, path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library_fcpbundle"));
   assert.deepEqual(payload.cacheRoots, [
-    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library.fcpbundle", "Event-A", "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
-    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library.fcpbundle", "Event-B", "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
+    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library_fcpbundle", "Event-A", "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
+    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library_fcpbundle", "Event-B", "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
   ]);
   assert.deepEqual(payload.assets.map((asset) => asset.cacheRoot), payload.cacheRoots);
 });
@@ -1691,7 +1691,7 @@ test("install_stabilizer_package_cache resolves Event from retained analysis bun
   const retainedPackageDir = path.join(
     tmp,
     "_walking_stabilizer_analysis",
-    "Library.fcpbundle",
+    "Library_fcpbundle",
     "Old-Event",
     path.basename(pkg.packageDirectory)
   );
@@ -1717,6 +1717,53 @@ test("install_stabilizer_package_cache resolves Event from retained analysis bun
   assert.equal(install.status, "ok");
   assert.equal(install.eventRoot, resolvedEventRoot);
   assert.equal(install.eventRootResolution.source, "cache-identity-in-current-bundle");
+  assert.deepEqual(install.eventRootResolution.bundleRootSources, ["retained analysis bundle name"]);
+});
+
+test("install_stabilizer_package_cache keeps legacy retained .fcpbundle directory compatibility", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-install-cache-legacy-retained-layout-test-"));
+  const analysis = analysisResult();
+  const cacheRoot = writeCachePayload(tmp, analysis);
+  const analysisPath = path.join(tmp, "analysis.json");
+  fs.writeFileSync(analysisPath, JSON.stringify({ status: "ok", cacheRoot, results: [analysis] }), "utf8");
+  const build = run("python3", [
+    "scripts/build_stabilizer_fcpxml_import.py",
+    "--source-fcpxml",
+    fixture,
+    "--analysis-json",
+    analysisPath,
+    "--output-dir",
+    tmp,
+    "--only-analyzed-assets",
+    "--per-footage-packages",
+  ]);
+  const pkg = build.packages[0];
+  const retainedPackageDir = path.join(
+    tmp,
+    "_walking_stabilizer_analysis",
+    "Library.fcpbundle",
+    "Old-Event",
+    path.basename(pkg.packageDirectory)
+  );
+  fs.mkdirSync(path.dirname(retainedPackageDir), { recursive: true });
+  fs.renameSync(pkg.packageDirectory, retainedPackageDir);
+  const manifestPath = path.join(retainedPackageDir, path.basename(pkg.manifestPath));
+  const renamedEventRoot = path.join(tmp, "Library.fcpbundle", "Renamed Event");
+  fs.mkdirSync(path.join(renamedEventRoot, "Original Media"), { recursive: true });
+  writeCachePayload(renamedEventRoot, analysis);
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.mediaPath = "/Volumes/External Media/P1000307.mov";
+  manifest.eventName = "Old Event";
+  manifest.eventRoot = path.join(tmp, "Old Event");
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+  const install = run("python3", [
+    "scripts/install_stabilizer_package_cache.py",
+    "--manifest",
+    manifestPath,
+  ]);
+  assert.equal(install.status, "ok");
   assert.deepEqual(install.eventRootResolution.bundleRootSources, ["retained analysis bundle name"]);
 });
 

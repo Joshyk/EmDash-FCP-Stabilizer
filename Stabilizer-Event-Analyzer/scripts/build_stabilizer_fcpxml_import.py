@@ -827,6 +827,13 @@ def package_event_name(source_root: ET.Element, asset_id: str, result: dict, tar
     return target_event_name or result.get("eventName") or event_name_by_asset_id(source_root).get(asset_id)
 
 
+def retained_analysis_bundle_dir_name(source_path: Path) -> str:
+    name = source_path.name
+    if name.lower().endswith(".fcpbundle"):
+        name = f"{name[:-len('.fcpbundle')]}_fcpbundle"
+    return safe_file_component(name)
+
+
 def package_parent_directory(
     output_dir: Path,
     source_path: Path,
@@ -840,12 +847,13 @@ def package_parent_directory(
     event_name = package_event_name(source_root, asset_id, result, target_event_name)
     if not str(event_name or "").strip():
         raise ValueError(f"analysis result for {result.get('name') or asset_id} is missing Event name; refusing ambiguous retained package path")
-    if output_dir.name == source_path.name:
+    retained_bundle_name = retained_analysis_bundle_dir_name(source_path)
+    if output_dir.name in {retained_bundle_name, source_path.name}:
         if output_dir.expanduser().resolve(strict=False) == source_path.expanduser().resolve(strict=False):
             raise ValueError("retained package output for .fcpbundle sources must not be inside the source .fcpbundle; use a sibling analysis directory")
         bundle_dir = output_dir
     else:
-        bundle_dir = output_dir / source_path.name
+        bundle_dir = output_dir / retained_bundle_name
         if bundle_dir.expanduser().resolve(strict=False) == source_path.expanduser().resolve(strict=False):
             raise ValueError("retained package output for .fcpbundle sources must not be inside the source .fcpbundle; use a sibling analysis directory")
     return bundle_dir / safe_file_component(str(event_name))

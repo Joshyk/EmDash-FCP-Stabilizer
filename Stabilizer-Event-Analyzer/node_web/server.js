@@ -408,12 +408,16 @@ function defaultImportsDirForSource(sourcePath) {
   const resolved = expandPath(sourcePath);
   if (!resolved) return "";
   if (isFcpBundleSource(resolved)) {
-    return path.join(path.dirname(resolved), DEFAULT_ANALYSIS_DIR_NAME, path.basename(resolved));
+    return path.join(path.dirname(resolved), DEFAULT_ANALYSIS_DIR_NAME, retainedAnalysisBundleDirName(resolved));
   }
   if (path.basename(resolved) === "Info.fcpxml" && path.basename(path.dirname(resolved)).endsWith(".fcpxmld")) {
     return path.join(path.dirname(path.dirname(resolved)), DEFAULT_ANALYSIS_DIR_NAME);
   }
   return path.join(path.dirname(resolved), DEFAULT_ANALYSIS_DIR_NAME);
+}
+
+function retainedAnalysisBundleDirName(sourcePath) {
+  return path.basename(sourcePath).replace(/\.fcpbundle$/i, "_fcpbundle");
 }
 
 function isFcpBundleSource(sourcePath) {
@@ -1538,5 +1542,6 @@ module.exports = {
   processFailureDetails,
   processFailureMessage,
   readNativeAnalyzerCacheSchemaVersion,
+  retainedAnalysisBundleDirName,
   restorePackageInfoForPath,
 };
