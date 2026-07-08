@@ -50,10 +50,10 @@ private struct StabilizerInfoFields {
 }
 
 private let tokyoWalkingStabilizerVersion = "1.1.1"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 921.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 1.0, 921.0)
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 922.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 1.0, 922.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_364_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_365_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -301,6 +301,12 @@ private struct AutoCropPlaybackScaleSample {
 
 private struct AutoCropPlaybackPositionSample {
     let seconds: Double
+    let positionPixels: vector_float2
+}
+
+private struct AutoCropPlaybackProtectedDemandSample {
+    let seconds: Double
+    let scale: Float
     let positionPixels: vector_float2
 }
 
@@ -3108,7 +3114,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return .identity
         }
 
-        var protectedDemandSamples: [AutoCropPlaybackScaleSample] = []
+        var protectedDemandSamples: [AutoCropPlaybackProtectedDemandSample] = []
         protectedDemandSamples.reserveCapacity(samples.count)
         var peakScale = Float(1.0)
         var peakSeconds: Double?
@@ -3129,10 +3135,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoCropZoomKeypointScale(forDemandScale: safeSampleScale),
                 minimumClippedScale
             )
+            let neutralPosition = autoCropPlaybackFinitePosition(
+                sample.neutralPositionPixels,
+                fallback: sample.positionPixels
+            )
+            let demandPosition = autoCropPlaybackFinitePosition(
+                sample.positionPixels,
+                fallback: neutralPosition
+            )
             protectedDemandSamples.append(
-                AutoCropPlaybackScaleSample(
+                AutoCropPlaybackProtectedDemandSample(
                     seconds: sample.seconds,
-                    scale: protectedScale
+                    scale: protectedScale,
+                    positionPixels: demandPosition
                 )
             )
             if protectedScale > peakScale {
@@ -3155,7 +3170,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 holdEndSeconds: min(lastTime, demandSample.seconds + holdSeconds),
                 endSeconds: min(lastTime, demandSample.seconds + holdSeconds + releaseSeconds),
                 scale: demandSample.scale,
-                positionPixels: vector_float2(0.0, 0.0)
+                positionPixels: demandSample.positionPixels
             )
         }
         let capLeadSeconds = min(leadSeconds, stabilizerAutoCropPlaybackCapLeadSeconds)
@@ -3168,7 +3183,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 holdEndSeconds: min(lastTime, demandSample.seconds + capHoldSeconds),
                 endSeconds: min(lastTime, demandSample.seconds + capHoldSeconds + capReleaseSeconds),
                 scale: demandSample.scale,
-                positionPixels: vector_float2(0.0, 0.0)
+                positionPixels: demandSample.positionPixels
             )
         }
 
@@ -3182,10 +3197,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         var activeCapKeypointStartIndex = capKeypoints.startIndex
 
         for sample in samples {
-            compositionPositionSamples.append(
-                autoCropPlaybackCompositionPositionSample(sample)
-            )
-
             while activeKeypointStartIndex < playbackKeypoints.endIndex {
                 let keypoint = playbackKeypoints[activeKeypointStartIndex]
                 guard keypoint.endSeconds < sample.seconds - 1e-9 else {
@@ -3195,6 +3206,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             }
 
             var scale = Float(1.0)
+            let basePositionSample = autoCropPlaybackCompositionPositionSample(sample)
+            let neutralPosition = autoCropPlaybackFinitePosition(
+                sample.neutralPositionPixels,
+                fallback: basePositionSample.positionPixels
+            )
+            var compositionPosition = basePositionSample.positionPixels
+            var weightedCompositionPosition = vector_float2(0.0, 0.0)
+            var compositionPositionWeight = Float(0.0)
             var keypointIndex = activeKeypointStartIndex
             while keypointIndex < playbackKeypoints.endIndex {
                 let keypoint = playbackKeypoints[keypointIndex]
@@ -3206,13 +3225,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     at: sample.seconds
                 )
                 if influence > 0.0001 {
-                    scale = max(
-                        scale,
-                        Float(1.0) + ((keypoint.scale - Float(1.0)) * influence)
-                    )
+                    let candidateScale = Float(1.0) + ((keypoint.scale - Float(1.0)) * influence)
+                    scale = max(scale, candidateScale)
+                    let positionWeight = influence * max(Float(0.0001), keypoint.scale - Float(1.0))
+                    let candidatePosition = neutralPosition + ((keypoint.positionPixels - neutralPosition) * influence)
+                    weightedCompositionPosition += candidatePosition * positionWeight
+                    compositionPositionWeight += positionWeight
                 }
                 keypointIndex = playbackKeypoints.index(after: keypointIndex)
             }
+            if compositionPositionWeight > 0.0001 {
+                compositionPosition = weightedCompositionPosition / compositionPositionWeight
+            }
+            compositionPositionSamples.append(
+                AutoCropPlaybackPositionSample(
+                    seconds: sample.seconds,
+                    positionPixels: compositionPosition
+                )
+            )
             let quantizedScale = autoCropPlaybackQuantizedScale(scale)
             rawPlannedSamples.append(
                 AutoCropPlaybackScaleSample(
@@ -3374,8 +3404,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             positionSamples: positionSamples,
             framingSamples: framingSamples
         )
+        let protectedDemandScaleSamples = protectedDemandSamples.map { demandSample in
+            AutoCropPlaybackScaleSample(
+                seconds: demandSample.seconds,
+                scale: demandSample.scale
+            )
+        }
         let rawDemandBounds = autoCropPlaybackDemandScaleBounds(samples)
-        let protectedDemandBounds = autoCropPlaybackScaleBounds(protectedDemandSamples)
+        let protectedDemandBounds = autoCropPlaybackScaleBounds(protectedDemandScaleSamples)
         let rawPlannedBounds = autoCropPlaybackScaleBounds(rawPlannedSamples)
         let repairedBounds = autoCropPlaybackScaleBounds(repairedPlan.samples)
         let preliminaryBounds = autoCropPlaybackScaleBounds(preliminaryPlannedSamples)
@@ -4582,8 +4618,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard spanSeconds > 1e-9 else {
             return max(Float(1.0), lowerSample.scale)
         }
-        let fraction = Float((seconds - lowerSample.seconds) / spanSeconds)
-        let interpolatedScale = lowerSample.scale + ((upperSample.scale - lowerSample.scale) * min(max(fraction, 0.0), 1.0))
+        let fraction = min(max(Float((seconds - lowerSample.seconds) / spanSeconds), 0.0), 1.0)
+        let easedFraction = easeInOutRamp(fraction)
+        let interpolatedScale = lowerSample.scale + ((upperSample.scale - lowerSample.scale) * easedFraction)
         return max(Float(1.0), interpolatedScale)
     }
 
@@ -4646,8 +4683,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard spanSeconds > 1e-9 else {
             return scaledPosition(lowerSample.positionPixels)
         }
-        let fraction = Float((seconds - lowerSample.seconds) / spanSeconds)
-        let position = lowerSample.positionPixels + ((upperSample.positionPixels - lowerSample.positionPixels) * min(max(fraction, 0.0), 1.0))
+        let fraction = min(max(Float((seconds - lowerSample.seconds) / spanSeconds), 0.0), 1.0)
+        let easedFraction = easeInOutRamp(fraction)
+        let position = lowerSample.positionPixels + ((upperSample.positionPixels - lowerSample.positionPixels) * easedFraction)
         return scaledPosition(position)
     }
 
@@ -4737,8 +4775,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         let fraction = min(max(Float((seconds - lowerSample.seconds) / spanSeconds), 0.0), 1.0)
-        let scale = lowerSample.scale + ((upperSample.scale - lowerSample.scale) * fraction)
-        let position = lowerSample.positionPixels + ((upperSample.positionPixels - lowerSample.positionPixels) * fraction)
+        let easedFraction = easeInOutRamp(fraction)
+        let scale = lowerSample.scale + ((upperSample.scale - lowerSample.scale) * easedFraction)
+        let position = lowerSample.positionPixels + ((upperSample.positionPixels - lowerSample.positionPixels) * easedFraction)
         return (
             scale: max(Float(1.0), scale),
             positionPixels: scaledPosition(position)

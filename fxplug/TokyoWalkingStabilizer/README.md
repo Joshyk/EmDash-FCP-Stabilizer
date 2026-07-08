@@ -351,13 +351,13 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   parameter is retained for compatibility and now defines the maximum hold after
   a strong Auto Crop zoom keypoint peak. With `Remove Black Edges` on, final crop
   zoom is read from a cached keypoint plan built from prepared analysis instead
-  of recalculating zoom every render frame. Each local peak safe-crop demand
-  becomes a keypoint, including low-demand coverage misses that would otherwise
-  expose outside-source pixels.
-  becomes an internal zoom keypoint; subtle keypoints scale their timing down
-  from their zoom delta so the visible crop-zoom bar does not stay zoomed across
-  the full default window. The current render frame is used only to clamp the
-  crop center inside the planned scale. A coverage repair pass checks the
+  of recalculating zoom every render frame. Each local peak safe-crop demand,
+  including low-demand coverage misses that would otherwise expose outside-source
+  pixels, becomes an internal zoom keypoint. Subtle keypoints scale their timing
+  down from their zoom delta so the visible crop zoom and center position do not
+  step across the full default window. Both use the same ease-in/out playback
+  curve and rate limits; the current render frame is used only to clamp the crop
+  center inside the planned scale. A coverage repair pass checks the
   prepared analysis against that curve and adds only the keypoints needed to keep
   the curve above black-edge safety demand, so occasional outside-source boxes do
   not force frame-by-frame zoom calculation. Low-demand keypoints that sit near

@@ -180,9 +180,10 @@ safe-crop demand becomes an internal zoom keypoint. `Auto Crop Zoom-In Time`,
 `Auto Crop Hold Time`, and `Auto Crop Zoom-Out Time` define the maximum lead,
 hold, and release for strong zoom keypoints. Smaller keypoints scale those
 durations down from the zoom delta, so subtle crop changes do not stay stretched
-across the full default window. The visible crop-zoom bar follows that smooth
-keypoint curve, while the current render frame is used only to clamp the crop
-center inside the planned scale. A coverage repair pass checks the
+across the full default window. The visible crop zoom and center position follow
+the same ease-in/out keypoint curve and playback rate limits, while the current
+render frame is used only to clamp the crop center inside the planned scale.
+A coverage repair pass checks the
 prepared analysis against that curve and adds only the keypoints needed to keep
 the curve above black-edge safety demand, so occasional outside-source boxes do
 not force frame-by-frame zoom calculation. Low-demand coverage misses are folded

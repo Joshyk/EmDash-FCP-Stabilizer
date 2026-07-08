@@ -169,8 +169,9 @@ fallbacks.
 - `Auto Crop Hold Time`: retained for parameter compatibility and now defines the
   maximum hold after a strong keypoint peak. When `Remove Black Edges` is on,
   each local peak safe-crop demand becomes an internal zoom keypoint; the visible
-  crop-zoom bar follows that smooth keypoint curve, while subtle keypoints scale
-  their timing down so they do not stay zoomed across the full default window. A
+  crop zoom and center position follow that smooth ease-in/out keypoint curve
+  with playback rate limits, while subtle keypoints scale their timing down so
+  they do not stay zoomed across the full default window. A
   coverage repair pass checks the prepared analysis against that curve and adds
   only the keypoints needed to keep the curve above black-edge safety demand, so
   occasional outside-source boxes do not force frame-by-frame zoom calculation.
