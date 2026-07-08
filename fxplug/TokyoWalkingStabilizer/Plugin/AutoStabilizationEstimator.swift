@@ -1023,6 +1023,10 @@ enum AutoStabilizationEstimator {
     private static let lensBandPulseSmoothingStartPixels: Float = 0.22
     private static let lensBandPulseSmoothingFullPixels: Float = 1.35
     private static let farFieldRigidRawReinforcementMaximumBlend: Float = 0.74
+    private static let farFieldLowFrequencyPriorityStartSeconds: Float = 0.28
+    private static let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
+    private static let farFieldLowFrequencyMeshSuppressionScale: Float = 0.62
+    private static let farFieldLowFrequencyTurnSuppressionRelief: Float = 0.65
     private static let lensBandPulseSmoothingStartRadians: Float = 0.00035
     private static let lensBandPulseSmoothingFullRadians: Float = 0.0024
     private static let farFieldRigidShakeTwoWayRadiusFrames = 5
@@ -14284,6 +14288,15 @@ enum AutoStabilizationEstimator {
         result.farFieldMeshDominantWindowSeconds = Float(targetWindowSeconds)
         result.farFieldMeshDominantSupport = clamp(dominantWindowSupport, min: 0.0, max: 1.0)
         result.farFieldMeshDominantCell = Float(dominantCellIndex)
+        let lowFrequencyWindowSupport = confidenceRamp(
+            Float(targetWindowSeconds),
+            start: farFieldLowFrequencyPriorityStartSeconds,
+            full: farFieldLowFrequencyPriorityFullSeconds
+        )
+        let lowFrequencySupport = lowFrequencyWindowSupport
+            * confidenceRamp(dominantWindowSupport, start: 0.18, full: 0.72)
+            * qualitySupport
+        let lowFrequencyTurnScale = 1.0 - ((1.0 - turnScale) * (1.0 - farFieldLowFrequencyTurnSuppressionRelief))
 
         var maximumEvidence = Float(0.0)
         var maximumAppliedSupport = Float(0.0)
@@ -14396,6 +14409,16 @@ enum AutoStabilizationEstimator {
                 pulseSmoothedPixelResidual(kind: .farFieldRigidShakeY, values: analysis.farFieldRigidShakePathY, scale: outputScale.y)
             )
             let rawRigidMagnitude = simd_length(rawRigidResidual)
+            let preparedRigidSupport = interpolatedValue(analysis.farFieldRigidShakeSupport, using: interpolation)
+            let shapeConsistency = interpolatedValue(analysis.farFieldRigidShakeShapeConsistency, using: interpolation)
+            let forwardBackwardConsistency = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistency, using: interpolation)
+            let lowFrequencyRigidPriority = lowFrequencySupport
+                * confidenceRamp(rawRigidMagnitude, start: 0.08, full: 0.66)
+                * confidenceRamp(max(preparedRigidSupport, dominantWindowSupport), start: 0.10, full: 0.56)
+                * confidenceRamp(shapeConsistency, start: 0.28, full: 0.70)
+                * confidenceRamp(forwardBackwardConsistency, start: 0.24, full: 0.68)
+                * lowFrequencyTurnScale
+                * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.62, full: 0.88) * 0.55))
             var meshRigidResidual = vector_float2(0.0, 0.0)
             var meshRigidWeight = Float(0.0)
             var meshRigidSupport = Float(0.0)
@@ -14442,7 +14465,8 @@ enum AutoStabilizationEstimator {
                             meshOpposingBins += 1.0
                         }
                     }
-                    let meshBlend = min(Float(0.45), meshRigidSupport * 0.45)
+                    let meshBlendCeiling = Float(0.45) * (1.0 - (lowFrequencyRigidPriority * farFieldLowFrequencyMeshSuppressionScale))
+                    let meshBlend = min(max(0.08, meshBlendCeiling), meshRigidSupport * 0.45)
                     result.farFieldMeshOffset = meshRigidResidual
                     result.farFieldMeshSupport = clamp(meshRigidSupport, min: 0.0, max: 1.0)
                     result.farFieldMeshBlend = meshBlend
@@ -14475,9 +14499,11 @@ enum AutoStabilizationEstimator {
                     start: 0.45,
                     full: 0.85
                 ) * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.62, full: 0.88) * 0.55))
+                let lowFrequencyRawReinforcement = lowFrequencyRigidPriority
+                    * confidenceRamp(rawRigidMagnitude - smoothedRigidMagnitude, start: 0.08, full: 0.74)
                 let rawBlend = min(
                     farFieldRigidRawReinforcementMaximumBlend,
-                    rawReinforcement * farFieldRigidRawReinforcementMaximumBlend
+                    max(rawReinforcement, lowFrequencyRawReinforcement) * farFieldRigidRawReinforcementMaximumBlend
                 )
                 let xBlend = rawBlend * (1.0 - (xQuiverScore * 0.82))
                 rigidResidual.x += (rawRigidResidual.x - rigidResidual.x) * xBlend
@@ -14489,9 +14515,8 @@ enum AutoStabilizationEstimator {
                 result.farFieldRigidXBeforeLimiter = rigidResidual.x
                 result.farFieldRigidXAfterLimiter = rigidResidual.x
             }
-            let preparedRigidSupport = interpolatedValue(analysis.farFieldRigidShakeSupport, using: interpolation)
-            let shapeConsistency = interpolatedValue(analysis.farFieldRigidShakeShapeConsistency, using: interpolation)
-            let forwardBackwardConsistency = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistency, using: interpolation)
+            let lowFrequencyRigidSupport = lowFrequencyRigidPriority
+                * confidenceRamp(simd_length(rigidResidual), start: 0.05, full: 0.48)
             let rigidSupport = max(
                 confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70)
                 * confidenceRamp(preparedRigidSupport, start: 0.08, full: 0.36)
@@ -14499,7 +14524,10 @@ enum AutoStabilizationEstimator {
                 * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
                 * qualitySupport
                 * turnScale,
-                meshRigidSupport * confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70)
+                max(
+                    meshRigidSupport * confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70),
+                    lowFrequencyRigidSupport
+                )
             )
             result.farFieldRigidOffset = rigidResidual
             result.farFieldRigidSupport = clamp(rigidSupport, min: 0.0, max: 1.0)

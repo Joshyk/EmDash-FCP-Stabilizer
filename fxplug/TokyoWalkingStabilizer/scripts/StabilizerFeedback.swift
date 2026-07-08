@@ -850,6 +850,10 @@ private let farFieldRigidRawReinforcementMaximumBlend: Float = 0.74
 private let lensBandPulseSmoothingBlend: Float = 0.46
 private let lensBandPulseSmoothingStartPixels: Float = 0.22
 private let lensBandPulseSmoothingFullPixels: Float = 1.35
+private let farFieldLowFrequencyPriorityStartSeconds: Float = 0.28
+private let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
+private let farFieldLowFrequencyMeshSuppressionScale: Float = 0.62
+private let farFieldLowFrequencyTurnSuppressionRelief: Float = 0.65
 private let expectedSourceLensShakeLocalBinCount = 9
 private let expectedFarFieldMeshRows = 5
 private let expectedFarFieldMeshColumns = 5
@@ -3831,6 +3835,18 @@ private func sourceSpaceLensShakeBand(
             )
         ) * 0.45
     )
+    let dominantSupport = analysis.farFieldMeshDominantSupport.indices.contains(index)
+        ? analysis.farFieldMeshDominantSupport[index]
+        : 0.0
+    let lowFrequencyWindowSupport = confidenceRamp(
+        Float(targetWindowSeconds),
+        start: farFieldLowFrequencyPriorityStartSeconds,
+        full: farFieldLowFrequencyPriorityFullSeconds
+    )
+    let lowFrequencySupport = lowFrequencyWindowSupport
+        * confidenceRamp(dominantSupport, start: 0.18, full: 0.72)
+        * qualitySupport
+    let lowFrequencyTurnScale = 1.0 - ((1.0 - turnScale) * (1.0 - farFieldLowFrequencyTurnSuppressionRelief))
     func support(_ magnitude: Float, start: Float, full: Float) -> Float {
         clamp(confidenceRamp(magnitude, start: start, full: full) * qualitySupport * turnScale, min: 0.0, max: 1.0)
     }
@@ -3845,6 +3861,16 @@ private func sourceSpaceLensShakeBand(
         let rawRigidResidualY = residual(analysis.farFieldRigidShakePathY) * yScale
         var rigidResidualX = pulseSmoothedPixelResidual(analysis.farFieldRigidShakePathX, scale: xScale)
         var rigidResidualY = pulseSmoothedPixelResidual(analysis.farFieldRigidShakePathY, scale: yScale)
+        let rawRigidMagnitude = hypotf(rawRigidResidualX, rawRigidResidualY)
+        let preparedRigidSupport = analysis.farFieldRigidShakeSupport[index]
+        let shapeConsistency = analysis.farFieldRigidShakeShapeConsistency[index]
+        let forwardBackwardConsistency = analysis.farFieldRigidShakeForwardBackwardConsistency[index]
+        let lowFrequencyRigidPriority = lowFrequencySupport
+            * confidenceRamp(rawRigidMagnitude, start: 0.08, full: 0.66)
+            * confidenceRamp(max(preparedRigidSupport, dominantSupport), start: 0.10, full: 0.56)
+            * confidenceRamp(shapeConsistency, start: 0.28, full: 0.70)
+            * confidenceRamp(forwardBackwardConsistency, start: 0.24, full: 0.68)
+            * lowFrequencyTurnScale
         var meshBlend = Float(0.0)
         var meshSupport = Float(0.0)
         let hasFarFieldMeshPaths = analysis.farFieldMeshRows == expectedFarFieldMeshRows
@@ -3897,12 +3923,12 @@ private func sourceSpaceLensShakeBand(
                     let coverageSupport = confidenceRamp(Float(meshSupportedBinCount), start: 4.0, full: 12.0)
                     meshSupport = min(meshMaxSupport, averageSupport * coverageSupport)
                 }
-                meshBlend = min(Float(0.45), meshSupport * 0.45)
+                let meshBlendCeiling = Float(0.45) * (1.0 - (lowFrequencyRigidPriority * farFieldLowFrequencyMeshSuppressionScale))
+                meshBlend = min(max(0.08, meshBlendCeiling), meshSupport * 0.45)
                 rigidResidualX += (meshResidualX - rigidResidualX) * meshBlend
                 rigidResidualY += (meshResidualY - rigidResidualY) * meshBlend
             }
         }
-        let rawRigidMagnitude = hypotf(rawRigidResidualX, rawRigidResidualY)
         let smoothedRigidMagnitude = hypotf(rigidResidualX, rigidResidualY)
         var rawReinforcementBlend = Float(0.0)
         let xQuiverScore = shortWindowXQuiverScore(
@@ -3915,9 +3941,6 @@ private func sourceSpaceLensShakeBand(
         var xBeforeQuiverLimiter = rigidResidualX
         if rawRigidMagnitude > smoothedRigidMagnitude,
            (rawRigidResidualX * rigidResidualX) + (rawRigidResidualY * rigidResidualY) > 0.0 {
-            let dominantSupport = analysis.farFieldMeshDominantSupport.indices.contains(index)
-                ? analysis.farFieldMeshDominantSupport[index]
-                : 0.0
             let rawReinforcement = confidenceRamp(
                 rawRigidMagnitude - smoothedRigidMagnitude,
                 start: 0.18,
@@ -3927,9 +3950,11 @@ private func sourceSpaceLensShakeBand(
                 start: 0.45,
                 full: 0.85
             )
+            let lowFrequencyRawReinforcement = lowFrequencyRigidPriority
+                * confidenceRamp(rawRigidMagnitude - smoothedRigidMagnitude, start: 0.08, full: 0.74)
             rawReinforcementBlend = min(
                 farFieldRigidRawReinforcementMaximumBlend,
-                rawReinforcement * farFieldRigidRawReinforcementMaximumBlend
+                max(rawReinforcement, lowFrequencyRawReinforcement) * farFieldRigidRawReinforcementMaximumBlend
             )
             let xBlend = rawReinforcementBlend * (1.0 - (xQuiverScore * 0.82))
             xBeforeQuiverLimiter = xBeforeLimiter + ((rawRigidResidualX - xBeforeLimiter) * rawReinforcementBlend)
@@ -3937,19 +3962,15 @@ private func sourceSpaceLensShakeBand(
             rigidResidualY += (rawRigidResidualY - rigidResidualY) * rawReinforcementBlend
         }
         let rigidMagnitude = hypotf(rigidResidualX, rigidResidualY)
-        let preparedRigidSupport = analysis.farFieldRigidShakeSupport[index]
-        let shapeConsistency = analysis.farFieldRigidShakeShapeConsistency[index]
-        let forwardBackwardConsistency = analysis.farFieldRigidShakeForwardBackwardConsistency[index]
-        let dominantSupport = analysis.farFieldMeshDominantSupport.indices.contains(index)
-            ? analysis.farFieldMeshDominantSupport[index]
-            : 0.0
+        let lowFrequencyRigidSupport = lowFrequencyRigidPriority
+            * confidenceRamp(rigidMagnitude, start: 0.05, full: 0.48)
         let rigidSupport = confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70)
             * confidenceRamp(preparedRigidSupport, start: 0.08, full: 0.36)
             * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
             * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
             * qualitySupport
             * turnScale
-        let boundedSupport = clamp(rigidSupport, min: 0.0, max: 1.0)
+        let boundedSupport = clamp(max(rigidSupport, max(meshSupport * confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70), lowFrequencyRigidSupport)), min: 0.0, max: 1.0)
         let applied = boundedSupport >= lensShakeMinimumSupport ? rigidMagnitude * boundedSupport : 0.0
         let reason = boundedSupport >= lensShakeMinimumSupport ? "farFieldRigid" : "farFieldRigidSuppressed"
         return BandAssessment(
@@ -3958,7 +3979,7 @@ private func sourceSpaceLensShakeBand(
             applied: applied,
             remaining: max(0.0, rigidMagnitude - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f raw %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f meshSupport %.2f meshBlend %.2f rawReinforceBlend %.2f xQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f localWarpSuppressed 1 reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rawRigidResidualX, rawRigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, meshSupport, meshBlend, rawReinforcementBlend, xQuiverScore, xBeforeQuiverLimiter, rigidResidualX, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f raw %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f lowFreqPriority %.2f meshSupport %.2f meshBlend %.2f rawReinforceBlend %.2f xQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f localWarpSuppressed 1 reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rawRigidResidualX, rawRigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, meshSupport, meshBlend, rawReinforcementBlend, xQuiverScore, xBeforeQuiverLimiter, rigidResidualX, reason)
         )
     }
 
