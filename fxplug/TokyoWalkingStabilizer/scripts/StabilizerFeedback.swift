@@ -817,6 +817,12 @@ private let farFieldLowFrequencyPriorityStartSeconds: Float = 0.28
 private let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
 private let farFieldLowFrequencyMeshSuppressionScale: Float = 1.0
 private let farFieldLowFrequencyTurnSuppressionRelief: Float = 0.65
+private let farFieldRigidOnlyGuardSupportStart: Float = 0.14
+private let farFieldRigidOnlyGuardSupportFull: Float = 0.46
+private let farFieldRigidOnlyGuardShapeStart: Float = 0.36
+private let farFieldRigidOnlyGuardShapeFull: Float = 0.72
+private let farFieldRigidOnlyGuardTwoWayStart: Float = 0.32
+private let farFieldRigidOnlyGuardTwoWayFull: Float = 0.70
 private let expectedSourceLensShakeLocalBinCount = 15
 private let expectedFarFieldMeshRows = 5
 private let expectedFarFieldMeshColumns = 9
@@ -3795,6 +3801,14 @@ private func sourceSpaceLensShakeBand(
             * qualitySupport
             * turnScale
         let boundedSupport = clamp(max(rigidSupport, max(meshSupport * confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70), lowFrequencyRigidSupport)), min: 0.0, max: 1.0)
+        let rigidOnlyGuard = clamp(
+            confidenceRamp(boundedSupport, start: farFieldRigidOnlyGuardSupportStart, full: farFieldRigidOnlyGuardSupportFull)
+                * confidenceRamp(shapeConsistency, start: farFieldRigidOnlyGuardShapeStart, full: farFieldRigidOnlyGuardShapeFull)
+                * confidenceRamp(forwardBackwardConsistency, start: farFieldRigidOnlyGuardTwoWayStart, full: farFieldRigidOnlyGuardTwoWayFull)
+                * (1.0 - (confidenceRamp(rollingShutterCandidate, start: 0.45, full: 0.75) * 0.65)),
+            min: 0.0,
+            max: 1.0
+        )
         let applied = boundedSupport >= lensShakeMinimumSupport ? rigidMagnitude * boundedSupport : 0.0
         let reason = boundedSupport >= lensShakeMinimumSupport ? "farFieldRigid" : "farFieldRigidSuppressed"
         return BandAssessment(
@@ -3803,7 +3817,7 @@ private func sourceSpaceLensShakeBand(
             applied: applied,
             remaining: max(0.0, rigidMagnitude - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f raw %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f rolling %.2f meshSupport %.2f meshBlend %.2f rawReinforceBlend %.2f xQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f localWarpSuppressed 1 reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rawRigidResidualX, rawRigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, rollingShutterCandidate, meshSupport, meshBlend, rawReinforcementBlend, xQuiverScore, xBeforeQuiverLimiter, rigidResidualX, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f raw %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f rolling %.2f meshSupport %.2f meshBlend %.2f rawReinforceBlend %.2f xQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rawRigidResidualX, rawRigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, rollingShutterCandidate, meshSupport, meshBlend, rawReinforcementBlend, xQuiverScore, xBeforeQuiverLimiter, rigidResidualX, rigidOnlyGuard, reason)
         )
     }
 

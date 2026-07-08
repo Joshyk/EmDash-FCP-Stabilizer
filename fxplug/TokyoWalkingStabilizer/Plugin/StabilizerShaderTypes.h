@@ -127,6 +127,7 @@ typedef struct TokyoWalkingStabilizerTransformUniforms {
     float lensBandMidLocalRoll;
     float lensBandWarpSupport;
     float lensBandWarpApplied;
+    float lensFarFieldRigidOnlyApplied;
     vector_float2 sourceLensShakeRidgeOffset;
     float sourceLensShakeRidgeSupport;
     float sourceLensShakeRidgeApplied;

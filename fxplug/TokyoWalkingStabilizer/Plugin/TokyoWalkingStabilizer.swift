@@ -50,10 +50,10 @@ private struct StabilizerInfoFields {
 }
 
 private let tokyoWalkingStabilizerVersion = "1.1.1"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 925.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 1.0, 925.0)
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 926.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 1.0, 926.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_368_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_369_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -10804,6 +10804,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             lensBandMidLocalRoll: renderedAutoTransform.lensBandMidLocalRoll * masterStrength,
             lensBandWarpSupport: renderedAutoTransform.lensBandWarpSupport,
             lensBandWarpApplied: renderedAutoTransform.lensBandWarpApplied,
+            lensFarFieldRigidOnlyApplied: renderedAutoTransform.lensFarFieldRigidShakeLocalWarpSuppressed,
             sourceLensShakeRidgeOffset: renderedAutoTransform.sourceLensShakeRidgeOffset * masterStrength,
             sourceLensShakeRidgeSupport: renderedAutoTransform.sourceLensShakeRidgeSupport,
             sourceLensShakeRidgeApplied: renderedAutoTransform.sourceLensShakeRidgeApplied,

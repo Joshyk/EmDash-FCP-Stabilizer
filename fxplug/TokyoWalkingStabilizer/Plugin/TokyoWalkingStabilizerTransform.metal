@@ -280,6 +280,8 @@ constant float lensBandRidgeRadius = 0.20;
 constant float lensBandMidRadius = 0.19;
 constant float lensBandFadeStart = 0.46;
 constant float lensBandFadeEnd = 0.58;
+constant float lensBandRigidOnlyFadeStart = 0.64;
+constant float lensBandRigidOnlyFadeEnd = 0.82;
 constant float lensBandInterBandDifferentialGain = 0.10;
 constant float lensBandColumnDifferentialGain = 0.08;
 constant float lensBandRowPhaseGain = 0.05;
@@ -448,9 +450,12 @@ fragment float4 fragmentShader(
     // support to a continuous application gain so weak evidence cannot step to full warp.
     float lensBandSupport = saturate(transform->lensBandWarpApplied)
         * lensBandAppliedGain(transform->lensBandWarpSupport);
+    float rigidOnlyGain = saturate(transform->lensFarFieldRigidOnlyApplied);
     if (lensBandSupport > 0.0001) {
         float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
-        float farFieldFade = 1.0 - smoothstep(lensBandFadeStart, lensBandFadeEnd, sourceY);
+        float fadeStart = mix(lensBandFadeStart, lensBandRigidOnlyFadeStart, rigidOnlyGain);
+        float fadeEnd = mix(lensBandFadeEnd, lensBandRigidOnlyFadeEnd, rigidOnlyGain);
+        float farFieldFade = 1.0 - smoothstep(fadeStart, fadeEnd, sourceY);
         float topWeight = lensBandWeight(sourceY, lensBandTopCenter, lensBandTopRadius);
         float ridgeWeight = lensBandWeight(sourceY, lensBandRidgeCenter, lensBandRidgeRadius);
         float midWeight = lensBandWeight(sourceY, lensBandMidCenter, lensBandMidRadius);
@@ -466,8 +471,9 @@ fragment float4 fragmentShader(
                 + transform->lensBandRidgeOffset
                 + transform->lensBandMidOffset
             ) / 3.0;
+            float differentialGain = 1.0 - rigidOnlyGain;
             float2 bandOffset = commonBandOffset
-                + ((weightedBandOffset - commonBandOffset) * lensBandInterBandDifferentialGain);
+                + ((weightedBandOffset - commonBandOffset) * lensBandInterBandDifferentialGain * differentialGain);
             float sourceX = saturate((stabilizedPixels.x / transform->outputSize.x) + 0.5);
             float columnPhase = clamp((sourceX - 0.5) * 2.0, -1.0, 1.0);
             float2 columnOffset = (
@@ -492,14 +498,15 @@ fragment float4 fragmentShader(
                 + (float2(-(transform->lensBandRidgeLocalRoll * ridgeYLocal), transform->lensBandRidgeLocalRoll * xLocal) * ridgeWeight)
                 + (float2(-(transform->lensBandMidLocalRoll * midYLocal), transform->lensBandMidLocalRoll * xLocal) * midWeight)
             ) / totalWeight;
-            bandOffset += columnOffset * columnPhase * lensBandColumnDifferentialGain;
-            bandOffset += rowPhaseOffset * lensBandRowPhaseGain;
-            bandOffset += localRollOffset * lensBandLocalRollGain;
+            bandOffset += columnOffset * columnPhase * lensBandColumnDifferentialGain * differentialGain;
+            bandOffset += rowPhaseOffset * lensBandRowPhaseGain * differentialGain;
+            bandOffset += localRollOffset * lensBandLocalRollGain * differentialGain;
             stabilizedPixels -= bandOffset * lensBandSupport * farFieldFade * transform->strength;
         }
     }
     float localLensSupport = saturate(transform->sourceLensShakeLocalApplied)
-        * lensBandAppliedGain(transform->sourceLensShakeLocalSupport);
+        * lensBandAppliedGain(transform->sourceLensShakeLocalSupport)
+        * (1.0 - rigidOnlyGain);
     if (localLensSupport > 0.0001) {
         float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
         float farFieldFade = 1.0 - smoothstep(sourceLensLocalFadeStart, sourceLensLocalFadeEnd, sourceY);
@@ -561,7 +568,8 @@ fragment float4 fragmentShader(
         }
     }
     float sourceRidgeSupport = saturate(transform->sourceLensShakeRidgeApplied)
-        * lensBandAppliedGain(transform->sourceLensShakeRidgeSupport);
+        * lensBandAppliedGain(transform->sourceLensShakeRidgeSupport)
+        * (1.0 - rigidOnlyGain);
     if (sourceRidgeSupport > 0.0001) {
         float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
         float ridgeWeight = lensBandWeight(sourceY, sourceLensRidgeCenter, sourceLensRidgeRadius);

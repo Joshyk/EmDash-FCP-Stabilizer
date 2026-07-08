@@ -1024,6 +1024,12 @@ enum AutoStabilizationEstimator {
     private static let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
     private static let farFieldLowFrequencyMeshSuppressionScale: Float = 1.0
     private static let farFieldLowFrequencyTurnSuppressionRelief: Float = 0.65
+    private static let farFieldRigidOnlyGuardSupportStart: Float = 0.14
+    private static let farFieldRigidOnlyGuardSupportFull: Float = 0.46
+    private static let farFieldRigidOnlyGuardShapeStart: Float = 0.36
+    private static let farFieldRigidOnlyGuardShapeFull: Float = 0.72
+    private static let farFieldRigidOnlyGuardTwoWayStart: Float = 0.32
+    private static let farFieldRigidOnlyGuardTwoWayFull: Float = 0.70
     private static let lensBandPulseSmoothingStartRadians: Float = 0.00035
     private static let lensBandPulseSmoothingFullRadians: Float = 0.0024
     private static let farFieldRigidShakeTwoWayRadiusFrames = 5
@@ -14345,7 +14351,6 @@ enum AutoStabilizationEstimator {
             && analysis.farFieldMeshPathY.count == frames.count * farFieldMeshBinCount
             && analysis.farFieldMeshSupport.count == frames.count * farFieldMeshBinCount
         if hasFarFieldRigidShakePaths {
-            result.farFieldRigidLocalWarpSuppressed = 1.0
             let rawRigidResidual = vector_float2(
                 residual(kind: .farFieldRigidShakeX, values: analysis.farFieldRigidShakePathX) * outputScale.x,
                 residual(kind: .farFieldRigidShakeY, values: analysis.farFieldRigidShakePathY) * outputScale.y
@@ -14496,6 +14501,15 @@ enum AutoStabilizationEstimator {
             result.farFieldRigidSupport = clamp(rigidSupport, min: 0.0, max: 1.0)
             result.farFieldRigidShapeConsistency = clamp(shapeConsistency, min: 0.0, max: 1.0)
             result.farFieldRigidForwardBackwardConsistency = clamp(forwardBackwardConsistency, min: 0.0, max: 1.0)
+            let rigidOnlyGuard = clamp(
+                confidenceRamp(result.farFieldRigidSupport, start: farFieldRigidOnlyGuardSupportStart, full: farFieldRigidOnlyGuardSupportFull)
+                    * confidenceRamp(shapeConsistency, start: farFieldRigidOnlyGuardShapeStart, full: farFieldRigidOnlyGuardShapeFull)
+                    * confidenceRamp(forwardBackwardConsistency, start: farFieldRigidOnlyGuardTwoWayStart, full: farFieldRigidOnlyGuardTwoWayFull)
+                    * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.45, full: 0.75) * 0.65)),
+                min: 0.0,
+                max: 1.0
+            )
+            result.farFieldRigidLocalWarpSuppressed = rigidOnlyGuard
             result.bandRawTopOffset = rawRigidResidual
             result.bandRawRidgeOffset = rawRigidResidual
             result.bandRawMidOffset = rawRigidResidual
@@ -14520,6 +14534,7 @@ enum AutoStabilizationEstimator {
             }
         }
         if hasLensBandPaths && hasFarFieldRigidShakePaths {
+            let rigidOnlyLocalWarpScale = 1.0 - clamp(result.farFieldRigidLocalWarpSuppressed, min: 0.0, max: 1.0)
             let sourceRidgeResidualY = pulseSmoothedPixelResidual(kind: .sourceLensShakeRidgeY, values: analysis.sourceLensShakeRidgePathY, scale: outputScale.y)
             let sourceRidgeLineResidualY = pulseSmoothedPixelResidual(kind: .sourceLensShakeRidgeLineY, values: analysis.sourceLensShakeRidgeLinePathY, scale: outputScale.y)
             result.sourceRidgeLineResidual = vector_float2(0.0, sourceRidgeLineResidualY)
@@ -14529,11 +14544,13 @@ enum AutoStabilizationEstimator {
                 * confidenceRamp(sourceRidgePreparedSupport, start: 0.08, full: 0.45)
                 * qualitySupport
                 * turnScale
+                * rigidOnlyLocalWarpScale
             let sourceRidgeLinePreparedSupport = interpolatedValue(analysis.sourceLensShakeRidgeLineSupport, using: interpolation)
             let sourceRidgeLineSupport = confidenceRamp(abs(sourceRidgeLineResidualY), start: 0.14, full: 1.10)
                 * confidenceRamp(sourceRidgeLinePreparedSupport, start: 0.08, full: 0.45)
                 * qualitySupport
                 * turnScale
+                * rigidOnlyLocalWarpScale
 
             if sourceRidgeSupport >= lensShakeMinimumSupport {
                 result.sourceRidgeOffset = vector_float2(
