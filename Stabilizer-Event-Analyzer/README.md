@@ -51,17 +51,16 @@ analysis. Compressed video samples are decoded through `VTDecompressionSession`
 into Metal-compatible native YUV pixel buffers, preserving 10-bit luma for
 10-bit sources. Luma sampling, blur metric reduction, cache-validation
 fingerprints, and frame-to-frame block motion search run through Metal compute
-kernels. Schema 44 analysis persists a 5x5 far-field mesh plus fps-derived
+kernels. Schema 45 analysis persists a `5x9` far-field mesh plus fps-derived
 dominant mesh shake windows from 1/20s through 1.0s, in addition to the two-way
-far-field rigid shake paths and lens-band evidence. The FxPlug render path can
-inspect denser upper-frame motion while still applying a coherent, low-order
-correction that avoids local mountain/cloud pulsing. Runtime can read schema 41
-caches by synthesizing rigid paths in memory, schema 42 caches without mesh
-evidence, and schema 43 mesh-only caches without dominant window evidence, but
-new analysis writes schema 44. Version `1.1.0` makes this schema 44
-fps-derived multi-window detector the baseline for future far-field shake work;
-new changes should not reintroduce fixed-frame shake windows or visible local
-mesh warps as the default correction path. Earlier
+far-field rigid shake paths, `3x5` source-lens local paths, and lens-band
+evidence. The FxPlug render path can inspect denser upper-frame motion while
+still applying a coherent, low-order correction that avoids local mountain/cloud
+pulsing. Runtime now accepts schema 45 only; earlier caches must be regenerated
+by the Event Analyzer. Version `1.1.1` makes this schema 45 fps-derived
+multi-window detector the baseline for future far-field shake work; new changes
+should not reintroduce fixed-frame shake windows or visible local mesh warps as
+the default correction path. Earlier
 schema 24 analysis uses upper-row far-field detail blocks, denser
 high far-field vertical detail blocks, central attitude-detail blocks for
 yaw/pitch/roll evidence, denser in-block sample density for high far-field

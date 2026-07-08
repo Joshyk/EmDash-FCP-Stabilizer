@@ -290,6 +290,16 @@ private struct Analysis {
             return value
         }
 
+        func requireIntArray(_ value: [Int32]?, _ name: String, count expectedCount: Int) throws -> [Int32] {
+            guard let value else {
+                throw FeedbackError(description: "Host Analysis cache is missing \(name); rerun Host Analysis with the current FxPlug")
+            }
+            guard value.count == expectedCount else {
+                throw FeedbackError(description: "Host Analysis cache is not feedback-ready: \(name) has \(value.count) values but expected \(expectedCount); rerun Host Analysis with the current FxPlug")
+            }
+            return value
+        }
+
         self.cachePath = cachePath
         schemaVersion = cache.schemaVersion
         qualityModel = analysisQualityModel(for: cache)
@@ -333,75 +343,31 @@ private struct Analysis {
         lensBandTopConfidence = try requireFloatArray(cache.lensBandTopConfidence, "lensBandTopConfidence")
         lensBandRidgeConfidence = try requireFloatArray(cache.lensBandRidgeConfidence, "lensBandRidgeConfidence")
         lensBandMidConfidence = try requireFloatArray(cache.lensBandMidConfidence, "lensBandMidConfidence")
-        if let cachedFarFieldRigidShakePathX = cache.farFieldRigidShakePathX,
-           let cachedFarFieldRigidShakePathY = cache.farFieldRigidShakePathY,
-           let cachedFarFieldRigidShakeSupport = cache.farFieldRigidShakeSupport,
-           let cachedFarFieldRigidShakeShapeConsistency = cache.farFieldRigidShakeShapeConsistency,
-           let cachedFarFieldRigidShakeForwardBackwardConsistency = cache.farFieldRigidShakeForwardBackwardConsistency {
-            farFieldRigidShakePathX = cachedFarFieldRigidShakePathX
-            farFieldRigidShakePathY = cachedFarFieldRigidShakePathY
-            farFieldRigidShakeSupport = cachedFarFieldRigidShakeSupport
-            farFieldRigidShakeShapeConsistency = cachedFarFieldRigidShakeShapeConsistency
-            farFieldRigidShakeForwardBackwardConsistency = cachedFarFieldRigidShakeForwardBackwardConsistency
-        } else if cache.schemaVersion == 41 {
-            let synthesized = synthesizeFarFieldRigidShakePaths(
-                topX: lensBandTopPathX,
-                topY: lensBandTopPathY,
-                ridgeX: lensBandRidgePathX,
-                ridgeY: lensBandRidgePathY,
-                midX: lensBandMidPathX,
-                midY: lensBandMidPathY,
-                topConfidence: lensBandTopConfidence,
-                ridgeConfidence: lensBandRidgeConfidence,
-                midConfidence: lensBandMidConfidence
-            )
-            farFieldRigidShakePathX = synthesized.pathX
-            farFieldRigidShakePathY = synthesized.pathY
-            farFieldRigidShakeSupport = synthesized.support
-            farFieldRigidShakeShapeConsistency = synthesized.shapeConsistency
-            farFieldRigidShakeForwardBackwardConsistency = synthesized.forwardBackwardConsistency
-        } else {
-            farFieldRigidShakePathX = try requireFloatArray(cache.farFieldRigidShakePathX, "farFieldRigidShakePathX")
-            farFieldRigidShakePathY = try requireFloatArray(cache.farFieldRigidShakePathY, "farFieldRigidShakePathY")
-            farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport")
-            farFieldRigidShakeShapeConsistency = try requireFloatArray(cache.farFieldRigidShakeShapeConsistency, "farFieldRigidShakeShapeConsistency")
-            farFieldRigidShakeForwardBackwardConsistency = try requireFloatArray(cache.farFieldRigidShakeForwardBackwardConsistency, "farFieldRigidShakeForwardBackwardConsistency")
+        farFieldRigidShakePathX = try requireFloatArray(cache.farFieldRigidShakePathX, "farFieldRigidShakePathX", count: frames.count)
+        farFieldRigidShakePathY = try requireFloatArray(cache.farFieldRigidShakePathY, "farFieldRigidShakePathY", count: frames.count)
+        farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport", count: frames.count)
+        farFieldRigidShakeShapeConsistency = try requireFloatArray(cache.farFieldRigidShakeShapeConsistency, "farFieldRigidShakeShapeConsistency", count: frames.count)
+        farFieldRigidShakeForwardBackwardConsistency = try requireFloatArray(cache.farFieldRigidShakeForwardBackwardConsistency, "farFieldRigidShakeForwardBackwardConsistency", count: frames.count)
+        guard let rows = cache.farFieldMeshRows,
+              let columns = cache.farFieldMeshColumns
+        else {
+            throw FeedbackError(description: "Host Analysis cache is missing farFieldMeshRows/Columns; rerun Event Analyzer with schema \(supportedCacheSchemaDescription)")
         }
-        if cache.schemaVersion >= 43 {
-            guard let rows = cache.farFieldMeshRows,
-                  let columns = cache.farFieldMeshColumns
-            else {
-                throw FeedbackError(description: "Host Analysis cache is missing farFieldMeshRows/Columns; rerun Host Analysis with the current FxPlug")
-            }
-            guard rows == expectedFarFieldMeshRows,
-                  columns == expectedFarFieldMeshColumns
-            else {
-                throw FeedbackError(description: "Host Analysis cache has farFieldMesh grid \(rows)x\(columns); expected \(expectedFarFieldMeshRows)x\(expectedFarFieldMeshColumns)")
-            }
-            farFieldMeshRows = rows
-            farFieldMeshColumns = columns
-            let meshCount = frames.count * expectedFarFieldMeshBinCount
-            farFieldMeshPathX = try requireFloatArray(cache.farFieldMeshPathX, "farFieldMeshPathX", count: meshCount)
-            farFieldMeshPathY = try requireFloatArray(cache.farFieldMeshPathY, "farFieldMeshPathY", count: meshCount)
-            farFieldMeshSupport = try requireFloatArray(cache.farFieldMeshSupport, "farFieldMeshSupport", count: meshCount)
-        } else {
-            farFieldMeshRows = 0
-            farFieldMeshColumns = 0
-            farFieldMeshPathX = []
-            farFieldMeshPathY = []
-            farFieldMeshSupport = []
+        guard rows == expectedFarFieldMeshRows,
+              columns == expectedFarFieldMeshColumns
+        else {
+            throw FeedbackError(description: "Host Analysis cache has farFieldMesh grid \(rows)x\(columns); expected \(expectedFarFieldMeshRows)x\(expectedFarFieldMeshColumns)")
         }
-        if cache.schemaVersion >= 44 {
-            farFieldMeshDominantWindowFrames = try requireFloatArray(cache.farFieldMeshDominantWindowFrames, "farFieldMeshDominantWindowFrames")
-            farFieldMeshDominantWindowSeconds = try requireFloatArray(cache.farFieldMeshDominantWindowSeconds, "farFieldMeshDominantWindowSeconds")
-            farFieldMeshDominantSupport = try requireFloatArray(cache.farFieldMeshDominantSupport, "farFieldMeshDominantSupport")
-            farFieldMeshDominantCell = try requireIntArray(cache.farFieldMeshDominantCell, "farFieldMeshDominantCell")
-        } else {
-            farFieldMeshDominantWindowFrames = Array(repeating: 0.0, count: frames.count)
-            farFieldMeshDominantWindowSeconds = Array(repeating: 0.0, count: frames.count)
-            farFieldMeshDominantSupport = Array(repeating: 0.0, count: frames.count)
-            farFieldMeshDominantCell = Array(repeating: -1, count: frames.count)
-        }
+        farFieldMeshRows = rows
+        farFieldMeshColumns = columns
+        let meshCount = frames.count * expectedFarFieldMeshBinCount
+        farFieldMeshPathX = try requireFloatArray(cache.farFieldMeshPathX, "farFieldMeshPathX", count: meshCount)
+        farFieldMeshPathY = try requireFloatArray(cache.farFieldMeshPathY, "farFieldMeshPathY", count: meshCount)
+        farFieldMeshSupport = try requireFloatArray(cache.farFieldMeshSupport, "farFieldMeshSupport", count: meshCount)
+        farFieldMeshDominantWindowFrames = try requireFloatArray(cache.farFieldMeshDominantWindowFrames, "farFieldMeshDominantWindowFrames", count: frames.count)
+        farFieldMeshDominantWindowSeconds = try requireFloatArray(cache.farFieldMeshDominantWindowSeconds, "farFieldMeshDominantWindowSeconds", count: frames.count)
+        farFieldMeshDominantSupport = try requireFloatArray(cache.farFieldMeshDominantSupport, "farFieldMeshDominantSupport", count: frames.count)
+        farFieldMeshDominantCell = try requireIntArray(cache.farFieldMeshDominantCell, "farFieldMeshDominantCell", count: frames.count)
         sourceLensShakeRidgePathY = try requireFloatArray(cache.sourceLensShakeRidgePathY, "sourceLensShakeRidgePathY")
         sourceLensShakeRidgeSupport = try requireFloatArray(cache.sourceLensShakeRidgeSupport, "sourceLensShakeRidgeSupport")
         sourceLensShakeRidgeLinePathY = try requireFloatArray(cache.sourceLensShakeRidgeLinePathY, "sourceLensShakeRidgeLinePathY")
@@ -850,164 +816,18 @@ private let farFieldLowFrequencyPriorityStartSeconds: Float = 0.28
 private let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
 private let farFieldLowFrequencyMeshSuppressionScale: Float = 0.62
 private let farFieldLowFrequencyTurnSuppressionRelief: Float = 0.65
-private let expectedSourceLensShakeLocalBinCount = 9
+private let expectedSourceLensShakeLocalBinCount = 15
 private let expectedFarFieldMeshRows = 5
-private let expectedFarFieldMeshColumns = 5
+private let expectedFarFieldMeshColumns = 9
 private let expectedFarFieldMeshBinCount = expectedFarFieldMeshRows * expectedFarFieldMeshColumns
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [41, 42, 43, 44]
+private let supportedCacheSchemaVersions: Set<Int> = [45]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
-private let farFieldRigidShakeTwoWayRadiusFrames = 5
-private let farFieldRigidShakeShapeStartPixels: Float = 0.10
-private let farFieldRigidShakeShapeFullPixels: Float = 1.15
-private let farFieldRigidShakeForwardBackwardStartPixels: Float = 0.08
-private let farFieldRigidShakeForwardBackwardFullPixels: Float = 1.00
-private let farFieldRigidShakeResidualStartPixels: Float = 0.08
-private let farFieldRigidShakeResidualFullPixels: Float = 0.70
-
-private struct FarFieldRigidShakePreparedPaths {
-    let pathX: [Float]
-    let pathY: [Float]
-    let support: [Float]
-    let shapeConsistency: [Float]
-    let forwardBackwardConsistency: [Float]
-}
-
-private func synthesizeFarFieldRigidShakePaths(
-    topX: [Float],
-    topY: [Float],
-    ridgeX: [Float],
-    ridgeY: [Float],
-    midX: [Float],
-    midY: [Float],
-    topConfidence: [Float],
-    ridgeConfidence: [Float],
-    midConfidence: [Float]
-) -> FarFieldRigidShakePreparedPaths {
-    let frameCount = [
-        topX.count, topY.count, ridgeX.count, ridgeY.count, midX.count, midY.count,
-        topConfidence.count, ridgeConfidence.count, midConfidence.count
-    ].min() ?? 0
-    guard frameCount > 0 else {
-        return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], support: [], shapeConsistency: [], forwardBackwardConsistency: [])
-    }
-
-    var pathX = Array(repeating: Float(0.0), count: frameCount)
-    var pathY = Array(repeating: Float(0.0), count: frameCount)
-    var support = Array(repeating: Float(0.0), count: frameCount)
-    var shapeConsistency = Array(repeating: Float(0.0), count: frameCount)
-    var forwardBackwardConsistency = Array(repeating: Float(0.0), count: frameCount)
-
-    for index in 0..<frameCount {
-        let commonX = (topX[index] * 0.25) + (ridgeX[index] * 0.50) + (midX[index] * 0.25)
-        let commonY = (topY[index] * 0.25) + (ridgeY[index] * 0.50) + (midY[index] * 0.25)
-        pathX[index] = commonX
-        pathY[index] = commonY
-
-        let topDelta = hypotf(topX[index] - commonX, topY[index] - commonY)
-        let ridgeDelta = hypotf(ridgeX[index] - commonX, ridgeY[index] - commonY)
-        let midDelta = hypotf(midX[index] - commonX, midY[index] - commonY)
-        let shapeDisagreement = max(topDelta, max(ridgeDelta, midDelta))
-        shapeConsistency[index] = clamp(
-            1.0 - confidenceRamp(
-                shapeDisagreement,
-                start: farFieldRigidShakeShapeStartPixels,
-                full: farFieldRigidShakeShapeFullPixels
-            ),
-            min: 0.0,
-            max: 1.0
-        )
-    }
-
-    let radius = farFieldRigidShakeTwoWayRadiusFrames
-    guard frameCount > radius * 2 else {
-        return FarFieldRigidShakePreparedPaths(
-            pathX: pathX,
-            pathY: pathY,
-            support: support,
-            shapeConsistency: shapeConsistency,
-            forwardBackwardConsistency: forwardBackwardConsistency
-        )
-    }
-
-    for index in radius..<(frameCount - radius) {
-        let forwardX = pathX[index] - ((2.0 * pathX[index - 1]) - pathX[index - 2])
-        let forwardY = pathY[index] - ((2.0 * pathY[index - 1]) - pathY[index - 2])
-        let backwardX = pathX[index] - ((2.0 * pathX[index + 1]) - pathX[index + 2])
-        let backwardY = pathY[index] - ((2.0 * pathY[index + 1]) - pathY[index + 2])
-        let residualMagnitude = (hypotf(forwardX, forwardY) + hypotf(backwardX, backwardY)) * 0.5
-        let residualMismatch = hypotf(forwardX - backwardX, forwardY - backwardY)
-        forwardBackwardConsistency[index] = clamp(
-            1.0 - confidenceRamp(
-                residualMismatch,
-                start: farFieldRigidShakeForwardBackwardStartPixels,
-                full: farFieldRigidShakeForwardBackwardFullPixels
-            ),
-            min: 0.0,
-            max: 1.0
-        )
-        let confidence = min(topConfidence[index], min(ridgeConfidence[index], midConfidence[index]))
-        support[index] = clamp(
-            confidenceRamp(confidence, start: 0.08, full: 0.36)
-                * shapeConsistency[index]
-                * forwardBackwardConsistency[index]
-                * confidenceRamp(
-                    residualMagnitude,
-                    start: farFieldRigidShakeResidualStartPixels,
-                    full: farFieldRigidShakeResidualFullPixels
-                ),
-            min: 0.0,
-            max: 1.0
-        )
-    }
-
-    return FarFieldRigidShakePreparedPaths(
-        pathX: pathX,
-        pathY: pathY,
-        support: support,
-        shapeConsistency: shapeConsistency,
-        forwardBackwardConsistency: forwardBackwardConsistency
-    )
-}
-
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
-    if cache.schemaVersion >= 18 {
-        return .eventAnalyzerCache
-    }
-    if cache.schemaVersion == 17, looksLikeLegacyEventAnalyzerCache(cache) {
-        return .eventAnalyzerCache
-    }
-    return .fxplugHostAnalysis
-}
-
-private func looksLikeLegacyEventAnalyzerCache(_ cache: PersistedHostAnalysisCache) -> Bool {
-    let frameCount = cache.frames.count
-    guard frameCount > 0,
-          cache.acceptedBlockCounts?.count == frameCount,
-          cache.totalBlockCounts?.count == frameCount,
-          cache.warpConfidence?.count == frameCount,
-          cache.pathRoll?.count == frameCount,
-          cache.footstepPathRoll?.count == frameCount
-    else {
-        return false
-    }
-    let allThreeBlockCounts = cache.acceptedBlockCounts?.allSatisfy { $0 == 3 } == true
-        && cache.totalBlockCounts?.allSatisfy { $0 == 3 } == true
-    let zeroRollAndWarp = allNearlyZero(cache.pathRoll)
-        && allNearlyZero(cache.footstepPathRoll)
-        && allNearlyZero(cache.warpConfidence)
-    return allThreeBlockCounts && zeroRollAndWarp
-}
-
-private func allNearlyZero(_ values: [Float]?) -> Bool {
-    guard let values, !values.isEmpty else {
-        return false
-    }
-    return values.allSatisfy { value in
-        value.isFinite && abs(value) <= 1e-6
-    }
+    _ = cache
+    return .eventAnalyzerCache
 }
 
 private func loadAnalysis(path: String) throws -> Analysis {
@@ -1400,24 +1220,20 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         ("warpConfidence", cache.warpConfidence),
         ("blurAmounts", cache.blurAmounts)
     ]
-    if cache.schemaVersion >= 42 {
-        floatArrays.append(contentsOf: [
-            ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
-            ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
-            ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
-            ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
-            ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
-        ])
+    floatArrays.append(contentsOf: [
+        ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
+        ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
+        ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
+        ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
+        ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
+    ])
+    guard let rows = cache.farFieldMeshRows,
+          let columns = cache.farFieldMeshColumns
+    else {
+        return "farFieldMeshRows/Columns are missing"
     }
-    if cache.schemaVersion >= 43 {
-        guard let rows = cache.farFieldMeshRows,
-              let columns = cache.farFieldMeshColumns
-        else {
-            return "farFieldMeshRows/Columns are missing"
-        }
-        if rows != expectedFarFieldMeshRows || columns != expectedFarFieldMeshColumns {
-            return "farFieldMesh grid is \(rows)x\(columns); expected \(expectedFarFieldMeshRows)x\(expectedFarFieldMeshColumns)"
-        }
+    if rows != expectedFarFieldMeshRows || columns != expectedFarFieldMeshColumns {
+        return "farFieldMesh grid is \(rows)x\(columns); expected \(expectedFarFieldMeshRows)x\(expectedFarFieldMeshColumns)"
     }
     let intArrays: [(String, [Int32]?)] = [
         ("acceptedBlockCounts", cache.acceptedBlockCounts),
@@ -1451,55 +1267,38 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
             return "\(name) has \(values.count) values but expected \(localPathCount)"
         }
     }
-    if cache.schemaVersion >= 44 {
-        let meshPathCount = frameCount * expectedFarFieldMeshBinCount
-        let meshFloatArrays: [(String, [Float]?)] = [
-            ("farFieldMeshPathX", cache.farFieldMeshPathX),
-            ("farFieldMeshPathY", cache.farFieldMeshPathY),
-            ("farFieldMeshSupport", cache.farFieldMeshSupport)
-        ]
-        for (name, values) in meshFloatArrays {
-            guard let values else {
-                return "\(name) is missing"
-            }
-            if values.count != meshPathCount {
-                return "\(name) has \(values.count) values but expected \(meshPathCount)"
-            }
+    let meshPathCount = frameCount * expectedFarFieldMeshBinCount
+    let meshFloatArrays: [(String, [Float]?)] = [
+        ("farFieldMeshPathX", cache.farFieldMeshPathX),
+        ("farFieldMeshPathY", cache.farFieldMeshPathY),
+        ("farFieldMeshSupport", cache.farFieldMeshSupport)
+    ]
+    for (name, values) in meshFloatArrays {
+        guard let values else {
+            return "\(name) is missing"
         }
-        let meshFrameFloatArrays: [(String, [Float]?)] = [
-            ("farFieldMeshDominantWindowFrames", cache.farFieldMeshDominantWindowFrames),
-            ("farFieldMeshDominantWindowSeconds", cache.farFieldMeshDominantWindowSeconds),
-            ("farFieldMeshDominantSupport", cache.farFieldMeshDominantSupport)
-        ]
-        for (name, values) in meshFrameFloatArrays {
-            guard let values else {
-                return "\(name) is missing"
-            }
-            if values.count != frameCount {
-                return "\(name) has \(values.count) values but frames has \(frameCount)"
-            }
+        if values.count != meshPathCount {
+            return "\(name) has \(values.count) values but expected \(meshPathCount)"
         }
-        guard let dominantCell = cache.farFieldMeshDominantCell else {
-            return "farFieldMeshDominantCell is missing"
+    }
+    let meshFrameFloatArrays: [(String, [Float]?)] = [
+        ("farFieldMeshDominantWindowFrames", cache.farFieldMeshDominantWindowFrames),
+        ("farFieldMeshDominantWindowSeconds", cache.farFieldMeshDominantWindowSeconds),
+        ("farFieldMeshDominantSupport", cache.farFieldMeshDominantSupport)
+    ]
+    for (name, values) in meshFrameFloatArrays {
+        guard let values else {
+            return "\(name) is missing"
         }
-        if dominantCell.count != frameCount {
-            return "farFieldMeshDominantCell has \(dominantCell.count) values but frames has \(frameCount)"
+        if values.count != frameCount {
+            return "\(name) has \(values.count) values but frames has \(frameCount)"
         }
-    } else if cache.schemaVersion >= 43 {
-        let meshPathCount = frameCount * expectedFarFieldMeshBinCount
-        let meshFloatArrays: [(String, [Float]?)] = [
-            ("farFieldMeshPathX", cache.farFieldMeshPathX),
-            ("farFieldMeshPathY", cache.farFieldMeshPathY),
-            ("farFieldMeshSupport", cache.farFieldMeshSupport)
-        ]
-        for (name, values) in meshFloatArrays {
-            guard let values else {
-                return "\(name) is missing"
-            }
-            if values.count != meshPathCount {
-                return "\(name) has \(values.count) values but expected \(meshPathCount)"
-            }
-        }
+    }
+    guard let dominantCell = cache.farFieldMeshDominantCell else {
+        return "farFieldMeshDominantCell is missing"
+    }
+    if dominantCell.count != frameCount {
+        return "farFieldMeshDominantCell has \(dominantCell.count) values but frames has \(frameCount)"
     }
     for (name, values) in intArrays {
         guard let values else {

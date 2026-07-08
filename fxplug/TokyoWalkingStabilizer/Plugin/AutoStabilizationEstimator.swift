@@ -1033,7 +1033,7 @@ enum AutoStabilizationEstimator {
     private static let farFieldRigidShakeResidualStartPixels: Float = 0.08
     private static let farFieldRigidShakeResidualFullPixels: Float = 0.70
     static let farFieldMeshRows = 5
-    static let farFieldMeshColumns = 5
+    static let farFieldMeshColumns = 9
     static let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
     private static let farFieldMeshDominantWindowSecondsCandidates: [Double] = [
         1.0 / 20.0,
@@ -1047,8 +1047,8 @@ enum AutoStabilizationEstimator {
         1.0
     ]
     static let sourceLensShakeLocalBandCount = 3
-    static let sourceLensShakeLocalColumnCount = 3
-    static let sourceLensShakeLocalBinCount = 9
+    static let sourceLensShakeLocalColumnCount = 5
+    static let sourceLensShakeLocalBinCount = sourceLensShakeLocalBandCount * sourceLensShakeLocalColumnCount
     private static let timeWindowSelectionEpsilon = 0.001
     private static let minimumAcceptedMotionBlocks = 3
     private static let minimumFarFieldMotionBlocks = 3
@@ -2169,11 +2169,15 @@ enum AutoStabilizationEstimator {
 
     private static func farFieldMeshColumnRanges() -> [(Float, Float)] {
         [
-            (0.00, 0.22),
-            (0.18, 0.42),
-            (0.38, 0.62),
-            (0.58, 0.82),
-            (0.78, 1.00)
+            (0.00, 0.14),
+            (0.10, 0.26),
+            (0.22, 0.38),
+            (0.34, 0.50),
+            (0.46, 0.62),
+            (0.58, 0.74),
+            (0.70, 0.86),
+            (0.82, 0.98),
+            (0.90, 1.00)
         ]
     }
 
@@ -12766,9 +12770,11 @@ enum AutoStabilizationEstimator {
             (0.28, 0.46)
         ]
         let localColumnRanges: [(Float, Float)] = [
-            (0.00, 0.36),
-            (0.32, 0.68),
-            (0.64, 1.00)
+            (0.00, 0.24),
+            (0.18, 0.42),
+            (0.38, 0.62),
+            (0.58, 0.82),
+            (0.76, 1.00)
         ]
         var localDx = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
         var localDy = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
@@ -14834,15 +14840,25 @@ enum AutoStabilizationEstimator {
                     let localOffsets = (0..<sourceLensShakeLocalBinCount).map { bin in
                         supportedLocalBinOffset(localResiduals[bin], support: localSupports[bin])
                     }
-                    result.localTopLeftOffset = localOffsets[0]
-                    result.localTopCenterOffset = localOffsets[1]
-                    result.localTopRightOffset = localOffsets[2]
-                    result.localRidgeLeftOffset = localOffsets[3]
-                    result.localRidgeCenterOffset = localOffsets[4]
-                    result.localRidgeRightOffset = localOffsets[5]
-                    result.localMidLeftOffset = localOffsets[6]
-                    result.localMidCenterOffset = localOffsets[7]
-                    result.localMidRightOffset = localOffsets[8]
+                    func localOffset(row: Int, column: Int) -> vector_float2 {
+                        let bin = (row * sourceLensShakeLocalColumnCount) + column
+                        guard localOffsets.indices.contains(bin) else {
+                            return vector_float2(0.0, 0.0)
+                        }
+                        return localOffsets[bin]
+                    }
+                    let leftColumn = 0
+                    let centerColumn = sourceLensShakeLocalColumnCount / 2
+                    let rightColumn = max(0, sourceLensShakeLocalColumnCount - 1)
+                    result.localTopLeftOffset = localOffset(row: 0, column: leftColumn)
+                    result.localTopCenterOffset = localOffset(row: 0, column: centerColumn)
+                    result.localTopRightOffset = localOffset(row: 0, column: rightColumn)
+                    result.localRidgeLeftOffset = localOffset(row: 1, column: leftColumn)
+                    result.localRidgeCenterOffset = localOffset(row: 1, column: centerColumn)
+                    result.localRidgeRightOffset = localOffset(row: 1, column: rightColumn)
+                    result.localMidLeftOffset = localOffset(row: 2, column: leftColumn)
+                    result.localMidCenterOffset = localOffset(row: 2, column: centerColumn)
+                    result.localMidRightOffset = localOffset(row: 2, column: rightColumn)
                     result.localSupport = clamp(localBinSupport, min: 0.0, max: 1.0)
                     result.localApplied = 1.0
                 }

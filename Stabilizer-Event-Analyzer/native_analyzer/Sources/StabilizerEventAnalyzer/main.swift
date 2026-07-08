@@ -7,9 +7,9 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 44
+private let cacheSchemaVersion = 45
 private let farFieldMeshRows = 5
-private let farFieldMeshColumns = 5
+private let farFieldMeshColumns = 9
 private let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
 private let farFieldMeshDominantWindowSecondsCandidates: [Double] = [
     1.0 / 20.0,
@@ -23,8 +23,8 @@ private let farFieldMeshDominantWindowSecondsCandidates: [Double] = [
     1.0
 ]
 private let sourceLensShakeLocalBandCount = 3
-private let sourceLensShakeLocalColumnCount = 3
-private let sourceLensShakeLocalBinCount = 9
+private let sourceLensShakeLocalColumnCount = 5
+private let sourceLensShakeLocalBinCount = sourceLensShakeLocalBandCount * sourceLensShakeLocalColumnCount
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
@@ -56,11 +56,15 @@ private func farFieldMeshBandRanges() -> [(Float, Float)] {
 
 private func farFieldMeshColumnRanges() -> [(Float, Float)] {
     [
-        (0.00, 0.22),
-        (0.18, 0.42),
-        (0.38, 0.62),
-        (0.58, 0.82),
-        (0.78, 1.00)
+        (0.00, 0.14),
+        (0.10, 0.26),
+        (0.22, 0.38),
+        (0.34, 0.50),
+        (0.46, 0.62),
+        (0.58, 0.74),
+        (0.70, 0.86),
+        (0.82, 0.98),
+        (0.90, 1.00)
     ]
 }
 
@@ -2407,9 +2411,11 @@ private final class MetalMotionWorkspace {
             (0.28, 0.46)
         ]
         let localColumnRanges: [(Float, Float)] = [
-            (0.00, 0.36),
-            (0.32, 0.68),
-            (0.64, 1.00)
+            (0.00, 0.24),
+            (0.18, 0.42),
+            (0.38, 0.62),
+            (0.58, 0.82),
+            (0.76, 1.00)
         ]
         var localDx = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)
         var localDy = Array(repeating: Float(0.0), count: sourceLensShakeLocalBinCount)

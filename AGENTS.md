@@ -57,11 +57,13 @@ residual pitch/yaw/roll, stride wobble, and parallax between near ground and dis
 background. Stabilization design and tests should treat those body-motion artifacts as the
 core problem, not as generic tripod shake or purely optical crop drift.
 
-The `1.1.0` far-field micro-shake implementation is the current baseline.
-Preserve schema 44's fps-derived dominant mesh window evidence for short
-source-space lens/camera shake up to one second. Future changes should not
-return to fixed-frame shake windows, hidden fallback smoothing, or visible local
-mesh warps that make mountains, clouds, ridgelines, or horizons pulse.
+The `1.1.1` far-field micro-shake implementation with schema 45 is the current
+baseline. Preserve schema 45's fps-derived dominant `5x9` far-field mesh window
+evidence for short source-space lens/camera shake up to one second. Future
+changes should not return to fixed-frame shake windows, hidden fallback
+smoothing, or visible local mesh warps that make mountains, clouds, ridgelines,
+or horizons pulse. Earlier schemas are intentionally unsupported and require a
+fresh Event Analyzer run.
 For 1px-class far-field shake detection, prefer source-resolution FCP export
 analysis over FCP Viewer screen pixels. Viewer screen-capture E2E is still required
 for playback cadence, plugin startup, proxy/Green-channel evidence, and visible
