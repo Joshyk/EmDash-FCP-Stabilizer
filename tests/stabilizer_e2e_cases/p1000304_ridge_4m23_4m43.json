@@ -53,6 +53,65 @@
     "w": 820,
     "h": 230
   },
+  "sourceFrameEvaluation": {
+    "enabled": true,
+    "exportProfile": {
+      "kind": "fcp-share-export-file",
+      "container": "mov",
+      "range": "caseInOut"
+    },
+    "outputPixelSpace": "source",
+    "visualReviewRequired": true,
+    "motionMagnification": 8.0,
+    "rois": [
+      {
+        "name": "cloud_upper",
+        "x": 921,
+        "y": 252,
+        "w": 4193,
+        "h": 706
+      },
+      {
+        "name": "ridge_horizon",
+        "x": 921,
+        "y": 403,
+        "w": 4193,
+        "h": 1159
+      },
+      {
+        "name": "right_mountain",
+        "x": 3171,
+        "y": 454,
+        "w": 1841,
+        "h": 1109
+      }
+    ],
+    "pulseWindowsSeconds": {
+      "min": 0.1667,
+      "max": 1.0
+    },
+    "qualityThresholds": {
+      "minOutputWidthRatioToSource": 0.95,
+      "minOutputHeightRatioToSource": 0.95,
+      "baselineWindowSeconds": 0.5,
+      "minMeasuredFrameRatio": 0.94,
+      "minAffineTrackingRatio": 0.3,
+      "minTrackingInliers": 28,
+      "minPhaseCorrelationResponse": 0.06,
+      "maxHighFrequencyResidualPixels": 0.9,
+      "maxHighFrequencyResidualP95Pixels": 0.35,
+      "maxHorizontalResidualP95Pixels": 0.35,
+      "maxVerticalResidualP95Pixels": 0.35,
+      "maxJerkP95PixelsPerFrame": 0.25,
+      "maxRidgeLineVerticalJerkP95PixelsPerFrame": 0.35,
+      "residualRunThresholdPixels": 0.25,
+      "maxResidualRunFrames": 8,
+      "maxPulseAmplitudePixels": 0.2,
+      "ptsIntervalToleranceRatio": 0.2,
+      "maxPtsIntervalIrregularRatio": 0.02,
+      "requirePtsIntervalMetrics": true
+    }
+  },
   "quality": {
     "targetSampleFps": "source",
     "sampleEveryCapturedFrame": true,
@@ -121,7 +180,7 @@
     "minRidgeTrackingInliers": 25,
     "minRidgeTrackingRatio": 0.65,
     "minRidgeMeasuredTrackingRatio": 0.95,
-    "minRidgeMeasuredFrameRatio": 0.90,
+    "minRidgeMeasuredFrameRatio": 0.9,
     "ridgeRollingMedianWindowSeconds": 0.5,
     "ridgeLineSearchTopFraction": 0.08,
     "ridgeLineSearchBottomFraction": 0.72,
@@ -133,7 +192,7 @@
     "maxRidgeHighFrequencyResidualP95Pixels": 0.35,
     "maxRidgeVerticalResidualP95Pixels": 0.28,
     "maxRidgeHorizontalResidualP95Pixels": 0.35,
-    "maxRidgeLineVerticalJerkP95PixelsPerFrame": 0.30,
+    "maxRidgeLineVerticalJerkP95PixelsPerFrame": 0.3,
     "maxRidgeLineVerticalJerkPixelsPerFrame": 0.75,
     "maxRidgeMinusReferenceHorizontalP95Pixels": 0.75,
     "maxRidgeMinusReferenceVerticalP95Pixels": 0.75,

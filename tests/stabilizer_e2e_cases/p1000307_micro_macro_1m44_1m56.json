@@ -65,6 +65,65 @@
     "w": 720,
     "h": 145
   },
+  "sourceFrameEvaluation": {
+    "enabled": true,
+    "exportProfile": {
+      "kind": "fcp-share-export-file",
+      "container": "mov",
+      "range": "caseInOut"
+    },
+    "outputPixelSpace": "source",
+    "visualReviewRequired": true,
+    "motionMagnification": 8.0,
+    "rois": [
+      {
+        "name": "cloud_upper",
+        "x": 1227,
+        "y": 202,
+        "w": 3682,
+        "h": 554
+      },
+      {
+        "name": "ridge_horizon",
+        "x": 1227,
+        "y": 277,
+        "w": 3682,
+        "h": 731
+      },
+      {
+        "name": "right_mountain",
+        "x": 3069,
+        "y": 504,
+        "w": 1841,
+        "h": 907
+      }
+    ],
+    "pulseWindowsSeconds": {
+      "min": 0.1667,
+      "max": 1.0
+    },
+    "qualityThresholds": {
+      "minOutputWidthRatioToSource": 0.95,
+      "minOutputHeightRatioToSource": 0.95,
+      "baselineWindowSeconds": 0.5,
+      "minMeasuredFrameRatio": 0.92,
+      "minAffineTrackingRatio": 0.25,
+      "minTrackingInliers": 24,
+      "minPhaseCorrelationResponse": 0.06,
+      "maxHighFrequencyResidualPixels": 1.1,
+      "maxHighFrequencyResidualP95Pixels": 0.55,
+      "maxHorizontalResidualP95Pixels": 0.5,
+      "maxVerticalResidualP95Pixels": 0.5,
+      "maxJerkP95PixelsPerFrame": 0.35,
+      "maxRidgeLineVerticalJerkP95PixelsPerFrame": 0.65,
+      "residualRunThresholdPixels": 0.35,
+      "maxResidualRunFrames": 9,
+      "maxPulseAmplitudePixels": 0.3,
+      "ptsIntervalToleranceRatio": 0.2,
+      "maxPtsIntervalIrregularRatio": 0.02,
+      "requirePtsIntervalMetrics": true
+    }
+  },
   "quality": {
     "targetSampleFps": "source",
     "sampleEveryCapturedFrame": true,

@@ -62,6 +62,11 @@ Preserve schema 44's fps-derived dominant mesh window evidence for short
 source-space lens/camera shake up to one second. Future changes should not
 return to fixed-frame shake windows, hidden fallback smoothing, or visible local
 mesh warps that make mountains, clouds, ridgelines, or horizons pulse.
+For 1px-class far-field shake detection, prefer source-resolution FCP export
+analysis over FCP Viewer screen pixels. Viewer screen-capture E2E is still required
+for playback cadence, plugin startup, proxy/Green-channel evidence, and visible
+acceptance, but it is not the precision measurement surface for subpixel or
+single-pixel ridge/cloud/horizon residuals.
 
 ## Analysis Cache And Legacy Host Analysis
 
