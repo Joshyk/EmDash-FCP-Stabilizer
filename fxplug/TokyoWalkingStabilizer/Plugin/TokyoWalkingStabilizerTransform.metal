@@ -301,6 +301,114 @@ constant float sourceLensRidgeRadius = 0.14;
 constant float sourceLensRidgeFadeStart = 0.38;
 constant float sourceLensRidgeFadeEnd = 0.52;
 
+static float debugRectOutlineCoverage(float2 uv, float2 outputSize, float minX, float maxX, float minY, float maxY, float thicknessPixels) {
+    if (uv.x < minX || uv.x > maxX || uv.y < minY || uv.y > maxY) {
+        return 0.0;
+    }
+    float thicknessX = max(thicknessPixels / max(outputSize.x, 1.0), 0.0001);
+    float thicknessY = max(thicknessPixels / max(outputSize.y, 1.0), 0.0001);
+    float edgeDistance = min(
+        min(abs(uv.x - minX), abs(uv.x - maxX)) / thicknessX,
+        min(abs(uv.y - minY), abs(uv.y - maxY)) / thicknessY
+    );
+    return 1.0 - smoothstep(0.65, 1.05, edgeDistance);
+}
+
+static float debugRectFillCoverage(float2 uv, float minX, float maxX, float minY, float maxY) {
+    return (uv.x >= minX && uv.x <= maxX && uv.y >= minY && uv.y <= maxY) ? 1.0 : 0.0;
+}
+
+static float farFieldMeshMinY(uint row) {
+    switch (row) {
+        case 0: return 0.04;
+        case 1: return 0.13;
+        case 2: return 0.22;
+        case 3: return 0.31;
+        default: return 0.40;
+    }
+}
+
+static float farFieldMeshMaxY(uint row) {
+    switch (row) {
+        case 0: return 0.16;
+        case 1: return 0.25;
+        case 2: return 0.34;
+        case 3: return 0.43;
+        default: return 0.52;
+    }
+}
+
+static float farFieldMeshMinX(uint column) {
+    switch (column) {
+        case 0: return 0.00;
+        case 1: return 0.18;
+        case 2: return 0.38;
+        case 3: return 0.58;
+        default: return 0.78;
+    }
+}
+
+static float farFieldMeshMaxX(uint column) {
+    switch (column) {
+        case 0: return 0.22;
+        case 1: return 0.42;
+        case 2: return 0.62;
+        case 3: return 0.82;
+        default: return 1.00;
+    }
+}
+
+static float sourceLensLocalMinY(uint row) {
+    switch (row) {
+        case 0: return 0.06;
+        case 1: return 0.16;
+        default: return 0.28;
+    }
+}
+
+static float sourceLensLocalMaxY(uint row) {
+    switch (row) {
+        case 0: return 0.18;
+        case 1: return 0.30;
+        default: return 0.46;
+    }
+}
+
+static float sourceLensLocalMinX(uint column) {
+    switch (column) {
+        case 0: return 0.00;
+        case 1: return 0.32;
+        default: return 0.64;
+    }
+}
+
+static float sourceLensLocalMaxX(uint column) {
+    switch (column) {
+        case 0: return 0.36;
+        case 1: return 0.68;
+        default: return 1.00;
+    }
+}
+
+static float2 sourceLensLocalOffsetForBin(constant TokyoWalkingStabilizerTransformUniforms *transform, uint bin) {
+    switch (bin) {
+        case 0: return transform->sourceLensShakeLocalTopLeftOffset;
+        case 1: return transform->sourceLensShakeLocalTopCenterOffset;
+        case 2: return transform->sourceLensShakeLocalTopRightOffset;
+        case 3: return transform->sourceLensShakeLocalRidgeLeftOffset;
+        case 4: return transform->sourceLensShakeLocalRidgeCenterOffset;
+        case 5: return transform->sourceLensShakeLocalRidgeRightOffset;
+        case 6: return transform->sourceLensShakeLocalMidLeftOffset;
+        case 7: return transform->sourceLensShakeLocalMidCenterOffset;
+        default: return transform->sourceLensShakeLocalMidRightOffset;
+    }
+}
+
+static float debugHorizontalGuideCoverage(float sourceY, float outputHeight, float guideY, float thicknessPixels) {
+    float thickness = max(thicknessPixels / max(outputHeight, 1.0), 0.0001);
+    return 1.0 - smoothstep(0.65, 1.05, abs(sourceY - guideY) / thickness);
+}
+
 fragment float4 fragmentShader(
     RasterizerData in [[stage_in]],
     texture2d<half> colorTexture [[texture(STI_InputImage)]],
@@ -470,6 +578,67 @@ fragment float4 fragmentShader(
     if (transform->debugOverlay > 0.5) {
         float2 pixel = uv * transform->outputSize;
         float overlayScale = clamp(transform->debugOverlayScale, 0.25, 8.0);
+        if (!outsideSource) {
+            float meshOutline = 0.0;
+            float meshDominantFill = 0.0;
+            float localOutline = 0.0;
+            float localActiveFill = 0.0;
+            float dominantCell = floor(transform->debugFarFieldMesh.w + 0.5);
+            float farFieldSupport = saturate(max(transform->debugFarFieldMesh.y, transform->debugFarFieldMeshWindow.z));
+            for (uint row = 0; row < 5; ++row) {
+                for (uint column = 0; column < 5; ++column) {
+                    float minX = farFieldMeshMinX(column);
+                    float maxX = farFieldMeshMaxX(column);
+                    float minY = farFieldMeshMinY(row);
+                    float maxY = farFieldMeshMaxY(row);
+                    float outline = debugRectOutlineCoverage(sampleUV, transform->outputSize, minX, maxX, minY, maxY, 1.25 * overlayScale);
+                    meshOutline = max(meshOutline, outline);
+                    float bin = float((row * 5) + column);
+                    if (dominantCell >= 0.0 && abs(bin - dominantCell) < 0.5) {
+                        meshDominantFill = max(meshDominantFill, debugRectFillCoverage(sampleUV, minX, maxX, minY, maxY));
+                    }
+                }
+            }
+            float localGain = saturate(transform->sourceLensShakeLocalApplied)
+                * lensBandAppliedGain(transform->sourceLensShakeLocalSupport);
+            for (uint row = 0; row < 3; ++row) {
+                for (uint column = 0; column < 3; ++column) {
+                    float minX = sourceLensLocalMinX(column);
+                    float maxX = sourceLensLocalMaxX(column);
+                    float minY = sourceLensLocalMinY(row);
+                    float maxY = sourceLensLocalMaxY(row);
+                    float outline = debugRectOutlineCoverage(sampleUV, transform->outputSize, minX, maxX, minY, maxY, 0.85 * overlayScale);
+                    localOutline = max(localOutline, outline);
+                    uint bin = (row * 3) + column;
+                    float cellActivity = smoothstep(0.02, 0.90, length(sourceLensLocalOffsetForBin(transform, bin))) * localGain;
+                    localActiveFill = max(
+                        localActiveFill,
+                        debugRectFillCoverage(sampleUV, minX, maxX, minY, maxY) * cellActivity
+                    );
+                }
+            }
+            float bandGuide = max(
+                debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandTopCenter, 0.90 * overlayScale),
+                max(
+                    debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandRidgeCenter, 0.90 * overlayScale),
+                    debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandMidCenter, 0.90 * overlayScale)
+                )
+            );
+            float bandGuideAlpha = bandGuide
+                * saturate(transform->lensBandWarpApplied)
+                * lensBandAppliedGain(transform->lensBandWarpSupport)
+                * 0.34;
+            float meshAlpha = (meshOutline * (0.14 + (0.18 * saturate(transform->debugFarFieldMesh.x))))
+                + (meshDominantFill * farFieldSupport * 0.16);
+            float localAlpha = (localOutline * (0.10 + (0.18 * localGain)))
+                + (localActiveFill * 0.18);
+            float combinedMeshAlpha = saturate(meshAlpha + localAlpha + bandGuideAlpha);
+            if (combinedMeshAlpha > 0.0) {
+                float3 meshOverlay = float3(0.94, 0.96, 0.98);
+                outputColor.rgb = mix(outputColor.rgb, meshOverlay, combinedMeshAlpha);
+                outputColor.a = 1.0;
+            }
+        }
         float panelX = pixel.x - (16.0 * overlayScale);
         float panelY = pixel.y - (16.0 * overlayScale);
         float labelWidth = 96.0 * overlayScale;

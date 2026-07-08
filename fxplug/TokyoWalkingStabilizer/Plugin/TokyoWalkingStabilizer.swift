@@ -10652,7 +10652,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sourceLensShakeLocalMidCenterOffset: renderedAutoTransform.sourceLensShakeLocalMidCenterOffset * masterStrength,
             sourceLensShakeLocalMidRightOffset: renderedAutoTransform.sourceLensShakeLocalMidRightOffset * masterStrength,
             sourceLensShakeLocalSupport: renderedAutoTransform.sourceLensShakeLocalSupport,
-            sourceLensShakeLocalApplied: renderedAutoTransform.sourceLensShakeLocalApplied
+            sourceLensShakeLocalApplied: renderedAutoTransform.sourceLensShakeLocalApplied,
+            debugFarFieldMesh: vector_float4(
+                renderedAutoTransform.lensFarFieldMeshAvailable,
+                renderedAutoTransform.lensFarFieldMeshSupport,
+                renderedAutoTransform.lensFarFieldMeshBlend,
+                renderedAutoTransform.lensFarFieldMeshDominantCell
+            ),
+            debugFarFieldMeshWindow: vector_float4(
+                renderedAutoTransform.lensFarFieldMeshDominantWindowFrames,
+                renderedAutoTransform.lensFarFieldMeshDominantWindowSeconds,
+                renderedAutoTransform.lensFarFieldMeshDominantSupport,
+                renderedAutoTransform.lensFarFieldMeshSupportedBins
+            )
         )
         if debugOverlayActive && !previewWarmupDecision.active {
             publishHostAnalysisRenderDiagnostics(
