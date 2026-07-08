@@ -41,6 +41,7 @@ private enum ParameterID: UInt32 {
     case autoCropHoldTime = 44
     case farFieldWarpStrength = 45
     case turnSmoothingZoom = 46
+    case meshOverlayMode = 47
 }
 
 private struct StabilizerInfoFields {
@@ -48,11 +49,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.0"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 917.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.0, 0.0, 917.0)
+private let tokyoWalkingStabilizerVersion = "1.1.1"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 918.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.0, 1.0, 918.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_360_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_361_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -135,6 +136,29 @@ let stabilizerAmbiguousActiveLibrariesCacheUnavailableMessage = "Project Bundle 
 private enum StabilizerEdgeDisplayMode: Int32 {
     case stretchEdges = 0
     case blackOutside = 1
+}
+
+private enum StabilizerMeshOverlayMode: Int32 {
+    case off = 0
+    case farFieldMesh = 1
+    case lensLocalMesh = 2
+    case bandGuides = 3
+    case allMeshes = 4
+
+    static let menuEntries = [
+        "Off",
+        "Far Field Mesh",
+        "Lens Local Mesh",
+        "Band Guides",
+        "All Meshes"
+    ]
+
+    static func clampedRawValue(_ rawValue: Int32) -> Int32 {
+        guard let mode = StabilizerMeshOverlayMode(rawValue: rawValue) else {
+            return StabilizerMeshOverlayMode.off.rawValue
+        }
+        return mode.rawValue
+    }
 }
 
 enum StabilizerSampleScale: Int32 {
@@ -671,6 +695,7 @@ private struct RenderAnalysisDecisionSignature: Equatable {
     let renderUsesPreparedAnalysis: Bool
     let stabilizationActive: Bool
     let debugOverlayActive: Bool
+    let meshOverlayMode: Int32
     let renderSourceIsProxy: Bool
     let renderSourceFrameInfo: String
     let renderCacheIdentityShort: String
@@ -697,6 +722,7 @@ private struct StabilizerPluginState {
     var autoCropEnabled: Bool
     var edgeDisplayMode: Int32
     var debugOverlay: Bool
+    var meshOverlayMode: Int32
     var sampleScale: Int32
     var hostAnalysisFrameCount: Int32
     var hostAnalysisRevision: UInt64
@@ -1383,6 +1409,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             defaultValue: "",
             parameterFlags: FxParameterFlags(kFxParameterFlag_NOT_ANIMATABLE | kFxParameterFlag_HIDDEN)
         )
+        paramAPI.addPopupMenu(
+            withName: "Mesh Overlay",
+            parameterID: ParameterID.meshOverlayMode.rawValue,
+            defaultValue: UInt32(StabilizerMeshOverlayMode.off.rawValue),
+            menuEntries: StabilizerMeshOverlayMode.menuEntries,
+            parameterFlags: flags
+        )
         paramAPI.addToggleButton(
             withName: "Debug Overlay",
             parameterID: ParameterID.debugOverlay.rawValue,
@@ -1424,6 +1457,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropEnabled: true,
             edgeDisplayMode: StabilizerEdgeDisplayMode.blackOutside.rawValue,
             debugOverlay: false,
+            meshOverlayMode: StabilizerMeshOverlayMode.off.rawValue,
             sampleScale: StabilizerSampleScale.defaultScale.rawValue,
             hostAnalysisFrameCount: 0,
             hostAnalysisRevision: 0,
@@ -1454,6 +1488,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         var debugOverlay = ObjCBool(state.debugOverlay)
         paramAPI.getBoolValue(&debugOverlay, fromParameter: ParameterID.debugOverlay.rawValue, at: renderTime)
         state.debugOverlay = debugOverlay.boolValue
+        paramAPI.getIntValue(&state.meshOverlayMode, fromParameter: ParameterID.meshOverlayMode.rawValue, at: renderTime)
+        state.meshOverlayMode = StabilizerMeshOverlayMode.clampedRawValue(state.meshOverlayMode)
         paramAPI.getIntValue(&state.sampleScale, fromParameter: ParameterID.sampleScale.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.renderRevision, fromParameter: ParameterID.renderRevision.rawValue, at: renderTime)
         var cacheIdentityValue = NSString()
@@ -6681,7 +6717,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     @discardableResult
     private func publishRenderAnalysisDecisionIfChanged(_ signature: RenderAnalysisDecisionSignature) -> Bool {
-        let decision = "Render Host Analysis decision | FxPlug \(signature.fxPlugVersion) | transform \(signature.transformEnabled ? "on" : "off") | completed \(signature.hasCompletedHostAnalysis ? "yes" : "no") | project cache \(signature.configuredProjectBundleCache ? "configured" : "not configured") | prepared \(signature.renderUsesPreparedAnalysis ? "yes" : "no") | stabilization \(signature.stabilizationActive ? "active" : "inactive") | debug overlay \(signature.debugOverlayActive ? "active" : "inactive") | proxy \(signature.renderSourceIsProxy ? "yes" : "no") | source \(signature.renderSourceFrameInfo) | identity \(signature.renderCacheIdentityShort) | auto crop \(signature.autoCropEnabled ? "on" : "off") profile \(signature.autoCropProfileName) | frames \(signature.hostAnalysisFrameCount)"
+        let decision = "Render Host Analysis decision | FxPlug \(signature.fxPlugVersion) | transform \(signature.transformEnabled ? "on" : "off") | completed \(signature.hasCompletedHostAnalysis ? "yes" : "no") | project cache \(signature.configuredProjectBundleCache ? "configured" : "not configured") | prepared \(signature.renderUsesPreparedAnalysis ? "yes" : "no") | stabilization \(signature.stabilizationActive ? "active" : "inactive") | debug overlay \(signature.debugOverlayActive ? "active" : "inactive") | mesh overlay \(signature.meshOverlayMode) | proxy \(signature.renderSourceIsProxy ? "yes" : "no") | source \(signature.renderSourceFrameInfo) | identity \(signature.renderCacheIdentityShort) | auto crop \(signature.autoCropEnabled ? "on" : "off") profile \(signature.autoCropProfileName) | frames \(signature.hostAnalysisFrameCount)"
         let now = Date.timeIntervalSinceReferenceDate
         statusLock.lock()
         let shouldPublish = lastRenderAnalysisDecisionSignature != signature
@@ -10310,13 +10346,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform = .identity
         }
         let debugOverlayActive = state.debugOverlay
+        let meshOverlayMode = StabilizerMeshOverlayMode.clampedRawValue(state.meshOverlayMode)
+        let meshOverlayActive = meshOverlayMode != StabilizerMeshOverlayMode.off.rawValue
         if renderCacheIdentity == nil {
             renderCacheIdentity = storeSnapshot.activeCacheIdentity
         }
         let renderCacheIdentityShort = Self.shortRenderCacheIdentity(renderCacheIdentity)
         let renderStatusReason: String?
         if transformEnabled && renderUsesPreparedAnalysis {
-            renderStatusReason = "prepared=yes debug=\(state.debugOverlay ? "on" : "off") proxy=\(renderSourceIsProxy ? "yes" : "no") identity=\(renderCacheIdentityShort)"
+            renderStatusReason = "prepared=yes debug=\(state.debugOverlay ? "on" : "off") mesh=\(meshOverlayMode) proxy=\(renderSourceIsProxy ? "yes" : "no") identity=\(renderCacheIdentityShort)"
         } else if transformEnabled {
             let preferredIdentity = preferredCacheIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let preferredIdentity,
@@ -10324,7 +10362,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                !StabilizerHostAnalysisStore.cacheIdentity(preferredIdentity, matches: expectedRange) {
                 renderStatusReason = "cacheRangeMismatch: preferred identity \(Self.shortRenderCacheIdentity(preferredIdentity)) did not match expected render range"
             } else if hasCompletedHostAnalysis || hasPreparedHostAnalysis || configuredProjectBundleCache || !(preferredIdentity ?? "").isEmpty {
-                renderStatusReason = "loadedButNotRendering: prepared=no completed=\(hasCompletedHostAnalysis ? "yes" : "no") loaded=\(hasPreparedHostAnalysis ? "yes" : "no") projectCache=\(configuredProjectBundleCache ? "configured" : "not configured") debug=\(state.debugOverlay ? "on" : "off") identity=\(renderCacheIdentityShort)"
+                renderStatusReason = "loadedButNotRendering: prepared=no completed=\(hasCompletedHostAnalysis ? "yes" : "no") loaded=\(hasPreparedHostAnalysis ? "yes" : "no") projectCache=\(configuredProjectBundleCache ? "configured" : "not configured") debug=\(state.debugOverlay ? "on" : "off") mesh=\(meshOverlayMode) identity=\(renderCacheIdentityShort)"
             } else {
                 renderStatusReason = nil
             }
@@ -10340,6 +10378,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 renderUsesPreparedAnalysis: renderUsesPreparedAnalysis,
                 stabilizationActive: renderUsesPreparedAnalysis && transformEnabled,
                 debugOverlayActive: debugOverlayActive,
+                meshOverlayMode: meshOverlayMode,
                 renderSourceIsProxy: renderSourceIsProxy,
                 renderSourceFrameInfo: renderSourceFrameInfo,
                 renderCacheIdentityShort: renderCacheIdentityShort,
@@ -10380,18 +10419,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 currentRenderRevision: state.renderRevision
             )
         }
-        let debugOverlayScale: Float
+        let debugOverlayScale: Float = (debugOverlayActive || meshOverlayActive) ? Self.debugOverlayScale(
+            outputWidth: Int(outputWidth),
+            outputHeight: Int(outputHeight),
+            renderSourceIsProxy: renderSourceIsProxy
+        ) : 1.0
         let diagnostic: vector_float4
         let diagnostic2: vector_float4
         let diagnostic3: vector_float4
         let diagnostic4: vector_float4
         var diagnostic5: vector_float4
         if debugOverlayActive {
-            debugOverlayScale = Self.debugOverlayScale(
-                outputWidth: Int(outputWidth),
-                outputHeight: Int(outputHeight),
-                renderSourceIsProxy: renderSourceIsProxy
-            )
             let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
             let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
             let turnScaleX = max(1.0, Float(outputWidth) * 0.01)
@@ -10489,7 +10527,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 0.0
             )
         } else {
-            debugOverlayScale = 1.0
             diagnostic = vector_float4(0.0, 0.0, 0.0, 0.0)
             diagnostic2 = vector_float4(0.0, 0.0, 0.0, 0.0)
             diagnostic3 = vector_float4(0.0, 0.0, 0.0, 0.0)
@@ -10623,6 +10660,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             debugRuntimeBuild: tokyoWalkingStabilizerDebugBuildNumber,
             debugRuntimeVersion: tokyoWalkingStabilizerDebugVersion,
             debugOverlayScale: debugOverlayScale,
+            debugMeshOverlayMode: Float(meshOverlayMode),
             autoCropScale: renderedAutoCropFraming.scale,
             autoCropPositionPixels: renderedAutoCropFraming.positionPixels,
             lensBandTopOffset: renderedAutoTransform.lensBandTopOffset * masterStrength,

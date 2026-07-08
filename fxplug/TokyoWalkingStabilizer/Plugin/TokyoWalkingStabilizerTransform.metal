@@ -575,14 +575,18 @@ fragment float4 fragmentShader(
     }
     outputColor.a = 1.0;
 
-    if (transform->debugOverlay > 0.5) {
-        float2 pixel = uv * transform->outputSize;
-        float overlayScale = clamp(transform->debugOverlayScale, 0.25, 8.0);
-        if (!outsideSource) {
-            float meshOutline = 0.0;
-            float meshDominantFill = 0.0;
-            float localOutline = 0.0;
-            float localActiveFill = 0.0;
+    float2 pixel = uv * transform->outputSize;
+    float overlayScale = clamp(transform->debugOverlayScale, 0.25, 8.0);
+    float meshOverlayMode = floor(transform->debugMeshOverlayMode + 0.5);
+    bool showAllMeshes = meshOverlayMode > 3.5;
+    bool showFarFieldMesh = showAllMeshes || abs(meshOverlayMode - 1.0) < 0.5;
+    bool showLensLocalMesh = showAllMeshes || abs(meshOverlayMode - 2.0) < 0.5;
+    bool showBandGuides = showAllMeshes || abs(meshOverlayMode - 3.0) < 0.5;
+
+    if (meshOverlayMode > 0.5 && !outsideSource) {
+        if (showFarFieldMesh) {
+            float farFieldOutline = 0.0;
+            float farFieldDominantFill = 0.0;
             float dominantCell = floor(transform->debugFarFieldMesh.w + 0.5);
             float farFieldSupport = saturate(max(transform->debugFarFieldMesh.y, transform->debugFarFieldMeshWindow.z));
             for (uint row = 0; row < 5; ++row) {
@@ -591,14 +595,27 @@ fragment float4 fragmentShader(
                     float maxX = farFieldMeshMaxX(column);
                     float minY = farFieldMeshMinY(row);
                     float maxY = farFieldMeshMaxY(row);
-                    float outline = debugRectOutlineCoverage(sampleUV, transform->outputSize, minX, maxX, minY, maxY, 1.25 * overlayScale);
-                    meshOutline = max(meshOutline, outline);
+                    float outline = debugRectOutlineCoverage(sampleUV, transform->outputSize, minX, maxX, minY, maxY, 3.25 * overlayScale);
+                    farFieldOutline = max(farFieldOutline, outline);
                     float bin = float((row * 5) + column);
                     if (dominantCell >= 0.0 && abs(bin - dominantCell) < 0.5) {
-                        meshDominantFill = max(meshDominantFill, debugRectFillCoverage(sampleUV, minX, maxX, minY, maxY));
+                        farFieldDominantFill = max(farFieldDominantFill, debugRectFillCoverage(sampleUV, minX, maxX, minY, maxY));
                     }
                 }
             }
+            float farFieldAlpha = saturate(
+                (farFieldOutline * (0.38 + (0.24 * saturate(transform->debugFarFieldMesh.x))))
+                + (farFieldDominantFill * farFieldSupport * 0.24)
+            );
+            if (farFieldAlpha > 0.0) {
+                outputColor.rgb = mix(outputColor.rgb, float3(0.08, 0.88, 1.0), farFieldAlpha);
+                outputColor.a = 1.0;
+            }
+        }
+
+        if (showLensLocalMesh) {
+            float localOutline = 0.0;
+            float localActiveFill = 0.0;
             float localGain = saturate(transform->sourceLensShakeLocalApplied)
                 * lensBandAppliedGain(transform->sourceLensShakeLocalSupport);
             for (uint row = 0; row < 3; ++row) {
@@ -607,7 +624,7 @@ fragment float4 fragmentShader(
                     float maxX = sourceLensLocalMaxX(column);
                     float minY = sourceLensLocalMinY(row);
                     float maxY = sourceLensLocalMaxY(row);
-                    float outline = debugRectOutlineCoverage(sampleUV, transform->outputSize, minX, maxX, minY, maxY, 0.85 * overlayScale);
+                    float outline = debugRectOutlineCoverage(sampleUV, transform->outputSize, minX, maxX, minY, maxY, 3.0 * overlayScale);
                     localOutline = max(localOutline, outline);
                     uint bin = (row * 3) + column;
                     float cellActivity = smoothstep(0.02, 0.90, length(sourceLensLocalOffsetForBin(transform, bin))) * localGain;
@@ -617,28 +634,36 @@ fragment float4 fragmentShader(
                     );
                 }
             }
-            float bandGuide = max(
-                debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandTopCenter, 0.90 * overlayScale),
-                max(
-                    debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandRidgeCenter, 0.90 * overlayScale),
-                    debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandMidCenter, 0.90 * overlayScale)
-                )
+            float localAlpha = saturate(
+                (localOutline * (0.34 + (0.14 * localGain)))
+                + (localActiveFill * 0.26)
             );
-            float bandGuideAlpha = bandGuide
-                * saturate(transform->lensBandWarpApplied)
-                * lensBandAppliedGain(transform->lensBandWarpSupport)
-                * 0.34;
-            float meshAlpha = (meshOutline * (0.14 + (0.18 * saturate(transform->debugFarFieldMesh.x))))
-                + (meshDominantFill * farFieldSupport * 0.16);
-            float localAlpha = (localOutline * (0.10 + (0.18 * localGain)))
-                + (localActiveFill * 0.18);
-            float combinedMeshAlpha = saturate(meshAlpha + localAlpha + bandGuideAlpha);
-            if (combinedMeshAlpha > 0.0) {
-                float3 meshOverlay = float3(0.94, 0.96, 0.98);
-                outputColor.rgb = mix(outputColor.rgb, meshOverlay, combinedMeshAlpha);
+            if (localAlpha > 0.0) {
+                outputColor.rgb = mix(outputColor.rgb, float3(1.0, 0.62, 0.10), localAlpha);
                 outputColor.a = 1.0;
             }
         }
+
+        if (showBandGuides) {
+            float bandGuide = max(
+                debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandTopCenter, 3.4 * overlayScale),
+                max(
+                    debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandRidgeCenter, 3.4 * overlayScale),
+                    debugHorizontalGuideCoverage(sampleUV.y, transform->outputSize.y, lensBandMidCenter, 3.4 * overlayScale)
+                )
+            );
+            float bandGuideAlpha = bandGuide
+                * (0.46 + (0.20
+                    * saturate(transform->lensBandWarpApplied)
+                    * lensBandAppliedGain(transform->lensBandWarpSupport)));
+            if (bandGuideAlpha > 0.0) {
+                outputColor.rgb = mix(outputColor.rgb, float3(1.0, 0.16, 0.72), saturate(bandGuideAlpha));
+                outputColor.a = 1.0;
+            }
+        }
+    }
+
+    if (transform->debugOverlay > 0.5) {
         float panelX = pixel.x - (16.0 * overlayScale);
         float panelY = pixel.y - (16.0 * overlayScale);
         float labelWidth = 96.0 * overlayScale;

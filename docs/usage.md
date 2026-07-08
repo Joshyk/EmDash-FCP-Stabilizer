@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.0` is the accepted review baseline for far-field micro-shake.
+Version `1.1.1` is the accepted review baseline for far-field micro-shake.
 Use schema 44 analysis for review builds so the fps-derived dominant mesh
 windows are present; older schema 43 caches can still render, but they do not
 carry the dominant window evidence used by the adopted short-shake correction.
@@ -227,6 +227,9 @@ fallbacks.
   the effective Footstep Jitter X/Y/R correction strength, `stride q`, the effective Stride
   Wobble X/Y/R correction strength, `turn q`, applied `warp q`, shear, yaw/pitch proxy, perspective,
   edge-hit counts, the X turn and stride components plus Y footstep and stride components.
+- `Mesh Overlay`: separate from `Debug Overlay`. Select `Far Field Mesh`, `Lens Local Mesh`,
+  `Band Guides`, or `All Meshes` when reviewing source-space cells without drawing the
+  diagnostic bars. `Off` leaves the preview clean.
 - Strength values above `1.0` still compensate low-confidence Footstep and Stride Wobble
   detections. Those walking-band controls use a more assertive
   medium-confidence response than TURN and WARP, but zero confidence still produces zero

@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.0` is the adopted far-field micro-shake baseline. It treats schema
+Version `1.1.1` keeps the adopted far-field micro-shake baseline. It treats schema
 44 fps-derived multi-window far-field mesh evidence as the primary path for
 short lens/camera shake up to one second. Future tuning should preserve that
 seconds-based detector, avoid fixed-frame shake windows, and keep the rendered
@@ -209,6 +209,10 @@ version. It does not control black outside-source pixels; `Edge Display Mode`
 controls that separately.
 The overlay scales from the current render output so the top-left panel occupies
 roughly half of the viewer height in original, optimized, and proxy playback.
+`Mesh Overlay` is separate from `Debug Overlay`: it can show the far-field mesh,
+lens-local mesh, band guides, or all meshes without drawing the top-left bars.
+Mesh families use distinct thicker colors so source-space cell boundaries remain
+visible during FCP preview review.
 
 `Host Analysis Status` appends the current FxPlug version when Final Cut Pro
 accepts status parameter updates. For existing timeline instances that keep

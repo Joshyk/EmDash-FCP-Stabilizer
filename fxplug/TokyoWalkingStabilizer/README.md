@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.0` is the adopted baseline for far-field micro-shake correction.
+- Version `1.1.1` keeps the adopted baseline for far-field micro-shake correction.
   Keep schema 44's fps-derived dominant mesh windows as the primary evidence for
   short source-space lens/camera shake up to one second. Do not return to a fixed
   10-frame detector or a visible local mesh warp that makes mountains, clouds, or
@@ -396,6 +396,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,
   and stride components.
+- `Mesh Overlay`: independent from `Debug Overlay`. Use it to show only the far-field mesh,
+  only the lens-local mesh, only band guides, or all meshes at once. The lines are thicker
+  and color-separated so mesh boundaries can be reviewed without the top-left diagnostic bars.
   The labels mean:
   `X` final horizontal correction,
   `Y` final vertical correction,
