@@ -341,19 +341,27 @@ static float farFieldMeshMaxY(uint row) {
 static float farFieldMeshMinX(uint column) {
     switch (column) {
         case 0: return 0.00;
-        case 1: return 0.18;
-        case 2: return 0.38;
-        case 3: return 0.58;
-        default: return 0.78;
+        case 1: return 0.10;
+        case 2: return 0.22;
+        case 3: return 0.34;
+        case 4: return 0.46;
+        case 5: return 0.58;
+        case 6: return 0.70;
+        case 7: return 0.82;
+        default: return 0.90;
     }
 }
 
 static float farFieldMeshMaxX(uint column) {
     switch (column) {
-        case 0: return 0.22;
-        case 1: return 0.42;
-        case 2: return 0.62;
-        case 3: return 0.82;
+        case 0: return 0.14;
+        case 1: return 0.26;
+        case 2: return 0.38;
+        case 3: return 0.50;
+        case 4: return 0.62;
+        case 5: return 0.74;
+        case 6: return 0.86;
+        case 7: return 0.98;
         default: return 1.00;
     }
 }
@@ -590,14 +598,14 @@ fragment float4 fragmentShader(
             float dominantCell = floor(transform->debugFarFieldMesh.w + 0.5);
             float farFieldSupport = saturate(max(transform->debugFarFieldMesh.y, transform->debugFarFieldMeshWindow.z));
             for (uint row = 0; row < 5; ++row) {
-                for (uint column = 0; column < 5; ++column) {
+                for (uint column = 0; column < 9; ++column) {
                     float minX = farFieldMeshMinX(column);
                     float maxX = farFieldMeshMaxX(column);
                     float minY = farFieldMeshMinY(row);
                     float maxY = farFieldMeshMaxY(row);
                     float outline = debugRectOutlineCoverage(sampleUV, transform->outputSize, minX, maxX, minY, maxY, 3.25 * overlayScale);
                     farFieldOutline = max(farFieldOutline, outline);
-                    float bin = float((row * 5) + column);
+                    float bin = float((row * 9) + column);
                     if (dominantCell >= 0.0 && abs(bin - dominantCell) < 0.5) {
                         farFieldDominantFill = max(farFieldDominantFill, debugRectFillCoverage(sampleUV, minX, maxX, minY, maxY));
                     }
