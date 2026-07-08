@@ -43,7 +43,6 @@ private struct Strengths {
     )
 }
 
-private let legacyFullTurnSmoothingStrength: Float = 12.0
 private let maximumTurnSmoothingStrength: Float = 36.0
 
 private struct PersistedHostAnalysisCache: Decodable {
@@ -763,7 +762,6 @@ private let turnOwnershipFootstepRollSuppression: Float = 0.55
 private let turnOwnershipStrideXSuppression: Float = 1.0
 private let turnOwnershipStrideYSuppression: Float = 0.55
 private let turnOwnershipStrideRollSuppression: Float = 0.50
-private let turnOwnershipFarFieldWarpSuppression: Float = 0.10
 private let turnOwnedWalkingXGateFloorMax: Float = 0.82
 private let turnOwnedStrideXGateFloorScale: Float = 1.15
 private let turnOwnedWalkingXGateFloorStartPixels: Float = 12.0
@@ -817,8 +815,6 @@ private let renderTurnTransitionBridgeEdgeGateFull: Float = 0.78
 private let renderTurnTransitionBridgeLowEdgeLargeTurnBlend: Float = 0.48
 private let renderTurnTransitionBridgeLowEdgeMacroStartPixels: Float = 48.0
 private let renderTurnTransitionBridgeLowEdgeMacroFullPixels: Float = 120.0
-private let renderTurnTransitionDetectedCapStartPixels: Float = 180.0
-private let renderTurnTransitionDetectedCapAllowancePixels: Float = 48.0
 private let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
 private let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
 private let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
@@ -1959,11 +1955,7 @@ private func renderTurnBridgeAssessment(
         bridgeTurnConfidence: bridgedConfidence,
         bridgeMacroX: averagedMacro
     )
-    let uncappedBlendedMacro = centerMacro + ((anchoredMacro - centerMacro) * bridgeBlend)
-    let blendedMacro = turnTransitionDetectedCappedMacroX(
-        centerDetected: centerSample.detected,
-        proposedMacroX: uncappedBlendedMacro
-    )
+    let blendedMacro = centerMacro + ((anchoredMacro - centerMacro) * bridgeBlend)
     let bridgedApplied = abs(blendedMacro)
     return RenderTurnBridgeAssessment(
         applied: bridgedApplied,
@@ -1972,7 +1964,7 @@ private func renderTurnBridgeAssessment(
         sampleCount: acceptedSamples,
         rawApplied: centerSample.applied,
         delta: bridgedApplied - centerSample.applied,
-        note: String(format: "29-sample %.2fs bridge support %.3f adaptive %.2fs/%.1fpx blend %.2f centerKeep %.3f centerAnchor %.3f cap %.3f", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, transitionWindowSeconds, timing.travelPixels, bridgeBlend, abs(bridgedMacro - averagedMacro), abs(anchoredMacro - bridgedMacro), abs(uncappedBlendedMacro - blendedMacro))
+        note: String(format: "29-sample %.2fs bridge support %.3f adaptive %.2fs/%.1fpx blend %.2f centerKeep %.3f centerAnchor %.3f uncapped", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, transitionWindowSeconds, timing.travelPixels, bridgeBlend, abs(bridgedMacro - averagedMacro), abs(anchoredMacro - bridgedMacro))
     )
 }
 
@@ -2064,21 +2056,6 @@ private func turnTransitionCenterAnchoredBridgeMacroX(
         )
     let anchor = confidenceRamp(centerReliability, start: 0.18, full: 0.45)
     return bridgeMacroX + ((centerMacroX - bridgeMacroX) * anchor)
-}
-
-private func turnTransitionDetectedCappedMacroX(
-    centerDetected: Float,
-    proposedMacroX: Float
-) -> Float {
-    let detectedMagnitude = abs(centerDetected)
-    let allowedMagnitude = detectedMagnitude + renderTurnTransitionDetectedCapAllowancePixels
-    guard detectedMagnitude >= renderTurnTransitionDetectedCapStartPixels,
-          abs(proposedMacroX) > allowedMagnitude
-    else {
-        return proposedMacroX
-    }
-    let proposedSign: Float = proposedMacroX >= 0.0 ? 1.0 : -1.0
-    return proposedSign * allowedMagnitude
 }
 
 private func assessment(for context: AssessmentContext, index: Int, options: Options, includeRenderTurnBridge: Bool = false) -> FrameAssessment {
@@ -2409,7 +2386,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         edgeQuality: warpEdgeQuality
     )
     let warpGate = warpGateComponents.gate
-    let warpTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFarFieldWarpSuppression), min: 0.0, max: 1.0)
+    let warpTurnGate: Float = 1.0
     let appliedWarpConfidence = farFieldWarpAppliedConfidence(
         stableWarpConfidence: stableWarpConfidence,
         warpGate: warpGate,
@@ -3826,15 +3803,7 @@ private func sourceSpaceLensShakeBand(
     let qualitySupport = confidenceRamp(appliedWarpConfidence, start: 0.16, full: 0.55)
         * confidenceRamp(trackingConfidence, start: 0.14, full: 0.42)
         * confidenceRamp(edgeQuality, start: 0.46, full: 0.82)
-    let turnScale = 1.0 - (
-        max(
-            confidenceRamp(turnShakeSuppression, start: 0.34, full: 0.76),
-            max(
-                confidenceRamp(abs(turnOwnershipX), start: 0.36, full: 0.88),
-                confidenceRamp(abs(turnOwnershipY), start: 0.36, full: 0.88)
-            )
-        ) * 0.45
-    )
+    let turnScale: Float = 1.0
     let dominantSupport = analysis.farFieldMeshDominantSupport.indices.contains(index)
         ? analysis.farFieldMeshDominantSupport[index]
         : 0.0
@@ -4468,11 +4437,11 @@ private func percentileValue(_ values: [Float], indices: [Int], percentile: Floa
 
 private func correctionFactor(_ strength: Double, confidence: Float) -> Float {
     let boundedStrength = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
-    let requested = min(boundedStrength, legacyFullTurnSmoothingStrength)
+    let requested = boundedStrength
     let response = turnCorrectionConfidenceResponse(confidence)
     let direct = min(requested, 1.0) * response
     let boost = max(0.0, requested - 1.0) * 0.55 * response * (1.0 - (response * 0.25))
-    return clamp(direct + boost, min: 0.0, max: 1.0)
+    return max(0.0, direct + boost)
 }
 
 private func walkingCorrectionFactor(_ strength: Double, confidence: Float, maxStrength: Float = 4.0) -> Float {

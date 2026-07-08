@@ -51,7 +51,7 @@ Current implementation to review:
   - `temporallySmoothedEstimate` samples 15 neighboring render times symmetrically and blends the final automatic transform with zero phase.
   - Turn Smoothing applies only to X translation and requires both tracking evidence and a real X turn band, without a hidden minimum turn-confidence floor.
   - Footstep Jitter X/Y and roll use only a short same-direction, confidence-aware neighborhood around the current center-frame impulse correction so fine ridge-line shake is smoother without being averaged away.
-  - During clear TURN-owned motion, a direct ownership-based turn-shake gate suppresses FJIT X most strongly and reduces FJIT Y/roll, SWOB Y/roll, and WARP confidence so turn motion is not reintroduced as frame vibration.
+  - During clear TURN-owned motion, WARP confidence remains active. A direct ownership-based turn-shake gate suppresses FJIT X most strongly and reduces FJIT Y/roll and SWOB Y/roll so turn motion is not reintroduced as walking-band vibration.
   - Footstep Jitter uses per-frame confidence without a hidden minimum floor before applying X/Y/roll correction, checks local baseline support plus surrounding footstep noise, and stays clamped at full detected-impulse removal.
   - Stride/Turn residual gates use robust window percentiles rather than the single worst residual in the window.
   - Far-field Warp render gating curves medium-confidence tracking/search-headroom evidence upward while preserving zero correction for zero evidence.

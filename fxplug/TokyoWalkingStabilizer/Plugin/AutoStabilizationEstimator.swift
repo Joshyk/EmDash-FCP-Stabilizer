@@ -853,8 +853,6 @@ enum AutoStabilizationEstimator {
     private static let renderTurnTransitionBridgeLowEdgeLargeTurnBlend: Float = 0.48
     private static let renderTurnTransitionBridgeLowEdgeMacroStartPixels: Float = 48.0
     private static let renderTurnTransitionBridgeLowEdgeMacroFullPixels: Float = 120.0
-    private static let renderTurnTransitionDetectedCapStartPixels: Float = 180.0
-    private static let renderTurnTransitionDetectedCapAllowancePixels: Float = 48.0
     private static let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
     private static let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
     private static let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
@@ -904,7 +902,6 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleFullScaleDegrees: Float = 0.16
     private static let strideWobbleFullResponseScale: Float = 0.55
     private static let turnSmoothingFullScalePixels: Float = 2.0
-    private static let legacyFullTurnSmoothingStrength: Float = 12.0
     private static let maximumTurnSmoothingStrength: Float = 36.0
     private static let turnOwnershipFootstepXSuppression: Float = 1.0
     private static let turnOwnershipFootstepYSuppression: Float = 0.65
@@ -912,7 +909,6 @@ enum AutoStabilizationEstimator {
     private static let turnOwnershipStrideXSuppression: Float = 1.0
     private static let turnOwnershipStrideYSuppression: Float = 0.55
     private static let turnOwnershipStrideRollSuppression: Float = 0.50
-    private static let turnOwnershipFarFieldWarpSuppression: Float = 0.10
     private static let turnOwnedWalkingXGateFloorMax: Float = 0.82
     private static let turnOwnedStrideXGateFloorScale: Float = 1.15
     private static let turnOwnedWalkingXGateFloorStartPixels: Float = 12.0
@@ -1146,7 +1142,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 79
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 80
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -3781,7 +3777,7 @@ enum AutoStabilizationEstimator {
             trackingConfidence: farFieldWarpTrackingConfidence,
             edgeQuality: farFieldWarpEdgeQuality
         )
-        let farFieldWarpTurnGate = clamp(1.0 - (playbackTurnShakeSuppression * turnOwnershipFarFieldWarpSuppression), min: 0.0, max: 1.0)
+        let farFieldWarpTurnGate: Float = 1.0
         let appliedWarpConfidence = farFieldWarpAppliedConfidence(
             stableWarpConfidence: stableWarpConfidence,
             warpGate: farFieldWarpGate,
@@ -4683,10 +4679,6 @@ enum AutoStabilizationEstimator {
                 bridgeTransform: smoothedTurnTransform
             )
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
-            smoothedTransform.macroPixelOffset.x = turnTransitionDetectedCappedMacroX(
-                centerTransform: rawCenterTransform,
-                proposedMacroX: smoothedTransform.macroPixelOffset.x
-            )
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
         }
 
@@ -7344,7 +7336,7 @@ enum AutoStabilizationEstimator {
                 trackingConfidence: farFieldWarpTrackingConfidence,
                 edgeQuality: farFieldWarpEdgeQuality
             )
-            let farFieldWarpTurnGate = clamp(1.0 - (playbackTurnShakeSuppression * turnOwnershipFarFieldWarpSuppression), min: 0.0, max: 1.0)
+            let farFieldWarpTurnGate: Float = 1.0
             let appliedWarpConfidence = farFieldWarpAppliedConfidence(
                 stableWarpConfidence: stableWarpConfidence,
                 warpGate: farFieldWarpGate,
@@ -8064,10 +8056,6 @@ enum AutoStabilizationEstimator {
                 bridgeTransform: smoothedTurnTransform
             )
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
-            smoothedTransform.macroPixelOffset.x = turnTransitionDetectedCappedMacroX(
-                centerTransform: centerTransform,
-                proposedMacroX: smoothedTransform.macroPixelOffset.x
-            )
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
         }
 
@@ -9007,7 +8995,7 @@ enum AutoStabilizationEstimator {
                 trackingConfidence: farFieldWarpTrackingConfidence,
                 edgeQuality: farFieldWarpEdgeQuality
             )
-            let farFieldWarpTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFarFieldWarpSuppression), min: 0.0, max: 1.0)
+            let farFieldWarpTurnGate: Float = 1.0
             appliedWarpConfidence = farFieldWarpAppliedConfidence(
                 stableWarpConfidence: stableWarpConfidence,
                 warpGate: farFieldWarpGate,
@@ -10091,7 +10079,7 @@ enum AutoStabilizationEstimator {
                 trackingConfidence: farFieldWarpTrackingConfidence,
                 edgeQuality: farFieldWarpEdgeQuality
             )
-            let farFieldWarpTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipFarFieldWarpSuppression), min: 0.0, max: 1.0)
+            let farFieldWarpTurnGate: Float = 1.0
             appliedWarpConfidence = farFieldWarpAppliedConfidence(
                 stableWarpConfidence: stableWarpConfidence,
                 warpGate: farFieldWarpGate,
@@ -10444,10 +10432,6 @@ enum AutoStabilizationEstimator {
                 bridgeTransform: smoothedTurnTransform
             )
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
-            smoothedTransform.macroPixelOffset.x = turnTransitionDetectedCappedMacroX(
-                centerTransform: rawCenterTransform,
-                proposedMacroX: smoothedTransform.macroPixelOffset.x
-            )
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
         }
         let shortWarpSamples = farFieldWarpSmoothingSamples(
@@ -10792,23 +10776,6 @@ enum AutoStabilizationEstimator {
             * turnTransitionBridgeQualitySupport(centerTransform)
         let anchor = confidenceRamp(centerReliability, start: 0.18, full: 0.45)
         return bridgeMacroX + ((centerMacroX - bridgeMacroX) * anchor)
-    }
-
-    private static func turnTransitionDetectedCappedMacroX(
-        centerTransform: StabilizerAutoTransform,
-        proposedMacroX: Float
-    ) -> Float {
-        let detectedMacroX = centerTransform.turnDetectedPixelOffset.x
-        let detectedMagnitude = abs(detectedMacroX)
-        let allowedMagnitude = detectedMagnitude + renderTurnTransitionDetectedCapAllowancePixels
-        guard detectedMagnitude >= renderTurnTransitionDetectedCapStartPixels,
-              abs(proposedMacroX) > allowedMagnitude,
-              (detectedMacroX * proposedMacroX) > 0.0
-        else {
-            return proposedMacroX
-        }
-        let detectedSign: Float = detectedMacroX >= 0.0 ? 1.0 : -1.0
-        return detectedSign * allowedMagnitude
     }
 
     private static func farFieldWarpSmoothingSamples(
@@ -13655,38 +13622,18 @@ enum AutoStabilizationEstimator {
     }
 
     private static func turnSmoothingOffsetLimit(
-        outputPixels: Float,
-        baseFraction: Float,
-        extraFraction: Float,
-        autoCropFraction: Float,
-        usesAutoCropTurnSpace: Bool,
-        strength: Double
+        outputPixels _: Float,
+        baseFraction _: Float,
+        extraFraction _: Float,
+        autoCropFraction _: Float,
+        usesAutoCropTurnSpace _: Bool,
+        strength _: Double
     ) -> Float {
-        let boundedStrength = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
-        let extraStrength = clamp(boundedStrength - 1.0, min: 0.0, max: 3.0)
-        let cropSpaceStrength = clamp(
-            (boundedStrength - 1.0) / max(1.0, legacyFullTurnSmoothingStrength - 1.0),
-            min: 0.0,
-            max: 1.0
-        )
-        let extendedCropSpaceStrength = clamp(
-            (boundedStrength - legacyFullTurnSmoothingStrength) / max(1.0, maximumTurnSmoothingStrength - legacyFullTurnSmoothingStrength),
-            min: 0.0,
-            max: 1.0
-        )
-        let cropSpaceFraction: Float
-        if usesAutoCropTurnSpace {
-            cropSpaceFraction = autoCropFraction * (cropSpaceStrength + extendedCropSpaceStrength)
-        } else {
-            cropSpaceFraction = 0.0
-        }
-        let fraction = baseFraction + (extraFraction * extraStrength) + cropSpaceFraction
-        return max(8.0, outputPixels * fraction)
+        return Float.infinity
     }
 
-    private static func turnSmoothingRotationLimit(strength: Double) -> Float {
-        let extraStrength = clamp(Float(strength - 1.0), min: 0.0, max: 3.0)
-        return baseTurnSmoothingRotationLimitDegrees + (extraTurnSmoothingRotationLimitDegrees * extraStrength)
+    private static func turnSmoothingRotationLimit(strength _: Double) -> Float {
+        return Float.infinity
     }
 
     private static func softLimit(_ value: Float, limit: Float) -> Float {
@@ -14030,15 +13977,7 @@ enum AutoStabilizationEstimator {
             start: 0.46,
             full: 0.82
         )
-        let turnScale = 1.0 - (
-            max(
-                confidenceRamp(turnShakeSuppression, start: 0.34, full: 0.76),
-                max(
-                    confidenceRamp(abs(turnOwnership.x), start: 0.36, full: 0.88),
-                    confidenceRamp(abs(turnOwnership.y), start: 0.36, full: 0.88)
-                )
-            ) * 0.45
-        )
+        let turnScale: Float = 1.0
 
         func residual(kind: MotionPathKind, values: [Float]) -> Float {
             guard !values.isEmpty else {
@@ -15818,14 +15757,14 @@ enum AutoStabilizationEstimator {
     }
 
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
-        let requestedRemoval = clamp(Float(strength), min: 0.0, max: legacyFullTurnSmoothingStrength)
+        let requestedRemoval = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
         let confidenceResponse = turnCorrectionConfidenceResponse(confidence)
         let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
         let confidenceBoost = max(0.0, requestedRemoval - 1.0)
             * 0.55
             * confidenceResponse
             * (1.0 - (confidenceResponse * 0.25))
-        return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
+        return max(0.0, directRemoval + confidenceBoost)
     }
 
     private static func walkingConfidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float, maxStrength: Float = 4.0) -> Float {

@@ -58,9 +58,8 @@ estimators, or Transform-keyframe writers back into this target.
   29-sample zero-phase transition pass for macro X correction only. That pass weights
   same-direction, high-confidence TURN corrections over broken center frames and preserves
   a confident center-frame TURN correction when the bridge average would otherwise weaken it.
-  Strength values above `1.0` use a more assertive confidence boost for TURN only, while
-  still clamping at full detected turn-band removal so the render path does not add inverse
-  pan shake. TURN ownership gates are smoothed across `0.90` seconds so FJIT/SWOB/WARP do not toggle abruptly
+  Strength values above `1.0` use a more assertive confidence boost for TURN only and are
+  no longer capped at full detected turn-band removal. TURN ownership gates are smoothed across `0.90` seconds so FJIT/SWOB do not toggle abruptly
   during turn entry and exit. TURN owns macro X pan, but Y/roll walking correction and
   Far-field Warp stay active during turns so gimbal pitch/yaw/roll shake is not
   muted just because the clip is changing direction. Moderate Footstep Jitter and Stride
@@ -270,8 +269,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   uses the same turn ownership gate as Footstep Jitter, and Y/roll are also reduced when
   TURN clearly owns the frame, so medium stride cleanup does not fight broad Turn Smoothing
   during real horizontal turns. FJIT and SWOB use a count-aware walking-band tracking gate;
-  WARP and TURN keep the stricter tracking gate, and WARP is additionally reduced during
-  clear TURN-owned motion to avoid turn-time frame shake.
+  WARP and TURN keep the stricter tracking gate, and WARP remains active during
+  clear TURN-owned motion so turn-time far-field shake is not muted by a turn cap.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
@@ -288,8 +287,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   so long prepared caches do not require repeated full-cache scans during playback.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   It does not change Y or roll, defaults to `12.0`, runs up to `36.0`, and the macro
-  correction is soft-limited to a small output-edge budget through `12.0`. Values above
-  `12.0` add crop-aware X turn soft-limit headroom without changing Y or roll. Render playback applies an
+  correction no longer has a separate render output-edge cap. Render playback applies an
   additional `2.8` second zero-phase transition pass to the macro X correction so the start
   and end of walking turns do not step between corrections, even across short low-confidence
   tracking dropouts. When Auto Crop is active, large X-turn travel automatically expands
