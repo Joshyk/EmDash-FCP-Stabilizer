@@ -1019,9 +1019,10 @@ enum AutoStabilizationEstimator {
     private static let lensBandPulseSmoothingStartPixels: Float = 0.22
     private static let lensBandPulseSmoothingFullPixels: Float = 1.35
     private static let farFieldRigidRawReinforcementMaximumBlend: Float = 0.74
+    private static let farFieldLowFrequencyRawReinforcementMaximumBlend: Float = 0.94
     private static let farFieldLowFrequencyPriorityStartSeconds: Float = 0.28
     private static let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
-    private static let farFieldLowFrequencyMeshSuppressionScale: Float = 0.62
+    private static let farFieldLowFrequencyMeshSuppressionScale: Float = 1.0
     private static let farFieldLowFrequencyTurnSuppressionRelief: Float = 0.65
     private static let lensBandPulseSmoothingStartRadians: Float = 0.00035
     private static let lensBandPulseSmoothingFullRadians: Float = 0.0024
@@ -14364,6 +14365,13 @@ enum AutoStabilizationEstimator {
                 * confidenceRamp(forwardBackwardConsistency, start: 0.24, full: 0.68)
                 * lowFrequencyTurnScale
                 * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.62, full: 0.88) * 0.55))
+            let lowFrequencyDominance = clamp(
+                lowFrequencyRigidPriority
+                    * confidenceRamp(Float(targetWindowSeconds), start: 0.42, full: farFieldLowFrequencyPriorityFullSeconds)
+                    * confidenceRamp(rawRigidMagnitude, start: 0.12, full: 0.90),
+                min: 0.0,
+                max: 1.0
+            )
             var meshRigidResidual = vector_float2(0.0, 0.0)
             var meshRigidWeight = Float(0.0)
             var meshRigidSupport = Float(0.0)
@@ -14410,8 +14418,13 @@ enum AutoStabilizationEstimator {
                             meshOpposingBins += 1.0
                         }
                     }
-                    let meshBlendCeiling = Float(0.45) * (1.0 - (lowFrequencyRigidPriority * farFieldLowFrequencyMeshSuppressionScale))
-                    let meshBlend = min(max(0.08, meshBlendCeiling), meshRigidSupport * 0.45)
+                    let lowFrequencyMeshSuppression = clamp(
+                        lowFrequencyDominance * farFieldLowFrequencyMeshSuppressionScale,
+                        min: 0.0,
+                        max: 1.0
+                    )
+                    let meshBlendCeiling = Float(0.45) * (1.0 - lowFrequencyMeshSuppression)
+                    let meshBlend = min(meshBlendCeiling, meshRigidSupport * 0.45 * (1.0 - lowFrequencyMeshSuppression))
                     result.farFieldMeshOffset = meshRigidResidual
                     result.farFieldMeshSupport = clamp(meshRigidSupport, min: 0.0, max: 1.0)
                     result.farFieldMeshBlend = meshBlend
@@ -14444,13 +14457,18 @@ enum AutoStabilizationEstimator {
                     start: 0.45,
                     full: 0.85
                 ) * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.62, full: 0.88) * 0.55))
-                let lowFrequencyRawReinforcement = lowFrequencyRigidPriority
-                    * confidenceRamp(rawRigidMagnitude - smoothedRigidMagnitude, start: 0.08, full: 0.74)
-                let rawBlend = min(
-                    farFieldRigidRawReinforcementMaximumBlend,
-                    max(rawReinforcement, lowFrequencyRawReinforcement) * farFieldRigidRawReinforcementMaximumBlend
+                let lowFrequencyRawReinforcement = max(
+                    lowFrequencyRigidPriority * confidenceRamp(rawRigidMagnitude - smoothedRigidMagnitude, start: 0.04, full: 0.42),
+                    lowFrequencyDominance * confidenceRamp(rawRigidMagnitude, start: 0.12, full: 0.90)
                 )
-                let xBlend = rawBlend * (1.0 - (xQuiverScore * 0.82))
+                let rawBlendCeiling = farFieldRigidRawReinforcementMaximumBlend
+                    + ((farFieldLowFrequencyRawReinforcementMaximumBlend - farFieldRigidRawReinforcementMaximumBlend) * lowFrequencyDominance)
+                let rawBlend = min(
+                    rawBlendCeiling,
+                    max(rawReinforcement, lowFrequencyRawReinforcement) * rawBlendCeiling
+                )
+                let xQuiverSuppression = xQuiverScore * (0.82 * (1.0 - (lowFrequencyDominance * 0.75)))
+                let xBlend = rawBlend * (1.0 - xQuiverSuppression)
                 rigidResidual.x += (rawRigidResidual.x - rigidResidual.x) * xBlend
                 rigidResidual.y += (rawRigidResidual.y - rigidResidual.y) * rawBlend
                 result.farFieldRigidXQuiverScore = max(result.farFieldRigidXQuiverScore, xQuiverScore)

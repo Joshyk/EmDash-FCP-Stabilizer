@@ -809,12 +809,13 @@ private let lensShakeShearFull: Float = 0.000320
 private let lensShakePerspectiveStart: Float = 0.000010
 private let lensShakePerspectiveFull: Float = 0.000095
 private let farFieldRigidRawReinforcementMaximumBlend: Float = 0.74
+private let farFieldLowFrequencyRawReinforcementMaximumBlend: Float = 0.94
 private let lensBandPulseSmoothingBlend: Float = 0.46
 private let lensBandPulseSmoothingStartPixels: Float = 0.22
 private let lensBandPulseSmoothingFullPixels: Float = 1.35
 private let farFieldLowFrequencyPriorityStartSeconds: Float = 0.28
 private let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
-private let farFieldLowFrequencyMeshSuppressionScale: Float = 0.62
+private let farFieldLowFrequencyMeshSuppressionScale: Float = 1.0
 private let farFieldLowFrequencyTurnSuppressionRelief: Float = 0.65
 private let expectedSourceLensShakeLocalBinCount = 15
 private let expectedFarFieldMeshRows = 5
@@ -3619,6 +3620,43 @@ private func sourceSpaceLensShakeBand(
         clamp(confidenceRamp(magnitude, start: start, full: full) * qualitySupport * turnScale, min: 0.0, max: 1.0)
     }
 
+    let residualX = residual(analysis.farFieldPathX) * xScale
+    let residualY = residual(analysis.farFieldPathY) * yScale
+    let residualRoll = residual(analysis.farFieldPathRoll)
+    let yaw = residual(analysis.pathYaw)
+    let pitch = residual(analysis.pathPitch)
+    let shearX = residual(analysis.pathShearX)
+    let shearY = residual(analysis.pathShearY)
+    let perspectiveX = residual(analysis.pathPerspectiveX)
+    let perspectiveY = residual(analysis.pathPerspectiveY)
+    let pixelSupport = max(
+        support(abs(residualX), start: lensShakePixelStartPixels, full: lensShakePixelFullPixels),
+        support(abs(residualY), start: lensShakePixelStartPixels, full: lensShakePixelFullPixels)
+    )
+    let rollSupport = support(abs(residualRoll), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
+    let yawPitchSupport = max(
+        support(abs(yaw), start: lensShakeYawPitchStart, full: lensShakeYawPitchFull),
+        support(abs(pitch), start: lensShakeYawPitchStart, full: lensShakeYawPitchFull)
+    )
+    let shearSupport = max(
+        support(abs(shearX), start: lensShakeShearStart, full: lensShakeShearFull),
+        support(abs(shearY), start: lensShakeShearStart, full: lensShakeShearFull)
+    )
+    let perspectiveSupport = max(
+        support(abs(perspectiveX), start: lensShakePerspectiveStart, full: lensShakePerspectiveFull),
+        support(abs(perspectiveY), start: lensShakePerspectiveStart, full: lensShakePerspectiveFull)
+    )
+    let affineSupport = max(pixelSupport, rollSupport)
+    let projectiveSupport = max(yawPitchSupport, max(shearSupport, perspectiveSupport))
+    let dominantProjectiveCandidate = confidenceRamp(projectiveSupport - affineSupport, start: 0.18, full: 0.55)
+    let mixedProjectiveCandidate = min(
+        confidenceRamp(projectiveSupport, start: 0.35, full: 0.70),
+        confidenceRamp(affineSupport, start: 0.20, full: 0.55)
+    ) * 0.75
+    let rollingShutterCandidate = max(dominantProjectiveCandidate, mixedProjectiveCandidate)
+    let rollingShutterSuppression = 1.0 - (confidenceRamp(rollingShutterCandidate, start: 0.62, full: 0.88) * 0.55)
+    let lensSupport = max(pixelSupport, rollSupport)
+
     let hasFarFieldRigidShakePaths = analysis.farFieldRigidShakePathX.count == analysis.frames.count
         && analysis.farFieldRigidShakePathY.count == analysis.frames.count
         && analysis.farFieldRigidShakeSupport.count == analysis.frames.count
@@ -3639,6 +3677,14 @@ private func sourceSpaceLensShakeBand(
             * confidenceRamp(shapeConsistency, start: 0.28, full: 0.70)
             * confidenceRamp(forwardBackwardConsistency, start: 0.24, full: 0.68)
             * lowFrequencyTurnScale
+            * rollingShutterSuppression
+        let lowFrequencyDominance = clamp(
+            lowFrequencyRigidPriority
+                * confidenceRamp(Float(targetWindowSeconds), start: 0.42, full: farFieldLowFrequencyPriorityFullSeconds)
+                * confidenceRamp(rawRigidMagnitude, start: 0.12, full: 0.90),
+            min: 0.0,
+            max: 1.0
+        )
         var meshBlend = Float(0.0)
         var meshSupport = Float(0.0)
         let hasFarFieldMeshPaths = analysis.farFieldMeshRows == expectedFarFieldMeshRows
@@ -3691,8 +3737,13 @@ private func sourceSpaceLensShakeBand(
                     let coverageSupport = confidenceRamp(Float(meshSupportedBinCount), start: 4.0, full: 12.0)
                     meshSupport = min(meshMaxSupport, averageSupport * coverageSupport)
                 }
-                let meshBlendCeiling = Float(0.45) * (1.0 - (lowFrequencyRigidPriority * farFieldLowFrequencyMeshSuppressionScale))
-                meshBlend = min(max(0.08, meshBlendCeiling), meshSupport * 0.45)
+                let lowFrequencyMeshSuppression = clamp(
+                    lowFrequencyDominance * farFieldLowFrequencyMeshSuppressionScale,
+                    min: 0.0,
+                    max: 1.0
+                )
+                let meshBlendCeiling = Float(0.45) * (1.0 - lowFrequencyMeshSuppression)
+                meshBlend = min(meshBlendCeiling, meshSupport * 0.45 * (1.0 - lowFrequencyMeshSuppression))
                 rigidResidualX += (meshResidualX - rigidResidualX) * meshBlend
                 rigidResidualY += (meshResidualY - rigidResidualY) * meshBlend
             }
@@ -3717,14 +3768,19 @@ private func sourceSpaceLensShakeBand(
                 max(dominantSupport, meshSupport),
                 start: 0.45,
                 full: 0.85
+            ) * rollingShutterSuppression
+            let lowFrequencyRawReinforcement = max(
+                lowFrequencyRigidPriority * confidenceRamp(rawRigidMagnitude - smoothedRigidMagnitude, start: 0.04, full: 0.42),
+                lowFrequencyDominance * confidenceRamp(rawRigidMagnitude, start: 0.12, full: 0.90)
             )
-            let lowFrequencyRawReinforcement = lowFrequencyRigidPriority
-                * confidenceRamp(rawRigidMagnitude - smoothedRigidMagnitude, start: 0.08, full: 0.74)
+            let rawBlendCeiling = farFieldRigidRawReinforcementMaximumBlend
+                + ((farFieldLowFrequencyRawReinforcementMaximumBlend - farFieldRigidRawReinforcementMaximumBlend) * lowFrequencyDominance)
             rawReinforcementBlend = min(
-                farFieldRigidRawReinforcementMaximumBlend,
-                max(rawReinforcement, lowFrequencyRawReinforcement) * farFieldRigidRawReinforcementMaximumBlend
+                rawBlendCeiling,
+                max(rawReinforcement, lowFrequencyRawReinforcement) * rawBlendCeiling
             )
-            let xBlend = rawReinforcementBlend * (1.0 - (xQuiverScore * 0.82))
+            let xQuiverSuppression = xQuiverScore * (0.82 * (1.0 - (lowFrequencyDominance * 0.75)))
+            let xBlend = rawReinforcementBlend * (1.0 - xQuiverSuppression)
             xBeforeQuiverLimiter = xBeforeLimiter + ((rawRigidResidualX - xBeforeLimiter) * rawReinforcementBlend)
             rigidResidualX += (rawRigidResidualX - rigidResidualX) * xBlend
             rigidResidualY += (rawRigidResidualY - rigidResidualY) * rawReinforcementBlend
@@ -3747,45 +3803,10 @@ private func sourceSpaceLensShakeBand(
             applied: applied,
             remaining: max(0.0, rigidMagnitude - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f raw %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f lowFreqPriority %.2f meshSupport %.2f meshBlend %.2f rawReinforceBlend %.2f xQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f localWarpSuppressed 1 reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rawRigidResidualX, rawRigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, meshSupport, meshBlend, rawReinforcementBlend, xQuiverScore, xBeforeQuiverLimiter, rigidResidualX, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f raw %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f rolling %.2f meshSupport %.2f meshBlend %.2f rawReinforceBlend %.2f xQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f localWarpSuppressed 1 reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rawRigidResidualX, rawRigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, rollingShutterCandidate, meshSupport, meshBlend, rawReinforcementBlend, xQuiverScore, xBeforeQuiverLimiter, rigidResidualX, reason)
         )
     }
 
-    let residualX = residual(analysis.farFieldPathX) * xScale
-    let residualY = residual(analysis.farFieldPathY) * yScale
-    let residualRoll = residual(analysis.farFieldPathRoll)
-    let yaw = residual(analysis.pathYaw)
-    let pitch = residual(analysis.pathPitch)
-    let shearX = residual(analysis.pathShearX)
-    let shearY = residual(analysis.pathShearY)
-    let perspectiveX = residual(analysis.pathPerspectiveX)
-    let perspectiveY = residual(analysis.pathPerspectiveY)
-    let pixelSupport = max(
-        support(abs(residualX), start: lensShakePixelStartPixels, full: lensShakePixelFullPixels),
-        support(abs(residualY), start: lensShakePixelStartPixels, full: lensShakePixelFullPixels)
-    )
-    let rollSupport = support(abs(residualRoll), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
-    let yawPitchSupport = max(
-        support(abs(yaw), start: lensShakeYawPitchStart, full: lensShakeYawPitchFull),
-        support(abs(pitch), start: lensShakeYawPitchStart, full: lensShakeYawPitchFull)
-    )
-    let shearSupport = max(
-        support(abs(shearX), start: lensShakeShearStart, full: lensShakeShearFull),
-        support(abs(shearY), start: lensShakeShearStart, full: lensShakeShearFull)
-    )
-    let perspectiveSupport = max(
-        support(abs(perspectiveX), start: lensShakePerspectiveStart, full: lensShakePerspectiveFull),
-        support(abs(perspectiveY), start: lensShakePerspectiveStart, full: lensShakePerspectiveFull)
-    )
-    let affineSupport = max(pixelSupport, rollSupport)
-    let projectiveSupport = max(yawPitchSupport, max(shearSupport, perspectiveSupport))
-    let dominantProjectiveCandidate = confidenceRamp(projectiveSupport - affineSupport, start: 0.18, full: 0.55)
-    let mixedProjectiveCandidate = min(
-        confidenceRamp(projectiveSupport, start: 0.35, full: 0.70),
-        confidenceRamp(affineSupport, start: 0.20, full: 0.55)
-    ) * 0.75
-    let rollingShutterCandidate = max(dominantProjectiveCandidate, mixedProjectiveCandidate)
-    let lensSupport = max(pixelSupport, rollSupport)
     let topResidual = (
         x: residual(analysis.lensBandTopPathX) * xScale,
         y: residual(analysis.lensBandTopPathY) * yScale
