@@ -103,8 +103,8 @@
       "max": 1.0
     },
     "qualityThresholds": {
-      "minOutputWidthRatioToSource": 0.95,
-      "minOutputHeightRatioToSource": 0.95,
+      "minOutputWidthRatioToSource": 1.0,
+      "minOutputHeightRatioToSource": 1.0,
       "baselineWindowSeconds": 0.5,
       "minMeasuredFrameRatio": 0.92,
       "minAffineTrackingRatio": 0.25,

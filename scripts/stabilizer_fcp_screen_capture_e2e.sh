@@ -13,6 +13,8 @@ Usage: scripts/stabilizer_fcp_screen_capture_e2e.sh COMMAND [OPTIONS]
 Commands:
   set-proxy-only
              Set the current FCP Viewer media playback to Proxy Only.
+  set-optimized-original
+             Set the current FCP Viewer media playback to Optimized/Original.
   set-green-channel
              Set the current FCP Viewer channel display to Green.
   prepare    Open and normalize FCP UI state for the configured E2E case.
@@ -5439,6 +5441,16 @@ if [[ "$command_name" == "set-proxy-only" ]]; then
 		fail "set-proxy-only does not accept options"
 	fi
 	set_fcp_proxy_only
+	exit 0
+fi
+
+if [[ "$command_name" == "set-optimized-original" ]]; then
+	if [[ $# -gt 0 ]]; then
+		fail "set-optimized-original does not accept options"
+	fi
+	set_fcp_viewer_media_playback "Optimized/Original" >/dev/null \
+		|| fail "could not set FCP Viewer media playback mode to Optimized/Original"
+	printf 'FCP Viewer media playback mode set to: Optimized/Original\n'
 	exit 0
 fi
 

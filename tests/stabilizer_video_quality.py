@@ -1137,10 +1137,24 @@ def probe_pts_timing(video_path: Path, tolerance_ratio: float) -> dict[str, Any]
         "csv=p=0",
         str(video_path),
     ]
+    timeout_seconds = float(os.environ.get("STABILIZER_PTS_PROBE_TIMEOUT_SECONDS", "90"))
     try:
-        result = subprocess.run(command, check=False, capture_output=True, text=True)
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout_seconds)
     except FileNotFoundError:
         return {"summary": {"available": False, "reason": "ffprobe_not_found"}}
+    except subprocess.TimeoutExpired as exc:
+        partial_stdout = exc.stdout or ""
+        if isinstance(partial_stdout, bytes):
+            partial_stdout = partial_stdout.decode(errors="replace")
+        partial_count = len([line for line in str(partial_stdout).splitlines() if line.strip()])
+        return {
+            "summary": {
+                "available": False,
+                "reason": "ffprobe_timeout",
+                "timeoutSeconds": timeout_seconds,
+                "partialPtsFrameCount": partial_count,
+            }
+        }
 
     if result.returncode != 0:
         return {

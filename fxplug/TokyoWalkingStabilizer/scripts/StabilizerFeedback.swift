@@ -210,6 +210,11 @@ private struct Analysis {
     let farFieldRigidShakeSupport: [Float]
     let farFieldRigidShakeShapeConsistency: [Float]
     let farFieldRigidShakeForwardBackwardConsistency: [Float]
+    let farFieldMeshRows: Int
+    let farFieldMeshColumns: Int
+    let farFieldMeshPathX: [Float]
+    let farFieldMeshPathY: [Float]
+    let farFieldMeshSupport: [Float]
     let farFieldMeshDominantWindowFrames: [Float]
     let farFieldMeshDominantWindowSeconds: [Float]
     let farFieldMeshDominantSupport: [Float]
@@ -362,6 +367,30 @@ private struct Analysis {
             farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport")
             farFieldRigidShakeShapeConsistency = try requireFloatArray(cache.farFieldRigidShakeShapeConsistency, "farFieldRigidShakeShapeConsistency")
             farFieldRigidShakeForwardBackwardConsistency = try requireFloatArray(cache.farFieldRigidShakeForwardBackwardConsistency, "farFieldRigidShakeForwardBackwardConsistency")
+        }
+        if cache.schemaVersion >= 43 {
+            guard let rows = cache.farFieldMeshRows,
+                  let columns = cache.farFieldMeshColumns
+            else {
+                throw FeedbackError(description: "Host Analysis cache is missing farFieldMeshRows/Columns; rerun Host Analysis with the current FxPlug")
+            }
+            guard rows == expectedFarFieldMeshRows,
+                  columns == expectedFarFieldMeshColumns
+            else {
+                throw FeedbackError(description: "Host Analysis cache has farFieldMesh grid \(rows)x\(columns); expected \(expectedFarFieldMeshRows)x\(expectedFarFieldMeshColumns)")
+            }
+            farFieldMeshRows = rows
+            farFieldMeshColumns = columns
+            let meshCount = frames.count * expectedFarFieldMeshBinCount
+            farFieldMeshPathX = try requireFloatArray(cache.farFieldMeshPathX, "farFieldMeshPathX", count: meshCount)
+            farFieldMeshPathY = try requireFloatArray(cache.farFieldMeshPathY, "farFieldMeshPathY", count: meshCount)
+            farFieldMeshSupport = try requireFloatArray(cache.farFieldMeshSupport, "farFieldMeshSupport", count: meshCount)
+        } else {
+            farFieldMeshRows = 0
+            farFieldMeshColumns = 0
+            farFieldMeshPathX = []
+            farFieldMeshPathY = []
+            farFieldMeshSupport = []
         }
         if cache.schemaVersion >= 44 {
             farFieldMeshDominantWindowFrames = try requireFloatArray(cache.farFieldMeshDominantWindowFrames, "farFieldMeshDominantWindowFrames")
@@ -817,6 +846,10 @@ private let lensShakeShearStart: Float = 0.000030
 private let lensShakeShearFull: Float = 0.000320
 private let lensShakePerspectiveStart: Float = 0.000010
 private let lensShakePerspectiveFull: Float = 0.000095
+private let farFieldRigidRawReinforcementMaximumBlend: Float = 0.74
+private let lensBandPulseSmoothingBlend: Float = 0.46
+private let lensBandPulseSmoothingStartPixels: Float = 0.22
+private let lensBandPulseSmoothingFullPixels: Float = 1.35
 private let expectedSourceLensShakeLocalBinCount = 9
 private let expectedFarFieldMeshRows = 5
 private let expectedFarFieldMeshColumns = 5
@@ -3685,6 +3718,107 @@ private func sourceSpaceLensShakeBand(
             outerWindowSeconds: outerWindowSeconds
         ) ?? values[index])
     }
+    func residualAt(_ values: [Float], index sampleIndex: Int) -> Float {
+        guard values.indices.contains(sampleIndex), analysis.frames.indices.contains(sampleIndex) else { return 0.0 }
+        return values[sampleIndex] - (outerLinearPrediction(
+            values,
+            frames: analysis.frames,
+            centerIndex: sampleIndex,
+            innerWindowSeconds: innerWindowSeconds,
+            outerWindowSeconds: outerWindowSeconds
+        ) ?? values[sampleIndex])
+    }
+    func pulseSmoothedPixelResidual(_ values: [Float], scale: Float) -> Float {
+        let current = residual(values) * scale
+        let windowFrames = analysis.farFieldMeshDominantWindowFrames.indices.contains(index)
+            ? max(3, Int(round(analysis.farFieldMeshDominantWindowFrames[index])))
+            : max(3, Int(round(targetWindowSeconds / frameStep)))
+        let radiusFrames = max(1, windowFrames / 2)
+        let centerTime = analysis.frames[index].time
+        let radiusSeconds = max(frameStep, Double(radiusFrames) * frameStep)
+        var weightedResidual = Float(0.0)
+        var totalWeight = Float(0.0)
+        for sampleIndex in (index - radiusFrames)...(index + radiusFrames) {
+            guard analysis.frames.indices.contains(sampleIndex), values.indices.contains(sampleIndex) else { continue }
+            let distance = abs(analysis.frames[sampleIndex].time - centerTime)
+            let normalizedDistance = clamp(Float(distance / radiusSeconds), min: 0.0, max: 1.0)
+            let weight = (1.0 - normalizedDistance) * (1.0 - normalizedDistance)
+            weightedResidual += residualAt(values, index: sampleIndex) * scale * weight
+            totalWeight += weight
+        }
+        guard totalWeight > Float.ulpOfOne else { return current }
+        let smoothed = weightedResidual / totalWeight
+        let pulseMagnitude = abs(current - smoothed)
+        let blend = confidenceRamp(
+            pulseMagnitude,
+            start: lensBandPulseSmoothingStartPixels,
+            full: lensBandPulseSmoothingFullPixels
+        ) * lensBandPulseSmoothingBlend
+        return current + ((smoothed - current) * blend)
+    }
+    func shortWindowXQuiverScore(_ values: [Float], rawResidualPixels: Float, limitedResidualPixels: Float, scale: Float) -> Float {
+        guard values.count == analysis.frames.count else { return 0.0 }
+        let windowFrames = analysis.farFieldMeshDominantWindowFrames.indices.contains(index)
+            ? max(3, Int(round(analysis.farFieldMeshDominantWindowFrames[index])))
+            : max(3, Int(round(targetWindowSeconds / frameStep)))
+        let radiusFrames = max(1, min(windowFrames / 2, Int(round(1.0 / frameStep)) / 2))
+        let centerTime = analysis.frames[index].time
+        let radiusSeconds = min(0.5, max(frameStep, Double(radiusFrames) * frameStep))
+        var samples: [Float] = []
+        for sampleIndex in (index - radiusFrames)...(index + radiusFrames) {
+            guard analysis.frames.indices.contains(sampleIndex), values.indices.contains(sampleIndex) else { continue }
+            if abs(analysis.frames[sampleIndex].time - centerTime) > radiusSeconds + (frameStep * 0.5) {
+                continue
+            }
+            samples.append(residualAt(values, index: sampleIndex) * scale)
+        }
+        guard samples.count >= 3 else { return 0.0 }
+        var minResidual = Float.greatestFiniteMagnitude
+        var maxResidual = -Float.greatestFiniteMagnitude
+        var maxStep = Float(0.0)
+        var maxJerk = Float(0.0)
+        var flipCount = 0
+        var deltaCount = 0
+        var previousSample: Float?
+        var previousDelta: Float?
+        for sample in samples {
+            minResidual = min(minResidual, sample)
+            maxResidual = max(maxResidual, sample)
+            if let previousSample {
+                let delta = sample - previousSample
+                maxStep = max(maxStep, abs(delta))
+                if let previousDelta {
+                    maxJerk = max(maxJerk, abs(delta - previousDelta))
+                    if delta * previousDelta < -0.05 {
+                        flipCount += 1
+                    }
+                }
+                previousDelta = delta
+                deltaCount += 1
+            }
+            previousSample = sample
+        }
+        let residualSpan = max(0.0, maxResidual - minResidual)
+        let rawDivergence = abs(rawResidualPixels - limitedResidualPixels)
+        let flipRatio = deltaCount > 1 ? Float(flipCount) / Float(deltaCount - 1) : 0.0
+        let shortPulseEvidence = max(
+            confidenceRamp(maxStep, start: 0.35, full: 1.85),
+            max(
+                confidenceRamp(maxJerk, start: 0.26, full: 1.25),
+                max(
+                    confidenceRamp(residualSpan, start: 0.70, full: 3.10),
+                    confidenceRamp(flipRatio, start: 0.18, full: 0.55)
+                )
+            )
+        )
+        return clamp(
+            shortPulseEvidence
+                * confidenceRamp(rawDivergence, start: 0.22, full: 1.60)
+                * confidenceRamp(Float(samples.count), start: 3.0, full: 9.0),
+            min: 0.0,
+            max: 1.0
+        )
+    }
     let qualitySupport = confidenceRamp(appliedWarpConfidence, start: 0.16, full: 0.55)
         * confidenceRamp(trackingConfidence, start: 0.14, full: 0.42)
         * confidenceRamp(edgeQuality, start: 0.46, full: 0.82)
@@ -3707,12 +3841,108 @@ private func sourceSpaceLensShakeBand(
         && analysis.farFieldRigidShakeShapeConsistency.count == analysis.frames.count
         && analysis.farFieldRigidShakeForwardBackwardConsistency.count == analysis.frames.count
     if hasFarFieldRigidShakePaths {
-        let rigidResidualX = residual(analysis.farFieldRigidShakePathX) * xScale
-        let rigidResidualY = residual(analysis.farFieldRigidShakePathY) * yScale
+        let rawRigidResidualX = residual(analysis.farFieldRigidShakePathX) * xScale
+        let rawRigidResidualY = residual(analysis.farFieldRigidShakePathY) * yScale
+        var rigidResidualX = pulseSmoothedPixelResidual(analysis.farFieldRigidShakePathX, scale: xScale)
+        var rigidResidualY = pulseSmoothedPixelResidual(analysis.farFieldRigidShakePathY, scale: yScale)
+        var meshBlend = Float(0.0)
+        var meshSupport = Float(0.0)
+        let hasFarFieldMeshPaths = analysis.farFieldMeshRows == expectedFarFieldMeshRows
+            && analysis.farFieldMeshColumns == expectedFarFieldMeshColumns
+            && analysis.farFieldMeshPathX.count == analysis.frames.count * expectedFarFieldMeshBinCount
+            && analysis.farFieldMeshPathY.count == analysis.frames.count * expectedFarFieldMeshBinCount
+            && analysis.farFieldMeshSupport.count == analysis.frames.count * expectedFarFieldMeshBinCount
+        if hasFarFieldMeshPaths {
+            var meshResidualX = Float(0.0)
+            var meshResidualY = Float(0.0)
+            var meshWeight = Float(0.0)
+            var meshMaxSupport = Float(0.0)
+            var meshSupportSum = Float(0.0)
+            var meshSupportedBinCount = 0
+            for bin in 0..<expectedFarFieldMeshBinCount {
+                let start = bin * analysis.frames.count
+                let end = start + analysis.frames.count
+                guard analysis.farFieldMeshPathX.indices.contains(start),
+                      analysis.farFieldMeshPathX.indices.contains(end - 1),
+                      analysis.farFieldMeshPathY.indices.contains(start),
+                      analysis.farFieldMeshPathY.indices.contains(end - 1),
+                      analysis.farFieldMeshSupport.indices.contains(start + index)
+                else {
+                    continue
+                }
+                let pathX = Array(analysis.farFieldMeshPathX[start..<end])
+                let pathY = Array(analysis.farFieldMeshPathY[start..<end])
+                let residualX = pulseSmoothedPixelResidual(pathX, scale: xScale)
+                let residualY = pulseSmoothedPixelResidual(pathY, scale: yScale)
+                let preparedSupport = analysis.farFieldMeshSupport[start + index]
+                let support = confidenceRamp(hypotf(residualX, residualY), start: 0.08, full: 0.70)
+                    * confidenceRamp(preparedSupport, start: 0.08, full: 0.38)
+                    * qualitySupport
+                    * turnScale
+                let weight = max(0.0, support)
+                meshResidualX += residualX * weight
+                meshResidualY += residualY * weight
+                meshWeight += weight
+                if support > 0.01 {
+                    meshMaxSupport = max(meshMaxSupport, support)
+                    meshSupportSum += support
+                    meshSupportedBinCount += 1
+                }
+            }
+            if meshWeight > Float.ulpOfOne {
+                meshResidualX /= meshWeight
+                meshResidualY /= meshWeight
+                if meshSupportedBinCount > 0 {
+                    let averageSupport = meshSupportSum / Float(meshSupportedBinCount)
+                    let coverageSupport = confidenceRamp(Float(meshSupportedBinCount), start: 4.0, full: 12.0)
+                    meshSupport = min(meshMaxSupport, averageSupport * coverageSupport)
+                }
+                meshBlend = min(Float(0.45), meshSupport * 0.45)
+                rigidResidualX += (meshResidualX - rigidResidualX) * meshBlend
+                rigidResidualY += (meshResidualY - rigidResidualY) * meshBlend
+            }
+        }
+        let rawRigidMagnitude = hypotf(rawRigidResidualX, rawRigidResidualY)
+        let smoothedRigidMagnitude = hypotf(rigidResidualX, rigidResidualY)
+        var rawReinforcementBlend = Float(0.0)
+        let xQuiverScore = shortWindowXQuiverScore(
+            analysis.farFieldRigidShakePathX,
+            rawResidualPixels: rawRigidResidualX,
+            limitedResidualPixels: rigidResidualX,
+            scale: xScale
+        )
+        let xBeforeLimiter = rigidResidualX
+        var xBeforeQuiverLimiter = rigidResidualX
+        if rawRigidMagnitude > smoothedRigidMagnitude,
+           (rawRigidResidualX * rigidResidualX) + (rawRigidResidualY * rigidResidualY) > 0.0 {
+            let dominantSupport = analysis.farFieldMeshDominantSupport.indices.contains(index)
+                ? analysis.farFieldMeshDominantSupport[index]
+                : 0.0
+            let rawReinforcement = confidenceRamp(
+                rawRigidMagnitude - smoothedRigidMagnitude,
+                start: 0.18,
+                full: 1.15
+            ) * confidenceRamp(
+                max(dominantSupport, meshSupport),
+                start: 0.45,
+                full: 0.85
+            )
+            rawReinforcementBlend = min(
+                farFieldRigidRawReinforcementMaximumBlend,
+                rawReinforcement * farFieldRigidRawReinforcementMaximumBlend
+            )
+            let xBlend = rawReinforcementBlend * (1.0 - (xQuiverScore * 0.82))
+            xBeforeQuiverLimiter = xBeforeLimiter + ((rawRigidResidualX - xBeforeLimiter) * rawReinforcementBlend)
+            rigidResidualX += (rawRigidResidualX - rigidResidualX) * xBlend
+            rigidResidualY += (rawRigidResidualY - rigidResidualY) * rawReinforcementBlend
+        }
         let rigidMagnitude = hypotf(rigidResidualX, rigidResidualY)
         let preparedRigidSupport = analysis.farFieldRigidShakeSupport[index]
         let shapeConsistency = analysis.farFieldRigidShakeShapeConsistency[index]
         let forwardBackwardConsistency = analysis.farFieldRigidShakeForwardBackwardConsistency[index]
+        let dominantSupport = analysis.farFieldMeshDominantSupport.indices.contains(index)
+            ? analysis.farFieldMeshDominantSupport[index]
+            : 0.0
         let rigidSupport = confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70)
             * confidenceRamp(preparedRigidSupport, start: 0.08, full: 0.36)
             * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
@@ -3728,7 +3958,7 @@ private func sourceSpaceLensShakeBand(
             applied: applied,
             remaining: max(0.0, rigidMagnitude - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f localWarpSuppressed 1 reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f raw %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f meshSupport %.2f meshBlend %.2f rawReinforceBlend %.2f xQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f localWarpSuppressed 1 reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rawRigidResidualX, rawRigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, meshSupport, meshBlend, rawReinforcementBlend, xQuiverScore, xBeforeQuiverLimiter, rigidResidualX, reason)
         )
     }
 

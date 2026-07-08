@@ -59,6 +59,8 @@ Options:
   --source-quality-output-dir PATH
                                Directory for source-resolution evaluator artifacts.
   --source-visual-review STATE passed, failed, or not-reviewed for exported-video review.
+  --skip-source-diagnostic-videos
+                               Write source-resolution CSV/JSON metrics only; skip slow overlay videos.
   --clear-render-files         For recover-case, move Event Render Files before reopening.
   --assume-current-fcp-state   Pass through to the E2E harness.
   --assume-prepared-fcp        Pass through to the E2E harness.
@@ -91,6 +93,22 @@ with open(path, encoding="utf-8") as handle:
 for part in dotted.split("."):
     value = value[part]
 print(value)
+PY
+}
+
+json_bool_value() {
+	local file="$1"
+	local key="$2"
+	python3 - "$file" "$key" <<'PY'
+import json
+import sys
+
+path, dotted = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle)
+for part in dotted.split("."):
+    value = value[part]
+print("true" if bool(value) else "false")
 PY
 }
 
@@ -216,6 +234,7 @@ print_case_run_pattern() {
 	# project: ${project}
 	# range: ${start_timecode} - ${end_timecode}
 	# fixed case ROI: ${viewer_roi}
+	# fixed ROI note: current MacBook Air Retina display is 1440 × 900; re-measure after display scaling changes.
 	scripts/fcp_e2e_control.sh recover-case --case ${alias}
 PATTERN
 	if case_source_frame_evaluation_enabled "$file"; then
@@ -324,6 +343,105 @@ print(Path(artifact_root) / case_id / "source_quality" / Path(video_path).stem)
 PY
 }
 
+case_project_db_path() {
+	local file="$1"
+	python3 - "$file" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    case = json.load(handle)
+
+library = Path(case["library"])
+project = case["project"]
+source_paths = [case.get("originalMedia"), case.get("proxyMedia")]
+event_names = []
+for raw_path in source_paths:
+    if not raw_path:
+        continue
+    try:
+        relative = Path(raw_path).resolve().relative_to(library.resolve())
+    except ValueError:
+        continue
+    if relative.parts:
+        event_names.append(relative.parts[0])
+
+event_candidates = []
+for event_name in event_names:
+    event_candidates.append(library / event_name / project / "CurrentVersion.fcpevent")
+
+unique = []
+seen = set()
+for candidate in event_candidates:
+    key = str(candidate)
+    if key in seen:
+        continue
+    seen.add(key)
+    if candidate.exists():
+        unique.append(candidate)
+
+if len(unique) == 1:
+    print(unique[0])
+    raise SystemExit(0)
+
+candidates = []
+if library.exists():
+    for candidate in library.glob("*/*/CurrentVersion.fcpevent"):
+        if candidate.parent.name == project:
+            candidates.append(candidate)
+
+unique = []
+seen = set()
+for candidate in candidates:
+    key = str(candidate)
+    if key in seen:
+        continue
+    seen.add(key)
+    if candidate.exists():
+        unique.append(candidate)
+
+if len(unique) != 1:
+    raise SystemExit(
+        "expected exactly one project CurrentVersion.fcpevent for "
+        f"{project}, found {len(unique)}"
+    )
+
+print(unique[0])
+PY
+}
+
+assert_case_project_contains_effect() {
+	local project_db
+	local expected_effect
+	local remove_black_edges
+	if ! project_db="$(case_project_db_path "$case_file")"; then
+		fail "could not resolve a unique Final Cut Pro project database for case: ${case_file}"
+	fi
+	[[ -n "$project_db" ]] || fail "resolved Final Cut Pro project database path was empty for case: ${case_file}"
+	[[ -f "$project_db" ]] || fail "resolved Final Cut Pro project database is not a file: ${project_db}"
+	expected_effect="$(json_value "$case_file" expectedEffect)"
+	remove_black_edges="$(json_bool_value "$case_file" removeBlackEdges)"
+	python3 - "$project_db" "$expected_effect" "$remove_black_edges" <<'PY'
+from pathlib import Path
+import sys
+
+db_path = Path(sys.argv[1])
+expected_effect = sys.argv[2].encode("utf-8")
+require_remove_black_edges = sys.argv[3] == "true"
+payload = db_path.read_bytes()
+if expected_effect not in payload:
+    raise SystemExit(
+        f"case project does not contain expected effect {sys.argv[2]!r}: {db_path}"
+    )
+if require_remove_black_edges and b"Remove Black Edges" not in payload:
+    raise SystemExit(
+        f"case project does not contain Remove Black Edges parameter: {db_path}"
+    )
+print(f"Case project contains expected Stabilizer effect metadata: {db_path}")
+PY
+}
+
 fcp_seek_timecode_entry() {
 	local timecode_entry="$1"
 	timeout 10 /usr/bin/osascript - "$timecode_entry" <<'APPLESCRIPT' >/dev/null
@@ -378,9 +496,16 @@ APPLESCRIPT
 		|| fail "could not restore Final Cut Pro playhead to export start timecode entry ${start_entry}"
 }
 
+set_fcp_source_export_media_playback_original() {
+	"$E2E_SCRIPT" set-optimized-original >&2 \
+		|| fail "could not set Final Cut Pro Viewer media playback mode to Optimized/Original before source-resolution export; refusing proxy export"
+	printf 'Final Cut Pro Viewer media playback mode set for source export: Optimized/Original\n' >&2
+}
+
 wait_for_export_file() {
 	local output_path="$1"
 	local timeout_seconds="${2:-900}"
+	local min_duration_seconds="${3:-0.1}"
 	local waited=0
 	local previous_size=-1
 	local stable_count=0
@@ -390,7 +515,7 @@ wait_for_export_file() {
 			size="$(stat -f '%z' "$output_path")"
 			if [[ "$size" -gt 0 && "$size" == "$previous_size" ]]; then
 				stable_count=$((stable_count + 1))
-				if (( stable_count >= 5 )); then
+				if (( stable_count >= 3 )) && export_video_probe_ok "$output_path" "$min_duration_seconds"; then
 					return 0
 				fi
 			else
@@ -407,59 +532,578 @@ wait_for_export_file() {
 	return 1
 }
 
+export_video_probe_ok() {
+	local output_path="$1"
+	local min_duration_seconds="${2:-0.1}"
+	python3 - "$output_path" "$min_duration_seconds" <<'PY' >/dev/null 2>&1
+import json
+import math
+import subprocess
+import sys
+
+path = sys.argv[1]
+min_duration = float(sys.argv[2])
+probe = subprocess.run(
+    [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,nb_frames,r_frame_rate,duration:format=duration",
+        "-of",
+        "json",
+        path,
+    ],
+    check=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+data = json.loads(probe.stdout)
+streams = data.get("streams") or []
+if not streams:
+    raise SystemExit("no video stream")
+stream = streams[0]
+width = int(stream.get("width") or 0)
+height = int(stream.get("height") or 0)
+if width <= 0 or height <= 0:
+    raise SystemExit("invalid dimensions")
+
+duration_text = (data.get("format") or {}).get("duration") or stream.get("duration") or "0"
+duration = float(duration_text)
+if duration + 0.05 < min_duration:
+    raise SystemExit(f"duration {duration:.3f} below {min_duration:.3f}")
+
+rate_text = stream.get("r_frame_rate") or "0/1"
+try:
+    numerator, denominator = rate_text.split("/", 1)
+    fps = float(numerator) / float(denominator)
+except Exception:
+    fps = 0.0
+nb_frames_text = stream.get("nb_frames") or "0"
+try:
+    nb_frames = int(nb_frames_text)
+except ValueError:
+    nb_frames = 0
+if fps > 0 and nb_frames > 0:
+    min_frames = max(1, int(math.floor(min_duration * fps * 0.95)))
+    if nb_frames < min_frames:
+        raise SystemExit(f"frames {nb_frames} below {min_frames}")
+PY
+}
+
+case_export_min_duration_seconds() {
+	local file="$1"
+	python3 - "$file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    case = json.load(handle)
+duration = float(case.get("durationSeconds") or 0.0)
+print(f"{max(0.1, duration - 0.25):.3f}")
+PY
+}
+
 press_fcp_export_file_to_path() {
 	local output_path="$1"
 	local output_dir
 	local output_name
+	local output_base_name
 	local export_log
 	local export_status
 	output_dir="$(dirname "$output_path")"
 	output_name="$(basename "$output_path")"
+	output_base_name="${output_name%.mov}"
 	mkdir -p "$output_dir"
 	[[ ! -e "$output_path" ]] || fail "refusing to overwrite existing source export: ${output_path}"
 	export_log="$(mktemp "${TMPDIR:-/tmp}/stabilizer-fcp-export-ui.XXXXXX")"
 	set +e
-	timeout 90 /usr/bin/osascript - "$output_dir" "$output_name" >"$export_log" 2>&1 <<'APPLESCRIPT'
+	timeout 90 /usr/bin/osascript - "$output_dir" "$output_name" "$output_base_name" >"$export_log" 2>&1 <<'APPLESCRIPT'
 on run argv
 	set outputDir to item 1 of argv
 	set outputName to item 2 of argv
+	set outputBaseName to item 3 of argv
 	tell application "Final Cut Pro" to activate
 	tell application "System Events"
 		tell process "Final Cut Pro"
 			set frontmost to true
 			key code 14 using command down
-			set nextButton to my waitForButtonContaining({"Next", "Continue"}, 30)
-			if nextButton is missing value then error "Final Cut Pro export/share dialog did not expose a Next button. Visible buttons: " & my buttonSnapshot(12)
+			set exportWindow to my waitForExportFileWindow(30)
+			if exportWindow is missing value then error "Final Cut Pro Export File window did not appear. Windows: " & my windowSnapshot()
+			set proxyAlert to my proxyMediaAlertDescription(8)
+			if proxyAlert is not "" then error "Final Cut Pro proxy media alert appeared before source export save sheet; refusing Continue/proxy export. " & proxyAlert
+			set nextButton to my directExportWindowButton(exportWindow, {"Next…", "Next", "Next..."})
+			if nextButton is missing value then error "Final Cut Pro Export File window did not expose a direct Next button. " & my buttonSnapshotForElement("Export File window", exportWindow, 6)
 			perform action "AXPress" of nextButton
-			set saveButton to my waitForButtonContaining({"Save"}, 30)
-			if saveButton is missing value then error "Final Cut Pro export save panel did not expose a Save button. Visible buttons: " & my buttonSnapshot(12)
-			keystroke "g" using {command down, shift down}
-			delay 0.3
-			keystroke outputDir
-			key code 36
-			delay 0.8
-			set nameField to my firstWritableTextField(12)
-			if nameField is missing value then error "Final Cut Pro export save panel filename field not found"
-			set value of nameField to outputName
+			set saveSheet to my waitForExportSaveSheet(exportWindow, 30)
+			if saveSheet is missing value then error "Final Cut Pro Export File Save sheet did not appear after pressing Next. " & my buttonSnapshotForElement("Export File window", exportWindow, 8) & " || " & my sheetButtonSnapshot(exportWindow, 8)
+			set saveButton to my exactButtonFromList(saveSheet, {"Save"}, 8)
+			if saveButton is missing value then error "Final Cut Pro Export File Save sheet did not expose Save. " & my buttonSnapshotForElement("Export File Save sheet", saveSheet, 8)
+			set nameField to my filenameFieldInSaveSheet(saveSheet, 10)
+			if nameField is missing value then error "Final Cut Pro Export File Save sheet filename field not found. " & my textFieldSnapshotForElement("Export File Save sheet", saveSheet, 10)
+			try
+				set focused of nameField to true
+				set value of nameField to outputBaseName
+			on error errMsg
+				error "Final Cut Pro Export File Save sheet filename field could not be set through AXValue: " & errMsg
+			end try
 			delay 0.1
-			perform action "AXPress" of saveButton
+			if my elementValueText(nameField) is not outputBaseName then error "Final Cut Pro Export File Save sheet filename did not update to " & outputBaseName & ". " & my textFieldSnapshotForElement("Export File Save sheet", saveSheet, 10)
+			my submitExportSave(saveSheet, saveButton)
 		end tell
 	end tell
 	return outputDir & "/" & outputName
 end run
 
+on waitForExportFileWindow(timeoutSeconds)
+	repeat with attempt from 1 to (timeoutSeconds * 5)
+		tell application "System Events"
+			tell process "Final Cut Pro"
+				repeat with candidateWindow in windows
+					if my elementTextEquals(candidateWindow, "Export File") then return candidateWindow
+				end repeat
+			end tell
+		end tell
+		delay 0.2
+	end repeat
+	return missing value
+end waitForExportFileWindow
+
+on directExportWindowButton(exportWindow, buttonTitles)
+	tell application "System Events"
+		repeat with buttonTitle in buttonTitles
+			try
+				return button (buttonTitle as text) of exportWindow
+			end try
+		end repeat
+	end tell
+	return missing value
+end directExportWindowButton
+
+on waitForExportSaveSheet(exportWindow, timeoutSeconds)
+	repeat with attempt from 1 to (timeoutSeconds * 5)
+		set proxyAlert to my proxyMediaAlertDescription(8)
+		if proxyAlert is not "" then error "Final Cut Pro proxy media alert appeared during source export; refusing Continue/proxy export. " & proxyAlert
+		set candidateSheet to my firstElementWithRole(exportWindow, "AXSheet", 10)
+		if candidateSheet is not missing value then
+			if my exactButtonFromList(candidateSheet, {"Save"}, 8) is not missing value then return candidateSheet
+		end if
+		delay 0.2
+	end repeat
+	return missing value
+end waitForExportSaveSheet
+
+on proxyMediaAlertDescription(remainingDepth)
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				try
+					repeat with candidateSheet in sheets of candidateWindow
+						set sheetText to my elementTreeText(candidateSheet, remainingDepth, {})
+						if my looksLikeProxyMediaAlert(candidateSheet, sheetText, remainingDepth) then return my truncatedText(sheetText)
+					end repeat
+				end try
+				try
+					set windowSubrole to ""
+					try
+						set windowSubrole to subrole of candidateWindow as text
+					end try
+					if windowSubrole is not "AXStandardWindow" and not my elementTextEquals(candidateWindow, "Export File") then
+						set windowText to my elementTreeText(candidateWindow, remainingDepth, {})
+						if my looksLikeProxyMediaAlert(candidateWindow, windowText, remainingDepth) then return my truncatedText(windowText)
+					end if
+				end try
+			end repeat
+		end tell
+	end tell
+	return ""
+end proxyMediaAlertDescription
+
+on looksLikeProxyMediaAlert(candidateElement, candidateText, remainingDepth)
+	if not my textContainsIgnoringCase(candidateText, "proxy") then return false
+	if not my textContainsIgnoringCase(candidateText, "media") then return false
+	if my exactButtonFromList(candidateElement, {"Continue", "Continue…", "Continue..."}, remainingDepth) is missing value then return false
+	return true
+end looksLikeProxyMediaAlert
+
+on textContainsIgnoringCase(haystackText, needleText)
+	ignoring case
+		if haystackText contains needleText then return true
+	end ignoring
+	return false
+end textContainsIgnoringCase
+
+on elementTreeText(rootElement, remainingDepth, foundTexts)
+	if remainingDepth < 0 then return my joinTextList(foundTexts, " | ")
+	set elementLabel to my elementText(rootElement)
+	if elementLabel is not "" then set end of foundTexts to elementLabel
+	tell application "System Events"
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return my joinTextList(foundTexts, " | ")
+		end try
+	end tell
+	repeat with childElement in childElements
+		set childText to my elementTreeText(childElement, remainingDepth - 1, {})
+		if childText is not "" then set end of foundTexts to childText
+	end repeat
+	return my joinTextList(foundTexts, " | ")
+end elementTreeText
+
+on truncatedText(valueText)
+	if (length of valueText) > 500 then return (text 1 thru 500 of valueText) & "..."
+	return valueText
+end truncatedText
+
+on submitExportSave(saveSheet, saveButton)
+	tell application "System Events"
+		try
+			with timeout of 3 seconds
+				perform action "AXPress" of saveButton
+			end timeout
+			log "Submitted Export File Save sheet through AXPress."
+			return
+		on error pressError
+			log "Export File Save AXPress did not return cleanly; continuing only after trying explicit keyboard submit. Error: " & pressError
+		end try
+		delay 0.2
+		try
+			click saveButton
+			log "Submitted Export File Save sheet through AppleScript element click after AXPress timeout."
+			return
+		on error clickError
+			log "Export File Save element click failed after AXPress timeout: " & clickError
+		end try
+		try
+			set focused of saveSheet to true
+		end try
+		key code 36
+		log "Submitted Export File Save sheet through Return key after AXPress/click did not complete."
+	end tell
+end submitExportSave
+
+on exactButtonFromList(rootElement, buttonTitles, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+		if roleName is "AXButton" then
+			repeat with buttonTitle in buttonTitles
+				if my elementTextEquals(rootElement, buttonTitle as text) then return rootElement
+			end repeat
+		end if
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my exactButtonFromList(childElement, buttonTitles, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end exactButtonFromList
+
+on filenameFieldInSaveSheet(saveSheet, remainingDepth)
+	tell application "System Events"
+		try
+			log "Export File Save sheet filename field resolved by direct Save As: AX lookup."
+			return text field "Save As:" of saveSheet
+		end try
+	end tell
+	set focusedFields to my collectFocusedTextFields(saveSheet, remainingDepth, {})
+	if (count of focusedFields) is 1 then
+		log "Export File Save sheet filename field resolved by focused text field; direct Save As: AX lookup was unavailable."
+		return item 1 of focusedFields
+	end if
+	set textFields to my collectTextFields(saveSheet, remainingDepth, {})
+	if (count of textFields) is 1 then
+		log "Export File Save sheet filename field resolved by sole sheet text field; direct Save As: AX lookup was unavailable."
+		return item 1 of textFields
+	end if
+	return missing value
+end filenameFieldInSaveSheet
+
+on collectFocusedTextFields(rootElement, remainingDepth, foundFields)
+	if remainingDepth < 0 then return foundFields
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+		if roleName is "AXTextField" or roleName is "AXTextArea" then
+			try
+				if focused of rootElement then set end of foundFields to rootElement
+			end try
+		end if
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return foundFields
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundFields to my collectFocusedTextFields(childElement, remainingDepth - 1, foundFields)
+	end repeat
+	return foundFields
+end collectFocusedTextFields
+
+on collectTextFields(rootElement, remainingDepth, foundFields)
+	if remainingDepth < 0 then return foundFields
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+		if roleName is "AXTextField" or roleName is "AXTextArea" then set end of foundFields to rootElement
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return foundFields
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundFields to my collectTextFields(childElement, remainingDepth - 1, foundFields)
+	end repeat
+	return foundFields
+end collectTextFields
+
+on windowSnapshot()
+	set foundWindows to {}
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			repeat with candidateWindow in windows
+				set windowText to my elementText(candidateWindow)
+				if windowText is "" then set windowText to "<untitled>"
+				set end of foundWindows to windowText
+			end repeat
+		end tell
+	end tell
+	if (count of foundWindows) is 0 then return "none"
+	return my joinTextList(foundWindows, " | ")
+end windowSnapshot
+
+on sheetButtonSnapshot(exportWindow, remainingDepth)
+	set snapshots to {}
+	set candidateSheet to my firstElementWithRole(exportWindow, "AXSheet", remainingDepth)
+	if candidateSheet is missing value then return "Export File sheets: none"
+	set end of snapshots to my buttonSnapshotForElement("Export File sheet", candidateSheet, remainingDepth)
+	return my joinTextList(snapshots, " || ")
+end sheetButtonSnapshot
+
+on buttonSnapshotForElement(rootLabel, rootElement, remainingDepth)
+	set foundButtons to my collectButtons(rootElement, remainingDepth, {})
+	if (count of foundButtons) is 0 then return rootLabel & " buttons: none"
+	return rootLabel & " buttons: " & my joinTextList(foundButtons, " | ")
+end buttonSnapshotForElement
+
+on textFieldSnapshotForElement(rootLabel, rootElement, remainingDepth)
+	set foundFields to my collectTextFieldDescriptions(rootElement, remainingDepth, {})
+	if (count of foundFields) is 0 then return rootLabel & " text fields: none"
+	return rootLabel & " text fields: " & my joinTextList(foundFields, " | ")
+end textFieldSnapshotForElement
+
+on collectTextFieldDescriptions(rootElement, remainingDepth, foundFields)
+	if remainingDepth < 0 then return foundFields
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+		if roleName is "AXTextField" or roleName is "AXTextArea" then set end of foundFields to my textFieldDescription(rootElement)
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return foundFields
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundFields to my collectTextFieldDescriptions(childElement, remainingDepth - 1, foundFields)
+	end repeat
+	return foundFields
+end collectTextFieldDescriptions
+
+on textFieldDescription(candidateElement)
+	set fieldName to my elementText(candidateElement)
+	set fieldValue to my elementValueText(candidateElement)
+	if fieldName is "" then set fieldName to "<unnamed>"
+	return "name=" & fieldName & ", value=" & fieldValue
+end textFieldDescription
+
 on waitForButtonContaining(labels, timeoutSeconds)
 	repeat with attempt from 1 to (timeoutSeconds * 5)
 		tell application "System Events"
 			tell process "Final Cut Pro"
-				set foundButton to my firstButtonContaining(front window, labels, 12)
-				if foundButton is not missing value then return foundButton
+				set directButton to my firstDirectButtonNamed(labels)
+				if directButton is not missing value then return directButton
+				repeat with candidateWindow in windows
+					set foundButton to my firstButtonContaining(candidateWindow, labels, 14)
+					if foundButton is not missing value then return foundButton
+					try
+						repeat with candidateSheet in sheets of candidateWindow
+							set foundButton to my firstButtonContaining(candidateSheet, labels, 14)
+							if foundButton is not missing value then return foundButton
+						end repeat
+					end try
+				end repeat
 			end tell
 		end tell
 		delay 0.2
 	end repeat
 	return missing value
 end waitForButtonContaining
+
+on waitForExactWindowButton(buttonTitles, timeoutSeconds)
+	repeat with attempt from 1 to (timeoutSeconds * 5)
+		tell application "System Events"
+			tell process "Final Cut Pro"
+				repeat with candidateWindow in windows
+					repeat with buttonTitle in buttonTitles
+						try
+							return button (buttonTitle as text) of candidateWindow
+						end try
+					end repeat
+					set foundButton to my firstExactButtonFromList(candidateWindow, buttonTitles, 4)
+					if foundButton is not missing value then return foundButton
+				end repeat
+			end tell
+		end tell
+		delay 0.2
+	end repeat
+	return missing value
+end waitForExactWindowButton
+
+on waitForExactSheetButton(buttonTitle, timeoutSeconds)
+	repeat with attempt from 1 to (timeoutSeconds * 5)
+		tell application "System Events"
+			tell process "Final Cut Pro"
+				repeat with candidateWindow in windows
+					set candidateSheet to my firstElementWithRole(candidateWindow, "AXSheet", 8)
+					if candidateSheet is not missing value then
+						set foundButton to my firstExactButton(candidateSheet, buttonTitle, 8)
+						if foundButton is not missing value then return foundButton
+					end if
+				end repeat
+			end tell
+		end tell
+		delay 0.2
+	end repeat
+	return missing value
+end waitForExactSheetButton
+
+on firstElementWithRole(rootElement, requiredRole, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+		if roleName is requiredRole then return rootElement
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstElementWithRole(childElement, requiredRole, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstElementWithRole
+
+on firstExactButtonFromList(rootElement, buttonTitles, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+		if roleName is "AXButton" then
+			repeat with buttonTitle in buttonTitles
+				if my elementTextEquals(rootElement, buttonTitle as text) then return rootElement
+			end repeat
+		end if
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstExactButtonFromList(childElement, buttonTitles, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstExactButtonFromList
+
+on firstExactButton(rootElement, buttonTitle, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			set roleName to role of rootElement as text
+		on error
+			set roleName to ""
+		end try
+		if roleName is "AXButton" then
+			if my elementTextEquals(rootElement, buttonTitle) then return rootElement
+		end if
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstExactButton(childElement, buttonTitle, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstExactButton
+
+on firstDirectButtonNamed(labels)
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set exactLabels to {}
+			repeat with targetLabel in labels
+				set labelText to targetLabel as text
+				set end of exactLabels to labelText
+				set end of exactLabels to (labelText & "…")
+				set end of exactLabels to (labelText & "...")
+			end repeat
+			repeat with candidateWindow in windows
+				repeat with exactLabel in exactLabels
+					try
+						return button (exactLabel as text) of candidateWindow
+					end try
+				end repeat
+				try
+					repeat with candidateSheet in sheets of candidateWindow
+						repeat with exactLabel in exactLabels
+							try
+								return button (exactLabel as text) of candidateSheet
+							end try
+						end repeat
+					end repeat
+				end try
+			end repeat
+		end tell
+	end tell
+	return missing value
+end firstDirectButtonNamed
 
 on firstButtonContaining(rootElement, labels, remainingDepth)
 	if remainingDepth < 0 then return missing value
@@ -494,9 +1138,16 @@ on buttonSnapshot(remainingDepth)
 	set foundButtons to {}
 	tell application "System Events"
 		tell process "Final Cut Pro"
-			try
-				set foundButtons to my collectButtons(front window, remainingDepth, {})
-			end try
+			repeat with candidateWindow in windows
+				try
+					set foundButtons to my collectButtons(candidateWindow, remainingDepth, foundButtons)
+				end try
+				try
+					repeat with candidateSheet in sheets of candidateWindow
+						set foundButtons to my collectButtons(candidateSheet, remainingDepth, foundButtons)
+					end repeat
+				end try
+			end repeat
 		end tell
 	end tell
 	return my joinTextList(foundButtons, " | ")
@@ -529,9 +1180,18 @@ end collectButtons
 on firstWritableTextField(remainingDepth)
 	tell application "System Events"
 		tell process "Final Cut Pro"
-			return my firstTextField(front window, remainingDepth)
+			repeat with candidateWindow in windows
+				set candidateSheet to my firstElementWithRole(candidateWindow, "AXSheet", 8)
+				if candidateSheet is not missing value then
+					set foundField to my firstTextField(candidateSheet, remainingDepth)
+					if foundField is not missing value then return foundField
+				end if
+				set foundField to my firstTextField(candidateWindow, remainingDepth)
+				if foundField is not missing value then return foundField
+			end repeat
 		end tell
 	end tell
+	return missing value
 end firstWritableTextField
 
 on firstTextField(rootElement, remainingDepth)
@@ -575,6 +1235,36 @@ on elementText(candidateElement)
 	return ""
 end elementText
 
+on elementValueText(candidateElement)
+	tell application "System Events"
+		try
+			return value of candidateElement as text
+		end try
+	end tell
+	return ""
+end elementValueText
+
+on elementTextEquals(candidateElement, requiredText)
+	set labelsToCheck to {}
+	tell application "System Events"
+		try
+			set end of labelsToCheck to name of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to description of candidateElement as text
+		end try
+		try
+			set end of labelsToCheck to value of candidateElement as text
+		end try
+	end tell
+	repeat with labelText in labelsToCheck
+		ignoring case
+			if (labelText as text) is requiredText then return true
+		end ignoring
+	end repeat
+	return false
+end elementTextEquals
+
 on joinTextList(textItems, separatorText)
 	set previousDelimiters to AppleScript's text item delimiters
 	set AppleScript's text item delimiters to separatorText
@@ -594,38 +1284,246 @@ APPLESCRIPT
 	rm -f "$export_log"
 }
 
+set_fcp_source_export_overlays_off() {
+	local remove_black_edges
+	remove_black_edges="$(json_value "$case_file" removeBlackEdges | tr '[:upper:]' '[:lower:]')"
+	STABILIZER_SOURCE_REMOVE_BLACK_EDGES="$remove_black_edges" swift - <<'SWIFT' \
+		|| fail "could not normalize Remove Black Edges, Debug Overlay, and Mesh Overlay before source-resolution export"
+import AppKit
+import ApplicationServices
+import Foundation
+
+func copyAttr(_ element: AXUIElement, _ attr: String) -> AnyObject? {
+    var value: AnyObject?
+    let status = AXUIElementCopyAttributeValue(element, attr as CFString, &value)
+    return status == .success ? value : nil
+}
+
+func textAttr(_ element: AXUIElement, _ attr: String) -> String {
+    guard let value = copyAttr(element, attr) else {
+        return ""
+    }
+    return String(describing: value)
+}
+
+func combinedText(_ element: AXUIElement) -> String {
+    [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute]
+        .map { textAttr(element, $0) }
+        .joined(separator: " ")
+}
+
+func die(_ message: String) -> Never {
+    fputs(message + "\n", stderr)
+    exit(2)
+}
+
+func boolValue(_ element: AXUIElement) -> Bool {
+    let raw = textAttr(element, kAXValueAttribute).lowercased()
+    return raw == "1" || raw == "true"
+}
+
+@discardableResult
+func press(_ element: AXUIElement, label: String) -> Bool {
+    let status = AXUIElementPerformAction(element, kAXPressAction as CFString)
+    if status != .success {
+        fputs("AXPress failed for \(label): \(status.rawValue)\n", stderr)
+        return false
+    }
+    return true
+}
+
+func descendants(of root: AXUIElement, maxDepth: Int = 14) -> [AXUIElement] {
+    var result: [AXUIElement] = []
+    var queue: [(AXUIElement, Int)] = [(root, 0)]
+    while !queue.isEmpty && result.count < 8_000 {
+        let (element, depth) = queue.removeFirst()
+        result.append(element)
+        guard depth < maxDepth,
+              let children = copyAttr(element, kAXChildrenAttribute) as? [AXUIElement]
+        else {
+            continue
+        }
+        for child in children {
+            queue.append((child, depth + 1))
+        }
+    }
+    return result
+}
+
+func waitForElement(root: AXUIElement, timeout: TimeInterval, predicate: (AXUIElement) -> Bool) -> AXUIElement? {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if let match = descendants(of: root).first(where: predicate) {
+            return match
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    return nil
+}
+
+func waitForMenuItem(root: AXUIElement, named target: String, timeout: TimeInterval) -> AXUIElement? {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        for element in descendants(of: root, maxDepth: 16) {
+            guard textAttr(element, kAXRoleAttribute) == "AXMenuItem" else {
+                continue
+            }
+            if combinedText(element).localizedCaseInsensitiveContains(target) {
+                return element
+            }
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    return nil
+}
+
+let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.FinalCut")
+guard let app = apps.first else {
+    die("Final Cut Pro is not running")
+}
+app.activate()
+Thread.sleep(forTimeInterval: 0.15)
+let root = AXUIElementCreateApplication(app.processIdentifier)
+
+if let inspectorToggle = waitForElement(root: root, timeout: 3.0, predicate: {
+    textAttr($0, kAXRoleAttribute) == "AXCheckBox"
+        && combinedText($0).localizedCaseInsensitiveContains("show or hide the inspector")
+}) {
+    if !boolValue(inspectorToggle) {
+        guard press(inspectorToggle, label: "Show or hide the Inspector") else {
+            die("could not show Final Cut Pro Inspector")
+        }
+        Thread.sleep(forTimeInterval: 0.35)
+    }
+} else {
+    die("Final Cut Pro Inspector toolbar toggle not found")
+}
+
+let desiredCropText = ProcessInfo.processInfo.environment["STABILIZER_SOURCE_REMOVE_BLACK_EDGES"] ?? "false"
+let desiredCrop = desiredCropText == "true" || desiredCropText == "1" || desiredCropText == "yes"
+guard let crop = waitForElement(root: root, timeout: 4.0, predicate: {
+    textAttr($0, kAXRoleAttribute) == "AXCheckBox"
+        && combinedText($0).localizedCaseInsensitiveContains("remove black edges check box")
+}) else {
+    die("Remove Black Edges checkbox not found")
+}
+if boolValue(crop) != desiredCrop {
+    guard press(crop, label: "Remove Black Edges") else {
+        die("press Remove Black Edges failed")
+    }
+    Thread.sleep(forTimeInterval: 0.25)
+}
+print("Remove Black Edges set \(desiredCrop ? "On" : "Off")")
+
+guard let debug = waitForElement(root: root, timeout: 4.0, predicate: {
+    textAttr($0, kAXRoleAttribute) == "AXCheckBox"
+        && combinedText($0).localizedCaseInsensitiveContains("debug overlay check box")
+}) else {
+    die("Debug Overlay checkbox not found")
+}
+if boolValue(debug) {
+    guard press(debug, label: "Debug Overlay") else {
+        die("press Debug Overlay failed")
+    }
+    Thread.sleep(forTimeInterval: 0.25)
+    print("Debug Overlay set Off")
+} else {
+    print("Debug Overlay already Off")
+}
+
+guard let mesh = waitForElement(root: root, timeout: 4.0, predicate: {
+    textAttr($0, kAXRoleAttribute) == "AXPopUpButton"
+        && combinedText($0).localizedCaseInsensitiveContains("mesh overlay pop up")
+}) else {
+    die("Mesh Overlay pop-up not found")
+}
+let currentMesh = textAttr(mesh, kAXValueAttribute)
+if !currentMesh.localizedCaseInsensitiveContains("Off") {
+    guard press(mesh, label: "Mesh Overlay pop-up") else {
+        die("press Mesh Overlay pop-up failed")
+    }
+    Thread.sleep(forTimeInterval: 0.2)
+    guard let offItem = waitForMenuItem(root: root, named: "Off", timeout: 3.0) else {
+        die("Mesh Overlay Off menu item not found")
+    }
+    guard press(offItem, label: "Mesh Overlay Off") else {
+        die("press Mesh Overlay Off failed")
+    }
+    Thread.sleep(forTimeInterval: 0.3)
+    print("Mesh Overlay set Off from \(currentMesh)")
+} else {
+    print("Mesh Overlay already Off")
+}
+SWIFT
+	printf 'Source export controls set to: Remove Black Edges %s, Debug Overlay off, Mesh Overlay Off\n' "$remove_black_edges" >&2
+}
+
+select_source_export_timeline_clip() {
+	local start_entry
+	start_entry="$(case_timecode_entry "$case_file" startTimecodeEntry startTimecode)"
+	fcp_seek_timecode_entry "$start_entry" \
+		|| fail "could not seek Final Cut Pro to source export start timecode entry ${start_entry}"
+	sleep 0.4
+	"${ROOT_DIR}/scripts/fcp_ui_test.sh" select-playhead-clip \
+		|| fail "could not select the source export timeline clip at ${start_entry}"
+	sleep 0.4
+}
+
 prepare_fcp_for_source_export() {
 	local assume_prepared="$1"
 	local assume_current="$2"
 	local project
 	project="$(json_value "$case_file" project)"
+	assert_case_project_contains_effect
 	if [[ "$assume_prepared" == "1" || "$assume_current" == "1" ]]; then
 		wait_for_fcp_standard_window 15 \
 			|| fail "Final Cut Pro standard window is not readable for source export"
-		fcp_project_visible_by_ax "$project" \
-			|| fail "Final Cut Pro project is not visible for source export: ${project}"
-		printf 'Verifying current Final Cut Pro project before source export: %s\n' "$project" >&2
-		run_harness assert-prepared
+		printf 'Using current Final Cut Pro state for source export; forcing Optimized/Original before Export File while preserving Proxy Only for screen-capture E2E: %s\n' "$project" >&2
+		select_source_export_timeline_clip
+		set_fcp_source_export_overlays_off
+		set_fcp_source_export_media_playback_original
 		return
 	fi
-	open_case_project_primary \
+	open_case_project_primary 1 \
 		|| fail "could not open Final Cut Pro project for source export without coordinate fallback"
-	run_harness assert-prepared
+	printf 'Opened Final Cut Pro project for source export; forcing Optimized/Original before Export File while preserving Proxy Only for screen-capture E2E: %s\n' "$project" >&2
+	select_source_export_timeline_clip
+	set_fcp_source_export_overlays_off
+	set_fcp_source_export_media_playback_original
 }
 
 export_source_video() {
 	local output_path="$1"
 	local assume_prepared="$2"
 	local assume_current="$3"
+	local output_dir
+	local output_name
+	local staged_output_path
+	local min_duration_seconds
 	[[ -n "$output_path" ]] || output_path="$(case_export_output_path "$case_file")"
 	[[ "$output_path" == *.mov ]] || output_path="${output_path}.mov"
+	output_dir="$(dirname "$output_path")"
+	output_name="$(basename "$output_path")"
+	staged_output_path="${ARTIFACT_ROOT}/${output_name}"
+	min_duration_seconds="$(case_export_min_duration_seconds "$case_file")"
 	prepare_fcp_for_source_export "$assume_prepared" "$assume_current"
 	set_fcp_case_export_range
 	printf 'Starting Final Cut Pro source-resolution export: %s\n' "$output_path" >&2
+	if [[ "$staged_output_path" != "$output_path" && -e "$staged_output_path" ]]; then
+		fail "refusing to overwrite existing staged source export: ${staged_output_path}"
+	fi
 	press_fcp_export_file_to_path "$output_path" \
 		|| fail "Final Cut Pro export UI automation failed before save; no screen-capture fallback will be used"
-	wait_for_export_file "$output_path" 900 \
-		|| fail "Final Cut Pro export did not produce a stable file within timeout: ${output_path}"
+	if wait_for_export_file "$output_path" 8 "$min_duration_seconds"; then
+		:
+	elif [[ "$staged_output_path" != "$output_path" ]] && wait_for_export_file "$staged_output_path" 900 "$min_duration_seconds"; then
+		mkdir -p "$output_dir"
+		mv "$staged_output_path" "$output_path"
+		printf 'Moved staged Final Cut Pro source export into requested path:\n  from: %s\n  to:   %s\n' \
+			"$staged_output_path" "$output_path" >&2
+	else
+		fail "Final Cut Pro export did not produce a stable file within timeout: ${output_path}"
+	fi
 	printf 'Final Cut Pro source export ready: %s\n' "$output_path" >&2
 	printf '%s\n' "$output_path"
 }
@@ -637,16 +1535,22 @@ run_source_quality() {
 	local assume_current="$4"
 	local quality_output_dir="$5"
 	local source_visual_review="$6"
+	local skip_diagnostic_videos="$7"
+	local source_quality_args=()
 	if [[ -z "$video_path" ]]; then
-		video_path="$(export_source_video "$export_output_path" "$assume_prepared" "$assume_current")"
+		video_path="$(export_source_video "$export_output_path" "$assume_prepared" "$assume_current" | tail -n 1)"
 	fi
 	[[ -f "$video_path" ]] || fail "source-quality video does not exist: ${video_path}"
 	[[ -n "$quality_output_dir" ]] || quality_output_dir="$(case_source_quality_output_dir "$case_file" "$video_path")"
+	if [[ "$skip_diagnostic_videos" == "1" ]]; then
+		source_quality_args+=("--skip-diagnostic-videos")
+	fi
 	python3 "$SOURCE_QUALITY_SCRIPT" \
 		--case "$case_file" \
 		--video "$video_path" \
 		--output-dir "$quality_output_dir" \
-		--visual-review "$source_visual_review"
+		--visual-review "$source_visual_review" \
+		"${source_quality_args[@]}"
 }
 
 require_case_proxy_only() {
@@ -836,6 +1740,91 @@ open_case_project_via_helper() {
 	timeout 30 /usr/bin/osascript "$FCP_HELPER" open-project "$project"
 }
 
+open_case_project_via_browser_group_ax() {
+	local project="$1"
+	local open_status
+	set +e
+	PROJECT_NAME="$project" swift - <<'SWIFT'
+import AppKit
+import ApplicationServices
+import Foundation
+
+func copyAttr(_ element: AXUIElement, _ attr: String) -> AnyObject? {
+    var value: AnyObject?
+    let status = AXUIElementCopyAttributeValue(element, attr as CFString, &value)
+    return status == .success ? value : nil
+}
+
+func textAttr(_ element: AXUIElement, _ attr: String) -> String {
+    guard let value = copyAttr(element, attr) else {
+        return ""
+    }
+    return String(describing: value)
+}
+
+func children(of element: AXUIElement) -> [AXUIElement] {
+    copyAttr(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
+}
+
+func die(_ message: String) -> Never {
+    fputs(message + "\n", stderr)
+    exit(2)
+}
+
+let project = ProcessInfo.processInfo.environment["PROJECT_NAME"] ?? ""
+if project.isEmpty {
+    die("PROJECT_NAME is empty")
+}
+let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.FinalCut")
+guard let app = apps.first else {
+    die("Final Cut Pro is not running")
+}
+app.activate()
+Thread.sleep(forTimeInterval: 0.2)
+let root = AXUIElementCreateApplication(app.processIdentifier)
+var queue: [(AXUIElement, Int)] = [(root, 0)]
+var match: AXUIElement?
+while !queue.isEmpty {
+    let (element, depth) = queue.removeFirst()
+    if textAttr(element, kAXRoleAttribute) == "AXGroup",
+       textAttr(element, kAXDescriptionAttribute) == project {
+        match = element
+        break
+    }
+    if depth < 14 {
+        for child in children(of: element) {
+            queue.append((child, depth + 1))
+        }
+    }
+}
+guard let projectElement = match else {
+    die("Could not find visible Browser project group named \(project)")
+}
+let selected: AnyObject = kCFBooleanTrue
+AXUIElementSetAttributeValue(projectElement, kAXSelectedAttribute as CFString, selected)
+AXUIElementSetAttributeValue(projectElement, kAXFocusedAttribute as CFString, selected)
+let pressStatus = AXUIElementPerformAction(projectElement, kAXPressAction as CFString)
+if pressStatus != .success {
+    die("AXPress failed for visible Browser project group \(project): \(pressStatus.rawValue)")
+}
+Thread.sleep(forTimeInterval: 0.3)
+print("Selected visible Browser project group \(project)")
+SWIFT
+	open_status=$?
+	set -e
+	if [[ "$open_status" != "0" ]]; then
+		return "$open_status"
+	fi
+	timeout 8 /usr/bin/osascript <<'APPLESCRIPT' >/dev/null
+tell application "Final Cut Pro" to activate
+tell application "System Events"
+	tell process "Final Cut Pro"
+		click menu item "Open Clip" of menu "Clip" of menu bar 1
+	end tell
+end tell
+APPLESCRIPT
+}
+
 fcp_project_visible_by_ax() {
 	local project="$1"
 	timeout 15 /usr/bin/osascript - "$project" <<'APPLESCRIPT' >/dev/null
@@ -953,6 +1942,7 @@ APPLESCRIPT
 }
 
 open_case_project_primary() {
+	local forbid_harness_prepare="${1:-0}"
 	local library
 	local project
 	library="$(json_value "$case_file" library)"
@@ -968,6 +1958,18 @@ open_case_project_primary() {
 	fi
 	printf 'Primary helper project open did not expose the target project; trying selected Browser project open via helper menu path.\n' >&2
 	if timeout 12 /usr/bin/osascript "$FCP_HELPER" wait-open-selected-project 3 "$project" && fcp_project_visible_by_ax "$project"; then
+		return 0
+	fi
+	printf 'Selected Browser helper did not expose the target project; trying direct visible Browser project group AX path.\n' >&2
+	if open_case_project_via_browser_group_ax "$project" && fcp_project_visible_by_ax "$project"; then
+		return 0
+	fi
+	if [[ "$forbid_harness_prepare" == "1" ]]; then
+		printf 'Selected Browser helper did not expose the target project; source export refuses screen-capture harness prepare fallback.\n' >&2
+		return 1
+	fi
+	printf 'Selected Browser helper did not expose the target project; trying screen-capture harness AX/menu prepare path without coordinate fallback.\n' >&2
+	if run_harness prepare; then
 		return 0
 	fi
 	printf 'Primary helper project open failed or did not make the target project visible; no coordinate fallback will run.\n' >&2
@@ -1122,6 +2124,7 @@ video_path=""
 export_output_path=""
 source_quality_output_dir=""
 source_visual_review="${STABILIZER_SOURCE_VISUAL_REVIEW:-not-reviewed}"
+skip_source_diagnostic_videos=0
 assume_current_fcp_state=0
 assume_prepared_fcp=0
 
@@ -1161,6 +2164,10 @@ while [[ $# -gt 0 ]]; do
 			[[ "$source_visual_review" == "passed" || "$source_visual_review" == "failed" || "$source_visual_review" == "not-reviewed" ]] \
 				|| fail "--source-visual-review must be passed, failed, or not-reviewed"
 			shift 2
+			;;
+		--skip-source-diagnostic-videos)
+			skip_source_diagnostic_videos=1
+			shift
 			;;
 		--assume-current-fcp-state|--assume-prepared-fcp)
 			harness_args+=("$1")
@@ -1248,7 +2255,7 @@ case "$command_name" in
 			export_source_video "$export_output_path" "$assume_prepared_fcp" "$assume_current_fcp_state"
 			;;
 		run-source-quality)
-			run_source_quality "$video_path" "$export_output_path" "$assume_prepared_fcp" "$assume_current_fcp_state" "$source_quality_output_dir" "$source_visual_review"
+			run_source_quality "$video_path" "$export_output_path" "$assume_prepared_fcp" "$assume_current_fcp_state" "$source_quality_output_dir" "$source_visual_review" "$skip_source_diagnostic_videos"
 			;;
 		patterns)
 			print_patterns

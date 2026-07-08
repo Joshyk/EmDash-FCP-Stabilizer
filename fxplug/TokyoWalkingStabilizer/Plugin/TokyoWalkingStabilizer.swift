@@ -50,10 +50,10 @@ private struct StabilizerInfoFields {
 }
 
 private let tokyoWalkingStabilizerVersion = "1.1.1"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 918.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.0, 1.0, 918.0)
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 919.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.0, 1.0, 919.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_361_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_362_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -88,6 +88,10 @@ private let stabilizerAutoCropKeypointDuplicateSeconds = 0.125
 private let stabilizerAutoCropKeypointCoveragePassLimit = 64
 private let stabilizerAutoCropSubtleZoomMaximumDelta: Float = 0.08
 private let stabilizerAutoCropSubtleZoomMultiplier: Float = 0.5
+private let stabilizerCropOffEdgeGuardMaximumScaleDelta: Float = 0.012
+private let stabilizerCropOffEdgeGuardBaseScaleDelta: Float = 0.006
+private let stabilizerCropOffEdgeGuardLargeDemandPixels: Float = 20.0
+private let stabilizerCropOffEdgeGuardPaddingPixels: Float = 8.0
 private let stabilizerAutoCropDurationScaleReferenceDelta: Float = 0.10
 private let stabilizerAutoCropMinimumDurationScale = 0.5
 private let stabilizerAutoCropMinimumScaledDurationSeconds = 0.25
@@ -210,11 +214,17 @@ private struct AutoCropFraming {
     var scale: Float
     var positionPixels: vector_float2
     var telemetry: AutoCropCoverageTelemetry
+    var cropOffEdgeGuardScale: Float = 1.0
+    var cropOffEdgeGuardDemandX: Float = 0.0
+    var cropOffEdgeGuardActive: Float = 0.0
 
     static let identity = AutoCropFraming(
         scale: 1.0,
         positionPixels: vector_float2(0.0, 0.0),
-        telemetry: .empty
+        telemetry: .empty,
+        cropOffEdgeGuardScale: 1.0,
+        cropOffEdgeGuardDemandX: 0.0,
+        cropOffEdgeGuardActive: 0.0
     )
 }
 
@@ -2310,6 +2320,72 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFramingCache.removeValue(forKey: oldestKey)
         }
         return framing
+    }
+
+    private static func cropOffEdgeGuardFraming(
+        currentTransform: StabilizerAutoTransform,
+        outputSize: vector_float2,
+        masterStrength: Float
+    ) -> AutoCropFraming {
+        guard masterStrength > 0.0001,
+              outputSize.x > 1.0,
+              outputSize.y > 1.0
+        else {
+            return .identity
+        }
+        let rigidDemand = max(
+            abs(currentTransform.lensFarFieldRigidShakeOffset.x),
+            abs(currentTransform.lensFarFieldMeshOffset.x)
+        )
+        let bandDemand = max(
+            max(abs(currentTransform.lensBandTopOffset.x), abs(currentTransform.lensBandRidgeOffset.x)),
+            max(
+                abs(currentTransform.lensBandMidOffset.x),
+                max(
+                    max(abs(currentTransform.lensBandTopColumnOffset.x), abs(currentTransform.lensBandRidgeColumnOffset.x)),
+                    max(abs(currentTransform.lensBandMidColumnOffset.x), abs(currentTransform.lensBandRidgeRowPhaseOffset.x))
+                )
+            )
+        )
+        let localDemand = max(
+            max(
+                max(abs(currentTransform.sourceLensShakeLocalTopLeftOffset.x), abs(currentTransform.sourceLensShakeLocalTopCenterOffset.x)),
+                max(abs(currentTransform.sourceLensShakeLocalTopRightOffset.x), abs(currentTransform.sourceLensShakeLocalRidgeLeftOffset.x))
+            ),
+            max(
+                max(abs(currentTransform.sourceLensShakeLocalRidgeCenterOffset.x), abs(currentTransform.sourceLensShakeLocalRidgeRightOffset.x)),
+                max(
+                    abs(currentTransform.sourceLensShakeLocalMidLeftOffset.x),
+                    max(abs(currentTransform.sourceLensShakeLocalMidCenterOffset.x), abs(currentTransform.sourceLensShakeLocalMidRightOffset.x))
+                )
+            )
+        )
+        let globalDemand = max(abs(currentTransform.pixelOffset.x), abs(currentTransform.lensShakePixelOffset.x))
+        let demandX = max(max(rigidDemand, bandDemand), max(localDemand, globalDemand)) * masterStrength
+        let evidence = max(
+            max(currentTransform.lensFarFieldRigidShakeSupport, currentTransform.lensFarFieldMeshSupport),
+            max(currentTransform.lensBandWarpSupport, currentTransform.sourceLensShakeLocalSupport)
+        )
+        guard demandX >= 0.25 || evidence >= 0.06 else {
+            return .identity
+        }
+        let halfWidth = max(outputSize.x * 0.5, 1.0)
+        let demandScaleDelta = min(
+            stabilizerCropOffEdgeGuardMaximumScaleDelta,
+            max(0.0, (demandX + stabilizerCropOffEdgeGuardPaddingPixels) / halfWidth)
+        )
+        let scaleDelta = demandX >= stabilizerCropOffEdgeGuardLargeDemandPixels
+            ? max(demandScaleDelta, stabilizerCropOffEdgeGuardMaximumScaleDelta * 0.75)
+            : max(demandScaleDelta, stabilizerCropOffEdgeGuardBaseScaleDelta)
+        let boundedDelta = min(max(scaleDelta, 0.0), stabilizerCropOffEdgeGuardMaximumScaleDelta)
+        return AutoCropFraming(
+            scale: 1.0 + boundedDelta,
+            positionPixels: vector_float2(0.0, 0.0),
+            telemetry: .empty,
+            cropOffEdgeGuardScale: 1.0 + boundedDelta,
+            cropOffEdgeGuardDemandX: demandX,
+            cropOffEdgeGuardActive: 1.0
+        )
     }
 
     private static func autoCropFraming(
@@ -7336,7 +7412,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedSourceLensShakeLocalMidCenterOffset = autoTransform.sourceLensShakeLocalMidCenterOffset * masterStrength
             let appliedSourceLensShakeLocalMidRightOffset = autoTransform.sourceLensShakeLocalMidRightOffset * masterStrength
             let componentMessage = String(
-                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeWindowSeconds=%.5f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f lensBandCorrectionModel=%@ lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensFarFieldMeshDominantWindowFrames=%.2f lensFarFieldMeshDominantWindowSeconds=%.5f lensFarFieldMeshDominantSupport=%.5f lensFarFieldMeshDominantCell=%.0f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeWindowSeconds=%.5f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f lensBandCorrectionModel=%@ lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensFarFieldMeshDominantWindowFrames=%.2f lensFarFieldMeshDominantWindowSeconds=%.5f lensFarFieldMeshDominantSupport=%.5f lensFarFieldMeshDominantCell=%.0f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f cropOffEdgeGuardScale=%.6f cropOffEdgeGuardDemandX=%.5f cropOffEdgeGuardActive=%.2f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
                 analysisSeconds,
                 samplePosition,
                 lowerIndex,
@@ -7449,6 +7525,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoCropFraming.positionPixels.x,
                 autoCropFraming.positionPixels.y,
                 autoCropFraming.scale,
+                autoCropFraming.cropOffEdgeGuardScale,
+                autoCropFraming.cropOffEdgeGuardDemandX,
+                autoCropFraming.cropOffEdgeGuardActive,
                 autoTransform.turnConfidence,
                 trackingQuality,
                 appliedTransformDelta.x,
@@ -7542,7 +7621,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 lensBandMessage
             )
             let lensRigidMessage = String(
-                format: "Render lens rigid csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensFarFieldRigidX=%.5f lensFarFieldRigidY=%.5f lensFarFieldRigidResidualX=%.5f lensFarFieldRigidResidualY=%.5f lensFarFieldRigidSupport=%.5f lensFarFieldRigidApplied=%.2f lensFarFieldRigidShapeConsistency=%.5f lensFarFieldRigidForwardBackwardConsistency=%.5f lensFarFieldRigidLocalWarpSuppressed=%.2f lensFarFieldMeshAvailable=%.2f lensFarFieldMeshX=%.5f lensFarFieldMeshY=%.5f lensFarFieldMeshSupport=%.5f lensFarFieldMeshBlend=%.5f lensFarFieldMeshSupportedBins=%.1f lensFarFieldMeshMaxBinDelta=%.5f lensFarFieldMeshOpposingBins=%.1f",
+                format: "Render lens rigid csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensFarFieldRigidX=%.5f lensFarFieldRigidY=%.5f lensFarFieldRigidResidualX=%.5f lensFarFieldRigidResidualY=%.5f lensFarFieldRigidSupport=%.5f lensFarFieldRigidApplied=%.2f lensFarFieldRigidShapeConsistency=%.5f lensFarFieldRigidForwardBackwardConsistency=%.5f lensFarFieldRigidLocalWarpSuppressed=%.2f farFieldRigidXQuiverScore=%.5f farFieldRigidXBeforeLimiter=%.5f farFieldRigidXAfterLimiter=%.5f lensFarFieldMeshAvailable=%.2f lensFarFieldMeshX=%.5f lensFarFieldMeshY=%.5f lensFarFieldMeshSupport=%.5f lensFarFieldMeshBlend=%.5f lensFarFieldMeshSupportedBins=%.1f lensFarFieldMeshMaxBinDelta=%.5f lensFarFieldMeshOpposingBins=%.1f",
                 analysisSeconds,
                 samplePosition,
                 frames.count,
@@ -7560,6 +7639,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 autoTransform.lensFarFieldRigidShakeShapeConsistency,
                 autoTransform.lensFarFieldRigidShakeForwardBackwardConsistency,
                 autoTransform.lensFarFieldRigidShakeLocalWarpSuppressed,
+                autoTransform.lensFarFieldRigidXQuiverScore,
+                autoTransform.lensFarFieldRigidXBeforeLimiter * masterStrength,
+                autoTransform.lensFarFieldRigidXAfterLimiter * masterStrength,
                 autoTransform.lensFarFieldMeshAvailable,
                 appliedLensFarFieldMeshOffset.x,
                 appliedLensFarFieldMeshOffset.y,
@@ -10569,6 +10651,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 onPlaybackPreparationReady: autoCropPlaybackPlanPrepared
             )
             autoCropFraming = rawAutoCropFraming
+        } else if renderUsesPreparedAnalysis {
+            autoCropFraming = Self.cropOffEdgeGuardFraming(
+                currentTransform: autoTransform,
+                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                masterStrength: masterStrength
+            )
         } else {
             autoCropFraming = .identity
         }

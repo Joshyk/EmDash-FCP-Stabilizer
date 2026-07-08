@@ -297,9 +297,9 @@ constant float sourceLensLocalColumnDifferentialGain = 0.08;
 constant float sourceLensLocalBandDifferentialGain = 0.08;
 
 constant float sourceLensRidgeCenter = 0.25;
-constant float sourceLensRidgeRadius = 0.14;
-constant float sourceLensRidgeFadeStart = 0.38;
-constant float sourceLensRidgeFadeEnd = 0.52;
+constant float sourceLensRidgeRadius = 0.20;
+constant float sourceLensRidgeFadeStart = 0.46;
+constant float sourceLensRidgeFadeEnd = 0.62;
 
 static float debugRectOutlineCoverage(float2 uv, float2 outputSize, float minX, float maxX, float minY, float maxY, float thicknessPixels) {
     if (uv.x < minX || uv.x > maxX || uv.y < minY || uv.y > maxY) {

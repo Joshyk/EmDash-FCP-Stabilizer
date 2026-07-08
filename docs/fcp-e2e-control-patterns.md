@@ -78,6 +78,12 @@ scripts/fcp_e2e_control.sh run --case p1000307 \
   --assume-current-fcp-state
 ```
 
+The current MacBook Air test display is set to `1440 × 900` Retina. Treat
+checked-in or manually supplied Viewer ROI values as display-layout dependent
+and re-measure them after display scaling changes. Source-resolution export
+quality does not use Viewer pixels and should not be adjusted for this display
+setting.
+
 ## Recovery And Warmup
 
 Recover the case library without deleting analysis or transcoded media:

@@ -105,4 +105,6 @@ scripts/stabilizer_fcp_screen_capture_e2e.sh evaluate \
 ```
 
 If the FCP window layout changes, pass `--viewer-roi x,y,w,h` for the absolute Viewer
-rectangle in the screen recording.
+rectangle in the screen recording. The current MacBook Air display setting is
+`1440 × 900` Retina, so re-measure any fixed Viewer ROI after display scaling changes. The
+source-resolution export evaluator does not use Viewer pixels.
