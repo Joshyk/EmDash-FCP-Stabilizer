@@ -156,7 +156,8 @@ estimators, or Transform-keyframe writers back into this target.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, optional small-clamp Far-field Warp, and dynamic Auto Crop scale when
   `Remove Black Edges` is enabled. `Turn Smoothing Zoom` can add extra smooth crop
-  margin for large crop-aware X turns.
+  margin for large crop-aware X turns, and exposes that margin as black diagnostic
+  edge space when `Remove Black Edges` is disabled.
 - Includes a minimal wrapper app source/resource set under `WrapperApp/`.
 
 The current effect implementation reads current render frames as Metal textures, validates
@@ -294,9 +295,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   adaptive X-turn window farther, so extra zoom margin is spent on a slower,
   more even pan instead of a faster x-axis transition.
 - `Turn Smoothing Zoom`: defaults to `1.0`, ranges from `0.0...4.0`, and adds crop-aware
-  margin for large X turns. With `Remove Black Edges` enabled the margin becomes
-  Auto Crop zoom; with it disabled the same budget is visible as black diagnostic
-  edge space.
+  margin for large X turns. Values above `1.0` lower the travel threshold for adaptive
+  X-turn smoothing, so high zoom spends more edge space on a slower pan. With
+  `Remove Black Edges` enabled the margin becomes Auto Crop zoom; with it disabled
+  the same budget is intentionally visible as larger black diagnostic edge space.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
   motion paths. The default is `6.0` seconds. The UI value is used as the TURN window,
   and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run
