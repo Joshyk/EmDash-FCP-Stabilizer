@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.5` keeps the far-field micro-shake correction baseline on schema 48.
+- Version `1.1.6` keeps the far-field micro-shake correction baseline on schema 48.
   Keep schema 48's fps-derived dominant `5x9` mesh windows as the primary evidence
   for short source-space lens/camera shake up to one second, with the coherent
   rigid far-field X/Y/roll path built from the sky/top and ridge/horizon bands
@@ -292,7 +292,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   tracking dropouts. Large X-turn travel is detected with `Turn Detection Window`
   as a forward lookahead horizon, but correction amount remains controlled by
   `Turn Smoothing Strength`.
-- `Max Turning Smoothing Zoom`: defaults to `1.08`, ranges from `1.00...1.60`, and caps
+- `Max Turning Smoothing Zoom`: defaults to `1.08`, ranges from `1.00...10.00`, and caps
   crop-aware zoom demand for large X turns. It does not change turn correction strength
   and does not extend the smoothing window. With `Remove Black Edges` enabled the margin
   becomes Auto Crop zoom; with it disabled the same budget is intentionally visible

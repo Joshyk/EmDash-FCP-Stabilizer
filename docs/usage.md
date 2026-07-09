@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.5` is the current review baseline for far-field micro-shake.
+Version `1.1.6` is the current review baseline for far-field micro-shake.
 Use schema 48 analysis for review builds so the fps-derived dominant `5x9`
 mesh windows, top/ridge-prioritized far-field rigid X/Y/roll path, and `3x5`
 source-lens local evidence are present. Earlier schemas
@@ -158,7 +158,7 @@ fallbacks.
   `9.0` seconds. This is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis. The UI value is the TURN lookahead horizon, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
-- `Max Turning Smoothing Zoom`: defaults to `1.08`, ranges from `1.00...1.60`, and is
+- `Max Turning Smoothing Zoom`: defaults to `1.08`, ranges from `1.00...10.00`, and is
   the absolute Auto Crop zoom cap for turn demand. It does not change turn correction
   strength and does not extend the smoothing window. With `Remove Black Edges` enabled
   the budget becomes Auto Crop zoom; with it disabled the same budget is intentionally

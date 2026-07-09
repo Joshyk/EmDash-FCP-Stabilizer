@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.5` uses schema 48 far-field micro-shake analysis. It keeps the
+Version `1.1.6` uses schema 48 far-field micro-shake analysis. It keeps the
 fps-derived multi-window `5x9` far-field mesh evidence, but adds a persisted
 global far-field rigid roll path so short whole-frame Y/roll camera vibration can
 be corrected as a coherent transform instead of a local mountain/cloud warp.
@@ -143,7 +143,7 @@ value. It is treated as a forward lookahead from the current frame, so future
 large X-turn travel can shape the current smooth target and future turn-zoom
 demand can hold Auto Crop zoom before release. Its UI minimum is the fixed `2.0`
 second Stride Wobble window, so TURN cannot run shorter than SWOB.
-`Max Turning Smoothing Zoom` defaults to `1.08` and ranges from `1.00...1.60`.
+`Max Turning Smoothing Zoom` defaults to `1.08` and ranges from `1.00...10.00`.
 It is an absolute Auto Crop zoom cap for turn demand, not a turn-correction
 strength and not a hidden window-extension control. With `Remove Black Edges`
 enabled that budget becomes smooth Auto Crop zoom; with it disabled the same

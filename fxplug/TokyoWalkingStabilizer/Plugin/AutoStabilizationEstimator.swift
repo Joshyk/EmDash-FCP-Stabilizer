@@ -870,7 +870,7 @@ enum AutoStabilizationEstimator {
     private static let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
     private static let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
     private static let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-    private static let adaptiveXTurnTransitionMaximumZoomScale: Float = 1.60
+    private static let adaptiveXTurnTransitionMaximumZoomScale: Float = 10.0
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.44
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18

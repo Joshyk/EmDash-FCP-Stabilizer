@@ -793,7 +793,7 @@ private let renderTurnTransitionZoomCenterAnchorFade: Float = 0.92
 private let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
 private let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
 private let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-private let adaptiveXTurnTransitionMaximumZoomScale: Float = 1.60
+private let adaptiveXTurnTransitionMaximumZoomScale: Float = 10.0
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -5178,10 +5178,10 @@ private func parseOptions() throws -> Options {
         case "--turn-window":
             options.turnWindowSeconds = max(strideWindowSeconds, try nextDouble(for: arg))
         case "--max-turn-zoom":
-            options.maxTurnZoom = min(max(1.0, try nextDouble(for: arg)), 1.60)
+            options.maxTurnZoom = min(max(1.0, try nextDouble(for: arg)), 10.0)
         case "--turn-zoom":
             FileHandle.standardError.write(Data("warning: --turn-zoom is deprecated; use --max-turn-zoom.\n".utf8))
-            options.maxTurnZoom = min(max(1.0, try nextDouble(for: arg)), 1.60)
+            options.maxTurnZoom = min(max(1.0, try nextDouble(for: arg)), 10.0)
         case "--output-size":
             let value = try nextValue(for: arg)
             let parts = value.lowercased().split(separator: "x")
