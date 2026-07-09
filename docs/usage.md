@@ -159,10 +159,11 @@ fallbacks.
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
 - `Turn Smoothing Zoom`: defaults to `1.0`, ranges from `0.0...4.0`, and adds smooth
-  crop-aware margin for large X turns. Values above `1.0` also expand the adaptive
-  X-turn smoothing window so added zoom budget is spent on a smoother pan. With
-  `Remove Black Edges` enabled the margin becomes Auto Crop zoom; with it disabled
-  the same budget is visible as black diagnostic edge space.
+  crop-aware margin for large X turns. Values above `1.0` also lower the travel
+  threshold and expand the adaptive X-turn smoothing window so added zoom budget is
+  spent on a smoother pan. With `Remove Black Edges` enabled the margin becomes
+  Auto Crop zoom; with it disabled the same budget is intentionally exposed as
+  larger black diagnostic edge space.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.

@@ -868,6 +868,9 @@ enum AutoStabilizationEstimator {
     private static let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
     private static let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
     private static let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
+    private static let adaptiveXTurnTransitionZoomTargetPixelRate: Float = 22.0
+    private static let adaptiveXTurnTransitionZoomGateStartPixels: Float = 48.0
+    private static let adaptiveXTurnTransitionZoomGateFullPixels: Float = 150.0
     private static let adaptiveXTurnTransitionZoomBaselineStrength: Float = 1.0
     private static let adaptiveXTurnTransitionZoomFullStrength: Float = 4.0
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
@@ -16345,14 +16348,20 @@ enum AutoStabilizationEstimator {
         )
         let zoomWindowExtension = requestedWindow * Double(zoomWindowSupport)
         let maximumWindow = max(baseWindow, requestedWindow + zoomWindowExtension)
+        let targetPixelRate = adaptiveXTurnTransitionTargetPixelRate
+            + ((adaptiveXTurnTransitionZoomTargetPixelRate - adaptiveXTurnTransitionTargetPixelRate) * zoomWindowSupport)
+        let gateStartPixels = adaptiveXTurnTransitionGateStartPixels
+            + ((adaptiveXTurnTransitionZoomGateStartPixels - adaptiveXTurnTransitionGateStartPixels) * zoomWindowSupport)
+        let gateFullPixels = adaptiveXTurnTransitionGateFullPixels
+            + ((adaptiveXTurnTransitionZoomGateFullPixels - adaptiveXTurnTransitionGateFullPixels) * zoomWindowSupport)
         let travelWindow = min(
             maximumWindow,
-            max(baseWindow, Double(travelPixels / max(adaptiveXTurnTransitionTargetPixelRate, Float.ulpOfOne)))
+            max(baseWindow, Double(travelPixels / max(targetPixelRate, Float.ulpOfOne)))
         )
         let travelGate = confidenceRamp(
             travelPixels,
-            start: adaptiveXTurnTransitionGateStartPixels,
-            full: adaptiveXTurnTransitionGateFullPixels
+            start: min(gateStartPixels, gateFullPixels - Float.ulpOfOne),
+            full: max(gateFullPixels, gateStartPixels + Float.ulpOfOne)
         )
         let effectiveWindow = baseWindow + ((travelWindow - baseWindow) * Double(travelGate))
         return AdaptiveXTurnTiming(

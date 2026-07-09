@@ -142,11 +142,13 @@ turn output-edge cap.
 value. Its UI minimum is the fixed `2.0` second Stride Wobble window, so TURN
 cannot run shorter than SWOB.
 `Turn Smoothing Zoom` defaults to `1.0` and runs up to `4.0`. Values above
-`1.0` add crop-aware margin for large X turns and expand the adaptive X-turn
-smoothing window beyond the `Turn Detection Window`, up to roughly one extra
-window at `4.0`. With `Remove Black Edges` enabled that margin becomes smooth
-Auto Crop zoom; with it disabled the same budget is visible as black diagnostic
-edge space. Lower it to `0.0` to keep the old crop budget.
+`1.0` add crop-aware margin for large X turns, lower the travel threshold for
+the adaptive X-turn smoothing window, and can expand that window beyond the
+`Turn Detection Window`, up to roughly one extra window at `4.0`. With
+`Remove Black Edges` enabled that margin becomes smooth Auto Crop zoom; with it
+disabled the same budget is intentionally exposed as larger black diagnostic
+edge space, and turn-space edge guarding backs off so the extra correction is
+visible. Lower it to `0.0` to keep the old crop budget.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 

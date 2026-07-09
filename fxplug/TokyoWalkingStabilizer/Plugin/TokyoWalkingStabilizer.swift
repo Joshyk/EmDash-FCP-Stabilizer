@@ -2327,7 +2327,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private static func cropOffEdgeGuardFraming(
         currentTransform: StabilizerAutoTransform,
         outputSize: vector_float2,
-        masterStrength: Float
+        masterStrength: Float,
+        strengths: StabilizerCorrectionStrengths
     ) -> AutoCropFraming {
         guard masterStrength > 0.0001,
               outputSize.x > 1.0,
@@ -2379,7 +2380,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let scaleDelta = demandX >= stabilizerCropOffEdgeGuardLargeDemandPixels
             ? max(demandScaleDelta, stabilizerCropOffEdgeGuardMaximumScaleDelta * 0.75)
             : max(demandScaleDelta, stabilizerCropOffEdgeGuardBaseScaleDelta)
-        let boundedDelta = min(max(scaleDelta, 0.0), stabilizerCropOffEdgeGuardMaximumScaleDelta)
+        let turnExposureSupport = cropOffTurnSmoothingExposureSupport(
+            currentTransform: currentTransform,
+            masterStrength: masterStrength,
+            strengths: strengths
+        )
+        let exposedScaleDelta = scaleDelta * (1.0 - turnExposureSupport)
+        let boundedDelta = min(max(exposedScaleDelta, 0.0), stabilizerCropOffEdgeGuardMaximumScaleDelta)
         return AutoCropFraming(
             scale: 1.0 + boundedDelta,
             positionPixels: vector_float2(0.0, 0.0),
@@ -2388,6 +2395,46 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cropOffEdgeGuardDemandX: demandX,
             cropOffEdgeGuardActive: 1.0
         )
+    }
+
+    private static func cropOffTurnSmoothingExposureSupport(
+        currentTransform: StabilizerAutoTransform,
+        masterStrength: Float,
+        strengths: StabilizerCorrectionStrengths
+    ) -> Float {
+        guard strengths.usesAutoCropTurnSpace,
+              masterStrength.isFinite,
+              masterStrength > Float.ulpOfOne
+        else {
+            return 0.0
+        }
+        let zoomStrength = min(
+            max(Float(strengths.turnSmoothingZoom), 0.0),
+            Float(stabilizerMaximumTurnSmoothingZoom)
+        )
+        let zoomSupport = thresholdRamp(
+            zoomStrength,
+            start: Float(stabilizerDefaultTurnSmoothingZoom),
+            full: Float(stabilizerMaximumTurnSmoothingZoom)
+        )
+        guard zoomSupport > Float.ulpOfOne else {
+            return 0.0
+        }
+        let turnPixels = abs(currentTransform.turnDetectedPixelOffset.x) * max(0.0, masterStrength)
+        let travelSupport = thresholdRamp(
+            turnPixels,
+            start: stabilizerAutoCropTurnSmoothingZoomStartPixels * 0.5,
+            full: stabilizerAutoCropTurnSmoothingZoomFullPixels * 0.70
+        )
+        guard travelSupport > Float.ulpOfOne else {
+            return 0.0
+        }
+        let confidenceSupport = thresholdRamp(
+            min(max(currentTransform.turnConfidence, 0.0), 1.0),
+            start: stabilizerAutoCropTurnSmoothingZoomConfidenceStart,
+            full: stabilizerAutoCropTurnSmoothingZoomConfidenceFull
+        )
+        return min(max(zoomSupport * travelSupport * confidenceSupport, 0.0), 1.0)
     }
 
     private static func autoCropFraming(
@@ -10713,7 +10760,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFraming = Self.cropOffEdgeGuardFraming(
                 currentTransform: autoTransform,
                 outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                masterStrength: masterStrength
+                masterStrength: masterStrength,
+                strengths: correctionStrengths
             )
         } else {
             autoCropFraming = .identity
