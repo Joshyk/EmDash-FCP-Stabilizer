@@ -18,7 +18,7 @@ private struct Options {
     var limit = 5
     var listCaches = false
     var turnWindowSeconds = renderTurnTransitionSmoothingWindowSeconds
-    var turnZoom = 5.0
+    var turnStrength = 5.0
     var strengths = Strengths.defaults
 }
 
@@ -1545,7 +1545,7 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
         fallbackWindowSeconds: turnWindowSeconds,
         turnWindowSeconds: turnWindowSeconds,
         outputScale: xScale,
-        turnSmoothingZoom: options.turnZoom
+        turnSmoothingZoom: options.turnStrength
     )
     let turnSmoothY = timeWeightedMonotonicSCurveValue(
         context.turnStrideSmoothedYPath,
@@ -1578,7 +1578,7 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
     )
     let rawTurnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
     let turnQ = turnCorrectionConfidence(confidence: rawTurnQ, turnOwnership: turnOwnershipX)
-    let correction = correctionFactor(turnSmoothingZoom: options.turnZoom, confidence: turnQ)
+    let correction = correctionFactor(turnSmoothingZoom: options.turnStrength, confidence: turnQ)
     let detected = abs(turnBandX * xScale)
     let macroPixelOffsetX = -(turnBandX * xScale) * correction
     return TurnCorrectionSample(
@@ -1651,7 +1651,7 @@ private func renderTurnBridgeAssessment(
         travelPixels: centerSample.detected,
         baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
         turnWindowSeconds: options.turnWindowSeconds,
-        turnSmoothingZoom: options.turnZoom
+        turnSmoothingZoom: options.turnStrength
     )
     let transitionWindowSeconds = timing.windowSeconds
     let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
@@ -1785,7 +1785,7 @@ private func renderTurnBridgeAssessment(
     let averagedMacro = weightedMacro / totalWeight
     let centerMacro = centerSample.macroPixelOffsetX
     let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
-        turnSmoothingZoom: options.turnZoom,
+        turnSmoothingZoom: options.turnStrength,
         turnConfidence: centerSample.confidence,
         turnTravelPixels: centerSample.detected
     )
@@ -4851,7 +4851,7 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
     print("Cache: \(analysis.cachePath)")
     print("Schema: \(analysis.schemaVersion), frames: \(analysis.frames.count), sample: \(analysis.sampleWidth)x\(analysis.sampleHeight)")
     print("Turn window: \(formatSeconds(options.turnWindowSeconds))")
-    print(String(format: "Turn smoothing zoom: %.2f", options.turnZoom))
+    print(String(format: "Turn smoothing strength: %.2f", options.turnStrength))
     if let time = options.relativeTime {
         print("Requested clip time: \(formatSeconds(time)), window: \(formatSeconds(options.windowSeconds))")
         if let selected = assessments.first {
@@ -4924,7 +4924,7 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
         }),
         "windowSeconds": options.windowSeconds,
         "turnWindowSeconds": options.turnWindowSeconds,
-        "turnZoom": options.turnZoom,
+        "turnStrength": options.turnStrength,
         "note": jsonValue(options.note),
         "assessments": assessments.map { assessment in
             [
@@ -5193,11 +5193,14 @@ private func parseOptions() throws -> Options {
         case "--turn-window":
             _ = try nextDouble(for: arg)
             throw FeedbackError(description: "--turn-window is retired; Auto Crop Zoom-In/Out controls now determine turn zoom timing.")
+        case "--turn-strength":
+            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 10.0)
         case "--max-turn-zoom":
-            FileHandle.standardError.write(Data("warning: --max-turn-zoom is deprecated; use --turn-zoom.\n".utf8))
-            options.turnZoom = min(max(0.0, try nextDouble(for: arg)), 10.0)
+            FileHandle.standardError.write(Data("warning: --max-turn-zoom is deprecated; use --turn-strength.\n".utf8))
+            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 10.0)
         case "--turn-zoom":
-            options.turnZoom = min(max(0.0, try nextDouble(for: arg)), 10.0)
+            FileHandle.standardError.write(Data("warning: --turn-zoom is deprecated; use --turn-strength.\n".utf8))
+            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 10.0)
         case "--output-size":
             let value = try nextValue(for: arg)
             let parts = value.lowercased().split(separator: "x")
@@ -5223,7 +5226,7 @@ private func parseOptions() throws -> Options {
             options.strengths.strideR = try nextDouble(for: arg)
         case "--turn":
             _ = try nextDouble(for: arg)
-            throw FeedbackError(description: "--turn is retired; use --turn-zoom for turn smoothing correction and zoom authority.")
+            throw FeedbackError(description: "--turn is retired; use --turn-strength for turn smoothing correction and zoom authority.")
         case "--warp":
             options.strengths.warp = try nextDouble(for: arg)
         case "--help", "-h":
@@ -5247,8 +5250,8 @@ private func printUsage() {
 
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
-    --turn-zoom should match Turn Smoothing Zoom when it is not 5.0; range is 0...10.
-    --max-turn-zoom is a deprecated alias for --turn-zoom and prints a warning when used.
+    --turn-strength should match Turn Smoothing Strength when it is not 5.0; range is 0...10.
+    --turn-zoom and --max-turn-zoom are deprecated aliases for --turn-strength and print a warning when used.
     --turn-window is retired and returns an error.
     --list-caches reports saved cache readiness without repairing cache files.
     --compare-cache validates saved cache equivalence; float arrays may differ only within --compare-tolerance.

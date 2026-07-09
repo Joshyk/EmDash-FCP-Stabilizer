@@ -21,8 +21,8 @@ private enum ParameterID: UInt32 {
     case yStrength = 18
     case sampleScale = 19
     case renderRevision = 20
-    // ID 23 is retired Turn Smoothing Strength. Do not reuse it; Turn
-    // Smoothing Zoom now owns turn correction strength.
+    // ID 23 is the retired legacy turn strength slider. Do not reuse it; ID 46
+    // now owns visible Turn Smoothing Strength.
     case edgeDisplayMode = 27
     // ID 28 is retired because existing FCP effect instances can persist the
     // old 0-4 slider range for that parameter ID.
@@ -51,11 +51,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.8"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 972.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 8.0, 972.0)
+private let tokyoWalkingStabilizerVersion = "1.1.9"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 973.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 9.0, 973.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_418_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_419_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -1256,7 +1256,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Turn Smoothing Zoom",
+            withName: "Turn Smoothing Strength",
             parameterID: ParameterID.turnSmoothingZoom.rawValue,
             defaultValue: stabilizerDefaultTurnSmoothingZoom,
             parameterMin: 0.0,

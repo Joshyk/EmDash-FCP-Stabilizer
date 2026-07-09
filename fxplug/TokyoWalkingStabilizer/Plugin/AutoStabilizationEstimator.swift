@@ -836,12 +836,6 @@ enum AutoStabilizationEstimator {
     private static let maximumLocalSearchRadius = 10
     private static let positionGain: Float = 1.0
     private static let rotationGain: Float = 1.0
-    private static let baseTurnSmoothingOffsetLimitX: Float = 0.08
-    private static let extraTurnSmoothingOffsetLimitX: Float = 0.06
-    private static let autoCropTurnSmoothingOffsetLimitX: Float = 0.18
-    private static let baseTurnSmoothingOffsetLimitY: Float = 0.055
-    private static let extraTurnSmoothingOffsetLimitY: Float = 0.040
-    private static let autoCropTurnSmoothingOffsetLimitY: Float = 0.0
     private static let turnSmoothingFullScaleDegrees: Float = 0.16
     private static let baseTurnSmoothingRotationLimitDegrees: Float = 0.80
     private static let extraTurnSmoothingRotationLimitDegrees: Float = 0.55
@@ -3781,7 +3775,10 @@ enum AutoStabilizationEstimator {
         let macroPixelOffset = vector_float2(
             softLimit(
                 -panBandX * xScale * positionGain * panCorrectionStrengthX,
-                limit: turnSmoothingOffsetLimit()
+                limit: turnSmoothingXOffsetLimit(
+                    outputPixels: outputSize.x,
+                    turnSmoothingStrength: strengths.turnSmoothingZoom
+                )
             ),
             softLimit(
                 -panBandY * yScale * positionGain * panCorrectionStrengthY,
@@ -7333,7 +7330,10 @@ enum AutoStabilizationEstimator {
             let macroPixelOffset = vector_float2(
                 softLimit(
                     -panBandX * xScale * positionGain * panCorrectionStrengthX,
-                    limit: turnSmoothingOffsetLimit()
+                    limit: turnSmoothingXOffsetLimit(
+                        outputPixels: outputSize.x,
+                        turnSmoothingStrength: strengths.turnSmoothingZoom
+                    )
                 ),
                 softLimit(
                     -panBandY * yScale * positionGain * panCorrectionStrengthY,
@@ -9176,7 +9176,10 @@ enum AutoStabilizationEstimator {
         let rawMacroCompensationRotation = -panBandRoll * rotationGain * panCorrectionStrengthRoll
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
-            limit: turnSmoothingOffsetLimit()
+            limit: turnSmoothingXOffsetLimit(
+                outputPixels: outputSize.x,
+                turnSmoothingStrength: strengths.turnSmoothingZoom
+            )
         )
         let macroCompensationY = softLimit(
             rawMacroCompensationY,
@@ -10191,7 +10194,10 @@ enum AutoStabilizationEstimator {
         let detectedTurnPixelOffset = vector_float2(-panBandX * xScale, -panBandY * yScale)
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
-            limit: turnSmoothingOffsetLimit()
+            limit: turnSmoothingXOffsetLimit(
+                outputPixels: outputSize.x,
+                turnSmoothingStrength: strengths.turnSmoothingZoom
+            )
         )
         let macroCompensationY = softLimit(
             rawMacroCompensationY,
@@ -13999,13 +14005,29 @@ enum AutoStabilizationEstimator {
         return Float.infinity
     }
 
+    private static func turnSmoothingXOffsetLimit(
+        outputPixels: Float,
+        turnSmoothingStrength: Double
+    ) -> Float {
+        guard outputPixels.isFinite, outputPixels > 0.0 else {
+            return 0.0
+        }
+        return outputPixels * 0.5 * turnSmoothingZoomNormalized(turnSmoothingStrength)
+    }
+
     private static func turnSmoothingRotationLimit() -> Float {
         return Float.infinity
     }
 
     private static func softLimit(_ value: Float, limit: Float) -> Float {
-        guard value.isFinite, limit.isFinite, limit > 0.0 else {
+        guard value.isFinite else {
             return value
+        }
+        guard limit.isFinite else {
+            return value
+        }
+        guard limit > 0.0 else {
+            return 0.0
         }
         return Float(Darwin.tanh(Double(value / limit))) * limit
     }
