@@ -821,6 +821,12 @@ private let farFieldLowFrequencyRawReinforcementMaximumBlend: Float = 0.94
 private let lensBandPulseSmoothingBlend: Float = 0.46
 private let lensBandPulseSmoothingStartPixels: Float = 0.22
 private let lensBandPulseSmoothingFullPixels: Float = 1.35
+private let farFieldRigidDeltaCoherenceTopRidgeStartPixels: Float = 1.45
+private let farFieldRigidDeltaCoherenceTopRidgeFullPixels: Float = 5.50
+private let farFieldRigidDeltaCoherenceMidStartPixels: Float = 3.25
+private let farFieldRigidDeltaCoherenceMidFullPixels: Float = 9.50
+private let farFieldRigidDeltaCoherenceMotionStartPixels: Float = 0.22
+private let farFieldRigidDeltaCoherenceMotionFullPixels: Float = 3.60
 private let farFieldLowFrequencyPriorityStartSeconds: Float = 0.28
 private let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
 private let farFieldLowFrequencyMeshSuppressionScale: Float = 1.0
@@ -3694,6 +3700,102 @@ private func sourceSpaceLensShakeBand(
             max: 1.0
         )
     }
+    func farFieldRigidDeltaCoherenceSupport() -> Float {
+        guard analysis.frames.count >= 3,
+              analysis.lensBandTopPathX.count == analysis.frames.count,
+              analysis.lensBandTopPathY.count == analysis.frames.count,
+              analysis.lensBandRidgePathX.count == analysis.frames.count,
+              analysis.lensBandRidgePathY.count == analysis.frames.count,
+              analysis.lensBandMidPathX.count == analysis.frames.count,
+              analysis.lensBandMidPathY.count == analysis.frames.count,
+              analysis.lensBandTopConfidence.count == analysis.frames.count,
+              analysis.lensBandRidgeConfidence.count == analysis.frames.count,
+              analysis.lensBandMidConfidence.count == analysis.frames.count
+        else {
+            return 0.0
+        }
+        let fpsWindowLimit = max(3, Int(round(1.0 / max(frameStep, 1.0 / 240.0))))
+        let preparedWindowFrames = analysis.farFieldMeshDominantWindowFrames.indices.contains(index)
+            ? max(3, Int(round(analysis.farFieldMeshDominantWindowFrames[index])))
+            : max(3, Int(round(targetWindowSeconds / frameStep)))
+        let localDominantSupport = analysis.farFieldMeshDominantSupport.indices.contains(index)
+            ? analysis.farFieldMeshDominantSupport[index]
+            : 0.0
+        let windowFrames = max(3, min(preparedWindowFrames, fpsWindowLimit))
+        let radiusFrames = max(1, windowFrames / 2)
+        let centerTime = analysis.frames[index].time
+        let radiusSeconds = min(1.0, max(frameStep, Double(radiusFrames) * frameStep))
+        var weightedSupport = Float(0.0)
+        var totalWeight = Float(0.0)
+        for sampleIndex in (index - radiusFrames)...(index + radiusFrames) {
+            guard sampleIndex > 0,
+                  analysis.frames.indices.contains(sampleIndex)
+            else {
+                continue
+            }
+            let distance = abs(analysis.frames[sampleIndex].time - centerTime)
+            guard distance <= radiusSeconds + (frameStep * 0.5) else {
+                continue
+            }
+            let topDeltaX = (analysis.lensBandTopPathX[sampleIndex] - analysis.lensBandTopPathX[sampleIndex - 1]) * xScale
+            let topDeltaY = (analysis.lensBandTopPathY[sampleIndex] - analysis.lensBandTopPathY[sampleIndex - 1]) * yScale
+            let ridgeDeltaX = (analysis.lensBandRidgePathX[sampleIndex] - analysis.lensBandRidgePathX[sampleIndex - 1]) * xScale
+            let ridgeDeltaY = (analysis.lensBandRidgePathY[sampleIndex] - analysis.lensBandRidgePathY[sampleIndex - 1]) * yScale
+            let midDeltaX = (analysis.lensBandMidPathX[sampleIndex] - analysis.lensBandMidPathX[sampleIndex - 1]) * xScale
+            let midDeltaY = (analysis.lensBandMidPathY[sampleIndex] - analysis.lensBandMidPathY[sampleIndex - 1]) * yScale
+            let farDeltaX = (topDeltaX * 0.35) + (ridgeDeltaX * 0.65)
+            let farDeltaY = (topDeltaY * 0.35) + (ridgeDeltaY * 0.65)
+            let topRidgeDisagreement = hypotf(topDeltaX - ridgeDeltaX, topDeltaY - ridgeDeltaY)
+            let midDisagreement = hypotf(midDeltaX - farDeltaX, midDeltaY - farDeltaY)
+            let topRidgeCoherence = 1.0 - confidenceRamp(
+                topRidgeDisagreement,
+                start: farFieldRigidDeltaCoherenceTopRidgeStartPixels,
+                full: farFieldRigidDeltaCoherenceTopRidgeFullPixels
+            )
+            let midParallaxVeto = confidenceRamp(
+                midDisagreement,
+                start: farFieldRigidDeltaCoherenceMidStartPixels,
+                full: farFieldRigidDeltaCoherenceMidFullPixels
+            )
+            let rollDelta = analysis.farFieldRigidShakePathRoll.indices.contains(sampleIndex)
+                && analysis.farFieldRigidShakePathRoll.indices.contains(sampleIndex - 1)
+                ? abs(analysis.farFieldRigidShakePathRoll[sampleIndex] - analysis.farFieldRigidShakePathRoll[sampleIndex - 1])
+                : 0.0
+            let motionEvidence = max(
+                confidenceRamp(
+                    hypotf(farDeltaX, farDeltaY),
+                    start: farFieldRigidDeltaCoherenceMotionStartPixels,
+                    full: farFieldRigidDeltaCoherenceMotionFullPixels
+                ),
+                confidenceRamp(
+                    rollDelta,
+                    start: lensShakeRollStartDegrees * 0.5,
+                    full: lensShakeRollFullDegrees
+                )
+            )
+            let farConfidence = min(analysis.lensBandTopConfidence[sampleIndex], analysis.lensBandRidgeConfidence[sampleIndex])
+            let confidenceGate = confidenceRamp(farConfidence, start: 0.08, full: 0.34)
+            let midConfidenceGate = 0.65 + (0.35 * confidenceRamp(analysis.lensBandMidConfidence[sampleIndex], start: 0.06, full: 0.30))
+            let support = clamp(
+                topRidgeCoherence
+                    * (1.0 - (midParallaxVeto * 0.45))
+                    * motionEvidence
+                    * confidenceGate
+                    * midConfidenceGate
+                    * confidenceRamp(localDominantSupport, start: 0.16, full: 0.66),
+                min: 0.0,
+                max: 1.0
+            )
+            let normalizedDistance = clamp(Float(distance / radiusSeconds), min: 0.0, max: 1.0)
+            let weight = (1.0 - normalizedDistance) * (1.0 - normalizedDistance)
+            weightedSupport += support * weight
+            totalWeight += weight
+        }
+        guard totalWeight > Float.ulpOfOne else {
+            return 0.0
+        }
+        return clamp(weightedSupport / totalWeight, min: 0.0, max: 1.0)
+    }
     let qualitySupport = confidenceRamp(appliedWarpConfidence, start: 0.16, full: 0.55)
         * confidenceRamp(trackingConfidence, start: 0.14, full: 0.42)
         * confidenceRamp(edgeQuality, start: 0.46, full: 0.82)
@@ -3770,11 +3872,17 @@ private func sourceSpaceLensShakeBand(
         let preparedRigidRollSupport = analysis.farFieldRigidShakeRollSupport[index]
         let shapeConsistency = analysis.farFieldRigidShakeShapeConsistency[index]
         let forwardBackwardConsistency = analysis.farFieldRigidShakeForwardBackwardConsistency[index]
+        let deltaCoherenceSupport = farFieldRigidDeltaCoherenceSupport()
+        let deltaCoherenceAuthority = confidenceRamp(deltaCoherenceSupport, start: 0.08, full: 0.34)
+        let effectivePreparedRigidSupport = max(preparedRigidSupport, deltaCoherenceAuthority)
+        let effectivePreparedRigidRollSupport = max(preparedRigidRollSupport, deltaCoherenceAuthority)
+        let effectiveShapeConsistency = max(shapeConsistency, deltaCoherenceAuthority)
+        let effectiveForwardBackwardConsistency = max(forwardBackwardConsistency, deltaCoherenceAuthority * 0.92)
         let lowFrequencyRigidPriority = lowFrequencySupport
             * confidenceRamp(rawRigidMagnitude, start: 0.08, full: 0.66)
-            * confidenceRamp(max(preparedRigidSupport, dominantSupport), start: 0.10, full: 0.56)
-            * confidenceRamp(shapeConsistency, start: 0.28, full: 0.70)
-            * confidenceRamp(forwardBackwardConsistency, start: 0.24, full: 0.68)
+            * confidenceRamp(max(effectivePreparedRigidSupport, dominantSupport), start: 0.10, full: 0.56)
+            * confidenceRamp(effectiveShapeConsistency, start: 0.28, full: 0.70)
+            * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.24, full: 0.68)
             * lowFrequencyTurnScale
             * rollingShutterSuppression
         let lowFrequencyDominance = clamp(
@@ -4004,7 +4112,7 @@ private func sourceSpaceLensShakeBand(
                     full: farFieldParallaxWarpDampingOpposingFull
                 ),
                 (1.0 - confidenceRamp(
-                    forwardBackwardConsistency,
+                    effectiveForwardBackwardConsistency,
                     start: farFieldParallaxWarpDampingTwoWayStart,
                     full: farFieldParallaxWarpDampingTwoWayFull
                 )) * 0.85
@@ -4017,12 +4125,12 @@ private func sourceSpaceLensShakeBand(
             rigidResidualY *= 1.0 - parallaxWarpDamping
         }
         let coherentXShapeAuthority = confidenceRamp(
-            shapeConsistency,
+            effectiveShapeConsistency,
             start: farFieldCoherentSlabXShapeStart,
             full: farFieldCoherentSlabXShapeFull
         )
         let coherentXTwoWayAuthority = confidenceRamp(
-            forwardBackwardConsistency,
+            effectiveForwardBackwardConsistency,
             start: farFieldCoherentSlabXTwoWayStart,
             full: farFieldCoherentSlabXTwoWayFull
         )
@@ -4038,7 +4146,7 @@ private func sourceSpaceLensShakeBand(
         )
         let lowFrequencyXAuthority = lowFrequencyRigidPriority
             * confidenceRamp(Float(targetWindowSeconds), start: 0.42, full: farFieldLowFrequencyPriorityFullSeconds)
-            * confidenceRamp(forwardBackwardConsistency, start: 0.08, full: 0.42)
+            * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.08, full: 0.42)
             * (1.0 - (coherentXMeshVeto * 0.72))
             * (1.0 - (coherentXQuiverVeto * 0.78))
         let coherentSlabXAuthority = clamp(
@@ -4053,12 +4161,12 @@ private func sourceSpaceLensShakeBand(
             rigidResidualX *= coherentSlabXAuthority
         }
         let coherentYShapeAuthority = confidenceRamp(
-            shapeConsistency,
+            effectiveShapeConsistency,
             start: farFieldCoherentSlabYShapeStart,
             full: farFieldCoherentSlabYShapeFull
         )
         let coherentYTwoWayAuthority = confidenceRamp(
-            forwardBackwardConsistency,
+            effectiveForwardBackwardConsistency,
             start: farFieldCoherentSlabYTwoWayStart,
             full: farFieldCoherentSlabYTwoWayFull
         )
@@ -4068,7 +4176,7 @@ private func sourceSpaceLensShakeBand(
             full: farFieldCoherentSlabYMeshDeltaFull
         )
         let lowFrequencyYAuthority = lowFrequencyRigidPriority
-            * confidenceRamp(forwardBackwardConsistency, start: 0.08, full: 0.42)
+            * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.08, full: 0.42)
             * (1.0 - (coherentYMeshVeto * 0.55))
         let coherentSlabYAuthority = clamp(
             max(coherentYShapeAuthority * coherentYTwoWayAuthority, lowFrequencyYAuthority),
@@ -4082,22 +4190,22 @@ private func sourceSpaceLensShakeBand(
         let lowFrequencyRigidSupport = lowFrequencyRigidPriority
             * confidenceRamp(rigidMagnitude, start: 0.05, full: 0.48)
         let rigidSupport = confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70)
-            * confidenceRamp(preparedRigidSupport, start: 0.08, full: 0.36)
-            * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
-            * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
+            * confidenceRamp(effectivePreparedRigidSupport, start: 0.08, full: 0.36)
+            * confidenceRamp(effectiveShapeConsistency, start: 0.44, full: 0.82)
+            * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.36, full: 0.78)
             * qualitySupport
             * turnScale
         let rigidRollSupport = confidenceRamp(abs(rigidRollResidual), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
-            * confidenceRamp(preparedRigidRollSupport, start: 0.08, full: 0.36)
-            * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
-            * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
+            * confidenceRamp(effectivePreparedRigidRollSupport, start: 0.08, full: 0.36)
+            * confidenceRamp(effectiveShapeConsistency, start: 0.44, full: 0.82)
+            * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.36, full: 0.78)
             * qualitySupport
             * turnScale
         let boundedSupport = clamp(max(max(rigidSupport, rigidRollSupport), max(meshSupport * confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70), lowFrequencyRigidSupport)), min: 0.0, max: 1.0)
         let rigidOnlyEvidence = clamp(
             confidenceRamp(boundedSupport, start: farFieldRigidOnlyGuardSupportStart, full: farFieldRigidOnlyGuardSupportFull)
-                * confidenceRamp(shapeConsistency, start: farFieldRigidOnlyGuardShapeStart, full: farFieldRigidOnlyGuardShapeFull)
-                * confidenceRamp(forwardBackwardConsistency, start: farFieldRigidOnlyGuardTwoWayStart, full: farFieldRigidOnlyGuardTwoWayFull)
+                * confidenceRamp(effectiveShapeConsistency, start: farFieldRigidOnlyGuardShapeStart, full: farFieldRigidOnlyGuardShapeFull)
+                * confidenceRamp(effectiveForwardBackwardConsistency, start: farFieldRigidOnlyGuardTwoWayStart, full: farFieldRigidOnlyGuardTwoWayFull)
                 * (1.0 - (confidenceRamp(rollingShutterCandidate, start: 0.45, full: 0.75) * 0.65)),
             min: 0.0,
             max: 1.0
@@ -4114,7 +4222,7 @@ private func sourceSpaceLensShakeBand(
             applied: applied,
             remaining: max(0.0, detected - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f roll %.5f raw %.3f %.3f rawRoll %.5f support %.2f rollSupport %.2f prepared %.2f rollPrepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f dominantMeshYBlend %.2f shortYBoost %.2f parallaxDamp %.2f coherentX %.2f coherentY %.2f rolling %.2f meshSupport %.2f meshBlend %.2f meshMaxDelta %.2f meshOpposing %.0f rawReinforceBlend %.2f xQuiver %.2f yQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f yBeforeLimiter %.3f yAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rigidRollResidual, rawRigidResidualX, rawRigidResidualY, rawRigidRollResidual, boundedSupport, rigidRollSupport, preparedRigidSupport, preparedRigidRollSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, dominantMeshYBlend, shortWindowRigidYBoost, parallaxWarpDamping, coherentSlabXAuthority, coherentSlabYAuthority, rollingShutterCandidate, meshSupport, meshBlend, meshMaxBinDelta, meshOpposingBins, rawReinforcementBlend, xQuiverScore, yQuiverScore, xBeforeQuiverLimiter, rigidResidualX, yBeforeQuiverLimiter, rigidResidualY, rigidOnlyGuard, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f roll %.5f raw %.3f %.3f rawRoll %.5f support %.2f rollSupport %.2f prepared %.2f rollPrepared %.2f shape %.2f twoWay %.2f deltaRigid %.2f deltaAuthority %.2f effectiveShape %.2f effectiveTwoWay %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f dominantMeshYBlend %.2f shortYBoost %.2f parallaxDamp %.2f coherentX %.2f coherentY %.2f rolling %.2f meshSupport %.2f meshBlend %.2f meshMaxDelta %.2f meshOpposing %.0f rawReinforceBlend %.2f xQuiver %.2f yQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f yBeforeLimiter %.3f yAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rigidRollResidual, rawRigidResidualX, rawRigidResidualY, rawRigidRollResidual, boundedSupport, rigidRollSupport, preparedRigidSupport, preparedRigidRollSupport, shapeConsistency, forwardBackwardConsistency, deltaCoherenceSupport, deltaCoherenceAuthority, effectiveShapeConsistency, effectiveForwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, dominantMeshYBlend, shortWindowRigidYBoost, parallaxWarpDamping, coherentSlabXAuthority, coherentSlabYAuthority, rollingShutterCandidate, meshSupport, meshBlend, meshMaxBinDelta, meshOpposingBins, rawReinforcementBlend, xQuiverScore, yQuiverScore, xBeforeQuiverLimiter, rigidResidualX, yBeforeQuiverLimiter, rigidResidualY, rigidOnlyGuard, reason)
         )
     }
 

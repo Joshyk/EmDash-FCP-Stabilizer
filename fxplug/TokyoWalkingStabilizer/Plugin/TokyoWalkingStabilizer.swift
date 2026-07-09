@@ -7233,6 +7233,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if (mask & 524288) != 0 { parts.append("sourceRidgeGlobalOnly") }
         if (mask & 1048576) != 0 { parts.append("globalY") }
         if (mask & 2097152) != 0 { parts.append("globalRoll") }
+        if (mask & 4194304) != 0 { parts.append("deltaRigid") }
         return parts.joined(separator: ",")
     }
 
@@ -10634,7 +10635,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 simd_length(autoTransform.lensBandTopOffset) / max(diagnosticScaleX, Float.ulpOfOne),
                 simd_length(autoTransform.lensBandRidgeOffset) / max(diagnosticScaleX, Float.ulpOfOne),
                 simd_length(autoTransform.lensBandMidOffset) / max(diagnosticScaleX, Float.ulpOfOne),
-                autoTransform.lensBandWarpSupport
+                autoTransform.lensBandWarpSupport,
+                autoTransform.lensFarFieldRigidShakeSupport,
+                autoTransform.lensFarFieldRigidRollSupport,
+                abs(autoTransform.lensFarFieldRigidGlobalYOffset) / max(diagnosticScaleY, Float.ulpOfOne),
+                abs(autoTransform.lensFarFieldRigidGlobalRollDegrees) / 0.08
             ))
             diagnostic = vector_float4(
                 min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),

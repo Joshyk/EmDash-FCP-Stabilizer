@@ -1105,6 +1105,12 @@ enum AutoStabilizationEstimator {
     private static let farFieldRigidShakeForwardBackwardFullPixels: Float = 1.00
     private static let farFieldRigidShakeResidualStartPixels: Float = 0.08
     private static let farFieldRigidShakeResidualFullPixels: Float = 0.70
+    private static let farFieldRigidDeltaCoherenceTopRidgeStartPixels: Float = 1.45
+    private static let farFieldRigidDeltaCoherenceTopRidgeFullPixels: Float = 5.50
+    private static let farFieldRigidDeltaCoherenceMidStartPixels: Float = 3.25
+    private static let farFieldRigidDeltaCoherenceMidFullPixels: Float = 9.50
+    private static let farFieldRigidDeltaCoherenceMotionStartPixels: Float = 0.22
+    private static let farFieldRigidDeltaCoherenceMotionFullPixels: Float = 3.60
     static let farFieldMeshRows = 5
     static let farFieldMeshColumns = 9
     static let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
@@ -14796,6 +14802,114 @@ enum AutoStabilizationEstimator {
             && analysis.farFieldMeshPathX.count == frames.count * farFieldMeshBinCount
             && analysis.farFieldMeshPathY.count == frames.count * farFieldMeshBinCount
             && analysis.farFieldMeshSupport.count == frames.count * farFieldMeshBinCount
+
+        func farFieldRigidDeltaCoherenceSupport() -> Float {
+            guard hasLensBandPaths,
+                  frames.indices.contains(centerIndex),
+                  frames.count >= 3
+            else {
+                return 0.0
+            }
+            let fpsWindowLimit = max(3, Int((1.0 / max(frameStepSeconds, 1.0 / 240.0)).rounded()))
+            let windowFrameCount = max(
+                3,
+                min(Int(max(3.0, dominantWindowFrames).rounded()), fpsWindowLimit)
+            )
+            let radiusFrames = max(1, windowFrameCount / 2)
+            let centerTime = frames[centerIndex].time
+            let radiusSeconds = min(1.0, max(frameStepSeconds, Double(radiusFrames) * frameStepSeconds))
+            var weightedSupport = Float(0.0)
+            var totalWeight = Float(0.0)
+            for index in (centerIndex - radiusFrames)...(centerIndex + radiusFrames) {
+                guard index > 0,
+                      frames.indices.contains(index),
+                      analysis.lensBandTopPathX.indices.contains(index),
+                      analysis.lensBandTopPathX.indices.contains(index - 1),
+                      analysis.lensBandTopPathY.indices.contains(index),
+                      analysis.lensBandTopPathY.indices.contains(index - 1),
+                      analysis.lensBandRidgePathX.indices.contains(index),
+                      analysis.lensBandRidgePathX.indices.contains(index - 1),
+                      analysis.lensBandRidgePathY.indices.contains(index),
+                      analysis.lensBandRidgePathY.indices.contains(index - 1),
+                      analysis.lensBandMidPathX.indices.contains(index),
+                      analysis.lensBandMidPathX.indices.contains(index - 1),
+                      analysis.lensBandMidPathY.indices.contains(index),
+                      analysis.lensBandMidPathY.indices.contains(index - 1),
+                      analysis.lensBandTopConfidence.indices.contains(index),
+                      analysis.lensBandRidgeConfidence.indices.contains(index),
+                      analysis.lensBandMidConfidence.indices.contains(index)
+                else {
+                    continue
+                }
+                let distance = abs(frames[index].time - centerTime)
+                guard distance <= radiusSeconds + (frameStepSeconds * 0.5) else {
+                    continue
+                }
+                let topDelta = vector_float2(
+                    (analysis.lensBandTopPathX[index] - analysis.lensBandTopPathX[index - 1]) * outputScale.x,
+                    (analysis.lensBandTopPathY[index] - analysis.lensBandTopPathY[index - 1]) * outputScale.y
+                )
+                let ridgeDelta = vector_float2(
+                    (analysis.lensBandRidgePathX[index] - analysis.lensBandRidgePathX[index - 1]) * outputScale.x,
+                    (analysis.lensBandRidgePathY[index] - analysis.lensBandRidgePathY[index - 1]) * outputScale.y
+                )
+                let midDelta = vector_float2(
+                    (analysis.lensBandMidPathX[index] - analysis.lensBandMidPathX[index - 1]) * outputScale.x,
+                    (analysis.lensBandMidPathY[index] - analysis.lensBandMidPathY[index - 1]) * outputScale.y
+                )
+                let farDelta = (topDelta * 0.35) + (ridgeDelta * 0.65)
+                let topRidgeDisagreement = simd_length(topDelta - ridgeDelta)
+                let midDisagreement = simd_length(midDelta - farDelta)
+                let topRidgeCoherence = 1.0 - confidenceRamp(
+                    topRidgeDisagreement,
+                    start: farFieldRigidDeltaCoherenceTopRidgeStartPixels,
+                    full: farFieldRigidDeltaCoherenceTopRidgeFullPixels
+                )
+                let midParallaxVeto = confidenceRamp(
+                    midDisagreement,
+                    start: farFieldRigidDeltaCoherenceMidStartPixels,
+                    full: farFieldRigidDeltaCoherenceMidFullPixels
+                )
+                let rollDelta = analysis.farFieldRigidShakePathRoll.indices.contains(index)
+                    && analysis.farFieldRigidShakePathRoll.indices.contains(index - 1)
+                    ? abs(analysis.farFieldRigidShakePathRoll[index] - analysis.farFieldRigidShakePathRoll[index - 1])
+                    : 0.0
+                let motionEvidence = max(
+                    confidenceRamp(
+                        simd_length(farDelta),
+                        start: farFieldRigidDeltaCoherenceMotionStartPixels,
+                        full: farFieldRigidDeltaCoherenceMotionFullPixels
+                    ),
+                    confidenceRamp(
+                        rollDelta,
+                        start: lensShakeRollStartDegrees * 0.5,
+                        full: lensShakeRollFullDegrees
+                    )
+                )
+                let farConfidence = min(analysis.lensBandTopConfidence[index], analysis.lensBandRidgeConfidence[index])
+                let confidenceGate = confidenceRamp(farConfidence, start: 0.08, full: 0.34)
+                let midConfidenceGate = 0.65 + (0.35 * confidenceRamp(analysis.lensBandMidConfidence[index], start: 0.06, full: 0.30))
+                let support = clamp(
+                    topRidgeCoherence
+                        * (1.0 - (midParallaxVeto * 0.45))
+                        * motionEvidence
+                        * confidenceGate
+                        * midConfidenceGate
+                        * confidenceRamp(dominantWindowSupport, start: 0.16, full: 0.66),
+                    min: 0.0,
+                    max: 1.0
+                )
+                let normalizedDistance = clamp(Float(distance / radiusSeconds), min: 0.0, max: 1.0)
+                let weight = (1.0 - normalizedDistance) * (1.0 - normalizedDistance)
+                weightedSupport += support * weight
+                totalWeight += weight
+            }
+            guard totalWeight > Float.ulpOfOne else {
+                return 0.0
+            }
+            return clamp(weightedSupport / totalWeight, min: 0.0, max: 1.0)
+        }
+
         if hasFarFieldRigidShakePaths {
             let rawRigidResidual = vector_float2(
                 residual(kind: .farFieldRigidShakeX, values: analysis.farFieldRigidShakePathX) * outputScale.x,
@@ -14811,11 +14925,20 @@ enum AutoStabilizationEstimator {
             let preparedRigidRollSupport = interpolatedValue(analysis.farFieldRigidShakeRollSupport, using: interpolation)
             let shapeConsistency = interpolatedValue(analysis.farFieldRigidShakeShapeConsistency, using: interpolation)
             let forwardBackwardConsistency = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistency, using: interpolation)
+            let deltaCoherenceSupport = farFieldRigidDeltaCoherenceSupport()
+            let deltaCoherenceAuthority = confidenceRamp(deltaCoherenceSupport, start: 0.08, full: 0.34)
+            let effectivePreparedRigidSupport = max(preparedRigidSupport, deltaCoherenceAuthority)
+            let effectivePreparedRigidRollSupport = max(preparedRigidRollSupport, deltaCoherenceAuthority)
+            let effectiveShapeConsistency = max(shapeConsistency, deltaCoherenceAuthority)
+            let effectiveForwardBackwardConsistency = max(forwardBackwardConsistency, deltaCoherenceAuthority * 0.92)
+            if deltaCoherenceSupport >= lensShakeMinimumSupport {
+                result.bandModelMask |= 4194304
+            }
             let lowFrequencyRigidPriority = lowFrequencySupport
                 * confidenceRamp(rawRigidMagnitude, start: 0.08, full: 0.66)
-                * confidenceRamp(max(preparedRigidSupport, dominantWindowSupport), start: 0.10, full: 0.56)
-                * confidenceRamp(shapeConsistency, start: 0.28, full: 0.70)
-                * confidenceRamp(forwardBackwardConsistency, start: 0.24, full: 0.68)
+                * confidenceRamp(max(effectivePreparedRigidSupport, dominantWindowSupport), start: 0.10, full: 0.56)
+                * confidenceRamp(effectiveShapeConsistency, start: 0.28, full: 0.70)
+                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.24, full: 0.68)
                 * lowFrequencyTurnScale
                 * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.62, full: 0.88) * 0.55))
             let lowFrequencyDominance = clamp(
@@ -15043,12 +15166,12 @@ enum AutoStabilizationEstimator {
                         meshOpposingFraction,
                         start: farFieldParallaxWarpDampingOpposingStart,
                         full: farFieldParallaxWarpDampingOpposingFull
-                    ),
-                    (1.0 - confidenceRamp(
-                        forwardBackwardConsistency,
-                        start: farFieldParallaxWarpDampingTwoWayStart,
-                        full: farFieldParallaxWarpDampingTwoWayFull
-                    )) * 0.85
+	                    ),
+	                    (1.0 - confidenceRamp(
+	                        effectiveForwardBackwardConsistency,
+	                        start: farFieldParallaxWarpDampingTwoWayStart,
+	                        full: farFieldParallaxWarpDampingTwoWayFull
+	                    )) * 0.85
                 )
                 * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.62, full: 0.88) * 0.35))
             let parallaxWarpDamping = farFieldParallaxWarpDampingMaximum
@@ -15060,16 +15183,16 @@ enum AutoStabilizationEstimator {
                     result.bandModelMask |= 2048
                 }
             }
-            let coherentXShapeAuthority = confidenceRamp(
-                shapeConsistency,
-                start: farFieldCoherentSlabXShapeStart,
-                full: farFieldCoherentSlabXShapeFull
-            )
-            let coherentXTwoWayAuthority = confidenceRamp(
-                forwardBackwardConsistency,
-                start: farFieldCoherentSlabXTwoWayStart,
-                full: farFieldCoherentSlabXTwoWayFull
-            )
+	            let coherentXShapeAuthority = confidenceRamp(
+	                effectiveShapeConsistency,
+	                start: farFieldCoherentSlabXShapeStart,
+	                full: farFieldCoherentSlabXShapeFull
+	            )
+	            let coherentXTwoWayAuthority = confidenceRamp(
+	                effectiveForwardBackwardConsistency,
+	                start: farFieldCoherentSlabXTwoWayStart,
+	                full: farFieldCoherentSlabXTwoWayFull
+	            )
             let coherentXMeshVeto = confidenceRamp(
                 meshRigidMaxBinDelta,
                 start: farFieldCoherentSlabXMeshDeltaStart,
@@ -15080,11 +15203,11 @@ enum AutoStabilizationEstimator {
                 start: farFieldCoherentSlabXQuiverStart,
                 full: farFieldCoherentSlabXQuiverFull
             )
-            let lowFrequencyXAuthority = lowFrequencyRigidPriority
-                * confidenceRamp(Float(targetWindowSeconds), start: 0.42, full: farFieldLowFrequencyPriorityFullSeconds)
-                * confidenceRamp(forwardBackwardConsistency, start: 0.08, full: 0.42)
-                * (1.0 - (coherentXMeshVeto * 0.72))
-                * (1.0 - (coherentXQuiverVeto * 0.78))
+	            let lowFrequencyXAuthority = lowFrequencyRigidPriority
+	                * confidenceRamp(Float(targetWindowSeconds), start: 0.42, full: farFieldLowFrequencyPriorityFullSeconds)
+	                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.08, full: 0.42)
+	                * (1.0 - (coherentXMeshVeto * 0.72))
+	                * (1.0 - (coherentXQuiverVeto * 0.78))
             let coherentSlabXAuthority = clamp(
                 max(
                     coherentXShapeAuthority * coherentXTwoWayAuthority * (1.0 - (max(coherentXMeshVeto, coherentXQuiverVeto) * 0.92)),
@@ -15099,24 +15222,24 @@ enum AutoStabilizationEstimator {
                     result.bandModelMask |= 8192
                 }
             }
-            let coherentYShapeAuthority = confidenceRamp(
-                shapeConsistency,
-                start: farFieldCoherentSlabYShapeStart,
-                full: farFieldCoherentSlabYShapeFull
-            )
-            let coherentYTwoWayAuthority = confidenceRamp(
-                forwardBackwardConsistency,
-                start: farFieldCoherentSlabYTwoWayStart,
-                full: farFieldCoherentSlabYTwoWayFull
-            )
+	            let coherentYShapeAuthority = confidenceRamp(
+	                effectiveShapeConsistency,
+	                start: farFieldCoherentSlabYShapeStart,
+	                full: farFieldCoherentSlabYShapeFull
+	            )
+	            let coherentYTwoWayAuthority = confidenceRamp(
+	                effectiveForwardBackwardConsistency,
+	                start: farFieldCoherentSlabYTwoWayStart,
+	                full: farFieldCoherentSlabYTwoWayFull
+	            )
             let coherentYMeshVeto = confidenceRamp(
                 meshRigidMaxBinDelta,
                 start: farFieldCoherentSlabYMeshDeltaStart,
                 full: farFieldCoherentSlabYMeshDeltaFull
             )
-            let lowFrequencyYAuthority = lowFrequencyRigidPriority
-                * confidenceRamp(forwardBackwardConsistency, start: 0.08, full: 0.42)
-                * (1.0 - (coherentYMeshVeto * 0.55))
+	            let lowFrequencyYAuthority = lowFrequencyRigidPriority
+	                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.08, full: 0.42)
+	                * (1.0 - (coherentYMeshVeto * 0.55))
             let coherentSlabYAuthority = clamp(
                 max(coherentYShapeAuthority * coherentYTwoWayAuthority, lowFrequencyYAuthority),
                 min: 0.0,
@@ -15130,35 +15253,35 @@ enum AutoStabilizationEstimator {
             }
             let lowFrequencyRigidSupport = lowFrequencyRigidPriority
                 * confidenceRamp(simd_length(rigidResidual), start: 0.05, full: 0.48)
-            let rigidSupport = max(
-                confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70)
-                * confidenceRamp(preparedRigidSupport, start: 0.08, full: 0.36)
-                * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
-                * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
-                * qualitySupport
-                * turnScale,
+	            let rigidSupport = max(
+	                confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70)
+	                * confidenceRamp(effectivePreparedRigidSupport, start: 0.08, full: 0.36)
+	                * confidenceRamp(effectiveShapeConsistency, start: 0.44, full: 0.82)
+	                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.36, full: 0.78)
+	                * qualitySupport
+	                * turnScale,
                 max(
                     meshRigidSupport * confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70),
                     lowFrequencyRigidSupport
                 )
-            )
-            let rigidRollSupport = confidenceRamp(abs(rigidRollResidual), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
-                * confidenceRamp(preparedRigidRollSupport, start: 0.08, full: 0.36)
-                * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
-                * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
-                * qualitySupport
-                * turnScale
+	            )
+	            let rigidRollSupport = confidenceRamp(abs(rigidRollResidual), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
+	                * confidenceRamp(effectivePreparedRigidRollSupport, start: 0.08, full: 0.36)
+	                * confidenceRamp(effectiveShapeConsistency, start: 0.44, full: 0.82)
+	                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.36, full: 0.78)
+	                * qualitySupport
+	                * turnScale
             result.farFieldRigidOffset = rigidResidual
             result.farFieldRigidSupport = clamp(rigidSupport, min: 0.0, max: 1.0)
             result.farFieldRigidRollResidual = rigidRollResidual
             result.farFieldRigidRollSupport = clamp(rigidRollSupport, min: 0.0, max: 1.0)
-            result.farFieldRigidShapeConsistency = clamp(shapeConsistency, min: 0.0, max: 1.0)
-            result.farFieldRigidForwardBackwardConsistency = clamp(forwardBackwardConsistency, min: 0.0, max: 1.0)
-            let rigidOnlyEvidence = clamp(
-                confidenceRamp(result.farFieldRigidSupport, start: farFieldRigidOnlyGuardSupportStart, full: farFieldRigidOnlyGuardSupportFull)
-                    * confidenceRamp(shapeConsistency, start: farFieldRigidOnlyGuardShapeStart, full: farFieldRigidOnlyGuardShapeFull)
-                    * confidenceRamp(forwardBackwardConsistency, start: farFieldRigidOnlyGuardTwoWayStart, full: farFieldRigidOnlyGuardTwoWayFull)
-                    * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.45, full: 0.75) * 0.65)),
+	            result.farFieldRigidShapeConsistency = clamp(effectiveShapeConsistency, min: 0.0, max: 1.0)
+	            result.farFieldRigidForwardBackwardConsistency = clamp(effectiveForwardBackwardConsistency, min: 0.0, max: 1.0)
+	            let rigidOnlyEvidence = clamp(
+	                confidenceRamp(result.farFieldRigidSupport, start: farFieldRigidOnlyGuardSupportStart, full: farFieldRigidOnlyGuardSupportFull)
+	                    * confidenceRamp(effectiveShapeConsistency, start: farFieldRigidOnlyGuardShapeStart, full: farFieldRigidOnlyGuardShapeFull)
+	                    * confidenceRamp(effectiveForwardBackwardConsistency, start: farFieldRigidOnlyGuardTwoWayStart, full: farFieldRigidOnlyGuardTwoWayFull)
+	                    * (1.0 - (confidenceRamp(result.rollingShutterCandidate, start: 0.45, full: 0.75) * 0.65)),
                 min: 0.0,
                 max: 1.0
             )
