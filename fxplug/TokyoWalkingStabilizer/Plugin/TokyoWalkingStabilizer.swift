@@ -49,11 +49,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.6"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 970.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 6.0, 970.0)
+private let tokyoWalkingStabilizerVersion = "1.1.7"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 971.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 7.0, 971.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_416_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_417_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -120,10 +120,10 @@ private let stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds = 1.90
 private let stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds = 2.90
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveStartDelta: Float = 0.060
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveFullDelta: Float = 0.090
-private let stabilizerAutoCropTurnSmoothingZoomStartPixels: Float = 96.0
-private let stabilizerAutoCropTurnSmoothingZoomFullPixels: Float = 220.0
-private let stabilizerAutoCropTurnSmoothingZoomConfidenceStart: Float = 0.30
-private let stabilizerAutoCropTurnSmoothingZoomConfidenceFull: Float = 0.55
+private let stabilizerAutoCropTurnSmoothingZoomStartPixels: Float = 24.0
+private let stabilizerAutoCropTurnSmoothingZoomFullPixels: Float = 160.0
+private let stabilizerAutoCropTurnSmoothingZoomConfidenceStart: Float = 0.12
+private let stabilizerAutoCropTurnSmoothingZoomConfidenceFull: Float = 0.35
 private let stabilizerRenderRevisionRetryIntervalSeconds: TimeInterval = 0.5
 let stabilizerProjectCacheUnavailableMessage = "Project Bundle Cache Unavailable - Event Analysis Files Unavailable"
 let stabilizerAmbiguousEventCacheUnavailableMessage = "Project Bundle Cache Unavailable - Ambiguous Event"
@@ -5664,7 +5664,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard turnConfidenceSupport > Float.ulpOfOne else {
             return 1.0
         }
-        let support = travelSupport * turnConfidenceSupport
+        let support = min(travelSupport, turnConfidenceSupport)
         let delta = zoomDelta * support
         return max(1.0, 1.0 + delta)
     }

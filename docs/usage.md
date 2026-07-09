@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.6` is the current review baseline for far-field micro-shake.
+Version `1.1.7` is the current review baseline for far-field micro-shake.
 Use schema 48 analysis for review builds so the fps-derived dominant `5x9`
 mesh windows, top/ridge-prioritized far-field rigid X/Y/roll path, and `3x5`
 source-lens local evidence are present. Earlier schemas
