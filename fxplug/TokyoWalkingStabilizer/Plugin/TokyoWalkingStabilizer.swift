@@ -50,10 +50,10 @@ private struct StabilizerInfoFields {
 }
 
 private let tokyoWalkingStabilizerVersion = "1.1.4"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 967.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 4.0, 967.0)
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 968.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 4.0, 968.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_410_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_411_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -64,7 +64,8 @@ private let stabilizerDefaultTurnDetectionWindowSeconds = 6.0
 private let stabilizerDefaultTurnSmoothingStrength = 12.0
 private let stabilizerMaximumTurnSmoothingStrength = 36.0
 private let stabilizerDefaultTurnSmoothingZoom = 1.0
-private let stabilizerMaximumTurnSmoothingZoom = 4.0
+private let stabilizerMaximumTurnSmoothingZoom = 12.0
+private let stabilizerFullAuthorityTurnSmoothingZoom: Float = 25.0
 private let stabilizerMaximumFarFieldWarpStrength = 12.0
 private let stabilizerDefaultAutoCropTransitionDuration = 10.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
@@ -123,7 +124,9 @@ private let stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds = 1.90
 private let stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds = 2.90
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveStartDelta: Float = 0.060
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveFullDelta: Float = 0.090
-private let stabilizerAutoCropTurnSmoothingZoomDeltaPerUnit: Float = 0.08
+private let stabilizerAutoCropTurnSmoothingZoomBaseDeltaPerUnit: Float = 0.08
+private let stabilizerAutoCropTurnSmoothingZoomHighDeltaPerUnit: Float = 0.032
+private let stabilizerAutoCropTurnSmoothingZoomBaseFullStrength: Float = 4.0
 private let stabilizerAutoCropTurnSmoothingZoomStartPixels: Float = 96.0
 private let stabilizerAutoCropTurnSmoothingZoomFullPixels: Float = 220.0
 private let stabilizerAutoCropTurnSmoothingZoomConfidenceStart: Float = 0.30
@@ -2415,7 +2418,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let zoomSupport = thresholdRamp(
             zoomStrength,
             start: Float(stabilizerDefaultTurnSmoothingZoom),
-            full: Float(stabilizerMaximumTurnSmoothingZoom)
+            full: stabilizerFullAuthorityTurnSmoothingZoom
         )
         guard zoomSupport > Float.ulpOfOne else {
             return 0.0
@@ -5641,7 +5644,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return 1.0
         }
         let support = travelSupport * turnConfidenceSupport
-        let delta = zoomStrength * stabilizerAutoCropTurnSmoothingZoomDeltaPerUnit * support
+        let baseZoomStrength = min(zoomStrength, stabilizerAutoCropTurnSmoothingZoomBaseFullStrength)
+        let highZoomStrength = max(0.0, zoomStrength - stabilizerAutoCropTurnSmoothingZoomBaseFullStrength)
+        let delta = (
+            (baseZoomStrength * stabilizerAutoCropTurnSmoothingZoomBaseDeltaPerUnit)
+                + (highZoomStrength * stabilizerAutoCropTurnSmoothingZoomHighDeltaPerUnit)
+        ) * support
         return max(1.0, 1.0 + delta)
     }
 

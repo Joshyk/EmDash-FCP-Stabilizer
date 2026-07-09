@@ -865,14 +865,16 @@ enum AutoStabilizationEstimator {
     private static let renderTurnTransitionBridgeLowEdgeLargeTurnBlend: Float = 0.48
     private static let renderTurnTransitionBridgeLowEdgeMacroStartPixels: Float = 48.0
     private static let renderTurnTransitionBridgeLowEdgeMacroFullPixels: Float = 120.0
+    private static let renderTurnTransitionZoomCenterPreservationFade: Float = 0.92
+    private static let renderTurnTransitionZoomCenterAnchorFade: Float = 0.92
     private static let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
     private static let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
     private static let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-    private static let adaptiveXTurnTransitionZoomTargetPixelRate: Float = 22.0
+    private static let adaptiveXTurnTransitionZoomTargetPixelRate: Float = 18.0
     private static let adaptiveXTurnTransitionZoomGateStartPixels: Float = 48.0
     private static let adaptiveXTurnTransitionZoomGateFullPixels: Float = 150.0
     private static let adaptiveXTurnTransitionZoomBaselineStrength: Float = 1.0
-    private static let adaptiveXTurnTransitionZoomFullStrength: Float = 4.0
+    private static let adaptiveXTurnTransitionZoomFullStrength: Float = 25.0
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.44
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -1224,7 +1226,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 95
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 96
     private enum MotionPathKind: Hashable {
         case footstepX
         case footstepY
@@ -4800,17 +4802,24 @@ enum AutoStabilizationEstimator {
             var bridgedMacroOffset = smoothedTurnTransform.macroPixelOffset
             let centerMacroX = rawCenterTransform.macroPixelOffset.x
             let bridgedMacroX = bridgedMacroOffset.x
+            let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
+                turnSmoothingZoom: strengths.turnSmoothingZoom,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            )
             if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
                abs(centerMacroX) > abs(bridgedMacroX),
                (centerMacroX * bridgedMacroX) > 0.0
             {
                 let centerResponse = turnCorrectionConfidenceResponse(rawCenterTransform.turnConfidence)
-                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
+                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70)
+                    * 0.85
+                    * (1.0 - (zoomBridgeAuthority * renderTurnTransitionZoomCenterPreservationFade))
                 bridgedMacroOffset.x = bridgedMacroX + ((centerMacroX - bridgedMacroX) * centerPreservation)
             }
             bridgedMacroOffset.x = turnTransitionCenterAnchoredBridgeMacroX(
                 centerTransform: rawCenterTransform,
-                bridgeMacroX: bridgedMacroOffset.x
+                bridgeMacroX: bridgedMacroOffset.x,
+                zoomBridgeAuthority: zoomBridgeAuthority
             )
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: rawCenterTransform,
@@ -8372,17 +8381,24 @@ enum AutoStabilizationEstimator {
             var bridgedMacroOffset = smoothedTurnTransform.macroPixelOffset
             let centerMacroX = centerTransform.macroPixelOffset.x
             let bridgedMacroX = bridgedMacroOffset.x
+            let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
+                turnSmoothingZoom: strengths.turnSmoothingZoom,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            )
             if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
                abs(centerMacroX) > abs(bridgedMacroX),
                (centerMacroX * bridgedMacroX) > 0.0
             {
                 let centerResponse = turnCorrectionConfidenceResponse(centerTransform.turnConfidence)
-                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
+                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70)
+                    * 0.85
+                    * (1.0 - (zoomBridgeAuthority * renderTurnTransitionZoomCenterPreservationFade))
                 bridgedMacroOffset.x = bridgedMacroX + ((centerMacroX - bridgedMacroX) * centerPreservation)
             }
             bridgedMacroOffset.x = turnTransitionCenterAnchoredBridgeMacroX(
                 centerTransform: centerTransform,
-                bridgeMacroX: bridgedMacroOffset.x
+                bridgeMacroX: bridgedMacroOffset.x,
+                zoomBridgeAuthority: zoomBridgeAuthority
             )
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: centerTransform,
@@ -10764,17 +10780,24 @@ enum AutoStabilizationEstimator {
             var bridgedMacroOffset = smoothedTurnTransform.macroPixelOffset
             let centerMacroX = rawCenterTransform.macroPixelOffset.x
             let bridgedMacroX = bridgedMacroOffset.x
+            let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
+                turnSmoothingZoom: strengths.turnSmoothingZoom,
+                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            )
             if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
                abs(centerMacroX) > abs(bridgedMacroX),
                (centerMacroX * bridgedMacroX) > 0.0
             {
                 let centerResponse = turnCorrectionConfidenceResponse(rawCenterTransform.turnConfidence)
-                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
+                let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70)
+                    * 0.85
+                    * (1.0 - (zoomBridgeAuthority * renderTurnTransitionZoomCenterPreservationFade))
                 bridgedMacroOffset.x = bridgedMacroX + ((centerMacroX - bridgedMacroX) * centerPreservation)
             }
             bridgedMacroOffset.x = turnTransitionCenterAnchoredBridgeMacroX(
                 centerTransform: rawCenterTransform,
-                bridgeMacroX: bridgedMacroOffset.x
+                bridgeMacroX: bridgedMacroOffset.x,
+                zoomBridgeAuthority: zoomBridgeAuthority
             )
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: rawCenterTransform,
@@ -11084,6 +11107,21 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    private static func turnSmoothingZoomBridgeAuthority(
+        turnSmoothingZoom: Double,
+        usesAutoCropTurnSpace: Bool
+    ) -> Float {
+        guard usesAutoCropTurnSpace else {
+            return 0.0
+        }
+        let zoomStrength = Float(turnSmoothingZoom.isFinite ? max(0.0, turnSmoothingZoom) : 0.0)
+        return confidenceRamp(
+            zoomStrength,
+            start: adaptiveXTurnTransitionZoomBaselineStrength,
+            full: adaptiveXTurnTransitionZoomFullStrength
+        )
+    }
+
     private static func turnTransitionBridgeQualitySupport(_ transform: StabilizerAutoTransform) -> Float {
         let trackingSupport = confidenceRamp(
             clamp(transform.trackingConfidence, min: 0.0, max: 1.0),
@@ -11113,7 +11151,8 @@ enum AutoStabilizationEstimator {
 
     private static func turnTransitionCenterAnchoredBridgeMacroX(
         centerTransform: StabilizerAutoTransform,
-        bridgeMacroX: Float
+        bridgeMacroX: Float,
+        zoomBridgeAuthority: Float
     ) -> Float {
         let centerMacroX = centerTransform.macroPixelOffset.x
         guard abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
@@ -11125,6 +11164,7 @@ enum AutoStabilizationEstimator {
         let centerReliability = turnCorrectionConfidenceResponse(centerTransform.turnConfidence)
             * turnTransitionBridgeQualitySupport(centerTransform)
         let anchor = confidenceRamp(centerReliability, start: 0.18, full: 0.45)
+            * (1.0 - (clamp(zoomBridgeAuthority, min: 0.0, max: 1.0) * renderTurnTransitionZoomCenterAnchorFade))
         return bridgeMacroX + ((centerMacroX - bridgeMacroX) * anchor)
     }
 

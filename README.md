@@ -141,10 +141,13 @@ turn output-edge cap.
 `Turn Detection Window` defaults to `6.0` seconds and comes from the Inspector UI
 value. Its UI minimum is the fixed `2.0` second Stride Wobble window, so TURN
 cannot run shorter than SWOB.
-`Turn Smoothing Zoom` defaults to `1.0` and runs up to `4.0`. Values above
+`Turn Smoothing Zoom` defaults to `1.0` and runs up to `25.0`. Values above
 `1.0` add crop-aware margin for large X turns, lower the travel threshold for
 the adaptive X-turn smoothing window, and can expand that window beyond the
-`Turn Detection Window`, up to roughly one extra window at `4.0`. With
+`Turn Detection Window`, with smoothing authority increasing across the full
+slider range and higher values adding more crop margin. High values
+also relax the turn bridge's center anchoring so the added margin is spent on
+actual ease-in/ease-out instead of snapping back to the peak correction. With
 `Remove Black Edges` enabled that margin becomes smooth Auto Crop zoom; with it
 disabled the same budget is intentionally exposed as larger black diagnostic
 edge space, and turn-space edge guarding backs off so the extra correction is

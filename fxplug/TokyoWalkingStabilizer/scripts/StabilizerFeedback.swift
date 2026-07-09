@@ -788,14 +788,16 @@ private let renderTurnTransitionBridgeEdgeGateFull: Float = 0.78
 private let renderTurnTransitionBridgeLowEdgeLargeTurnBlend: Float = 0.48
 private let renderTurnTransitionBridgeLowEdgeMacroStartPixels: Float = 48.0
 private let renderTurnTransitionBridgeLowEdgeMacroFullPixels: Float = 120.0
+private let renderTurnTransitionZoomCenterPreservationFade: Float = 0.92
+private let renderTurnTransitionZoomCenterAnchorFade: Float = 0.92
 private let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
 private let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
 private let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-private let adaptiveXTurnTransitionZoomTargetPixelRate: Float = 22.0
+private let adaptiveXTurnTransitionZoomTargetPixelRate: Float = 18.0
 private let adaptiveXTurnTransitionZoomGateStartPixels: Float = 48.0
 private let adaptiveXTurnTransitionZoomGateFullPixels: Float = 150.0
 private let adaptiveXTurnTransitionZoomBaselineStrength: Float = 1.0
-private let adaptiveXTurnTransitionZoomFullStrength: Float = 4.0
+private let adaptiveXTurnTransitionZoomFullStrength: Float = 25.0
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -1799,13 +1801,19 @@ private func renderTurnBridgeAssessment(
 
     let averagedMacro = weightedMacro / totalWeight
     let centerMacro = centerSample.macroPixelOffsetX
+    let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
+        turnSmoothingZoom: options.turnZoom,
+        usesAutoCropTurnSpace: true
+    )
     let bridgedMacro: Float
     if abs(centerMacro) >= renderTurnTransitionMinimumMacroPixels,
        abs(centerMacro) > abs(averagedMacro),
        (centerMacro * averagedMacro) > 0.0
     {
         let centerResponse = turnCorrectionConfidenceResponse(centerSample.confidence)
-        let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70) * 0.85
+        let centerPreservation = confidenceRamp(centerResponse, start: 0.35, full: 0.70)
+            * 0.85
+            * (1.0 - (zoomBridgeAuthority * renderTurnTransitionZoomCenterPreservationFade))
         bridgedMacro = averagedMacro + ((centerMacro - averagedMacro) * centerPreservation)
     } else {
         bridgedMacro = averagedMacro
@@ -1816,7 +1824,8 @@ private func renderTurnBridgeAssessment(
         centerTurnConfidence: centerSample.confidence,
         centerTrackingConfidence: centerSample.trackingConfidence,
         centerWalkingTrackingConfidence: centerSample.walkingTrackingConfidence,
-        centerEdgeQuality: centerSample.edgeQuality
+        centerEdgeQuality: centerSample.edgeQuality,
+        zoomBridgeAuthority: zoomBridgeAuthority
     )
     let bridgedConfidence = clamp(weightedConfidence / totalWeight, min: 0.0, max: 1.0)
     let bridgeBlend = turnTransitionBridgeBlend(
@@ -1836,7 +1845,7 @@ private func renderTurnBridgeAssessment(
         sampleCount: acceptedSamples,
         rawApplied: centerSample.applied,
         delta: bridgedApplied - centerSample.applied,
-        note: String(format: "29-sample %.2fs bridge support %.3f adaptive %.2fs/%.1fpx blend %.2f centerKeep %.3f centerAnchor %.3f uncapped", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, transitionWindowSeconds, timing.travelPixels, bridgeBlend, abs(bridgedMacro - averagedMacro), abs(anchoredMacro - bridgedMacro))
+        note: String(format: "29-sample %.2fs bridge support %.3f adaptive %.2fs/%.1fpx zoomAuthority %.2f blend %.2f centerKeep %.3f centerAnchor %.3f uncapped", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, transitionWindowSeconds, timing.travelPixels, zoomBridgeAuthority, bridgeBlend, abs(bridgedMacro - averagedMacro), abs(anchoredMacro - bridgedMacro))
     )
 }
 
@@ -1906,13 +1915,29 @@ private func turnTransitionBridgeEdgeSupport(edgeQuality: Float) -> Float {
     )
 }
 
+private func turnSmoothingZoomBridgeAuthority(
+    turnSmoothingZoom: Double,
+    usesAutoCropTurnSpace: Bool
+) -> Float {
+    guard usesAutoCropTurnSpace else {
+        return 0.0
+    }
+    let zoomStrength = Float(turnSmoothingZoom.isFinite ? max(0.0, turnSmoothingZoom) : 0.0)
+    return confidenceRamp(
+        zoomStrength,
+        start: adaptiveXTurnTransitionZoomBaselineStrength,
+        full: adaptiveXTurnTransitionZoomFullStrength
+    )
+}
+
 private func turnTransitionCenterAnchoredBridgeMacroX(
     centerMacroX: Float,
     bridgeMacroX: Float,
     centerTurnConfidence: Float,
     centerTrackingConfidence: Float,
     centerWalkingTrackingConfidence: Float,
-    centerEdgeQuality: Float
+    centerEdgeQuality: Float,
+    zoomBridgeAuthority: Float
 ) -> Float {
     guard abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
           abs(bridgeMacroX) > abs(centerMacroX),
@@ -1927,6 +1952,7 @@ private func turnTransitionCenterAnchoredBridgeMacroX(
             edgeQuality: centerEdgeQuality
         )
     let anchor = confidenceRamp(centerReliability, start: 0.18, full: 0.45)
+        * (1.0 - (clamp(zoomBridgeAuthority, min: 0.0, max: 1.0) * renderTurnTransitionZoomCenterAnchorFade))
     return bridgeMacroX + ((centerMacroX - bridgeMacroX) * anchor)
 }
 

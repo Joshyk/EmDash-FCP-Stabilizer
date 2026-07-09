@@ -158,12 +158,14 @@ fallbacks.
   `6.0` seconds. This is evaluated against prepared motion paths during render, so changing the slider
   does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
-- `Turn Smoothing Zoom`: defaults to `1.0`, ranges from `0.0...4.0`, and adds smooth
+- `Turn Smoothing Zoom`: defaults to `1.0`, ranges from `0.0...25.0`, and adds smooth
   crop-aware margin for large X turns. Values above `1.0` also lower the travel
   threshold and expand the adaptive X-turn smoothing window so added zoom budget is
-  spent on a smoother pan. With `Remove Black Edges` enabled the margin becomes
-  Auto Crop zoom; with it disabled the same budget is intentionally exposed as
-  larger black diagnostic edge space.
+  spent on a smoother pan. Smoothing authority increases across the full slider
+  range, while higher values add more crop margin. High values also reduce the bridge's
+  center anchoring, which lets the added margin drive actual ease-in/ease-out. With
+  `Remove Black Edges` enabled the margin becomes Auto Crop zoom; with it disabled
+  the same budget is intentionally exposed as larger black diagnostic edge space.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.

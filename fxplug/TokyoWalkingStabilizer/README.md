@@ -292,13 +292,16 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   tracking dropouts. Large X-turn travel automatically expands that transition
   window toward the full `Turn Detection Window` without an additional hidden
   six-second cap. `Turn Smoothing Zoom` values above `1.0` can extend the
-  adaptive X-turn window farther, so extra zoom margin is spent on a slower,
-  more even pan instead of a faster x-axis transition.
-- `Turn Smoothing Zoom`: defaults to `1.0`, ranges from `0.0...4.0`, and adds crop-aware
+  adaptive X-turn window farther and relax turn-bridge center anchoring, so
+  extra zoom margin is spent on a slower, more even pan instead of a faster
+  x-axis transition.
+- `Turn Smoothing Zoom`: defaults to `1.0`, ranges from `0.0...25.0`, and adds crop-aware
   margin for large X turns. Values above `1.0` lower the travel threshold for adaptive
-  X-turn smoothing, so high zoom spends more edge space on a slower pan. With
-  `Remove Black Edges` enabled the margin becomes Auto Crop zoom; with it disabled
-  the same budget is intentionally visible as larger black diagnostic edge space.
+  X-turn smoothing and reduce center anchoring, so high zoom spends more edge space
+  on a slower pan. Smoothing authority increases across the full slider range, and
+  higher values add more crop margin. With `Remove Black Edges` enabled the margin
+  becomes Auto Crop zoom; with it disabled the same budget is intentionally visible
+  as larger black diagnostic edge space.
 - `Turn Detection Window`: centered TURN window evaluated during render against prepared
   motion paths. The default is `6.0` seconds. The UI value is used as the TURN window,
   and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run
