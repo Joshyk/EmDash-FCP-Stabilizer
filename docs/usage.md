@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.4` is the current review baseline for far-field micro-shake.
+Version `1.1.5` is the current review baseline for far-field micro-shake.
 Use schema 48 analysis for review builds so the fps-derived dominant `5x9`
 mesh windows, top/ridge-prioritized far-field rigid X/Y/roll path, and `3x5`
 source-lens local evidence are present. Earlier schemas
@@ -154,34 +154,29 @@ fallbacks.
   kept in the Auto Crop / crop-off edge guard paths. TURN confidence requires both tracking
   evidence and a real X turn band, so low-evidence frames no longer receive a hidden minimum
   turn correction.
-- `Turn Detection Window`: centered smoothing window for walking turns. The default is
-  `6.0` seconds. This is evaluated against prepared motion paths during render, so changing the slider
-  does not require rebuilding analysis. The UI value is the TURN window, and the UI minimum
+- `Turn Detection Window`: forward lookahead window for walking turns. The default is
+  `9.0` seconds. This is evaluated against prepared motion paths during render, so changing the slider
+  does not require rebuilding analysis. The UI value is the TURN lookahead horizon, and the UI minimum
   is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
-- `Turn Smoothing Zoom`: defaults to `1.0`, ranges from `0.0...25.0`, and adds smooth
-  crop-aware margin for large X turns. Values above `1.0` also lower the travel
-  threshold and expand the adaptive X-turn smoothing window so added zoom budget is
-  spent on a smoother pan. Smoothing authority increases across the full slider
-  range, while higher values add more crop margin. High values also reduce the bridge's
-  center anchoring, which lets the added margin drive actual ease-in/ease-out. With
-  `Remove Black Edges` enabled the margin becomes Auto Crop zoom; with it disabled
-  the same budget is intentionally exposed as larger black diagnostic edge space.
+- `Max Turning Smoothing Zoom`: defaults to `1.08`, ranges from `1.00...1.60`, and is
+  the absolute Auto Crop zoom cap for turn demand. It does not change turn correction
+  strength and does not extend the smoothing window. With `Remove Black Edges` enabled
+  the budget becomes Auto Crop zoom; with it disabled the same budget is intentionally
+  exposed as larger black diagnostic edge space.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.
 - `Auto Crop Zoom-In Time`: retained for parameter compatibility and now acts as
-  the maximum lead time into a strong internal Auto Crop zoom keypoint. Smaller
-  zoom keypoints scale the effective lead down from their zoom delta.
+  the exact lead time into an internal Auto Crop zoom keypoint.
 - `Auto Crop Zoom-Out Time`: retained for parameter compatibility and now defines
-  the maximum release length after a strong Auto Crop zoom keypoint. Final zoom
+  the exact release length after an Auto Crop zoom keypoint. Final zoom
   is read from a cached keypoint plan built from the prepared analysis, not
   recalculated from each render frame's safe-crop scale.
 - `Auto Crop Hold Time`: retained for parameter compatibility and now defines the
-  maximum hold after a strong keypoint peak. When `Remove Black Edges` is on,
+  exact hold after a keypoint peak. When `Remove Black Edges` is on,
   each local peak safe-crop demand becomes an internal zoom keypoint; the visible
   crop zoom and center position follow that smooth ease-in/out keypoint curve
-  while subtle keypoints scale their timing down so
-  they do not stay zoomed across the full default window. A
+  using the configured lead, hold, and release durations directly. A
   coverage repair pass checks the prepared analysis against that curve and adds
   only the keypoints needed to keep the curve above black-edge safety demand, so
   occasional outside-source boxes do not force frame-by-frame zoom calculation.
@@ -261,7 +256,8 @@ Analysis range starts. For bundle-local caches, pass
 `--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache` for a range-specific file under that root's `caches/` directory. Add
 `--json` for structured output, `--window 0.5` to inspect the strongest frame near
-the note, `--turn-window` to match a non-default Inspector `Turn Detection Window` when it is not `6.0`, and
+the note, `--turn-window` to match a non-default Inspector `Turn Detection Window` when it is not `9.0`,
+`--max-turn-zoom` to match `Max Turning Smoothing Zoom` when it is not `1.08`, and
 `--output-size 1920x1080` to scale translation estimates to a preview size.
 
 Use `--list-caches` with the bundle cache root to inspect saved cache readiness before

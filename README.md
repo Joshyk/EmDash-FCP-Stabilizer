@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.4` uses schema 48 far-field micro-shake analysis. It keeps the
+Version `1.1.5` uses schema 48 far-field micro-shake analysis. It keeps the
 fps-derived multi-window `5x9` far-field mesh evidence, but adds a persisted
 global far-field rigid roll path so short whole-frame Y/roll camera vibration can
 be corrected as a coherent transform instead of a local mountain/cloud warp.
@@ -138,20 +138,16 @@ does not fight broad Turn Smoothing during real horizontal turns.
 more continuous S-curve intent. It applies only to X translation, does not change
 Y or roll, defaults to `12.0`, and runs up to `36.0` without a separate hidden
 turn output-edge cap.
-`Turn Detection Window` defaults to `6.0` seconds and comes from the Inspector UI
-value. Its UI minimum is the fixed `2.0` second Stride Wobble window, so TURN
-cannot run shorter than SWOB.
-`Turn Smoothing Zoom` defaults to `1.0` and runs up to `25.0`. Values above
-`1.0` add crop-aware margin for large X turns, lower the travel threshold for
-the adaptive X-turn smoothing window, and can expand that window beyond the
-`Turn Detection Window`, with smoothing authority increasing across the full
-slider range and higher values adding more crop margin. High values
-also relax the turn bridge's center anchoring so the added margin is spent on
-actual ease-in/ease-out instead of snapping back to the peak correction. With
-`Remove Black Edges` enabled that margin becomes smooth Auto Crop zoom; with it
-disabled the same budget is intentionally exposed as larger black diagnostic
-edge space, and turn-space edge guarding backs off so the extra correction is
-visible. Lower it to `0.0` to keep the old crop budget.
+`Turn Detection Window` defaults to `9.0` seconds and comes from the Inspector UI
+value. It is treated as a forward lookahead from the current frame, so future
+large X-turn travel can shape the current smooth target and future turn-zoom
+demand can hold Auto Crop zoom before release. Its UI minimum is the fixed `2.0`
+second Stride Wobble window, so TURN cannot run shorter than SWOB.
+`Max Turning Smoothing Zoom` defaults to `1.08` and ranges from `1.00...1.60`.
+It is an absolute Auto Crop zoom cap for turn demand, not a turn-correction
+strength and not a hidden window-extension control. With `Remove Black Edges`
+enabled that budget becomes smooth Auto Crop zoom; with it disabled the same
+budget is intentionally exposed as diagnostic edge space.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 
@@ -183,11 +179,10 @@ remain visible for parameter compatibility. With `Remove Black Edges` on, the
 render path builds a cached Auto Crop zoom keypoint plan from the prepared
 analysis instead of recalculating final zoom every render frame. Each local peak
 safe-crop demand becomes an internal zoom keypoint. `Auto Crop Zoom-In Time`,
-`Auto Crop Hold Time`, and `Auto Crop Zoom-Out Time` define the maximum lead,
-hold, and release for strong zoom keypoints. Smaller keypoints scale those
-durations down from the zoom delta, so subtle crop changes do not stay stretched
-across the full default window. The visible crop zoom and center position follow
-the same ease-in/out keypoint curve, while the current
+`Auto Crop Hold Time`, and `Auto Crop Zoom-Out Time` define the lead, hold, and
+release durations directly in seconds, with no hidden scale-based duration
+shrink. The visible crop zoom and center position follow the same ease-in/out
+keypoint curve, while the current
 render frame is used only to clamp the crop center inside the planned scale.
 A coverage repair pass checks the
 prepared analysis against that curve and adds only the keypoints needed to keep
@@ -470,7 +465,8 @@ requested `--window` and prints the selected clip time separately from the
 requested note time. For bundle-local caches, pass
 `--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache /path/to/host-analysis-v2.json`. Use `--json` for machine-readable output,
-`--turn-window` to match a non-default Inspector `Turn Detection Window` when it is not `6.0`, and
+`--turn-window` to match a non-default Inspector `Turn Detection Window` when it is not `9.0`,
+`--max-turn-zoom` to match `Max Turning Smoothing Zoom` when it is not `1.08`, and
 `--output-size 1920x1080` when you want pixel estimates scaled to a target preview size.
 
 Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"`

@@ -870,11 +870,7 @@ enum AutoStabilizationEstimator {
     private static let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
     private static let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
     private static let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-    private static let adaptiveXTurnTransitionZoomTargetPixelRate: Float = 18.0
-    private static let adaptiveXTurnTransitionZoomGateStartPixels: Float = 48.0
-    private static let adaptiveXTurnTransitionZoomGateFullPixels: Float = 150.0
-    private static let adaptiveXTurnTransitionZoomBaselineStrength: Float = 1.0
-    private static let adaptiveXTurnTransitionZoomFullStrength: Float = 25.0
+    private static let adaptiveXTurnTransitionMaximumZoomScale: Float = 1.60
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.44
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -11114,11 +11110,16 @@ enum AutoStabilizationEstimator {
         guard usesAutoCropTurnSpace else {
             return 0.0
         }
-        let zoomStrength = Float(turnSmoothingZoom.isFinite ? max(0.0, turnSmoothingZoom) : 0.0)
+        let maxZoomScale = clamp(
+            Float(turnSmoothingZoom.isFinite ? turnSmoothingZoom : 1.0),
+            min: 1.0,
+            max: adaptiveXTurnTransitionMaximumZoomScale
+        )
+        let zoomScaleDelta = max(Float(0.0), maxZoomScale - Float(1.0))
         return confidenceRamp(
-            zoomStrength,
-            start: adaptiveXTurnTransitionZoomBaselineStrength,
-            full: adaptiveXTurnTransitionZoomFullStrength
+            zoomScaleDelta,
+            start: 0.0,
+            full: adaptiveXTurnTransitionMaximumZoomScale - Float(1.0)
         )
     }
 
@@ -16487,7 +16488,7 @@ enum AutoStabilizationEstimator {
         travelPixels: Float,
         baseWindowSeconds: Double,
         panSmoothSeconds: Double,
-        turnSmoothingZoom: Double,
+        turnSmoothingZoom _: Double,
         usesAutoCropTurnSpace: Bool
     ) -> AdaptiveXTurnTiming {
         let baseWindow = baseWindowSeconds.isFinite && baseWindowSeconds > 0.0
@@ -16503,20 +16504,10 @@ enum AutoStabilizationEstimator {
         let requestedWindow = panSmoothSeconds.isFinite && panSmoothSeconds > 0.0
             ? panSmoothSeconds
             : baseWindow
-        let zoomStrength = Float(turnSmoothingZoom.isFinite ? max(0.0, turnSmoothingZoom) : 0.0)
-        let zoomWindowSupport = confidenceRamp(
-            zoomStrength,
-            start: adaptiveXTurnTransitionZoomBaselineStrength,
-            full: adaptiveXTurnTransitionZoomFullStrength
-        )
-        let zoomWindowExtension = requestedWindow * Double(zoomWindowSupport)
-        let maximumWindow = max(baseWindow, requestedWindow + zoomWindowExtension)
+        let maximumWindow = max(baseWindow, requestedWindow)
         let targetPixelRate = adaptiveXTurnTransitionTargetPixelRate
-            + ((adaptiveXTurnTransitionZoomTargetPixelRate - adaptiveXTurnTransitionTargetPixelRate) * zoomWindowSupport)
         let gateStartPixels = adaptiveXTurnTransitionGateStartPixels
-            + ((adaptiveXTurnTransitionZoomGateStartPixels - adaptiveXTurnTransitionGateStartPixels) * zoomWindowSupport)
         let gateFullPixels = adaptiveXTurnTransitionGateFullPixels
-            + ((adaptiveXTurnTransitionZoomGateFullPixels - adaptiveXTurnTransitionGateFullPixels) * zoomWindowSupport)
         let travelWindow = min(
             maximumWindow,
             max(baseWindow, Double(travelPixels / max(targetPixelRate, Float.ulpOfOne)))
@@ -16706,16 +16697,25 @@ enum AutoStabilizationEstimator {
         let baseHalfWindowSeconds = max(0.0, baseWindowSeconds * 0.5)
         for index in targetIndices where values.values.indices.contains(index) && frames.indices.contains(index) {
             let centerTime = frames[index].time
-            let localIndices = indicesWithinTimeRadius(
+            let centeredIndices = indicesWithinTimeRadius(
                 frames,
                 centerTime: centerTime,
                 radiusSeconds: baseHalfWindowSeconds
             )
-            let activeIndices = localIndices.isEmpty ? [index] : localIndices
+            let lookaheadIndices = indicesWithinForwardTimeWindow(
+                frames,
+                startTime: centerTime,
+                durationSeconds: panSmoothSeconds
+            )
+            let activeIndices = uniqueSortedIndices(
+                centeredIndices + lookaheadIndices,
+                validCount: frames.count
+            )
+            let timingSourceIndices = activeIndices.isEmpty ? [index] : activeIndices
             let timing = adaptiveXTurnTiming(
                 values,
                 frames: frames,
-                indices: activeIndices,
+                indices: timingSourceIndices,
                 baseWindowSeconds: baseWindowSeconds,
                 panSmoothSeconds: panSmoothSeconds,
                 outputScale: outputScale,
@@ -16727,14 +16727,23 @@ enum AutoStabilizationEstimator {
             }
             let activeWindow = timing.active ? max(fallbackWindow, timing.windowSeconds) : fallbackWindow
             let activeHalfWindow = max(0.0, activeWindow * 0.5)
-            let timingIndices = abs(activeWindow - baseWindowSeconds) > 0.001
+            let timingCenteredIndices = abs(activeWindow - baseWindowSeconds) > 0.001
                 ? indicesWithinTimeRadius(
                     frames,
                     centerTime: centerTime,
                     radiusSeconds: activeHalfWindow
                 )
-                : activeIndices
-            let effectiveIndices = timingIndices.isEmpty ? activeIndices : timingIndices
+                : centeredIndices
+            let timingLookaheadIndices = indicesWithinForwardTimeWindow(
+                frames,
+                startTime: centerTime,
+                durationSeconds: activeWindow
+            )
+            let timingIndices = uniqueSortedIndices(
+                timingCenteredIndices + timingLookaheadIndices,
+                validCount: frames.count
+            )
+            let effectiveIndices = timingIndices.isEmpty ? timingSourceIndices : timingIndices
             intentValues[index] = timeWeightedMonotonicSCurveValue(
                 values,
                 frames: frames,
@@ -16750,6 +16759,26 @@ enum AutoStabilizationEstimator {
             )
         }
         return (EstimatedPath(values: intentValues), maxTiming)
+    }
+
+    private static func indicesWithinForwardTimeWindow(
+        _ frames: [StabilizerAnalysisFrame],
+        startTime: Double,
+        durationSeconds: Double
+    ) -> [Int] {
+        guard !frames.isEmpty, startTime.isFinite, durationSeconds.isFinite else {
+            return []
+        }
+        let boundedDuration = max(0.0, durationSeconds)
+        let lowerIndex = lowerBoundFrameIndex(frames, time: startTime - timeWindowSelectionEpsilon)
+        let upperIndex = upperBoundFrameIndex(
+            frames,
+            time: startTime + boundedDuration + timeWindowSelectionEpsilon
+        )
+        guard lowerIndex < upperIndex else {
+            return []
+        }
+        return Array(lowerIndex..<upperIndex)
     }
 
     private static func timeWeightedMonotonicSCurveValue(

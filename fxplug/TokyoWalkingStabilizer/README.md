@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.4` keeps the far-field micro-shake correction baseline on schema 48.
+- Version `1.1.5` keeps the far-field micro-shake correction baseline on schema 48.
   Keep schema 48's fps-derived dominant `5x9` mesh windows as the primary evidence
   for short source-space lens/camera shake up to one second, with the coherent
   rigid far-field X/Y/roll path built from the sky/top and ridge/horizon bands
@@ -155,9 +155,9 @@ estimators, or Transform-keyframe writers back into this target.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, optional small-clamp Far-field Warp, and dynamic Auto Crop scale when
-  `Remove Black Edges` is enabled. `Turn Smoothing Zoom` can add extra smooth crop
-  margin for large crop-aware X turns, and exposes that margin as black diagnostic
-  edge space when `Remove Black Edges` is disabled.
+  `Remove Black Edges` is enabled. `Max Turning Smoothing Zoom` caps the smooth
+  crop margin for large crop-aware X turns, and exposes that margin as black
+  diagnostic edge space when `Remove Black Edges` is disabled.
 - Includes a minimal wrapper app source/resource set under `WrapperApp/`.
 
 The current effect implementation reads current render frames as Metal textures, validates
@@ -289,21 +289,16 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   correction no longer has a separate render output-edge cap. Render playback applies an
   additional `2.8` second zero-phase transition pass to the macro X correction so the start
   and end of walking turns do not step between corrections, even across short low-confidence
-  tracking dropouts. Large X-turn travel automatically expands that transition
-  window toward the full `Turn Detection Window` without an additional hidden
-  six-second cap. `Turn Smoothing Zoom` values above `1.0` can extend the
-  adaptive X-turn window farther and relax turn-bridge center anchoring, so
-  extra zoom margin is spent on a slower, more even pan instead of a faster
-  x-axis transition.
-- `Turn Smoothing Zoom`: defaults to `1.0`, ranges from `0.0...25.0`, and adds crop-aware
-  margin for large X turns. Values above `1.0` lower the travel threshold for adaptive
-  X-turn smoothing and reduce center anchoring, so high zoom spends more edge space
-  on a slower pan. Smoothing authority increases across the full slider range, and
-  higher values add more crop margin. With `Remove Black Edges` enabled the margin
+  tracking dropouts. Large X-turn travel is detected with `Turn Detection Window`
+  as a forward lookahead horizon, but correction amount remains controlled by
+  `Turn Smoothing Strength`.
+- `Max Turning Smoothing Zoom`: defaults to `1.08`, ranges from `1.00...1.60`, and caps
+  crop-aware zoom demand for large X turns. It does not change turn correction strength
+  and does not extend the smoothing window. With `Remove Black Edges` enabled the margin
   becomes Auto Crop zoom; with it disabled the same budget is intentionally visible
   as larger black diagnostic edge space.
-- `Turn Detection Window`: centered TURN window evaluated during render against prepared
-  motion paths. The default is `6.0` seconds. The UI value is used as the TURN window,
+- `Turn Detection Window`: forward TURN lookahead evaluated during render against prepared
+  motion paths. The default is `9.0` seconds. The UI value is used as the TURN lookahead,
   and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run
   shorter than SWOB.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
@@ -350,22 +345,20 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
 - `Auto Crop Zoom-In Time`: default `10` seconds, range `0...120` seconds. This
-  parameter is retained for compatibility and now acts as the maximum lead time
-  into a strong internal Auto Crop zoom keypoint. Smaller zoom keypoints scale
-  the effective lead down from their zoom delta.
+  parameter is retained for compatibility and now acts as the exact lead time
+  into an internal Auto Crop zoom keypoint.
 - `Auto Crop Zoom-Out Time`: default `10` seconds, range `0...30` seconds. This
-  parameter is retained for compatibility and now defines the maximum release
-  length after a strong Auto Crop zoom keypoint.
+  parameter is retained for compatibility and now defines the exact release
+  length after an Auto Crop zoom keypoint.
 - `Auto Crop Hold Time`: default `2` seconds, range `0...30` seconds. This
-  parameter is retained for compatibility and now defines the maximum hold after
-  a strong Auto Crop zoom keypoint peak. With `Remove Black Edges` on, final crop
+  parameter is retained for compatibility and now defines the exact hold after
+  an Auto Crop zoom keypoint peak. With `Remove Black Edges` on, final crop
   zoom is read from a cached keypoint plan built from prepared analysis instead
   of recalculating zoom every render frame. Each local peak safe-crop demand,
   including low-demand coverage misses that would otherwise expose outside-source
-  pixels, becomes an internal zoom keypoint. Subtle keypoints scale their timing
-  down from their zoom delta so the visible crop zoom and center position do not
-  step across the full default window. Both use the same ease-in/out playback
-  curve; the current render frame is used only to clamp the crop
+  pixels, becomes an internal zoom keypoint. The visible crop zoom and center
+  position use the configured lead, hold, and release durations directly on the
+  same ease-in/out playback curve; the current render frame is used only to clamp the crop
   center inside the planned scale. A coverage repair pass checks the
   prepared analysis against that curve and adds only the keypoints needed to keep
   the curve above black-edge safety demand, so occasional outside-source boxes do
@@ -446,7 +439,8 @@ without repairing, promoting, or deleting them.
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining shake from the prepared motion paths and tracking diagnostics, then
 prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order. Pass
-`--turn-window` when the Inspector `Turn Detection Window` is not the default `6.0`.
+`--turn-window` when the Inspector `Turn Detection Window` is not the default `9.0`,
+and `--max-turn-zoom` when `Max Turning Smoothing Zoom` is not the default `1.08`.
 It uses the same footstep-first band split as render, so `SWOB` and `TURN`
 diagnostics are computed from the footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band
