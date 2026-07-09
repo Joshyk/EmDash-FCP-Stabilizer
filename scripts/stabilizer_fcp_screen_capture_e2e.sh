@@ -726,9 +726,19 @@ collect_render_component_diagnostics() {
 	local component_focus_path="${evidence_dir}/render_components_focus.csv"
 	local component_points_path="${evidence_dir}/render_components_focus_points.csv"
 	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND (eventMessage CONTAINS "Render frame components csv v1" OR eventMessage CONTAINS "Render lens band csv v1" OR eventMessage CONTAINS "Render lens rigid csv v1" OR eventMessage CONTAINS "Render lens local csv v1" OR eventMessage CONTAINS "Render lens ridge line csv v1")'
-	if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$component_log_path" 2>&1; then
-		fail "could not read FxPlug render component diagnostics: $component_log_path"
-	fi
+	local log_attempt
+	for log_attempt in 1 2 3; do
+		if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$component_log_path" 2>&1; then
+			fail "could not read FxPlug render component diagnostics: $component_log_path"
+		fi
+		if grep -q "Render frame components csv v1 |" "$component_log_path"; then
+			break
+		fi
+		if [[ "$log_attempt" != "3" ]]; then
+			echo "Render component diagnostics not visible in unified log yet; retrying log show ($log_attempt/3)..." >&2
+			sleep 2
+		fi
+	done
 
 	python3 - "$case_file" "$component_log_path" "$component_csv_path" "$component_focus_path" "$component_points_path" <<'PY'
 import csv
@@ -1016,6 +1026,9 @@ columns = [
     "lensFarFieldRigidShapeConsistency",
     "lensFarFieldRigidForwardBackwardConsistency",
     "lensFarFieldRigidLocalWarpSuppressed",
+    "farFieldRigidXQuiverScore",
+    "farFieldRigidXBeforeLimiter",
+    "farFieldRigidXAfterLimiter",
     "lensFarFieldMeshAvailable",
     "lensFarFieldMesh.dx",
     "lensFarFieldMesh.dy",
@@ -1148,6 +1161,9 @@ source_keys = {
     "lensFarFieldRigidShapeConsistency": "lensFarFieldRigidShapeConsistency",
     "lensFarFieldRigidForwardBackwardConsistency": "lensFarFieldRigidForwardBackwardConsistency",
     "lensFarFieldRigidLocalWarpSuppressed": "lensFarFieldRigidLocalWarpSuppressed",
+    "farFieldRigidXQuiverScore": "farFieldRigidXQuiverScore",
+    "farFieldRigidXBeforeLimiter": "farFieldRigidXBeforeLimiter",
+    "farFieldRigidXAfterLimiter": "farFieldRigidXAfterLimiter",
     "lensFarFieldMeshAvailable": "lensFarFieldMeshAvailable",
     "lensFarFieldMesh.dx": "lensFarFieldMeshX",
     "lensFarFieldMesh.dy": "lensFarFieldMeshY",
@@ -1334,15 +1350,18 @@ from pathlib import Path
 print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")).get("caseId", ""))
 PY
 )"
-	local lens_gate_args=()
 	if [[ "$case_id" == "p1000307_micro_macro_1m44_1m56" ]]; then
-		lens_gate_args+=(--require-band-warp --forbid-global-lens)
+		python3 "${ROOT_DIR}/tests/stabilizer_lens_band_diagnostics.py" \
+			--video "$video_path" \
+			--render-log "$render_log_path" \
+			--output-dir "$output_dir" \
+			--forbid-global-lens
+		return
 	fi
 	python3 "${ROOT_DIR}/tests/stabilizer_lens_band_diagnostics.py" \
 		--video "$video_path" \
 		--render-log "$render_log_path" \
-		--output-dir "$output_dir" \
-		"${lens_gate_args[@]}"
+		--output-dir "$output_dir"
 }
 
 fail_if_recent_render_mismatches_case() {
@@ -1455,6 +1474,7 @@ source_clip = Path(case.get("sourceClip", "")).stem
 digits = "".join(re.findall(r"\d+", source_clip))
 frame_count = str(case.get("source", {}).get("frameCount", ""))
 frame_token = f"frames {frame_count}" if frame_count else ""
+sample_token = f"samples {frame_count}" if frame_count else ""
 requires_auto_crop = bool(case.get("removeBlackEdges"))
 tokens = [source_clip]
 if digits:
@@ -1528,20 +1548,52 @@ target_crop_unready = [
 
 # The Auto Crop ready logs currently have sample counts but no clip/cache
 # identity. Treat them as target evidence only in this controlled pre-record
-# evidence window and only when a target render decision is also present.
-crop_prepared_in_window = any(
-    "Auto Crop playback scale plan prepared async" in line
-    or "Auto Crop playback scale plan prepared inline" in line
-    for line in target_lines_after_ready
-)
+# evidence window, and require the sample count to match this case when no
+# fresh render decision was logged because Final Cut Pro reused cached frames.
+def is_crop_prepared_line(line: str) -> bool:
+    if (
+        "Auto Crop playback scale plan prepared async" not in line
+        and "Auto Crop playback scale plan prepared inline" not in line
+    ):
+        return False
+    return not sample_token or sample_token in line
+
+crop_prepared_in_window = any(is_crop_prepared_line(line) for line in target_lines_after_ready)
+target_crop_prepared = [
+    (index, line) for index, line in enumerate(lines)
+    if is_crop_prepared_line(line)
+]
 render_ready = bool(target_render_ready)
 trajectory_ready = bool(target_trajectory_prepared) or (render_ready and not target_trajectory_unready)
 crop_ready = (render_ready and crop_prepared_in_window) or (render_ready and not target_crop_unready)
+latest_prepared_index = None
+if target_trajectory_prepared and target_crop_prepared:
+    trajectory_indexes = [
+        index for index, line in enumerate(lines)
+        if "Playback trajectory prepared" in line and matches_target(line)
+    ]
+    latest_prepared_index = max(trajectory_indexes[-1], target_crop_prepared[-1][0])
+prepared_only_fallbacks_after_ready = (
+    [
+        line for line in lines[latest_prepared_index + 1:]
+        if fallback_pattern.search(line) and matches_target(line)
+    ]
+    if latest_prepared_index is not None
+    else []
+)
+prepared_only_ready = latest_prepared_index is not None and not prepared_only_fallbacks_after_ready
 
 if render_ready and trajectory_ready and crop_ready and not target_fallbacks_after_ready:
     print(
         "Playback readiness verified before capture: "
         f"target render prepared/proxy/auto-crop ready for {source_clip}."
+    )
+    raise SystemExit(0)
+if prepared_only_ready:
+    print(
+        "Playback readiness verified before capture: "
+        f"target trajectory/auto-crop prepared for {source_clip}; "
+        "no fresh render decision was logged in this cached Viewer pass."
     )
     raise SystemExit(0)
 
@@ -1557,6 +1609,8 @@ parts = [
 ]
 if target_fallbacks_after_ready:
     parts.append("latestTargetFallback=" + target_fallbacks_after_ready[-1][-260:])
+elif prepared_only_fallbacks_after_ready:
+    parts.append("latestPreparedOnlyFallback=" + prepared_only_fallbacks_after_ready[-1][-260:])
 if target_render_ready:
     parts.append("latestReadyRender=" + target_render_ready[-1][1][-320:])
 render_lines = [line for line in lines if "Render Host Analysis decision" in line]
@@ -2167,13 +2221,15 @@ end viewOptionsButton
 
 on viewOptionsButtonByKnownPath(rootElement)
 	tell application "System Events"
-		try
-			set currentElement to rootElement
-			repeat with childIndex in {1, 1, 1, 2, 1, 5, 2, 4}
-				set currentElement to UI element childIndex of currentElement
-			end repeat
-			if (role of currentElement as text) is "AXMenuButton" and (description of currentElement as text) is "View Options Menu Button" then return currentElement
-		end try
+		repeat with pathRef in {{1, 1, 1, 2, 1, 4, 2, 4}, {1, 1, 1, 2, 1, 5, 2, 4}}
+			try
+				set currentElement to rootElement
+				repeat with childIndex in pathRef
+					set currentElement to UI element childIndex of currentElement
+				end repeat
+				if (role of currentElement as text) is "AXMenuButton" and (description of currentElement as text) is "View Options Menu Button" then return currentElement
+			end try
+		end repeat
 	end tell
 	return missing value
 end viewOptionsButtonByKnownPath
@@ -2466,25 +2522,34 @@ debug_overlay_visible_now() {
 	assert_debug_overlay_visible_in_screenshot "$screenshot_path" "$viewer_roi" "$label"
 }
 
-set_fcp_debug_overlay_on_via_local_ax() {
-	/usr/bin/osascript > /dev/null <<'APPLESCRIPT' &
-tell application "Final Cut Pro" to activate
-tell application "System Events"
-	tell process "Final Cut Pro"
-		set frontmost to true
-		keystroke "4" using {command down}
-			delay 0.25
-			set frontWindow to my frontFinalCutProWindow()
-			set overlayCheckbox to my firstDebugOverlayCheckbox(frontWindow, 18)
-			if overlayCheckbox is missing value then set overlayCheckbox to my checkboxNearInspectorText(frontWindow, "Debug Overlay", 18)
-			if overlayCheckbox is missing value then error "Debug Overlay checkbox not found by local AX label/row search"
-			if not my checkboxIsOn(overlayCheckbox) then
-				my pressElement(overlayCheckbox)
+set_fcp_debug_overlay_via_local_ax() {
+	local desired_state="$1"
+	/usr/bin/osascript - "$desired_state" > /dev/null <<'APPLESCRIPT' &
+on run argv
+	set desiredStateText to item 1 of argv
+	set desiredState to false
+	if desiredStateText is "true" then set desiredState to true
+	tell application "Final Cut Pro" to activate
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			set frontmost to true
+			keystroke "4" using {command down}
 				delay 0.25
-			end if
-			if not my checkboxIsOn(overlayCheckbox) then error "Debug Overlay checkbox did not become enabled"
+				my ensureInspectorVisible()
+				set frontWindow to my frontFinalCutProWindow()
+				set inspectorRoot to my inspectorPanelRoot(frontWindow)
+				set overlayCheckbox to my firstDebugOverlayCheckbox(inspectorRoot, 18)
+				if overlayCheckbox is missing value then set overlayCheckbox to my checkboxNearInspectorText(inspectorRoot, "Debug Overlay", 18)
+				if overlayCheckbox is missing value then set overlayCheckbox to my debugOverlayCheckboxAfterScrolling(inspectorRoot)
+				if overlayCheckbox is missing value then error "Debug Overlay checkbox not found by local AX label/row search"
+				if my checkboxIsOn(overlayCheckbox) is not desiredState then
+					my pressElement(overlayCheckbox)
+					delay 0.25
+				end if
+				if my checkboxIsOn(overlayCheckbox) is not desiredState then error "Debug Overlay checkbox did not reach requested state"
+		end tell
 	end tell
-end tell
+end run
 
 on frontFinalCutProWindow()
 	tell application "System Events"
@@ -2498,6 +2563,56 @@ on frontFinalCutProWindow()
 		end tell
 	end tell
 end frontFinalCutProWindow
+
+on ensureInspectorVisible()
+	tell application "System Events"
+		tell process "Final Cut Pro"
+			try
+				set inspectorToggle to first checkbox of toolbar 1 of my frontFinalCutProWindow() whose description is "Show or hide the Inspector"
+				if not my checkboxIsOn(inspectorToggle) then
+					my pressElement(inspectorToggle)
+					delay 0.25
+				end if
+			end try
+		end tell
+	end tell
+end ensureInspectorVisible
+
+on inspectorPanelRoot(frontWindow)
+	tell application "System Events"
+		try
+			set contentSplit to splitter group 1 of group 2 of splitter group 1 of group 1 of splitter group 1 of frontWindow
+			repeat with candidateRoot in groups of contentSplit
+				if my elementIsRightInspectorCandidate(candidateRoot, frontWindow) then return candidateRoot
+			end repeat
+		end try
+	end tell
+	error "Could not resolve the Final Cut Pro Video Inspector panel."
+end inspectorPanelRoot
+
+on elementIsRightInspectorCandidate(elementRef, frontWindow)
+	tell application "System Events"
+		try
+			set rootPosition to position of frontWindow
+			set rootSize to size of frontWindow
+			set elementPosition to position of elementRef
+			set elementSize to size of elementRef
+			set rightPanelFloor to (item 1 of rootPosition) + ((item 1 of rootSize) * 0.55)
+			if (item 1 of elementPosition) >= rightPanelFloor and (item 1 of elementSize) >= 240 and (item 2 of elementSize) >= 300 then return true
+		end try
+	end tell
+	return false
+end elementIsRightInspectorCandidate
+
+on elementHasMinimumSize(elementRef, minWidth, minHeight)
+	tell application "System Events"
+		try
+			set sizeValues to size of elementRef
+			if (item 1 of sizeValues) >= minWidth and (item 2 of sizeValues) >= minHeight then return true
+		end try
+	end tell
+	return false
+end elementHasMinimumSize
 
 on firstDebugOverlayCheckbox(rootElement, remainingDepth)
 	if remainingDepth < 0 then return missing value
@@ -2560,6 +2675,57 @@ on checkboxNearInspectorText(rootElement, labelText, remainingDepth)
 	set checkboxPair to my nearestCheckboxNearY(rootElement, labelX, labelY, remainingDepth)
 	return item 1 of checkboxPair
 end checkboxNearInspectorText
+
+on debugOverlayCheckboxAfterScrolling(inspectorRoot)
+	repeat with attemptIndex from 1 to 8
+		my scrollInspectorDown(inspectorRoot)
+		delay 0.12
+		set overlayCheckbox to my firstDebugOverlayCheckbox(inspectorRoot, 18)
+		if overlayCheckbox is not missing value then return overlayCheckbox
+		set overlayCheckbox to my checkboxNearInspectorText(inspectorRoot, "Debug Overlay", 18)
+		if overlayCheckbox is not missing value then return overlayCheckbox
+	end repeat
+	return missing value
+end debugOverlayCheckboxAfterScrolling
+
+on scrollInspectorDown(rootElement)
+	set scroller to my firstInspectorScrollArea(rootElement, 12)
+	if scroller is missing value then return
+	tell application "System Events"
+		try
+			perform action "AXScrollDown" of scroller
+		end try
+		try
+			repeat with barElement in scroll bars of scroller
+				set value of barElement to 1.0
+			end repeat
+			return
+		end try
+	end tell
+end scrollInspectorDown
+
+on firstInspectorScrollArea(rootElement, remainingDepth)
+	if remainingDepth < 0 then return missing value
+	tell application "System Events"
+		try
+			if (role of rootElement as text) is "AXScrollArea" then
+				try
+					if (description of rootElement as text) is "inspector" then return rootElement
+				end try
+			end if
+		end try
+		try
+			set childElements to UI elements of rootElement
+		on error
+			return missing value
+		end try
+	end tell
+	repeat with childElement in childElements
+		set foundElement to my firstInspectorScrollArea(childElement, remainingDepth - 1)
+		if foundElement is not missing value then return foundElement
+	end repeat
+	return missing value
+end firstInspectorScrollArea
 
 on firstElementWithExactText(rootElement, requiredText, remainingDepth)
 	if remainingDepth < 0 then return missing value
@@ -2682,7 +2848,22 @@ on checkboxIsOn(elementReference)
 end checkboxIsOn
 APPLESCRIPT
 	local osascript_pid=$!
-	wait_for_ui_osascript "$osascript_pid" "Debug Overlay local AX retry" 100 0
+	wait_for_ui_osascript "$osascript_pid" "Debug Overlay ${desired_state} local AX" 300 0
+}
+
+set_fcp_debug_overlay_on_via_local_ax() {
+	set_fcp_debug_overlay_via_local_ax true
+}
+
+warm_debug_overlay_viewer_probe() {
+	local viewer_roi="${1:-}"
+	local label="${2:-Debug Overlay viewer warmup}"
+	printf '%s: playing briefly to force Final Cut Pro Viewer render before overlay recheck.\n' "$label" >&2
+	press_start_playback || return 1
+	sleep 1.4
+	press_stop_playback || true
+	sleep 0.4
+	debug_overlay_visible_now "$label" "$viewer_roi"
 }
 
 set_fcp_debug_overlay_on() {
@@ -2709,14 +2890,48 @@ set_fcp_debug_overlay_on() {
 			printf 'Tokyo Walking Stabilizer Debug Overlay set to: on via local AX retry.\n'
 			return 0
 		fi
+		if warm_debug_overlay_viewer_probe "$viewer_roi" "Debug Overlay after Viewer warmup"; then
+			printf 'Tokyo Walking Stabilizer Debug Overlay visible after Viewer warmup.\n'
+			return 0
+		fi
 		fail "could not set Tokyo Walking Stabilizer Debug Overlay on: ${result}"
 	fi
 	cat "$output_file"
 	rm -f "$output_file"
 	if ! debug_overlay_visible_now "Debug Overlay after enabling" "$viewer_roi"; then
+		if warm_debug_overlay_viewer_probe "$viewer_roi" "Debug Overlay after enabling Viewer warmup"; then
+			printf 'Tokyo Walking Stabilizer Debug Overlay visible after Viewer warmup.\n'
+			return 0
+		fi
 		fail "Tokyo Walking Stabilizer Debug Overlay was enabled in Inspector but is not visible in the Viewer"
 	fi
 	printf 'Tokyo Walking Stabilizer Debug Overlay set to: on\n'
+}
+
+force_fcp_debug_overlay_render_pulse() {
+	local viewer_roi="${1:-}"
+	printf 'Pulsing Debug Overlay off/on to force current FxPlug render diagnostics.\n'
+	set_fcp_debug_overlay_via_local_ax false \
+		|| fail "could not pulse Debug Overlay off before recording"
+	set_fcp_debug_overlay_via_local_ax true \
+		|| fail "could not pulse Debug Overlay on before recording"
+	if ! debug_overlay_visible_now "Debug Overlay after render pulse" "$viewer_roi"; then
+		fail "Debug Overlay render pulse completed but overlay is not visible in the Viewer"
+	fi
+}
+
+force_fcp_remove_black_edges_render_pulse() {
+	local desired_state="$1"
+	local opposite_state="true"
+	if [[ "$desired_state" == "true" ]]; then
+		opposite_state="false"
+	fi
+	printf 'Pulsing Remove Black Edges %s/%s to force current FxPlug render diagnostics.\n' "$opposite_state" "$desired_state"
+	set_fcp_remove_black_edges_via_local_ax "$opposite_state" \
+		|| fail "could not pulse Remove Black Edges to ${opposite_state} before recording"
+	sleep 0.3
+	set_fcp_remove_black_edges_via_local_ax "$desired_state" \
+		|| fail "could not restore Remove Black Edges to ${desired_state} before recording"
 }
 
 warm_fcp_proxy_only_viewer_render() {
@@ -3117,9 +3332,14 @@ APPLESCRIPT
 	return 1
 }
 
-set_fcp_remove_black_edges_on_via_local_ax() {
-	/usr/bin/osascript > /dev/null <<'APPLESCRIPT' &
-tell application "Final Cut Pro" to activate
+set_fcp_remove_black_edges_via_local_ax() {
+	local desired_state="$1"
+	/usr/bin/osascript - "$desired_state" > /dev/null <<'APPLESCRIPT' &
+on run argv
+	set desiredStateText to item 1 of argv
+	set desiredState to false
+	if desiredStateText is "true" then set desiredState to true
+	tell application "Final Cut Pro" to activate
 	tell application "System Events"
 		tell process "Final Cut Pro"
 			set frontmost to true
@@ -3129,13 +3349,14 @@ tell application "Final Cut Pro" to activate
 		set cropCheckbox to my firstCheckboxContainingText(inspectorRoot, "Remove Black Edges", 18)
 		if cropCheckbox is missing value then set cropCheckbox to my checkboxNearInspectorText(inspectorRoot, "Remove Black Edges", 18)
 		if cropCheckbox is missing value then error "Remove Black Edges checkbox not found by local AX label/row search"
-		if not my checkboxIsOn(cropCheckbox) then
+		if my checkboxIsOn(cropCheckbox) is not desiredState then
 			my pressElement(cropCheckbox)
 			delay 0.25
 		end if
-		if not my checkboxIsOn(cropCheckbox) then error "Remove Black Edges checkbox did not become enabled"
+		if my checkboxIsOn(cropCheckbox) is not desiredState then error "Remove Black Edges checkbox did not reach requested state"
 	end tell
 end tell
+end run
 
 on frontFinalCutProWindow()
 	tell application "System Events"
@@ -3358,7 +3579,7 @@ on checkboxIsOn(elementReference)
 end checkboxIsOn
 APPLESCRIPT
 	local osascript_pid=$!
-	wait_for_ui_osascript "$osascript_pid" "Remove Black Edges on" 300 0
+	wait_for_ui_osascript "$osascript_pid" "Remove Black Edges ${desired_state}" 300 0
 }
 
 assert_inspector_contains_case_effect_if_readable() {
@@ -5017,13 +5238,18 @@ assert_case_prepared() {
 	else
 		fail "selected timeline clip Inspector is not showing ${expected_effect}; refusing to toggle Debug Overlay on the wrong item"
 	fi
-	if [[ "$remove_black_edges" == "true" ]]; then
-		set_fcp_remove_black_edges_on_via_local_ax \
-			|| fail "case requires Remove Black Edges on, but the Inspector checkbox could not be enabled"
-		printf 'Remove Black Edges set to: on\n'
-	fi
+	set_fcp_remove_black_edges_via_local_ax "$remove_black_edges" \
+		|| fail "case requires Remove Black Edges ${remove_black_edges}, but the Inspector checkbox could not be set"
+	printf 'Remove Black Edges set to: %s\n' "$remove_black_edges"
 	set_fcp_debug_overlay_on "$viewer_roi"
 	assert_inspector_contains_case_effect_if_readable "$expected_effect" "$remove_black_edges"
+	if [[ "$remove_black_edges" == "false" ]]; then
+		if [[ "${STABILIZER_E2E_SKIP_REMOVE_BLACK_EDGES_RENDER_PULSE:-0}" == "1" ]]; then
+			printf 'Skipping Remove Black Edges render pulse because STABILIZER_E2E_SKIP_REMOVE_BLACK_EDGES_RENDER_PULSE=1; render revision must provide invalidation evidence.\n'
+		else
+			force_fcp_remove_black_edges_render_pulse "$remove_black_edges"
+		fi
+	fi
 	normalize_fcp_layout
 	set_fcp_proxy_only
 	set_fcp_green_channel

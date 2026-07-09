@@ -18,6 +18,7 @@ private struct Options {
     var limit = 5
     var listCaches = false
     var turnWindowSeconds = 6.0
+    var turnZoom = 1.0
     var strengths = Strengths.defaults
 }
 
@@ -90,7 +91,9 @@ private struct PersistedHostAnalysisCache: Decodable {
     let lensBandConfidence: [Float]?
     let farFieldRigidShakePathX: [Float]?
     let farFieldRigidShakePathY: [Float]?
+    let farFieldRigidShakePathRoll: [Float]?
     let farFieldRigidShakeSupport: [Float]?
+    let farFieldRigidShakeRollSupport: [Float]?
     let farFieldRigidShakeShapeConsistency: [Float]?
     let farFieldRigidShakeForwardBackwardConsistency: [Float]?
     let farFieldMeshRows: Int?
@@ -206,7 +209,9 @@ private struct Analysis {
     let lensBandConfidence: [Float]
     let farFieldRigidShakePathX: [Float]
     let farFieldRigidShakePathY: [Float]
+    let farFieldRigidShakePathRoll: [Float]
     let farFieldRigidShakeSupport: [Float]
+    let farFieldRigidShakeRollSupport: [Float]
     let farFieldRigidShakeShapeConsistency: [Float]
     let farFieldRigidShakeForwardBackwardConsistency: [Float]
     let farFieldMeshRows: Int
@@ -345,7 +350,9 @@ private struct Analysis {
         lensBandMidConfidence = try requireFloatArray(cache.lensBandMidConfidence, "lensBandMidConfidence")
         farFieldRigidShakePathX = try requireFloatArray(cache.farFieldRigidShakePathX, "farFieldRigidShakePathX", count: frames.count)
         farFieldRigidShakePathY = try requireFloatArray(cache.farFieldRigidShakePathY, "farFieldRigidShakePathY", count: frames.count)
+        farFieldRigidShakePathRoll = try requireFloatArray(cache.farFieldRigidShakePathRoll, "farFieldRigidShakePathRoll", count: frames.count)
         farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport", count: frames.count)
+        farFieldRigidShakeRollSupport = try requireFloatArray(cache.farFieldRigidShakeRollSupport, "farFieldRigidShakeRollSupport", count: frames.count)
         farFieldRigidShakeShapeConsistency = try requireFloatArray(cache.farFieldRigidShakeShapeConsistency, "farFieldRigidShakeShapeConsistency", count: frames.count)
         farFieldRigidShakeForwardBackwardConsistency = try requireFloatArray(cache.farFieldRigidShakeForwardBackwardConsistency, "farFieldRigidShakeForwardBackwardConsistency", count: frames.count)
         guard let rows = cache.farFieldMeshRows,
@@ -775,7 +782,7 @@ private let renderTurnTransitionSmoothingSampleCount = 29
 private let renderTurnTransitionSmoothingWindowSeconds = 2.8
 private let renderTurnTransitionMinimumMacroPixels: Float = 0.5
 private let renderTurnTransitionBridgeMinimumBlend: Float = 0.0
-private let renderTurnTransitionBridgeMaximumBlend: Float = 0.86
+private let renderTurnTransitionBridgeMaximumBlend: Float = 1.0
 private let renderTurnTransitionBridgeEdgeGateStart: Float = 0.45
 private let renderTurnTransitionBridgeEdgeGateFull: Float = 0.78
 private let renderTurnTransitionBridgeLowEdgeLargeTurnBlend: Float = 0.48
@@ -784,7 +791,8 @@ private let renderTurnTransitionBridgeLowEdgeMacroFullPixels: Float = 120.0
 private let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
 private let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
 private let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-private let adaptiveXTurnTransitionMaximumWindowSeconds = 6.0
+private let adaptiveXTurnTransitionZoomBaselineStrength: Float = 1.0
+private let adaptiveXTurnTransitionZoomFullStrength: Float = 4.0
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -817,12 +825,42 @@ private let farFieldLowFrequencyPriorityStartSeconds: Float = 0.28
 private let farFieldLowFrequencyPriorityFullSeconds: Float = 0.86
 private let farFieldLowFrequencyMeshSuppressionScale: Float = 1.0
 private let farFieldLowFrequencyTurnSuppressionRelief: Float = 0.65
-private let farFieldRigidOnlyGuardSupportStart: Float = 0.14
-private let farFieldRigidOnlyGuardSupportFull: Float = 0.46
-private let farFieldRigidOnlyGuardShapeStart: Float = 0.36
-private let farFieldRigidOnlyGuardShapeFull: Float = 0.72
-private let farFieldRigidOnlyGuardTwoWayStart: Float = 0.32
-private let farFieldRigidOnlyGuardTwoWayFull: Float = 0.70
+private let farFieldShortWindowRigidYBoostStartSeconds: Float = 0.15
+private let farFieldShortWindowRigidYBoostFullSeconds: Float = 0.055
+private let farFieldShortWindowRigidYBoostMaximum: Float = 0.0
+private let farFieldShortWindowDominantMeshYBlendMaximum: Float = 0.0
+private let farFieldCoherentSlabMeshYBlendMaximum: Float = 0.0
+private let farFieldParallaxWarpDampingDeltaStart: Float = 48.0
+private let farFieldParallaxWarpDampingDeltaFull: Float = 96.0
+private let farFieldParallaxWarpDampingOpposingStart: Float = 0.08
+private let farFieldParallaxWarpDampingOpposingFull: Float = 0.18
+private let farFieldParallaxWarpDampingTwoWayStart: Float = 0.08
+private let farFieldParallaxWarpDampingTwoWayFull: Float = 0.38
+private let farFieldParallaxWarpDampingMaximum: Float = 0.68
+private let farFieldCoherentSlabYShapeStart: Float = 0.18
+private let farFieldCoherentSlabYShapeFull: Float = 0.70
+private let farFieldCoherentSlabYTwoWayStart: Float = 0.22
+private let farFieldCoherentSlabYTwoWayFull: Float = 0.76
+private let farFieldCoherentSlabYMeshDeltaStart: Float = 10.0
+private let farFieldCoherentSlabYMeshDeltaFull: Float = 24.0
+private let farFieldCoherentSlabXShapeStart: Float = 0.12
+private let farFieldCoherentSlabXShapeFull: Float = 0.54
+private let farFieldCoherentSlabXTwoWayStart: Float = 0.18
+private let farFieldCoherentSlabXTwoWayFull: Float = 0.62
+private let farFieldCoherentSlabXMeshDeltaStart: Float = 13.0
+private let farFieldCoherentSlabXMeshDeltaFull: Float = 22.0
+private let farFieldCoherentSlabXQuiverStart: Float = 0.24
+private let farFieldCoherentSlabXQuiverFull: Float = 0.62
+private let farFieldCoherentMeshBlendDeltaStart: Float = 8.0
+private let farFieldCoherentMeshBlendDeltaFull: Float = 20.0
+private let farFieldCoherentMeshBlendOpposingStart: Float = 0.06
+private let farFieldCoherentMeshBlendOpposingFull: Float = 0.22
+private let farFieldRigidOnlyGuardSupportStart: Float = 0.08
+private let farFieldRigidOnlyGuardSupportFull: Float = 0.30
+private let farFieldRigidOnlyGuardShapeStart: Float = 0.24
+private let farFieldRigidOnlyGuardShapeFull: Float = 0.56
+private let farFieldRigidOnlyGuardTwoWayStart: Float = 0.20
+private let farFieldRigidOnlyGuardTwoWayFull: Float = 0.52
 private let expectedSourceLensShakeLocalBinCount = 15
 private let expectedFarFieldMeshRows = 5
 private let expectedFarFieldMeshColumns = 9
@@ -830,7 +868,7 @@ private let expectedFarFieldMeshBinCount = expectedFarFieldMeshRows * expectedFa
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [45]
+private let supportedCacheSchemaVersions: Set<Int> = [48]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
     _ = cache
@@ -963,7 +1001,9 @@ private func floatComparisonInputs(baseline: Analysis, compared: Analysis) -> [(
         ("lensBandConfidence", baseline.lensBandConfidence, compared.lensBandConfidence),
         ("farFieldRigidShakePathX", baseline.farFieldRigidShakePathX, compared.farFieldRigidShakePathX),
         ("farFieldRigidShakePathY", baseline.farFieldRigidShakePathY, compared.farFieldRigidShakePathY),
+        ("farFieldRigidShakePathRoll", baseline.farFieldRigidShakePathRoll, compared.farFieldRigidShakePathRoll),
         ("farFieldRigidShakeSupport", baseline.farFieldRigidShakeSupport, compared.farFieldRigidShakeSupport),
+        ("farFieldRigidShakeRollSupport", baseline.farFieldRigidShakeRollSupport, compared.farFieldRigidShakeRollSupport),
         ("farFieldRigidShakeShapeConsistency", baseline.farFieldRigidShakeShapeConsistency, compared.farFieldRigidShakeShapeConsistency),
         ("farFieldRigidShakeForwardBackwardConsistency", baseline.farFieldRigidShakeForwardBackwardConsistency, compared.farFieldRigidShakeForwardBackwardConsistency),
         ("sourceLensShakeRidgePathY", baseline.sourceLensShakeRidgePathY, compared.sourceLensShakeRidgePathY),
@@ -1230,7 +1270,9 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
     floatArrays.append(contentsOf: [
         ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
         ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
+        ("farFieldRigidShakePathRoll", cache.farFieldRigidShakePathRoll),
         ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
+        ("farFieldRigidShakeRollSupport", cache.farFieldRigidShakeRollSupport),
         ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
         ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
     ])
@@ -1342,6 +1384,7 @@ private func adaptiveXTurnTiming(
     travelPixels: Float,
     baseWindowSeconds: Double,
     turnWindowSeconds: Double,
+    turnSmoothingZoom: Double,
     usesAutoCropTurnSpace: Bool
 ) -> AdaptiveXTurnTiming {
     let baseWindow = baseWindowSeconds.isFinite && baseWindowSeconds > 0.0
@@ -1357,10 +1400,14 @@ private func adaptiveXTurnTiming(
     let requestedWindow = turnWindowSeconds.isFinite && turnWindowSeconds > 0.0
         ? turnWindowSeconds
         : baseWindow
-    let maximumWindow = max(
-        baseWindow,
-        min(max(baseWindow, requestedWindow), adaptiveXTurnTransitionMaximumWindowSeconds)
+    let zoomStrength = Float(turnSmoothingZoom.isFinite ? max(0.0, turnSmoothingZoom) : 0.0)
+    let zoomWindowSupport = confidenceRamp(
+        zoomStrength,
+        start: adaptiveXTurnTransitionZoomBaselineStrength,
+        full: adaptiveXTurnTransitionZoomFullStrength
     )
+    let zoomWindowExtension = requestedWindow * Double(zoomWindowSupport)
+    let maximumWindow = max(baseWindow, requestedWindow + zoomWindowExtension)
     let travelWindow = min(
         maximumWindow,
         max(baseWindow, Double(travelPixels / max(adaptiveXTurnTransitionTargetPixelRate, Float.ulpOfOne)))
@@ -1401,6 +1448,7 @@ private func adaptiveXTurnSmoothValue(
     fallbackWindowSeconds: Double,
     turnWindowSeconds: Double,
     outputScale: Float,
+    turnSmoothingZoom: Double,
     usesAutoCropTurnSpace: Bool
 ) -> Float {
     let travelPixels = monotonicDominantTravel(values, indices: indices)
@@ -1409,6 +1457,7 @@ private func adaptiveXTurnSmoothValue(
         travelPixels: travelPixels,
         baseWindowSeconds: baseWindowSeconds,
         turnWindowSeconds: turnWindowSeconds,
+        turnSmoothingZoom: turnSmoothingZoom,
         usesAutoCropTurnSpace: usesAutoCropTurnSpace
     )
     let activeWindow = timing.active ? max(fallbackWindowSeconds, timing.windowSeconds) : fallbackWindowSeconds
@@ -1494,6 +1543,7 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
         fallbackWindowSeconds: turnWindowSeconds,
         turnWindowSeconds: turnWindowSeconds,
         outputScale: xScale,
+        turnSmoothingZoom: options.turnZoom,
         usesAutoCropTurnSpace: true
     )
     let turnSmoothY = timeWeightedMonotonicSCurveValue(
@@ -1600,6 +1650,7 @@ private func renderTurnBridgeAssessment(
         travelPixels: centerSample.detected,
         baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
         turnWindowSeconds: options.turnWindowSeconds,
+        turnSmoothingZoom: options.turnZoom,
         usesAutoCropTurnSpace: true
     )
     let transitionWindowSeconds = timing.windowSeconds
@@ -3492,6 +3543,9 @@ private func sourceSpaceLensShakeBand(
         return BandAssessment(name: "LENS", detected: 0.0, applied: 0.0, remaining: 0.0, confidence: 0.0, note: "dominantWindowRequired")
     }
     let targetWindowSeconds = min(1.0, max(frameStep * 3.0, preparedWindowSeconds))
+    let dominantCell = analysis.farFieldMeshDominantCell.indices.contains(index)
+        ? Int(analysis.farFieldMeshDominantCell[index])
+        : -1
     let innerWindowSeconds = max(lensShakeInnerWindowMinimumSeconds, targetWindowSeconds * 0.56)
     let outerWindowSeconds = min(lensShakeOuterWindowMaximumSeconds, max(lensShakeOuterWindowMinimumSeconds, targetWindowSeconds * 3.0))
 
@@ -3543,7 +3597,35 @@ private func sourceSpaceLensShakeBand(
         ) * lensBandPulseSmoothingBlend
         return current + ((smoothed - current) * blend)
     }
-    func shortWindowXQuiverScore(_ values: [Float], rawResidualPixels: Float, limitedResidualPixels: Float, scale: Float) -> Float {
+    func pulseSmoothedDegreeRollResidual(_ values: [Float]) -> Float {
+        let current = residual(values)
+        let windowFrames = analysis.farFieldMeshDominantWindowFrames.indices.contains(index)
+            ? max(3, Int(round(analysis.farFieldMeshDominantWindowFrames[index])))
+            : max(3, Int(round(targetWindowSeconds / frameStep)))
+        let radiusFrames = max(1, windowFrames / 2)
+        let centerTime = analysis.frames[index].time
+        let radiusSeconds = max(frameStep, Double(radiusFrames) * frameStep)
+        var weightedResidual = Float(0.0)
+        var totalWeight = Float(0.0)
+        for sampleIndex in (index - radiusFrames)...(index + radiusFrames) {
+            guard analysis.frames.indices.contains(sampleIndex), values.indices.contains(sampleIndex) else { continue }
+            let distance = abs(analysis.frames[sampleIndex].time - centerTime)
+            let normalizedDistance = clamp(Float(distance / radiusSeconds), min: 0.0, max: 1.0)
+            let weight = (1.0 - normalizedDistance) * (1.0 - normalizedDistance)
+            weightedResidual += residualAt(values, index: sampleIndex) * weight
+            totalWeight += weight
+        }
+        guard totalWeight > Float.ulpOfOne else { return current }
+        let smoothed = weightedResidual / totalWeight
+        let pulseMagnitude = abs(current - smoothed)
+        let blend = confidenceRamp(
+            pulseMagnitude,
+            start: lensShakeRollStartDegrees,
+            full: lensShakeRollFullDegrees
+        ) * lensBandPulseSmoothingBlend
+        return current + ((smoothed - current) * blend)
+    }
+    func shortWindowQuiverScore(_ values: [Float], rawResidualPixels: Float, limitedResidualPixels: Float, scale: Float) -> Float {
         guard values.count == analysis.frames.count else { return 0.0 }
         let windowFrames = analysis.farFieldMeshDominantWindowFrames.indices.contains(index)
             ? max(3, Int(round(analysis.farFieldMeshDominantWindowFrames[index])))
@@ -3598,9 +3680,15 @@ private func sourceSpaceLensShakeBand(
                 )
             )
         )
+        let directQuiverEvidence = max(
+            confidenceRamp(maxStep, start: 0.18, full: 0.85),
+            max(
+                confidenceRamp(maxJerk, start: 0.14, full: 0.62),
+                confidenceRamp(flipRatio, start: 0.10, full: 0.34)
+            )
+        )
         return clamp(
-            shortPulseEvidence
-                * confidenceRamp(rawDivergence, start: 0.22, full: 1.60)
+            max(shortPulseEvidence * confidenceRamp(rawDivergence, start: 0.22, full: 1.60), directQuiverEvidence * 0.72)
                 * confidenceRamp(Float(samples.count), start: 3.0, full: 9.0),
             min: 0.0,
             max: 1.0
@@ -3665,16 +3753,21 @@ private func sourceSpaceLensShakeBand(
 
     let hasFarFieldRigidShakePaths = analysis.farFieldRigidShakePathX.count == analysis.frames.count
         && analysis.farFieldRigidShakePathY.count == analysis.frames.count
+        && analysis.farFieldRigidShakePathRoll.count == analysis.frames.count
         && analysis.farFieldRigidShakeSupport.count == analysis.frames.count
+        && analysis.farFieldRigidShakeRollSupport.count == analysis.frames.count
         && analysis.farFieldRigidShakeShapeConsistency.count == analysis.frames.count
         && analysis.farFieldRigidShakeForwardBackwardConsistency.count == analysis.frames.count
     if hasFarFieldRigidShakePaths {
         let rawRigidResidualX = residual(analysis.farFieldRigidShakePathX) * xScale
         let rawRigidResidualY = residual(analysis.farFieldRigidShakePathY) * yScale
+        let rawRigidRollResidual = residual(analysis.farFieldRigidShakePathRoll)
         var rigidResidualX = pulseSmoothedPixelResidual(analysis.farFieldRigidShakePathX, scale: xScale)
         var rigidResidualY = pulseSmoothedPixelResidual(analysis.farFieldRigidShakePathY, scale: yScale)
+        let rigidRollResidual = pulseSmoothedDegreeRollResidual(analysis.farFieldRigidShakePathRoll)
         let rawRigidMagnitude = hypotf(rawRigidResidualX, rawRigidResidualY)
         let preparedRigidSupport = analysis.farFieldRigidShakeSupport[index]
+        let preparedRigidRollSupport = analysis.farFieldRigidShakeRollSupport[index]
         let shapeConsistency = analysis.farFieldRigidShakeShapeConsistency[index]
         let forwardBackwardConsistency = analysis.farFieldRigidShakeForwardBackwardConsistency[index]
         let lowFrequencyRigidPriority = lowFrequencySupport
@@ -3693,6 +3786,11 @@ private func sourceSpaceLensShakeBand(
         )
         var meshBlend = Float(0.0)
         var meshSupport = Float(0.0)
+        var meshMaxBinDelta = Float(0.0)
+        var meshOpposingBins = Float(0.0)
+        var meshSupportedBinCount = 0
+        var dominantMeshResidualY = Float(0.0)
+        var dominantMeshSupport = Float(0.0)
         let hasFarFieldMeshPaths = analysis.farFieldMeshRows == expectedFarFieldMeshRows
             && analysis.farFieldMeshColumns == expectedFarFieldMeshColumns
             && analysis.farFieldMeshPathX.count == analysis.frames.count * expectedFarFieldMeshBinCount
@@ -3704,7 +3802,7 @@ private func sourceSpaceLensShakeBand(
             var meshWeight = Float(0.0)
             var meshMaxSupport = Float(0.0)
             var meshSupportSum = Float(0.0)
-            var meshSupportedBinCount = 0
+            var meshSupportedResiduals: [(x: Float, y: Float, support: Float)] = []
             for bin in 0..<expectedFarFieldMeshBinCount {
                 let start = bin * analysis.frames.count
                 let end = start + analysis.frames.count
@@ -3725,6 +3823,10 @@ private func sourceSpaceLensShakeBand(
                     * confidenceRamp(preparedSupport, start: 0.08, full: 0.38)
                     * qualitySupport
                     * turnScale
+                if bin == dominantCell {
+                    dominantMeshResidualY = residualY
+                    dominantMeshSupport = support
+                }
                 let weight = max(0.0, support)
                 meshResidualX += residualX * weight
                 meshResidualY += residualY * weight
@@ -3733,11 +3835,20 @@ private func sourceSpaceLensShakeBand(
                     meshMaxSupport = max(meshMaxSupport, support)
                     meshSupportSum += support
                     meshSupportedBinCount += 1
+                    meshSupportedResiduals.append((x: residualX, y: residualY, support: support))
                 }
             }
             if meshWeight > Float.ulpOfOne {
                 meshResidualX /= meshWeight
                 meshResidualY /= meshWeight
+                for residual in meshSupportedResiduals {
+                    let deltaX = residual.x - meshResidualX
+                    let deltaY = residual.y - meshResidualY
+                    meshMaxBinDelta = max(meshMaxBinDelta, hypotf(deltaX, deltaY))
+                    if (residual.x * meshResidualX) + (residual.y * meshResidualY) < -0.01 {
+                        meshOpposingBins += 1.0
+                    }
+                }
                 if meshSupportedBinCount > 0 {
                     let averageSupport = meshSupportSum / Float(meshSupportedBinCount)
                     let coverageSupport = confidenceRamp(Float(meshSupportedBinCount), start: 4.0, full: 12.0)
@@ -3748,22 +3859,54 @@ private func sourceSpaceLensShakeBand(
                     min: 0.0,
                     max: 1.0
                 )
+                let meshOpposingFraction = meshSupportedBinCount > 0
+                    ? meshOpposingBins / Float(meshSupportedBinCount)
+                    : 1.0
+                let meshCoherenceVeto = max(
+                    confidenceRamp(
+                        meshMaxBinDelta,
+                        start: farFieldCoherentMeshBlendDeltaStart,
+                        full: farFieldCoherentMeshBlendDeltaFull
+                    ),
+                    confidenceRamp(
+                        meshOpposingFraction,
+                        start: farFieldCoherentMeshBlendOpposingStart,
+                        full: farFieldCoherentMeshBlendOpposingFull
+                    )
+                )
+                let meshBlendAuthority = clamp(
+                    max(
+                        1.0 - meshCoherenceVeto,
+                        lowFrequencyDominance * (1.0 - (meshCoherenceVeto * 0.70))
+                    ),
+                    min: 0.0,
+                    max: 1.0
+                )
                 let meshBlendCeiling = Float(0.45) * (1.0 - lowFrequencyMeshSuppression)
-                meshBlend = min(meshBlendCeiling, meshSupport * 0.45 * (1.0 - lowFrequencyMeshSuppression))
+                let rawMeshBlend = min(meshBlendCeiling, meshSupport * 0.45 * (1.0 - lowFrequencyMeshSuppression))
+                meshBlend = rawMeshBlend * meshBlendAuthority
+                let meshYBlend = min(meshBlend, meshSupport * farFieldCoherentSlabMeshYBlendMaximum * (1.0 - lowFrequencyMeshSuppression))
                 rigidResidualX += (meshResidualX - rigidResidualX) * meshBlend
-                rigidResidualY += (meshResidualY - rigidResidualY) * meshBlend
+                rigidResidualY += (meshResidualY - rigidResidualY) * meshYBlend
             }
         }
         let smoothedRigidMagnitude = hypotf(rigidResidualX, rigidResidualY)
         var rawReinforcementBlend = Float(0.0)
-        let xQuiverScore = shortWindowXQuiverScore(
+        let xQuiverScore = shortWindowQuiverScore(
             analysis.farFieldRigidShakePathX,
             rawResidualPixels: rawRigidResidualX,
             limitedResidualPixels: rigidResidualX,
             scale: xScale
         )
+        let yQuiverScore = shortWindowQuiverScore(
+            analysis.farFieldRigidShakePathY,
+            rawResidualPixels: rawRigidResidualY,
+            limitedResidualPixels: rigidResidualY,
+            scale: yScale
+        )
         let xBeforeLimiter = rigidResidualX
         var xBeforeQuiverLimiter = rigidResidualX
+        var yBeforeQuiverLimiter = rigidResidualY
         if rawRigidMagnitude > smoothedRigidMagnitude,
            (rawRigidResidualX * rigidResidualX) + (rawRigidResidualY * rigidResidualY) > 0.0 {
             let rawReinforcement = confidenceRamp(
@@ -3785,11 +3928,155 @@ private func sourceSpaceLensShakeBand(
                 rawBlendCeiling,
                 max(rawReinforcement, lowFrequencyRawReinforcement) * rawBlendCeiling
             )
-            let xQuiverSuppression = xQuiverScore * (0.82 * (1.0 - (lowFrequencyDominance * 0.75)))
+            let xQuiverVeto = confidenceRamp(xQuiverScore, start: 0.28, full: 0.68)
+            let xQuiverSuppression = max(
+                xQuiverScore * (0.92 * (1.0 - (lowFrequencyDominance * 0.25))),
+                xQuiverVeto * 0.96
+            )
+            let yQuiverVeto = confidenceRamp(yQuiverScore, start: 0.24, full: 0.66)
+            let yQuiverSuppression = max(
+                yQuiverScore * (0.88 * (1.0 - (lowFrequencyDominance * 0.18))),
+                yQuiverVeto * 0.94
+            )
             let xBlend = rawReinforcementBlend * (1.0 - xQuiverSuppression)
+            let yBlend = rawReinforcementBlend * (1.0 - yQuiverSuppression)
             xBeforeQuiverLimiter = xBeforeLimiter + ((rawRigidResidualX - xBeforeLimiter) * rawReinforcementBlend)
+            yBeforeQuiverLimiter = rigidResidualY + ((rawRigidResidualY - rigidResidualY) * rawReinforcementBlend)
             rigidResidualX += (rawRigidResidualX - rigidResidualX) * xBlend
-            rigidResidualY += (rawRigidResidualY - rigidResidualY) * rawReinforcementBlend
+            rigidResidualY += (rawRigidResidualY - rigidResidualY) * yBlend
+        }
+        let dominantCellInUpperFarField = dominantCell >= 0
+            && dominantCell < expectedFarFieldMeshBinCount
+            && (dominantCell / expectedFarFieldMeshColumns) <= 1
+        let shortWindowDominantMeshYPriority = (
+            1.0 - confidenceRamp(
+                Float(targetWindowSeconds),
+                start: farFieldShortWindowRigidYBoostFullSeconds,
+                full: farFieldShortWindowRigidYBoostStartSeconds
+            )
+        )
+            * (dominantCellInUpperFarField ? 1.0 : 0.0)
+            * confidenceRamp(dominantSupport, start: 0.52, full: 0.88)
+            * confidenceRamp(dominantMeshSupport, start: 0.22, full: 0.62)
+            * (dominantMeshResidualY * rigidResidualY > 0.0 ? 1.0 : 0.0)
+            * confidenceRamp(abs(dominantMeshResidualY), start: 0.10, full: 0.95)
+            * qualitySupport
+            * (1.0 - (confidenceRamp(rollingShutterCandidate, start: 0.62, full: 0.88) * 0.50))
+        let dominantMeshYBlend = min(
+            farFieldShortWindowDominantMeshYBlendMaximum,
+            farFieldShortWindowDominantMeshYBlendMaximum * clamp(shortWindowDominantMeshYPriority, min: 0.0, max: 1.0)
+        )
+        if dominantMeshYBlend > 0.0 {
+            rigidResidualY += (dominantMeshResidualY - rigidResidualY) * dominantMeshYBlend
+        }
+        let shortWindowRigidYPriority = (
+            1.0 - confidenceRamp(
+                Float(targetWindowSeconds),
+                start: farFieldShortWindowRigidYBoostFullSeconds,
+                full: farFieldShortWindowRigidYBoostStartSeconds
+            )
+        )
+            * confidenceRamp(max(dominantSupport, meshSupport), start: 0.52, full: 0.88)
+            * (1.0 - (confidenceRamp(meshMaxBinDelta, start: 12.0, full: 32.0) * 0.65))
+            * (1.0 - confidenceRamp(meshSupportedBinCount > 0 ? meshOpposingBins / Float(meshSupportedBinCount) : 1.0, start: 0.08, full: 0.32))
+            * (1.0 - (confidenceRamp(yQuiverScore, start: 0.18, full: 0.60) * 0.90))
+            * confidenceRamp(abs(rigidResidualY), start: 0.10, full: 0.95)
+            * qualitySupport
+            * (1.0 - (confidenceRamp(rollingShutterCandidate, start: 0.62, full: 0.88) * 0.50))
+        let shortWindowRigidYBoost = farFieldShortWindowRigidYBoostMaximum
+            * clamp(shortWindowRigidYPriority, min: 0.0, max: 1.0)
+        if shortWindowRigidYBoost > 0.0 {
+            rigidResidualY *= 1.0 + shortWindowRigidYBoost
+        }
+        let meshOpposingFraction = meshSupportedBinCount > 0
+            ? meshOpposingBins / Float(meshSupportedBinCount)
+            : 0.0
+        let parallaxDampingEvidence = confidenceRamp(
+            meshMaxBinDelta,
+            start: farFieldParallaxWarpDampingDeltaStart,
+            full: farFieldParallaxWarpDampingDeltaFull
+        )
+            * confidenceRamp(Float(meshSupportedBinCount), start: 8.0, full: 16.0)
+            * max(
+                confidenceRamp(
+                    meshOpposingFraction,
+                    start: farFieldParallaxWarpDampingOpposingStart,
+                    full: farFieldParallaxWarpDampingOpposingFull
+                ),
+                (1.0 - confidenceRamp(
+                    forwardBackwardConsistency,
+                    start: farFieldParallaxWarpDampingTwoWayStart,
+                    full: farFieldParallaxWarpDampingTwoWayFull
+                )) * 0.85
+            )
+            * (1.0 - (confidenceRamp(rollingShutterCandidate, start: 0.62, full: 0.88) * 0.35))
+        let parallaxWarpDamping = farFieldParallaxWarpDampingMaximum
+            * clamp(parallaxDampingEvidence, min: 0.0, max: 1.0)
+        if parallaxWarpDamping > 0.0 {
+            rigidResidualX *= 1.0 - parallaxWarpDamping
+            rigidResidualY *= 1.0 - parallaxWarpDamping
+        }
+        let coherentXShapeAuthority = confidenceRamp(
+            shapeConsistency,
+            start: farFieldCoherentSlabXShapeStart,
+            full: farFieldCoherentSlabXShapeFull
+        )
+        let coherentXTwoWayAuthority = confidenceRamp(
+            forwardBackwardConsistency,
+            start: farFieldCoherentSlabXTwoWayStart,
+            full: farFieldCoherentSlabXTwoWayFull
+        )
+        let coherentXMeshVeto = confidenceRamp(
+            meshMaxBinDelta,
+            start: farFieldCoherentSlabXMeshDeltaStart,
+            full: farFieldCoherentSlabXMeshDeltaFull
+        )
+        let coherentXQuiverVeto = confidenceRamp(
+            xQuiverScore,
+            start: farFieldCoherentSlabXQuiverStart,
+            full: farFieldCoherentSlabXQuiverFull
+        )
+        let lowFrequencyXAuthority = lowFrequencyRigidPriority
+            * confidenceRamp(Float(targetWindowSeconds), start: 0.42, full: farFieldLowFrequencyPriorityFullSeconds)
+            * confidenceRamp(forwardBackwardConsistency, start: 0.08, full: 0.42)
+            * (1.0 - (coherentXMeshVeto * 0.72))
+            * (1.0 - (coherentXQuiverVeto * 0.78))
+        let coherentSlabXAuthority = clamp(
+            max(
+                coherentXShapeAuthority * coherentXTwoWayAuthority * (1.0 - (max(coherentXMeshVeto, coherentXQuiverVeto) * 0.92)),
+                lowFrequencyXAuthority
+            ),
+            min: 0.0,
+            max: 1.0
+        )
+        if coherentSlabXAuthority < 0.995 {
+            rigidResidualX *= coherentSlabXAuthority
+        }
+        let coherentYShapeAuthority = confidenceRamp(
+            shapeConsistency,
+            start: farFieldCoherentSlabYShapeStart,
+            full: farFieldCoherentSlabYShapeFull
+        )
+        let coherentYTwoWayAuthority = confidenceRamp(
+            forwardBackwardConsistency,
+            start: farFieldCoherentSlabYTwoWayStart,
+            full: farFieldCoherentSlabYTwoWayFull
+        )
+        let coherentYMeshVeto = confidenceRamp(
+            meshMaxBinDelta,
+            start: farFieldCoherentSlabYMeshDeltaStart,
+            full: farFieldCoherentSlabYMeshDeltaFull
+        )
+        let lowFrequencyYAuthority = lowFrequencyRigidPriority
+            * confidenceRamp(forwardBackwardConsistency, start: 0.08, full: 0.42)
+            * (1.0 - (coherentYMeshVeto * 0.55))
+        let coherentSlabYAuthority = clamp(
+            max(coherentYShapeAuthority * coherentYTwoWayAuthority, lowFrequencyYAuthority),
+            min: 0.0,
+            max: 1.0
+        )
+        if coherentSlabYAuthority < 0.995 {
+            rigidResidualY *= coherentSlabYAuthority
         }
         let rigidMagnitude = hypotf(rigidResidualX, rigidResidualY)
         let lowFrequencyRigidSupport = lowFrequencyRigidPriority
@@ -3800,8 +4087,14 @@ private func sourceSpaceLensShakeBand(
             * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
             * qualitySupport
             * turnScale
-        let boundedSupport = clamp(max(rigidSupport, max(meshSupport * confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70), lowFrequencyRigidSupport)), min: 0.0, max: 1.0)
-        let rigidOnlyGuard = clamp(
+        let rigidRollSupport = confidenceRamp(abs(rigidRollResidual), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
+            * confidenceRamp(preparedRigidRollSupport, start: 0.08, full: 0.36)
+            * confidenceRamp(shapeConsistency, start: 0.44, full: 0.82)
+            * confidenceRamp(forwardBackwardConsistency, start: 0.36, full: 0.78)
+            * qualitySupport
+            * turnScale
+        let boundedSupport = clamp(max(max(rigidSupport, rigidRollSupport), max(meshSupport * confidenceRamp(rigidMagnitude, start: 0.08, full: 0.70), lowFrequencyRigidSupport)), min: 0.0, max: 1.0)
+        let rigidOnlyEvidence = clamp(
             confidenceRamp(boundedSupport, start: farFieldRigidOnlyGuardSupportStart, full: farFieldRigidOnlyGuardSupportFull)
                 * confidenceRamp(shapeConsistency, start: farFieldRigidOnlyGuardShapeStart, full: farFieldRigidOnlyGuardShapeFull)
                 * confidenceRamp(forwardBackwardConsistency, start: farFieldRigidOnlyGuardTwoWayStart, full: farFieldRigidOnlyGuardTwoWayFull)
@@ -3809,15 +4102,19 @@ private func sourceSpaceLensShakeBand(
             min: 0.0,
             max: 1.0
         )
-        let applied = boundedSupport >= lensShakeMinimumSupport ? rigidMagnitude * boundedSupport : 0.0
+        let rigidOnlyGuard = rigidOnlyEvidence >= 0.34
+            ? max(rigidOnlyEvidence, confidenceRamp(rigidOnlyEvidence, start: 0.34, full: 0.58))
+            : rigidOnlyEvidence
+        let detected = rigidMagnitude + (abs(rigidRollResidual) * 12.0)
+        let applied = boundedSupport >= lensShakeMinimumSupport ? detected * boundedSupport : 0.0
         let reason = boundedSupport >= lensShakeMinimumSupport ? "farFieldRigid" : "farFieldRigidSuppressed"
         return BandAssessment(
             name: "LENS",
-            detected: rigidMagnitude,
+            detected: detected,
             applied: applied,
-            remaining: max(0.0, rigidMagnitude - applied),
+            remaining: max(0.0, detected - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f raw %.3f %.3f support %.2f prepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f rolling %.2f meshSupport %.2f meshBlend %.2f rawReinforceBlend %.2f xQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rawRigidResidualX, rawRigidResidualY, boundedSupport, preparedRigidSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, rollingShutterCandidate, meshSupport, meshBlend, rawReinforcementBlend, xQuiverScore, xBeforeQuiverLimiter, rigidResidualX, rigidOnlyGuard, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f roll %.5f raw %.3f %.3f rawRoll %.5f support %.2f rollSupport %.2f prepared %.2f rollPrepared %.2f shape %.2f twoWay %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f dominantMeshYBlend %.2f shortYBoost %.2f parallaxDamp %.2f coherentX %.2f coherentY %.2f rolling %.2f meshSupport %.2f meshBlend %.2f meshMaxDelta %.2f meshOpposing %.0f rawReinforceBlend %.2f xQuiver %.2f yQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f yBeforeLimiter %.3f yAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rigidRollResidual, rawRigidResidualX, rawRigidResidualY, rawRigidRollResidual, boundedSupport, rigidRollSupport, preparedRigidSupport, preparedRigidRollSupport, shapeConsistency, forwardBackwardConsistency, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, dominantMeshYBlend, shortWindowRigidYBoost, parallaxWarpDamping, coherentSlabXAuthority, coherentSlabYAuthority, rollingShutterCandidate, meshSupport, meshBlend, meshMaxBinDelta, meshOpposingBins, rawReinforcementBlend, xQuiverScore, yQuiverScore, xBeforeQuiverLimiter, rigidResidualX, yBeforeQuiverLimiter, rigidResidualY, rigidOnlyGuard, reason)
         )
     }
 
@@ -4405,6 +4702,7 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
     print("Cache: \(analysis.cachePath)")
     print("Schema: \(analysis.schemaVersion), frames: \(analysis.frames.count), sample: \(analysis.sampleWidth)x\(analysis.sampleHeight)")
     print("Turn window: \(formatSeconds(options.turnWindowSeconds))")
+    print(String(format: "Turn zoom: %.2f", options.turnZoom))
     if let time = options.relativeTime {
         print("Requested clip time: \(formatSeconds(time)), window: \(formatSeconds(options.windowSeconds))")
         if let selected = assessments.first {
@@ -4477,6 +4775,7 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
         }),
         "windowSeconds": options.windowSeconds,
         "turnWindowSeconds": options.turnWindowSeconds,
+        "turnZoom": options.turnZoom,
         "note": jsonValue(options.note),
         "assessments": assessments.map { assessment in
             [
@@ -4744,6 +5043,8 @@ private func parseOptions() throws -> Options {
             options.windowSeconds = max(0.0, try nextDouble(for: arg))
         case "--turn-window":
             options.turnWindowSeconds = max(strideWindowSeconds, try nextDouble(for: arg))
+        case "--turn-zoom":
+            options.turnZoom = max(0.0, try nextDouble(for: arg))
         case "--output-size":
             let value = try nextValue(for: arg)
             let parts = value.lowercased().split(separator: "x")
@@ -4793,6 +5094,7 @@ private func printUsage() {
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
     --turn-window should match the Inspector Turn Detection Window when it is not 6.0.
+    --turn-zoom should match Turn Smoothing Zoom when it is not 1.0.
     --list-caches reports saved cache readiness without repairing cache files.
     --compare-cache validates saved cache equivalence; float arrays may differ only within --compare-tolerance.
     """)

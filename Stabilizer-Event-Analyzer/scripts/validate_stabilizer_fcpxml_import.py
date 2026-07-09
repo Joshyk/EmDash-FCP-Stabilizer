@@ -20,7 +20,7 @@ from event_cache_resolution import resolve_event_root_from_manifest
 ALWAYS_INVALID_FILTER_VIDEO_ATTRS = {"videoOverride"}
 NAME_OVERRIDE_MIN_VERSION = (1, 12)
 FCP_RESOURCE_ID_PATTERN = re.compile(r"^r[0-9]+$")
-EXPECTED_CACHE_SCHEMA_VERSION = 45
+EXPECTED_CACHE_SCHEMA_VERSION = 48
 
 
 def emit(payload: dict, status: int = 0) -> int:
@@ -190,7 +190,9 @@ def cache_prepared_path_present(cache_payload: dict) -> bool:
         "pathRoll",
         "farFieldRigidShakePathX",
         "farFieldRigidShakePathY",
+        "farFieldRigidShakePathRoll",
         "farFieldRigidShakeSupport",
+        "farFieldRigidShakeRollSupport",
         "farFieldRigidShakeShapeConsistency",
         "farFieldRigidShakeForwardBackwardConsistency",
     ):

@@ -640,7 +640,8 @@ on run argv
 			perform action "AXPress" of nextButton
 			set saveSheet to my waitForExportSaveSheet(exportWindow, 30)
 			if saveSheet is missing value then error "Final Cut Pro Export File Save sheet did not appear after pressing Next. " & my buttonSnapshotForElement("Export File window", exportWindow, 8) & " || " & my sheetButtonSnapshot(exportWindow, 8)
-			set saveButton to my exactButtonFromList(saveSheet, {"Save"}, 8)
+			set saveButton to my directSaveSheetButton(saveSheet, {"Save"})
+			if saveButton is missing value then set saveButton to my exactButtonFromList(saveSheet, {"Save"}, 8)
 			if saveButton is missing value then error "Final Cut Pro Export File Save sheet did not expose Save. " & my buttonSnapshotForElement("Export File Save sheet", saveSheet, 8)
 			set nameField to my filenameFieldInSaveSheet(saveSheet, 10)
 			if nameField is missing value then error "Final Cut Pro Export File Save sheet filename field not found. " & my textFieldSnapshotForElement("Export File Save sheet", saveSheet, 10)
@@ -682,6 +683,20 @@ on directExportWindowButton(exportWindow, buttonTitles)
 	end tell
 	return missing value
 end directExportWindowButton
+
+on directSaveSheetButton(saveSheet, buttonTitles)
+	tell application "System Events"
+		repeat with buttonTitle in buttonTitles
+			try
+				return button (buttonTitle as text) of UI element 1 of saveSheet
+			end try
+			try
+				return button (buttonTitle as text) of saveSheet
+			end try
+		end repeat
+	end tell
+	return missing value
+end directSaveSheetButton
 
 on waitForExportSaveSheet(exportWindow, timeoutSeconds)
 	repeat with attempt from 1 to (timeoutSeconds * 5)
@@ -814,6 +829,13 @@ end exactButtonFromList
 
 on filenameFieldInSaveSheet(saveSheet, remainingDepth)
 	tell application "System Events"
+		try
+			set directField to UI element 11 of UI element 1 of saveSheet
+			if (role of directField as text) is "AXTextField" then
+				log "Export File Save sheet filename field resolved by direct AX path."
+				return directField
+			end if
+		end try
 		try
 			log "Export File Save sheet filename field resolved by direct Save As: AX lookup."
 			return text field "Save As:" of saveSheet

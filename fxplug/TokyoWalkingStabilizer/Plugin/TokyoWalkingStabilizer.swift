@@ -49,11 +49,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.1"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 926.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 1.0, 926.0)
+private let tokyoWalkingStabilizerVersion = "1.1.4"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 967.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 4.0, 967.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_369_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_410_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -64,7 +64,7 @@ private let stabilizerDefaultTurnDetectionWindowSeconds = 6.0
 private let stabilizerDefaultTurnSmoothingStrength = 12.0
 private let stabilizerMaximumTurnSmoothingStrength = 36.0
 private let stabilizerDefaultTurnSmoothingZoom = 1.0
-private let stabilizerMaximumTurnSmoothingZoom = 2.0
+private let stabilizerMaximumTurnSmoothingZoom = 4.0
 private let stabilizerMaximumFarFieldWarpStrength = 12.0
 private let stabilizerDefaultAutoCropTransitionDuration = 10.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
@@ -107,9 +107,8 @@ private let stabilizerAutoCropPlaybackAdaptiveClipPaddingDelta: Float = 0.004
 private let stabilizerAutoCropPlaybackAdaptiveClipMultiplier: Float = 1.5
 private let stabilizerAutoCropPlaybackEnvelopeRadiusSeconds = 1.25
 private let stabilizerAutoCropPlaybackPositionEnvelopeRadiusSeconds = 1.25
-private let stabilizerAutoCropPlaybackPositionRateLimitFractionPerSecond: Float = 0.040
+private let stabilizerAutoCropPlaybackPositionRateLimitFractionPerSecond: Float = 0.0
 private let stabilizerAutoCropPlaybackPositionMinimumStepPixels: Float = 0.20
-private let stabilizerAutoCropPlaybackPositionMaximumStepPixels: Float = 0.75
 private let stabilizerAutoCropPlaybackPositionDemandBlend: Float = 0.0
 private let stabilizerAutoCropPlaybackLookaheadMinimumDelta: Float = 0.22
 private let stabilizerAutoCropPlaybackLookaheadMaximumDelta: Float = 0.50
@@ -118,11 +117,8 @@ private let stabilizerAutoCropPlaybackCapLeadSeconds = 3.0
 private let stabilizerAutoCropPlaybackCapHoldSeconds = 0.25
 private let stabilizerAutoCropPlaybackCapReleaseSeconds = 4.0
 private let stabilizerAutoCropPlaybackCapSafetyDelta: Float = 0.035
-private let stabilizerAutoCropPlaybackVisualScaleKnee: Float = 1.35
-private let stabilizerAutoCropPlaybackVisualScaleMaximum: Float = 1.85
-private let stabilizerAutoCropPlaybackVisualScaleCompression: Float = 0.55
 private let stabilizerAutoCropPlaybackStablePositionFloorMaxDelta: Float = 0.003
-private let stabilizerAutoCropPlaybackScaleRateLimitPerSecond: Float = 0.012
+private let stabilizerAutoCropPlaybackScaleRateLimitPerSecond: Float = 0.0
 private let stabilizerAutoCropPlaybackScaleSmoothingMinimumRadiusSeconds = 1.90
 private let stabilizerAutoCropPlaybackScaleSmoothingMaximumRadiusSeconds = 2.90
 private let stabilizerAutoCropPlaybackScaleSmoothingAdaptiveStartDelta: Float = 0.060
@@ -3645,32 +3641,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func autoCropPlaybackVisualScaleCap(_ scale: Float) -> Float {
-        let safeScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
-        let knee = max(Float(1.0), stabilizerAutoCropPlaybackVisualScaleKnee)
-        let maximum = max(knee, stabilizerAutoCropPlaybackVisualScaleMaximum)
-        guard safeScale > knee else {
-            return safeScale
-        }
-        let compression = max(Float(0.05), stabilizerAutoCropPlaybackVisualScaleCompression)
-        let compressedProgress = Float(1.0) - expf(-((safeScale - knee) / compression))
-        return min(maximum, knee + ((maximum - knee) * compressedProgress))
+        max(Float(1.0), scale.isFinite ? scale : Float(1.0))
     }
 
     private static func autoCropPlaybackScaleInputForProtectedScale(_ protectedScale: Float) -> Float {
         let safeScale = max(Float(1.0), protectedScale.isFinite ? protectedScale : Float(1.0))
-        let knee = max(Float(1.0), stabilizerAutoCropPlaybackVisualScaleKnee)
-        let maximum = max(knee, stabilizerAutoCropPlaybackVisualScaleMaximum)
-        guard safeScale > knee else {
-            return autoCropPlaybackQuantizedScale(safeScale)
-        }
-        guard safeScale < maximum - 0.0001 else {
-            return autoCropPlaybackQuantizedScale(safeScale)
-        }
-        let compression = max(Float(0.05), stabilizerAutoCropPlaybackVisualScaleCompression)
-        let span = max(Float.ulpOfOne, maximum - knee)
-        let normalized = min(max((safeScale - knee) / span, Float(0.0)), Float(0.9999))
-        let inputScale = knee - (compression * logf(max(Float(0.0001), Float(1.0) - normalized)))
-        return autoCropPlaybackQuantizedScale(max(safeScale, inputScale))
+        return autoCropPlaybackQuantizedScale(safeScale)
     }
 
     private static func autoCropPlaybackMinimumClippedScale(_ scale: Float) -> Float {
@@ -4060,7 +4036,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     originalProtectedScale + stabilizerAutoCropPlaybackStablePositionFloorMaxDelta
                 )
                 let plannedPositionInputScale = autoCropPlaybackScaleInputForProtectedScale(
-                    min(cappedPlannedPositionProtectedScale, stabilizerAutoCropPlaybackVisualScaleMaximum)
+                    cappedPlannedPositionProtectedScale
                 )
                 if plannedPositionInputScale > requiredInputScale + 0.00001 {
                     requiredInputScale = plannedPositionInputScale
@@ -4493,10 +4469,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     ) -> Float {
         let outputReference = max(Float(1.0), min(outputSize.x, outputSize.y))
         let rate = outputReference * max(Float(0.0), stabilizerAutoCropPlaybackPositionRateLimitFractionPerSecond)
+        guard rate > 0.00001 else {
+            return Float.infinity
+        }
         let scaledLimit = rate * Float(max(0.0, deltaSeconds.isFinite ? deltaSeconds : 0.0))
         return max(
             stabilizerAutoCropPlaybackPositionMinimumStepPixels,
-            min(stabilizerAutoCropPlaybackPositionMaximumStepPixels, scaledLimit)
+            scaledLimit
         )
     }
 
@@ -4523,7 +4502,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     ) -> [AutoCropPlaybackPositionSample] {
         guard samples.count > 2,
               outputSize.x > 1.0,
-              outputSize.y > 1.0
+              outputSize.y > 1.0,
+              stabilizerAutoCropPlaybackPositionRateLimitFractionPerSecond > 0.00001
         else {
             return samples
         }
@@ -7211,6 +7191,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return "farFieldRigidSuppressed"
         case 9:
             return "dominantWindowRequired"
+        case 10:
+            return "rollingGlobalPixel"
         default:
             return "off"
         }
@@ -7230,6 +7212,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         if (mask & 64) != 0 { parts.append("sourceRidgeLine") }
         if (mask & 128) != 0 { parts.append("farFieldRigid") }
         if (mask & 256) != 0 { parts.append("farFieldMesh") }
+        if (mask & 512) != 0 { parts.append("shortRigidYBoost") }
+        if (mask & 1024) != 0 { parts.append("dominantMeshYBlend") }
+        if (mask & 2048) != 0 { parts.append("parallaxDamped") }
+        if (mask & 4096) != 0 { parts.append("coherentSlabYLimited") }
+        if (mask & 8192) != 0 { parts.append("coherentSlabXLimited") }
+        if (mask & 16384) != 0 { parts.append("coherentMeshLimited") }
+        if (mask & 32768) != 0 { parts.append("sourceRidgeSuppressed") }
+        if (mask & 65536) != 0 { parts.append("rollingGlobalPixel") }
+        if (mask & 131072) != 0 { parts.append("rollingMeshX") }
+        if (mask & 262144) != 0 { parts.append("sourceLocalGlobal") }
+        if (mask & 524288) != 0 { parts.append("sourceRidgeGlobalOnly") }
+        if (mask & 1048576) != 0 { parts.append("globalY") }
+        if (mask & 2097152) != 0 { parts.append("globalRoll") }
         return parts.joined(separator: ",")
     }
 
@@ -7440,6 +7435,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensFarFieldRigidCorrectionOffset = autoTransform.lensFarFieldRigidShakeApplied > 0.5
                 ? appliedLensBandRidgeOffset
                 : vector_float2(0.0, 0.0)
+            let appliedLensFarFieldRigidRollResidual = autoTransform.lensFarFieldRigidRollResidual * masterStrength
+            let appliedLensFarFieldRigidGlobalYOffset = autoTransform.lensFarFieldRigidGlobalYOffset * masterStrength
+            let appliedLensFarFieldRigidGlobalRollDegrees = autoTransform.lensFarFieldRigidGlobalRollDegrees * masterStrength
             let appliedSourceLensShakeRidgeLineOffset = autoTransform.sourceLensShakeRidgeLineOffset * masterStrength
             let appliedSourceLensShakeLocalTopLeftOffset = autoTransform.sourceLensShakeLocalTopLeftOffset * masterStrength
             let appliedSourceLensShakeLocalTopCenterOffset = autoTransform.sourceLensShakeLocalTopCenterOffset * masterStrength
@@ -7451,7 +7449,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedSourceLensShakeLocalMidCenterOffset = autoTransform.sourceLensShakeLocalMidCenterOffset * masterStrength
             let appliedSourceLensShakeLocalMidRightOffset = autoTransform.sourceLensShakeLocalMidRightOffset * masterStrength
             let componentMessage = String(
-                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeWindowSeconds=%.5f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f lensBandCorrectionModel=%@ lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensFarFieldMeshDominantWindowFrames=%.2f lensFarFieldMeshDominantWindowSeconds=%.5f lensFarFieldMeshDominantSupport=%.5f lensFarFieldMeshDominantCell=%.0f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f cropOffEdgeGuardScale=%.6f cropOffEdgeGuardDemandX=%.5f cropOffEdgeGuardActive=%.2f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
+                format: "Render frame components csv v1 | analysisTime=%.5f sample=%.3f idx=%d-%d frac=%.5f frames=%d proxy=%@ crop=%@ identity=%@ pixelX=%.5f pixelY=%.5f macroX=%.5f macroY=%.5f microX=%.5f microY=%.5f strideX=%.5f strideY=%.5f trajectoryMicroX=%.5f trajectoryMicroY=%.5f trajectoryContinuityX=%.5f trajectoryContinuityY=%.5f lensShakeX=%.5f lensShakeY=%.5f lensShakeRotation=%.5f lensShakeYaw=%.6f lensShakePitch=%.6f lensShakeShearX=%.6f lensShakeShearY=%.6f lensShakePerspectiveX=%.6f lensShakePerspectiveY=%.6f lensShakeScore=%.5f lensShakeSupport=%.5f lensShakeWindowFrames=%.2f lensShakeWindowSeconds=%.5f lensShakeAxis=%@ lensShakeReason=%@ lensShakeRollingShutterCandidate=%.5f lensBandCorrectionModel=%@ lensFarFieldRigidRollResidual=%.5f lensFarFieldRigidRollSupport=%.5f lensFarFieldRigidGlobalY=%.5f lensFarFieldRigidGlobalRoll=%.5f lensFarFieldRigidRollApplied=%.2f lensBandTopX=%.5f lensBandTopY=%.5f lensBandRidgeX=%.5f lensBandRidgeY=%.5f lensBandMidX=%.5f lensBandMidY=%.5f lensBandTopColumnX=%.5f lensBandTopColumnY=%.5f lensBandRidgeColumnX=%.5f lensBandRidgeColumnY=%.5f lensBandMidColumnX=%.5f lensBandMidColumnY=%.5f lensBandTopRowPhaseX=%.5f lensBandTopRowPhaseY=%.5f lensBandRidgeRowPhaseX=%.5f lensBandRidgeRowPhaseY=%.5f lensBandMidRowPhaseX=%.5f lensBandMidRowPhaseY=%.5f lensBandTopLocalRoll=%.7f lensBandRidgeLocalRoll=%.7f lensBandMidLocalRoll=%.7f lensBandWarpSupport=%.5f lensBandWarpApplied=%.2f lensBandRollingShutterScore=%.5f lensFarFieldMeshDominantWindowFrames=%.2f lensFarFieldMeshDominantWindowSeconds=%.5f lensFarFieldMeshDominantSupport=%.5f lensFarFieldMeshDominantCell=%.0f sourceLensShakeRidgeY=%.5f sourceLensShakeRidgeSupport=%.5f sourceLensShakeRidgeApplied=%.2f sourceLensShakeLocalSupport=%.5f sourceLensShakeLocalApplied=%.2f sourceLensShakeLocalTopLeftX=%.5f sourceLensShakeLocalTopLeftY=%.5f sourceLensShakeLocalTopCenterX=%.5f sourceLensShakeLocalTopCenterY=%.5f sourceLensShakeLocalTopRightX=%.5f sourceLensShakeLocalTopRightY=%.5f sourceLensShakeLocalRidgeLeftX=%.5f sourceLensShakeLocalRidgeLeftY=%.5f sourceLensShakeLocalRidgeCenterX=%.5f sourceLensShakeLocalRidgeCenterY=%.5f sourceLensShakeLocalRidgeRightX=%.5f sourceLensShakeLocalRidgeRightY=%.5f sourceLensShakeLocalMidLeftX=%.5f sourceLensShakeLocalMidLeftY=%.5f sourceLensShakeLocalMidCenterX=%.5f sourceLensShakeLocalMidCenterY=%.5f sourceLensShakeLocalMidRightX=%.5f sourceLensShakeLocalMidRightY=%.5f componentResidualX=%.5f componentResidualY=%.5f turnX=%.5f turnY=%.5f rotation=%.5f footstepRotation=%.5f strideRotation=%.5f rawRotation=%.5f smoothingRotationDelta=%.5f perspectiveX=%.5f perspectiveY=%.5f shearX=%.5f shearY=%.5f yawPitchX=%.5f yawPitchY=%.5f warpConfidence=%.5f blur=%.5f residual=%.5f acceptedBlocks=%d totalBlocks=%d cropX=%.5f cropY=%.5f cropScale=%.6f cropOffEdgeGuardScale=%.6f cropOffEdgeGuardDemandX=%.5f cropOffEdgeGuardActive=%.2f turnConfidence=%.5f trackingQuality=%.5f deltaX=%.5f deltaY=%.5f deltaSeconds=%.5f sampleDelta=%.5f previewWarming=%@ previewWarmupReason=%@",
                 analysisSeconds,
                 samplePosition,
                 lowerIndex,
@@ -7490,6 +7488,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 Self.lensShakeReasonDescription(autoTransform.lensShakeReasonCode),
                 autoTransform.lensShakeRollingShutterCandidate,
                 Self.lensBandCorrectionModelDescription(autoTransform.lensBandModelMask),
+                appliedLensFarFieldRigidRollResidual,
+                autoTransform.lensFarFieldRigidRollSupport,
+                appliedLensFarFieldRigidGlobalYOffset,
+                appliedLensFarFieldRigidGlobalRollDegrees,
+                autoTransform.lensFarFieldRigidRollApplied,
                 appliedLensBandTopOffset.x,
                 appliedLensBandTopOffset.y,
                 appliedLensBandRidgeOffset.x,
@@ -7660,7 +7663,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 lensBandMessage
             )
             let lensRigidMessage = String(
-                format: "Render lens rigid csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensFarFieldRigidX=%.5f lensFarFieldRigidY=%.5f lensFarFieldRigidResidualX=%.5f lensFarFieldRigidResidualY=%.5f lensFarFieldRigidSupport=%.5f lensFarFieldRigidApplied=%.2f lensFarFieldRigidShapeConsistency=%.5f lensFarFieldRigidForwardBackwardConsistency=%.5f lensFarFieldRigidLocalWarpSuppressed=%.2f farFieldRigidXQuiverScore=%.5f farFieldRigidXBeforeLimiter=%.5f farFieldRigidXAfterLimiter=%.5f lensFarFieldMeshAvailable=%.2f lensFarFieldMeshX=%.5f lensFarFieldMeshY=%.5f lensFarFieldMeshSupport=%.5f lensFarFieldMeshBlend=%.5f lensFarFieldMeshSupportedBins=%.1f lensFarFieldMeshMaxBinDelta=%.5f lensFarFieldMeshOpposingBins=%.1f",
+                format: "Render lens rigid csv v1 | analysisTime=%.5f sample=%.3f frames=%d proxy=%@ crop=%@ identity=%@ lensShakeReason=%@ lensBandCorrectionModel=%@ lensFarFieldRigidX=%.5f lensFarFieldRigidY=%.5f lensFarFieldRigidResidualX=%.5f lensFarFieldRigidResidualY=%.5f lensFarFieldRigidRollResidual=%.5f lensFarFieldRigidSupport=%.5f lensFarFieldRigidRollSupport=%.5f lensFarFieldRigidApplied=%.2f lensFarFieldRigidRollApplied=%.2f lensFarFieldRigidGlobalY=%.5f lensFarFieldRigidGlobalRoll=%.5f lensFarFieldRigidShapeConsistency=%.5f lensFarFieldRigidForwardBackwardConsistency=%.5f lensFarFieldRigidLocalWarpSuppressed=%.2f farFieldRigidXQuiverScore=%.5f farFieldRigidXBeforeLimiter=%.5f farFieldRigidXAfterLimiter=%.5f lensFarFieldMeshAvailable=%.2f lensFarFieldMeshX=%.5f lensFarFieldMeshY=%.5f lensFarFieldMeshSupport=%.5f lensFarFieldMeshBlend=%.5f lensFarFieldMeshSupportedBins=%.1f lensFarFieldMeshMaxBinDelta=%.5f lensFarFieldMeshOpposingBins=%.1f",
                 analysisSeconds,
                 samplePosition,
                 frames.count,
@@ -7673,8 +7676,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 appliedLensFarFieldRigidCorrectionOffset.y,
                 appliedLensFarFieldRigidShakeOffset.x,
                 appliedLensFarFieldRigidShakeOffset.y,
+                appliedLensFarFieldRigidRollResidual,
                 autoTransform.lensFarFieldRigidShakeSupport,
+                autoTransform.lensFarFieldRigidRollSupport,
                 autoTransform.lensFarFieldRigidShakeApplied,
+                autoTransform.lensFarFieldRigidRollApplied,
+                appliedLensFarFieldRigidGlobalYOffset,
+                appliedLensFarFieldRigidGlobalRollDegrees,
                 autoTransform.lensFarFieldRigidShakeShapeConsistency,
                 autoTransform.lensFarFieldRigidShakeForwardBackwardConsistency,
                 autoTransform.lensFarFieldRigidShakeLocalWarpSuppressed,
@@ -10385,6 +10393,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         var renderUsesPreparedAnalysis = false
         let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
+        let usesTurnSmoothingZoomSpace = state.autoCropEnabled || state.turnSmoothingZoom > 1.0001
         let correctionStrengths = StabilizerCorrectionStrengths(
             microJitterX: state.microJitterXStrength,
             microJitterY: state.microJitterYStrength,
@@ -10395,7 +10404,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             panStabilizationStrength: state.panStabilizationStrength,
             farFieldWarp: state.farFieldWarpStrength,
             turnSmoothingZoom: state.turnSmoothingZoom,
-            usesAutoCropTurnSpace: state.autoCropEnabled
+            usesAutoCropTurnSpace: usesTurnSmoothingZoomSpace
         )
         let configuredProjectBundleCache = transformEnabled
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)

@@ -83,7 +83,9 @@ private struct PersistedHostAnalysisCache: Codable {
     let lensBandConfidence: [Float]?
     let farFieldRigidShakePathX: [Float]?
     let farFieldRigidShakePathY: [Float]?
+    let farFieldRigidShakePathRoll: [Float]?
     let farFieldRigidShakeSupport: [Float]?
+    let farFieldRigidShakeRollSupport: [Float]?
     let farFieldRigidShakeShapeConsistency: [Float]?
     let farFieldRigidShakeForwardBackwardConsistency: [Float]?
     let farFieldMeshRows: Int?
@@ -262,8 +264,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 45
-    private static let supportedCacheSchemaVersions: Set<Int> = [45]
+    private static let cacheSchemaVersion = 48
+    private static let supportedCacheSchemaVersions: Set<Int> = [48]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1851,7 +1853,9 @@ final class StabilizerHostAnalysisStore {
             lensBandConfidence: prepared.lensBandConfidence,
             farFieldRigidShakePathX: prepared.farFieldRigidShakePathX,
             farFieldRigidShakePathY: prepared.farFieldRigidShakePathY,
+            farFieldRigidShakePathRoll: prepared.farFieldRigidShakePathRoll,
             farFieldRigidShakeSupport: prepared.farFieldRigidShakeSupport,
+            farFieldRigidShakeRollSupport: prepared.farFieldRigidShakeRollSupport,
             farFieldRigidShakeShapeConsistency: prepared.farFieldRigidShakeShapeConsistency,
             farFieldRigidShakeForwardBackwardConsistency: prepared.farFieldRigidShakeForwardBackwardConsistency,
             farFieldMeshRows: prepared.farFieldMeshRows,
@@ -2031,7 +2035,9 @@ final class StabilizerHostAnalysisStore {
                 lensBandConfidence: analysis.lensBandConfidence,
                 farFieldRigidShakePathX: analysis.farFieldRigidShakePathX,
                 farFieldRigidShakePathY: analysis.farFieldRigidShakePathY,
+                farFieldRigidShakePathRoll: analysis.farFieldRigidShakePathRoll,
                 farFieldRigidShakeSupport: analysis.farFieldRigidShakeSupport,
+                farFieldRigidShakeRollSupport: analysis.farFieldRigidShakeRollSupport,
                 farFieldRigidShakeShapeConsistency: analysis.farFieldRigidShakeShapeConsistency,
                 farFieldRigidShakeForwardBackwardConsistency: analysis.farFieldRigidShakeForwardBackwardConsistency,
                 farFieldMeshRows: analysis.farFieldMeshRows,
@@ -3089,7 +3095,9 @@ final class StabilizerHostAnalysisStore {
             cache.blurAmounts,
             cache.farFieldRigidShakePathX,
             cache.farFieldRigidShakePathY,
+            cache.farFieldRigidShakePathRoll,
             cache.farFieldRigidShakeSupport,
+            cache.farFieldRigidShakeRollSupport,
             cache.farFieldRigidShakeShapeConsistency,
             cache.farFieldRigidShakeForwardBackwardConsistency,
             cache.farFieldMeshDominantWindowFrames,
@@ -3161,7 +3169,9 @@ final class StabilizerHostAnalysisStore {
            let lensBandConfidence = cache.lensBandConfidence,
            let farFieldRigidShakePathX = cache.farFieldRigidShakePathX,
            let farFieldRigidShakePathY = cache.farFieldRigidShakePathY,
+           let farFieldRigidShakePathRoll = cache.farFieldRigidShakePathRoll,
            let farFieldRigidShakeSupport = cache.farFieldRigidShakeSupport,
+           let farFieldRigidShakeRollSupport = cache.farFieldRigidShakeRollSupport,
            let farFieldRigidShakeShapeConsistency = cache.farFieldRigidShakeShapeConsistency,
            let farFieldRigidShakeForwardBackwardConsistency = cache.farFieldRigidShakeForwardBackwardConsistency,
            let farFieldMeshPathX = cache.farFieldMeshPathX,
@@ -3244,7 +3254,9 @@ final class StabilizerHostAnalysisStore {
                 lensBandConfidence: lensBandConfidence,
                 farFieldRigidShakePathX: farFieldRigidShakePathX,
                 farFieldRigidShakePathY: farFieldRigidShakePathY,
+                farFieldRigidShakePathRoll: farFieldRigidShakePathRoll,
                 farFieldRigidShakeSupport: farFieldRigidShakeSupport,
+                farFieldRigidShakeRollSupport: farFieldRigidShakeRollSupport,
                 farFieldRigidShakeShapeConsistency: farFieldRigidShakeShapeConsistency,
                 farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShakeForwardBackwardConsistency,
                 farFieldMeshRows: farFieldMeshRows,
@@ -3336,7 +3348,9 @@ final class StabilizerHostAnalysisStore {
         floatArrays.append(contentsOf: [
             ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
             ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
+            ("farFieldRigidShakePathRoll", cache.farFieldRigidShakePathRoll),
             ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
+            ("farFieldRigidShakeRollSupport", cache.farFieldRigidShakeRollSupport),
             ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
             ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
         ])
@@ -3679,7 +3693,9 @@ final class StabilizerHostAnalysisStore {
                 lensBandConfidence: cache.lensBandConfidence,
                 farFieldRigidShakePathX: cache.farFieldRigidShakePathX,
                 farFieldRigidShakePathY: cache.farFieldRigidShakePathY,
+                farFieldRigidShakePathRoll: cache.farFieldRigidShakePathRoll,
                 farFieldRigidShakeSupport: cache.farFieldRigidShakeSupport,
+                farFieldRigidShakeRollSupport: cache.farFieldRigidShakeRollSupport,
                 farFieldRigidShakeShapeConsistency: cache.farFieldRigidShakeShapeConsistency,
                 farFieldRigidShakeForwardBackwardConsistency: cache.farFieldRigidShakeForwardBackwardConsistency,
                 farFieldMeshRows: cache.farFieldMeshRows,

@@ -275,33 +275,37 @@ static float lensBandAppliedGain(float support) {
 constant float lensBandTopCenter = 0.10;
 constant float lensBandRidgeCenter = 0.25;
 constant float lensBandMidCenter = 0.40;
-constant float lensBandTopRadius = 0.18;
-constant float lensBandRidgeRadius = 0.20;
-constant float lensBandMidRadius = 0.19;
-constant float lensBandFadeStart = 0.46;
-constant float lensBandFadeEnd = 0.58;
-constant float lensBandRigidOnlyFadeStart = 0.64;
-constant float lensBandRigidOnlyFadeEnd = 0.82;
-constant float lensBandInterBandDifferentialGain = 0.10;
-constant float lensBandColumnDifferentialGain = 0.08;
-constant float lensBandRowPhaseGain = 0.05;
-constant float lensBandLocalRollGain = 0.04;
+constant float lensBandTopRadius = 0.30;
+constant float lensBandRidgeRadius = 0.36;
+constant float lensBandMidRadius = 0.34;
+constant float lensBandFadeStart = 0.58;
+constant float lensBandFadeEnd = 0.78;
+constant float lensBandRigidOnlyFadeStart = 0.72;
+constant float lensBandRigidOnlyFadeEnd = 0.90;
+constant float lensBandInterBandDifferentialGain = 0.0;
+constant float lensBandColumnDifferentialGain = 0.0;
+constant float lensBandRowPhaseGain = 0.0;
+constant float lensBandLocalRollGain = 0.0;
+constant float lensBandMountainDifferentialFadeStart = 0.28;
+constant float lensBandMountainDifferentialFadeEnd = 0.62;
 
 constant float sourceLensLocalTopCenter = 0.10;
 constant float sourceLensLocalRidgeCenter = 0.25;
 constant float sourceLensLocalMidCenter = 0.42;
-constant float sourceLensLocalTopRadius = 0.18;
-constant float sourceLensLocalRidgeRadius = 0.19;
-constant float sourceLensLocalMidRadius = 0.18;
-constant float sourceLensLocalFadeStart = 0.48;
-constant float sourceLensLocalFadeEnd = 0.58;
-constant float sourceLensLocalColumnDifferentialGain = 0.08;
-constant float sourceLensLocalBandDifferentialGain = 0.08;
+constant float sourceLensLocalTopRadius = 0.28;
+constant float sourceLensLocalRidgeRadius = 0.34;
+constant float sourceLensLocalMidRadius = 0.30;
+constant float sourceLensLocalFadeStart = 0.56;
+constant float sourceLensLocalFadeEnd = 0.74;
+constant float sourceLensLocalColumnDifferentialGain = 0.0;
+constant float sourceLensLocalBandDifferentialGain = 0.0;
+constant float sourceLensLocalMountainDifferentialFadeStart = 0.28;
+constant float sourceLensLocalMountainDifferentialFadeEnd = 0.60;
 
 constant float sourceLensRidgeCenter = 0.25;
-constant float sourceLensRidgeRadius = 0.20;
-constant float sourceLensRidgeFadeStart = 0.46;
-constant float sourceLensRidgeFadeEnd = 0.62;
+constant float sourceLensRidgeRadius = 0.40;
+constant float sourceLensRidgeFadeStart = 0.56;
+constant float sourceLensRidgeFadeEnd = 0.82;
 
 static float debugRectOutlineCoverage(float2 uv, float2 outputSize, float minX, float maxX, float minY, float maxY, float thicknessPixels) {
     if (uv.x < minX || uv.x > maxX || uv.y < minY || uv.y > maxY) {
@@ -451,11 +455,14 @@ fragment float4 fragmentShader(
     float lensBandSupport = saturate(transform->lensBandWarpApplied)
         * lensBandAppliedGain(transform->lensBandWarpSupport);
     float rigidOnlyGain = saturate(transform->lensFarFieldRigidOnlyApplied);
+    float rigidOnlyLock = smoothstep(0.18, 0.42, rigidOnlyGain);
+    float localWarpEscapeGain = powr(1.0 - rigidOnlyLock, 6.0);
+    float ridgeWarpEscapeGain = powr(1.0 - rigidOnlyLock, 6.0);
     if (lensBandSupport > 0.0001) {
         float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
-        float fadeStart = mix(lensBandFadeStart, lensBandRigidOnlyFadeStart, rigidOnlyGain);
-        float fadeEnd = mix(lensBandFadeEnd, lensBandRigidOnlyFadeEnd, rigidOnlyGain);
-        float farFieldFade = 1.0 - smoothstep(fadeStart, fadeEnd, sourceY);
+        float localFarFieldFade = 1.0 - smoothstep(lensBandFadeStart, lensBandFadeEnd, sourceY);
+        float rigidFarFieldFade = 1.0 - smoothstep(lensBandRigidOnlyFadeStart, lensBandRigidOnlyFadeEnd, sourceY);
+        float farFieldFade = mix(localFarFieldFade, rigidFarFieldFade, rigidOnlyLock);
         float topWeight = lensBandWeight(sourceY, lensBandTopCenter, lensBandTopRadius);
         float ridgeWeight = lensBandWeight(sourceY, lensBandRidgeCenter, lensBandRidgeRadius);
         float midWeight = lensBandWeight(sourceY, lensBandMidCenter, lensBandMidRadius);
@@ -471,7 +478,13 @@ fragment float4 fragmentShader(
                 + transform->lensBandRidgeOffset
                 + transform->lensBandMidOffset
             ) / 3.0;
-            float differentialGain = 1.0 - rigidOnlyGain;
+            float mountainDifferentialMaskY = saturate(uv.y);
+            float mountainDifferentialGain = 1.0 - smoothstep(
+                lensBandMountainDifferentialFadeStart,
+                lensBandMountainDifferentialFadeEnd,
+                mountainDifferentialMaskY
+            );
+            float differentialGain = (1.0 - rigidOnlyLock) * mountainDifferentialGain;
             float2 bandOffset = commonBandOffset
                 + ((weightedBandOffset - commonBandOffset) * lensBandInterBandDifferentialGain * differentialGain);
             float sourceX = saturate((stabilizedPixels.x / transform->outputSize.x) + 0.5);
@@ -506,7 +519,7 @@ fragment float4 fragmentShader(
     }
     float localLensSupport = saturate(transform->sourceLensShakeLocalApplied)
         * lensBandAppliedGain(transform->sourceLensShakeLocalSupport)
-        * (1.0 - rigidOnlyGain);
+        * localWarpEscapeGain;
     if (localLensSupport > 0.0001) {
         float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
         float farFieldFade = 1.0 - smoothstep(sourceLensLocalFadeStart, sourceLensLocalFadeEnd, sourceY);
@@ -516,6 +529,12 @@ fragment float4 fragmentShader(
         float totalBandWeight = topWeight + ridgeWeight + midWeight;
         if (totalBandWeight > 0.0001) {
             float sourceX = saturate((stabilizedPixels.x / transform->outputSize.x) + 0.5);
+            float mountainDifferentialMaskY = saturate(uv.y);
+            float mountainDifferentialGain = 1.0 - smoothstep(
+                sourceLensLocalMountainDifferentialFadeStart,
+                sourceLensLocalMountainDifferentialFadeEnd,
+                mountainDifferentialMaskY
+            );
             float leftWeight = 1.0 - smoothstep(0.22, 0.50, sourceX);
             float rightWeight = smoothstep(0.50, 0.78, sourceX);
             float centerWeight = saturate(1.0 - max(leftWeight, rightWeight));
@@ -551,11 +570,11 @@ fragment float4 fragmentShader(
                 + transform->sourceLensShakeLocalMidRightOffset
             ) / 3.0;
             float2 topOffset = topCommonColumnOffset
-                + ((topColumnOffset - topCommonColumnOffset) * sourceLensLocalColumnDifferentialGain);
+                + ((topColumnOffset - topCommonColumnOffset) * sourceLensLocalColumnDifferentialGain * mountainDifferentialGain);
             float2 ridgeOffset = ridgeCommonColumnOffset
-                + ((ridgeColumnOffset - ridgeCommonColumnOffset) * sourceLensLocalColumnDifferentialGain);
+                + ((ridgeColumnOffset - ridgeCommonColumnOffset) * sourceLensLocalColumnDifferentialGain * mountainDifferentialGain);
             float2 midOffset = midCommonColumnOffset
-                + ((midColumnOffset - midCommonColumnOffset) * sourceLensLocalColumnDifferentialGain);
+                + ((midColumnOffset - midCommonColumnOffset) * sourceLensLocalColumnDifferentialGain * mountainDifferentialGain);
             float2 weightedLocalOffset = (
                 (topOffset * topWeight)
                 + (ridgeOffset * ridgeWeight)
@@ -563,17 +582,17 @@ fragment float4 fragmentShader(
             ) / totalBandWeight;
             float2 commonLocalOffset = (topOffset + ridgeOffset + midOffset) / 3.0;
             float2 localOffset = commonLocalOffset
-                + ((weightedLocalOffset - commonLocalOffset) * sourceLensLocalBandDifferentialGain);
+                + ((weightedLocalOffset - commonLocalOffset) * sourceLensLocalBandDifferentialGain * mountainDifferentialGain);
             stabilizedPixels -= localOffset * localLensSupport * farFieldFade * transform->strength;
         }
     }
     float sourceRidgeSupport = saturate(transform->sourceLensShakeRidgeApplied)
         * lensBandAppliedGain(transform->sourceLensShakeRidgeSupport)
-        * (1.0 - rigidOnlyGain);
+        * ridgeWarpEscapeGain;
     if (sourceRidgeSupport > 0.0001) {
-        float sourceY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
-        float ridgeWeight = lensBandWeight(sourceY, sourceLensRidgeCenter, sourceLensRidgeRadius);
-        float farFieldFade = 1.0 - smoothstep(sourceLensRidgeFadeStart, sourceLensRidgeFadeEnd, sourceY);
+        float sourceRidgeMaskY = saturate((stabilizedPixels.y / transform->outputSize.y) + 0.5);
+        float ridgeWeight = lensBandWeight(sourceRidgeMaskY, sourceLensRidgeCenter, sourceLensRidgeRadius);
+        float farFieldFade = 1.0 - smoothstep(sourceLensRidgeFadeStart, sourceLensRidgeFadeEnd, sourceRidgeMaskY);
         stabilizedPixels -= transform->sourceLensShakeRidgeOffset
             * sourceRidgeSupport
             * ridgeWeight
