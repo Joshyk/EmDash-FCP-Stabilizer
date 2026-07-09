@@ -17,8 +17,8 @@ private struct Options {
     var json = false
     var limit = 5
     var listCaches = false
-    var turnWindowSeconds = 9.0
-    var maxTurnZoom = 1.08
+    var turnWindowSeconds = renderTurnTransitionSmoothingWindowSeconds
+    var turnZoom = 5.0
     var strengths = Strengths.defaults
 }
 
@@ -29,7 +29,6 @@ private struct Strengths {
     var strideX: Double
     var strideY: Double
     var strideR: Double
-    var turn: Double
     var warp: Double
 
     static let defaults = Strengths(
@@ -39,12 +38,11 @@ private struct Strengths {
         strideX: 4.0,
         strideY: 4.0,
         strideR: 1.0,
-        turn: 12.0,
         warp: 1.0
     )
 }
 
-private let maximumTurnSmoothingStrength: Float = 36.0
+private let maximumTurnSmoothingCorrectionAuthority: Float = 36.0
 
 private struct PersistedHostAnalysisCache: Decodable {
     let schemaVersion: Int
@@ -793,7 +791,11 @@ private let renderTurnTransitionZoomCenterAnchorFade: Float = 0.92
 private let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
 private let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
 private let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-private let adaptiveXTurnTransitionMaximumZoomScale: Float = 10.0
+private let adaptiveXTurnTransitionMaximumZoomParameter: Float = 10.0
+private let adaptiveXTurnTransitionZoomStartPixels: Float = 24.0
+private let adaptiveXTurnTransitionZoomFullPixels: Float = 160.0
+private let adaptiveXTurnTransitionZoomConfidenceStart: Float = 0.12
+private let adaptiveXTurnTransitionZoomConfidenceFull: Float = 0.35
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -1391,8 +1393,7 @@ private func adaptiveXTurnTiming(
     travelPixels: Float,
     baseWindowSeconds: Double,
     turnWindowSeconds: Double,
-    turnSmoothingZoom _: Double,
-    usesAutoCropTurnSpace: Bool
+    turnSmoothingZoom: Double
 ) -> AdaptiveXTurnTiming {
     let baseWindow = baseWindowSeconds.isFinite && baseWindowSeconds > 0.0
         ? baseWindowSeconds
@@ -1400,7 +1401,7 @@ private func adaptiveXTurnTiming(
     guard travelPixels.isFinite, travelPixels > 0.0 else {
         return AdaptiveXTurnTiming(travelPixels: 0.0, windowSeconds: baseWindow, active: false)
     }
-    guard usesAutoCropTurnSpace else {
+    guard turnSmoothingZoomNormalized(turnSmoothingZoom) > Float.ulpOfOne else {
         return AdaptiveXTurnTiming(travelPixels: travelPixels, windowSeconds: baseWindow, active: false)
     }
 
@@ -1451,8 +1452,7 @@ private func adaptiveXTurnSmoothValue(
     fallbackWindowSeconds: Double,
     turnWindowSeconds: Double,
     outputScale: Float,
-    turnSmoothingZoom: Double,
-    usesAutoCropTurnSpace: Bool
+    turnSmoothingZoom: Double
 ) -> Float {
     let travelPixels = monotonicDominantTravel(values, indices: indices)
         * max(0.0, outputScale.isFinite ? abs(outputScale) : 0.0)
@@ -1460,8 +1460,7 @@ private func adaptiveXTurnSmoothValue(
         travelPixels: travelPixels,
         baseWindowSeconds: baseWindowSeconds,
         turnWindowSeconds: turnWindowSeconds,
-        turnSmoothingZoom: turnSmoothingZoom,
-        usesAutoCropTurnSpace: usesAutoCropTurnSpace
+        turnSmoothingZoom: turnSmoothingZoom
     )
     let activeWindow = timing.active ? max(fallbackWindowSeconds, timing.windowSeconds) : fallbackWindowSeconds
     let timingIndices = abs(activeWindow - fallbackWindowSeconds) > 0.001
@@ -1546,8 +1545,7 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
         fallbackWindowSeconds: turnWindowSeconds,
         turnWindowSeconds: turnWindowSeconds,
         outputScale: xScale,
-        turnSmoothingZoom: options.maxTurnZoom,
-        usesAutoCropTurnSpace: true
+        turnSmoothingZoom: options.turnZoom
     )
     let turnSmoothY = timeWeightedMonotonicSCurveValue(
         context.turnStrideSmoothedYPath,
@@ -1580,7 +1578,7 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
     )
     let rawTurnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
     let turnQ = turnCorrectionConfidence(confidence: rawTurnQ, turnOwnership: turnOwnershipX)
-    let correction = correctionFactor(options.strengths.turn, confidence: turnQ)
+    let correction = correctionFactor(turnSmoothingZoom: options.turnZoom, confidence: turnQ)
     let detected = abs(turnBandX * xScale)
     let macroPixelOffsetX = -(turnBandX * xScale) * correction
     return TurnCorrectionSample(
@@ -1653,8 +1651,7 @@ private func renderTurnBridgeAssessment(
         travelPixels: centerSample.detected,
         baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
         turnWindowSeconds: options.turnWindowSeconds,
-        turnSmoothingZoom: options.maxTurnZoom,
-        usesAutoCropTurnSpace: true
+        turnSmoothingZoom: options.turnZoom
     )
     let transitionWindowSeconds = timing.windowSeconds
     let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
@@ -1788,8 +1785,9 @@ private func renderTurnBridgeAssessment(
     let averagedMacro = weightedMacro / totalWeight
     let centerMacro = centerSample.macroPixelOffsetX
     let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
-        turnSmoothingZoom: options.maxTurnZoom,
-        usesAutoCropTurnSpace: true
+        turnSmoothingZoom: options.turnZoom,
+        turnConfidence: centerSample.confidence,
+        turnTravelPixels: centerSample.detected
     )
     let bridgedMacro: Float
     if abs(centerMacro) >= renderTurnTransitionMinimumMacroPixels,
@@ -1903,22 +1901,40 @@ private func turnTransitionBridgeEdgeSupport(edgeQuality: Float) -> Float {
 
 private func turnSmoothingZoomBridgeAuthority(
     turnSmoothingZoom: Double,
-    usesAutoCropTurnSpace: Bool
+    turnConfidence: Float,
+    turnTravelPixels: Float
 ) -> Float {
-    guard usesAutoCropTurnSpace else {
-        return 0.0
-    }
-    let maxZoomScale = clamp(
-        Float(turnSmoothingZoom.isFinite ? turnSmoothingZoom : 1.0),
-        min: 1.0,
-        max: adaptiveXTurnTransitionMaximumZoomScale
+    turnSmoothingZoomNormalized(turnSmoothingZoom)
+        * turnSmoothingZoomDemandSupport(
+            turnTravelPixels: turnTravelPixels,
+            turnConfidence: turnConfidence
+        )
+}
+
+private func turnSmoothingZoomNormalized(_ value: Double) -> Float {
+    let boundedValue = clamp(
+        Float(value.isFinite ? value : 0.0),
+        min: 0.0,
+        max: adaptiveXTurnTransitionMaximumZoomParameter
     )
-    let zoomScaleDelta = max(Float(0.0), maxZoomScale - Float(1.0))
-    return confidenceRamp(
-        zoomScaleDelta,
-        start: 0.0,
-        full: adaptiveXTurnTransitionMaximumZoomScale - Float(1.0)
+    return boundedValue / max(adaptiveXTurnTransitionMaximumZoomParameter, Float.ulpOfOne)
+}
+
+private func turnSmoothingZoomDemandSupport(
+    turnTravelPixels: Float,
+    turnConfidence: Float
+) -> Float {
+    let travelSupport = confidenceRamp(
+        abs(turnTravelPixels),
+        start: adaptiveXTurnTransitionZoomStartPixels,
+        full: adaptiveXTurnTransitionZoomFullPixels
     )
+    let confidenceSupport = confidenceRamp(
+        clamp(turnConfidence, min: 0.0, max: 1.0),
+        start: adaptiveXTurnTransitionZoomConfidenceStart,
+        full: adaptiveXTurnTransitionZoomConfidenceFull
+    )
+    return min(travelSupport, confidenceSupport)
 }
 
 private func turnTransitionCenterAnchoredBridgeMacroX(
@@ -4700,9 +4716,8 @@ private func percentileValue(_ values: [Float], indices: [Int], percentile: Floa
     return sortedValues[lowerIndex] + ((sortedValues[upperIndex] - sortedValues[lowerIndex]) * fraction)
 }
 
-private func correctionFactor(_ strength: Double, confidence: Float) -> Float {
-    let boundedStrength = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
-    let requested = boundedStrength
+private func correctionFactor(turnSmoothingZoom: Double, confidence: Float) -> Float {
+    let requested = turnSmoothingZoomNormalized(turnSmoothingZoom) * maximumTurnSmoothingCorrectionAuthority
     let response = turnCorrectionConfidenceResponse(confidence)
     let direct = min(requested, 1.0) * response
     let boost = max(0.0, requested - 1.0) * 0.55 * response * (1.0 - (response * 0.25))
@@ -4836,7 +4851,7 @@ private func renderHuman(_ assessments: [FrameAssessment], analysis: Analysis, o
     print("Cache: \(analysis.cachePath)")
     print("Schema: \(analysis.schemaVersion), frames: \(analysis.frames.count), sample: \(analysis.sampleWidth)x\(analysis.sampleHeight)")
     print("Turn window: \(formatSeconds(options.turnWindowSeconds))")
-    print(String(format: "Max turn zoom: %.2f", options.maxTurnZoom))
+    print(String(format: "Turn smoothing zoom: %.2f", options.turnZoom))
     if let time = options.relativeTime {
         print("Requested clip time: \(formatSeconds(time)), window: \(formatSeconds(options.windowSeconds))")
         if let selected = assessments.first {
@@ -4909,7 +4924,7 @@ private func renderJSON(_ assessments: [FrameAssessment], analysis: Analysis, op
         }),
         "windowSeconds": options.windowSeconds,
         "turnWindowSeconds": options.turnWindowSeconds,
-        "maxTurnZoom": options.maxTurnZoom,
+        "turnZoom": options.turnZoom,
         "note": jsonValue(options.note),
         "assessments": assessments.map { assessment in
             [
@@ -5176,12 +5191,13 @@ private func parseOptions() throws -> Options {
         case "--window":
             options.windowSeconds = max(0.0, try nextDouble(for: arg))
         case "--turn-window":
-            options.turnWindowSeconds = max(strideWindowSeconds, try nextDouble(for: arg))
+            _ = try nextDouble(for: arg)
+            throw FeedbackError(description: "--turn-window is retired; Auto Crop Zoom-In/Out controls now determine turn zoom timing.")
         case "--max-turn-zoom":
-            options.maxTurnZoom = min(max(1.0, try nextDouble(for: arg)), 10.0)
+            FileHandle.standardError.write(Data("warning: --max-turn-zoom is deprecated; use --turn-zoom.\n".utf8))
+            options.turnZoom = min(max(0.0, try nextDouble(for: arg)), 10.0)
         case "--turn-zoom":
-            FileHandle.standardError.write(Data("warning: --turn-zoom is deprecated; use --max-turn-zoom.\n".utf8))
-            options.maxTurnZoom = min(max(1.0, try nextDouble(for: arg)), 10.0)
+            options.turnZoom = min(max(0.0, try nextDouble(for: arg)), 10.0)
         case "--output-size":
             let value = try nextValue(for: arg)
             let parts = value.lowercased().split(separator: "x")
@@ -5206,7 +5222,8 @@ private func parseOptions() throws -> Options {
         case "--stride-r":
             options.strengths.strideR = try nextDouble(for: arg)
         case "--turn":
-            options.strengths.turn = try nextDouble(for: arg)
+            _ = try nextDouble(for: arg)
+            throw FeedbackError(description: "--turn is retired; use --turn-zoom for turn smoothing correction and zoom authority.")
         case "--warp":
             options.strengths.warp = try nextDouble(for: arg)
         case "--help", "-h":
@@ -5230,9 +5247,9 @@ private func printUsage() {
 
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
-    --turn-window should match the Inspector Turn Detection Window when it is not 9.0.
-    --max-turn-zoom should match Max Turning Smoothing Zoom when it is not 1.08.
-    --turn-zoom is a deprecated alias for --max-turn-zoom and prints a warning when used.
+    --turn-zoom should match Turn Smoothing Zoom when it is not 5.0; range is 0...10.
+    --max-turn-zoom is a deprecated alias for --turn-zoom and prints a warning when used.
+    --turn-window is retired and returns an error.
     --list-caches reports saved cache readiness without repairing cache files.
     --compare-cache validates saved cache equivalence; float arrays may differ only within --compare-tolerance.
     """)

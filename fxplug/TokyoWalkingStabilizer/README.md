@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.7` keeps the far-field micro-shake correction baseline on schema 48.
+- Version `1.1.8` keeps the far-field micro-shake correction baseline on schema 48.
   Keep schema 48's fps-derived dominant `5x9` mesh windows as the primary evidence
   for short source-space lens/camera shake up to one second, with the coherent
   rigid far-field X/Y/roll path built from the sky/top and ridge/horizon bands
@@ -155,7 +155,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, optional small-clamp Far-field Warp, and dynamic Auto Crop scale when
-  `Remove Black Edges` is enabled. `Max Turning Smoothing Zoom` caps the smooth
+  `Remove Black Edges` is enabled. `Turn Smoothing Zoom` caps the smooth
   crop margin for large crop-aware X turns, and exposes that margin as black
   diagnostic edge space when `Remove Black Edges` is disabled.
 - Includes a minimal wrapper app source/resource set under `WrapperApp/`.
@@ -284,23 +284,14 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   applies a tiny deadband and small render-only clamps so weak frames do not create wave-like
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,
   so long prepared caches do not require repeated full-cache scans during playback.
-- `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
-  It does not change Y or roll, defaults to `12.0`, runs up to `36.0`, and the macro
-  correction no longer has a separate render output-edge cap. Render playback applies an
-  additional `2.8` second zero-phase transition pass to the macro X correction so the start
-  and end of walking turns do not step between corrections, even across short low-confidence
-  tracking dropouts. Large X-turn travel is detected with `Turn Detection Window`
-  as a forward lookahead horizon, but correction amount remains controlled by
-  `Turn Smoothing Strength`.
-- `Max Turning Smoothing Zoom`: defaults to `1.08`, ranges from `1.00...10.00`, and caps
-  crop-aware zoom demand for large X turns. It does not change turn correction strength
-  and does not extend the smoothing window. With `Remove Black Edges` enabled the margin
-  becomes Auto Crop zoom; with it disabled the same budget is intentionally visible
-  as larger black diagnostic edge space.
-- `Turn Detection Window`: forward TURN lookahead evaluated during render against prepared
-  motion paths. The default is `9.0` seconds. The UI value is used as the TURN lookahead,
-  and the UI minimum is the fixed `2.0` second Stride Wobble window so TURN cannot run
-  shorter than SWOB.
+- `Turn Smoothing Zoom`: controls large segmented walking turns in X translation only.
+  It defaults to `5.0`, ranges from `0.00...10.00`, and is normalized to `0...1`.
+  At `0`, turn smoothing correction and turn zoom are disabled; at `10`, crop-aware
+  turn demand can reach a `1.5x` uniform Auto Crop cap. Actual turn correction and
+  zoom demand still require tracking evidence plus real X-turn travel, so static or
+  low-confidence frames do not receive hidden turn correction. Auto Crop uses
+  `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time` directly and holds release when a
+  near-future turn zoom demand would otherwise create a zoom-out / zoom-in pulse.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available. The render
@@ -439,8 +430,7 @@ without repairing, promoting, or deleting them.
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining shake from the prepared motion paths and tracking diagnostics, then
 prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order. Pass
-`--turn-window` when the Inspector `Turn Detection Window` is not the default `9.0`,
-and `--max-turn-zoom` when `Max Turning Smoothing Zoom` is not the default `1.08`.
+`--turn-zoom` when `Turn Smoothing Zoom` is not the default `5.0`.
 It uses the same footstep-first band split as render, so `SWOB` and `TURN`
 diagnostics are computed from the footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band

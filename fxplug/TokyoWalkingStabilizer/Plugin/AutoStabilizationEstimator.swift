@@ -243,10 +243,8 @@ struct StabilizerCorrectionStrengths {
     let strideWobbleX: Double
     let strideWobbleY: Double
     let strideWobbleRotation: Double
-    let panStabilizationStrength: Double
     let farFieldWarp: Double
     let turnSmoothingZoom: Double
-    let usesAutoCropTurnSpace: Bool
 
     static let defaultStrengths = StabilizerCorrectionStrengths(
         microJitterX: 1.0,
@@ -255,10 +253,8 @@ struct StabilizerCorrectionStrengths {
         strideWobbleX: 1.0,
         strideWobbleY: 1.0,
         strideWobbleRotation: 0.5,
-        panStabilizationStrength: 2.0,
         farFieldWarp: 0.5,
-        turnSmoothingZoom: 0.0,
-        usesAutoCropTurnSpace: false
+        turnSmoothingZoom: 5.0
     )
 }
 
@@ -870,7 +866,11 @@ enum AutoStabilizationEstimator {
     private static let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
     private static let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
     private static let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-    private static let adaptiveXTurnTransitionMaximumZoomScale: Float = 10.0
+    private static let adaptiveXTurnTransitionMaximumZoomParameter: Float = 10.0
+    private static let adaptiveXTurnTransitionZoomStartPixels: Float = 24.0
+    private static let adaptiveXTurnTransitionZoomFullPixels: Float = 160.0
+    private static let adaptiveXTurnTransitionZoomConfidenceStart: Float = 0.12
+    private static let adaptiveXTurnTransitionZoomConfidenceFull: Float = 0.35
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.44
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -916,7 +916,7 @@ enum AutoStabilizationEstimator {
     private static let strideWobbleFullScaleDegrees: Float = 0.16
     private static let strideWobbleFullResponseScale: Float = 0.55
     private static let turnSmoothingFullScalePixels: Float = 2.0
-    private static let maximumTurnSmoothingStrength: Float = 36.0
+    private static let maximumTurnSmoothingCorrectionAuthority: Float = 36.0
     private static let turnOwnershipFootstepXSuppression: Float = 1.0
     private static let turnOwnershipFootstepYSuppression: Float = 0.65
     private static let turnOwnershipFootstepRollSuppression: Float = 0.55
@@ -1310,9 +1310,8 @@ enum AutoStabilizationEstimator {
         let strideWobbleX: UInt64
         let strideWobbleY: UInt64
         let strideWobbleRotation: UInt64
-        let panStabilizationStrength: UInt64
         let farFieldWarp: UInt64
-        let usesAutoCropTurnSpace: Bool
+        let turnSmoothingZoom: UInt64
         let limitFootstepContinuity: Bool
         let includeFarFieldWarp: Bool
     }
@@ -1466,16 +1465,14 @@ enum AutoStabilizationEstimator {
         let middlePathRoll: UInt32
         let lastPathRoll: UInt32
         let preparedPathFingerprint: UInt64
-        let panSmoothSeconds: UInt64
         let microJitterX: UInt64
         let microJitterY: UInt64
         let microJitterRotation: UInt64
         let strideWobbleX: UInt64
         let strideWobbleY: UInt64
         let strideWobbleRotation: UInt64
-        let panStabilizationStrength: UInt64
         let farFieldWarp: UInt64
-        let usesAutoCropTurnSpace: Bool
+        let turnSmoothingZoom: UInt64
     }
 
     private static func combinePreparedPathHash(_ value: UInt64, into hash: inout UInt64) {
@@ -1778,9 +1775,8 @@ enum AutoStabilizationEstimator {
                 strideWobbleX: strengths.strideWobbleX.bitPattern,
                 strideWobbleY: strengths.strideWobbleY.bitPattern,
                 strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
-                panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
                 farFieldWarp: strengths.farFieldWarp.bitPattern,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
+                turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
                 limitFootstepContinuity: limitFootstepContinuity,
                 includeFarFieldWarp: includeFarFieldWarp
             )
@@ -3447,8 +3443,7 @@ enum AutoStabilizationEstimator {
             fallbackWindowSeconds: broadWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: xScale,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let broadY = playbackPreparedSmoothedValue(
             turnStrideSmoothedYPath,
@@ -3476,8 +3471,7 @@ enum AutoStabilizationEstimator {
             fallbackWindowSeconds: broadWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: xScale,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let broadFarFieldY = playbackPreparedSmoothedValue(
             analysis.farFieldPathY,
@@ -3774,9 +3768,9 @@ enum AutoStabilizationEstimator {
         let playbackMicroConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let playbackStrideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
 
-        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnTrackingConfidence)
-        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnTrackingConfidence)
-        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnTrackingConfidence)
+        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
+        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
+        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -3787,30 +3781,16 @@ enum AutoStabilizationEstimator {
         let macroPixelOffset = vector_float2(
             softLimit(
                 -panBandX * xScale * positionGain * panCorrectionStrengthX,
-                limit: turnSmoothingOffsetLimit(
-                    outputPixels: outputSize.x,
-                    baseFraction: baseTurnSmoothingOffsetLimitX,
-                    extraFraction: extraTurnSmoothingOffsetLimitX,
-                    autoCropFraction: autoCropTurnSmoothingOffsetLimitX,
-                    usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
-                    strength: strengths.panStabilizationStrength
-                )
+                limit: turnSmoothingOffsetLimit()
             ),
             softLimit(
                 -panBandY * yScale * positionGain * panCorrectionStrengthY,
-                limit: turnSmoothingOffsetLimit(
-                    outputPixels: outputSize.y,
-                    baseFraction: baseTurnSmoothingOffsetLimitY,
-                    extraFraction: extraTurnSmoothingOffsetLimitY,
-                    autoCropFraction: autoCropTurnSmoothingOffsetLimitY,
-                    usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
-                    strength: strengths.panStabilizationStrength
-                )
+                limit: turnSmoothingOffsetLimit()
             )
         )
         let macroRotation = softLimit(
             -panBandRoll * rotationGain * panCorrectionStrengthRoll,
-            limit: turnSmoothingRotationLimit(strength: strengths.panStabilizationStrength)
+            limit: turnSmoothingRotationLimit()
         )
         let microPixelLimitX = max(2.0, outputSize.x * 0.055)
         let microPixelLimitY = max(2.0, outputSize.y * 0.055)
@@ -4632,8 +4612,7 @@ enum AutoStabilizationEstimator {
                 travelPixels: abs(centerTransform.turnDetectedPixelOffset.x),
                 baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
                 panSmoothSeconds: panSmoothSeconds,
-                turnSmoothingZoom: strengths.turnSmoothingZoom,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+                turnSmoothingZoom: strengths.turnSmoothingZoom
             )
             let transitionWindowSeconds = timing.windowSeconds
             let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
@@ -4800,7 +4779,8 @@ enum AutoStabilizationEstimator {
             let bridgedMacroX = bridgedMacroOffset.x
             let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
                 turnSmoothingZoom: strengths.turnSmoothingZoom,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+                turnConfidence: rawCenterTransform.turnConfidence,
+                turnTravelPixels: abs(rawCenterTransform.turnDetectedPixelOffset.x)
             )
             if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
                abs(centerMacroX) > abs(bridgedMacroX),
@@ -5096,16 +5076,14 @@ enum AutoStabilizationEstimator {
             middlePathRoll: middlePathRoll.bitPattern,
             lastPathRoll: lastPathRoll.bitPattern,
             preparedPathFingerprint: preparedPathFingerprint(for: analysis),
-            panSmoothSeconds: panSmoothSeconds.bitPattern,
             microJitterX: strengths.microJitterX.bitPattern,
             microJitterY: strengths.microJitterY.bitPattern,
             microJitterRotation: strengths.microJitterRotation.bitPattern,
             strideWobbleX: strengths.strideWobbleX.bitPattern,
             strideWobbleY: strengths.strideWobbleY.bitPattern,
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
-            panStabilizationStrength: strengths.panStabilizationStrength.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern
         )
     }
 
@@ -6756,8 +6734,7 @@ enum AutoStabilizationEstimator {
             fallbackWindowSeconds: broadWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: xScale,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let broadXPath = broadXBuild.path
         let broadYPath = turnIntentPath(
@@ -6783,8 +6760,7 @@ enum AutoStabilizationEstimator {
             fallbackWindowSeconds: broadWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: xScale,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let broadFarFieldXPath = broadFarFieldXBuild.path
         let broadFarFieldYPath = turnIntentPath(
@@ -6809,7 +6785,7 @@ enum AutoStabilizationEstimator {
             adaptiveXTiming.travelPixels,
             adaptiveXTiming.windowSeconds,
             adaptiveXTiming.active ? "yes" : "no",
-            strengths.usesAutoCropTurnSpace ? "yes" : "no",
+            turnSmoothingZoomNormalized(strengths.turnSmoothingZoom) > Float.ulpOfOne ? "yes" : "no",
             panSmoothSeconds
         )
         let rawFarFieldPanBandXPath = frames.indices.map { index -> Float in
@@ -7344,9 +7320,9 @@ enum AutoStabilizationEstimator {
             let strideRollConfidence = max(rawStrideRollConfidence * strideRollTurnGate, strideRollFarFieldConfidenceFloor)
             let playbackMicroConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
             let playbackStrideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-            let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnTrackingConfidence)
-            let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnTrackingConfidence)
-            let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnTrackingConfidence)
+            let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
+            let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
+            let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
             let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
             let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
             let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -7357,30 +7333,16 @@ enum AutoStabilizationEstimator {
             let macroPixelOffset = vector_float2(
                 softLimit(
                     -panBandX * xScale * positionGain * panCorrectionStrengthX,
-                    limit: turnSmoothingOffsetLimit(
-                        outputPixels: outputSize.x,
-                        baseFraction: baseTurnSmoothingOffsetLimitX,
-                        extraFraction: extraTurnSmoothingOffsetLimitX,
-                        autoCropFraction: autoCropTurnSmoothingOffsetLimitX,
-                        usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
-                        strength: strengths.panStabilizationStrength
-                    )
+                    limit: turnSmoothingOffsetLimit()
                 ),
                 softLimit(
                     -panBandY * yScale * positionGain * panCorrectionStrengthY,
-                    limit: turnSmoothingOffsetLimit(
-                        outputPixels: outputSize.y,
-                        baseFraction: baseTurnSmoothingOffsetLimitY,
-                        extraFraction: extraTurnSmoothingOffsetLimitY,
-                        autoCropFraction: autoCropTurnSmoothingOffsetLimitY,
-                        usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
-                        strength: strengths.panStabilizationStrength
-                    )
+                    limit: turnSmoothingOffsetLimit()
                 )
             )
             let macroRotation = softLimit(
                 -panBandRoll * rotationGain * panCorrectionStrengthRoll,
-                limit: turnSmoothingRotationLimit(strength: strengths.panStabilizationStrength)
+                limit: turnSmoothingRotationLimit()
             )
             let microPixelLimitX = max(2.0, outputSize.x * 0.055)
             let microPixelLimitY = max(2.0, outputSize.y * 0.055)
@@ -8369,8 +8331,7 @@ enum AutoStabilizationEstimator {
             frames: frames,
             transforms: rawTransforms,
             panSmoothSeconds: panSmoothSeconds,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         if !turnSamples.isEmpty {
             let smoothedTurnTransform = weightedAverageTransform(turnSamples)
@@ -8379,7 +8340,8 @@ enum AutoStabilizationEstimator {
             let bridgedMacroX = bridgedMacroOffset.x
             let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
                 turnSmoothingZoom: strengths.turnSmoothingZoom,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+                turnConfidence: centerTransform.turnConfidence,
+                turnTravelPixels: abs(centerTransform.turnDetectedPixelOffset.x)
             )
             if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
                abs(centerMacroX) > abs(bridgedMacroX),
@@ -8504,8 +8466,7 @@ enum AutoStabilizationEstimator {
         frames: [StabilizerAnalysisFrame],
         transforms: [StabilizerAutoTransform],
         panSmoothSeconds: Double,
-        turnSmoothingZoom: Double,
-        usesAutoCropTurnSpace: Bool
+        turnSmoothingZoom: Double
     ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
         guard let firstTime = frames.first?.time,
               let lastTime = frames.last?.time
@@ -8516,8 +8477,7 @@ enum AutoStabilizationEstimator {
             travelPixels: abs(centerTransform.turnDetectedPixelOffset.x),
             baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
-            turnSmoothingZoom: turnSmoothingZoom,
-            usesAutoCropTurnSpace: usesAutoCropTurnSpace
+            turnSmoothingZoom: turnSmoothingZoom
         )
         let transitionWindowSeconds = timing.windowSeconds
         let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
@@ -8918,8 +8878,7 @@ enum AutoStabilizationEstimator {
             fallbackWindowSeconds: smoothWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: xScale,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let turnSmoothY = timeWeightedLinearPrediction(
             pathY,
@@ -8944,8 +8903,7 @@ enum AutoStabilizationEstimator {
             fallbackWindowSeconds: smoothWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: xScale,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let farFieldTurnSmoothY = timeWeightedLinearPrediction(
             farFieldPathY,
@@ -9204,9 +9162,9 @@ enum AutoStabilizationEstimator {
         let strideRollConfidence = max(rawStrideRollConfidence * strideRollTurnGate, strideRollFarFieldConfidenceFloor)
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceX)
-        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceY)
-        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceRoll)
+        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceX)
+        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceY)
+        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceRoll)
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -9218,29 +9176,15 @@ enum AutoStabilizationEstimator {
         let rawMacroCompensationRotation = -panBandRoll * rotationGain * panCorrectionStrengthRoll
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
-            limit: turnSmoothingOffsetLimit(
-                outputPixels: outputSize.x,
-                baseFraction: baseTurnSmoothingOffsetLimitX,
-                extraFraction: extraTurnSmoothingOffsetLimitX,
-                autoCropFraction: autoCropTurnSmoothingOffsetLimitX,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
-                strength: strengths.panStabilizationStrength
-            )
+            limit: turnSmoothingOffsetLimit()
         )
         let macroCompensationY = softLimit(
             rawMacroCompensationY,
-            limit: turnSmoothingOffsetLimit(
-                outputPixels: outputSize.y,
-                baseFraction: baseTurnSmoothingOffsetLimitY,
-                extraFraction: extraTurnSmoothingOffsetLimitY,
-                autoCropFraction: autoCropTurnSmoothingOffsetLimitY,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
-                strength: strengths.panStabilizationStrength
-            )
+            limit: turnSmoothingOffsetLimit()
         )
         let macroCompensationRotation = softLimit(
             rawMacroCompensationRotation,
-            limit: turnSmoothingRotationLimit(strength: strengths.panStabilizationStrength)
+            limit: turnSmoothingRotationLimit()
         )
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
@@ -9867,8 +9811,7 @@ enum AutoStabilizationEstimator {
             fallbackWindowSeconds: smoothWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: xScale,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let turnSmoothY = timeWeightedLinearPrediction(
             turnStrideSmoothedYPath,
@@ -9900,8 +9843,7 @@ enum AutoStabilizationEstimator {
             fallbackWindowSeconds: smoothWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: xScale,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let broadFarFieldY = timeWeightedLinearPrediction(
             farFieldStrideSmoothedYPath,
@@ -10234,9 +10176,9 @@ enum AutoStabilizationEstimator {
         let strideRollConfidence = max(rawStrideRollConfidence * strideRollTurnGate, strideRollFarFieldConfidenceFloor)
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceX)
-        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceY)
-        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.panStabilizationStrength, confidence: turnCorrectionConfidenceRoll)
+        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceX)
+        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceY)
+        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceRoll)
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -10249,29 +10191,15 @@ enum AutoStabilizationEstimator {
         let detectedTurnPixelOffset = vector_float2(-panBandX * xScale, -panBandY * yScale)
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
-            limit: turnSmoothingOffsetLimit(
-                outputPixels: outputSize.x,
-                baseFraction: baseTurnSmoothingOffsetLimitX,
-                extraFraction: extraTurnSmoothingOffsetLimitX,
-                autoCropFraction: autoCropTurnSmoothingOffsetLimitX,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
-                strength: strengths.panStabilizationStrength
-            )
+            limit: turnSmoothingOffsetLimit()
         )
         let macroCompensationY = softLimit(
             rawMacroCompensationY,
-            limit: turnSmoothingOffsetLimit(
-                outputPixels: outputSize.y,
-                baseFraction: baseTurnSmoothingOffsetLimitY,
-                extraFraction: extraTurnSmoothingOffsetLimitY,
-                autoCropFraction: autoCropTurnSmoothingOffsetLimitY,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace,
-                strength: strengths.panStabilizationStrength
-            )
+            limit: turnSmoothingOffsetLimit()
         )
         let macroCompensationRotation = softLimit(
             rawMacroCompensationRotation,
-            limit: turnSmoothingRotationLimit(strength: strengths.panStabilizationStrength)
+            limit: turnSmoothingRotationLimit()
         )
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
@@ -10778,7 +10706,8 @@ enum AutoStabilizationEstimator {
             let bridgedMacroX = bridgedMacroOffset.x
             let zoomBridgeAuthority = turnSmoothingZoomBridgeAuthority(
                 turnSmoothingZoom: strengths.turnSmoothingZoom,
-                usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+                turnConfidence: rawCenterTransform.turnConfidence,
+                turnTravelPixels: abs(rawCenterTransform.turnDetectedPixelOffset.x)
             )
             if abs(centerMacroX) >= renderTurnTransitionMinimumMacroPixels,
                abs(centerMacroX) > abs(bridgedMacroX),
@@ -10971,8 +10900,7 @@ enum AutoStabilizationEstimator {
             travelPixels: abs(centerTransform.turnDetectedPixelOffset.x),
             baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
-            turnSmoothingZoom: strengths.turnSmoothingZoom,
-            usesAutoCropTurnSpace: strengths.usesAutoCropTurnSpace
+            turnSmoothingZoom: strengths.turnSmoothingZoom
         )
         let transitionWindowSeconds = timing.windowSeconds
         let sampleCount = adaptiveXTurnTransitionSampleCount(windowSeconds: transitionWindowSeconds)
@@ -11103,24 +11031,42 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    private static func turnSmoothingZoomNormalized(_ value: Double) -> Float {
+        let boundedValue = clamp(
+            Float(value.isFinite ? value : 0.0),
+            min: 0.0,
+            max: adaptiveXTurnTransitionMaximumZoomParameter
+        )
+        return boundedValue / max(adaptiveXTurnTransitionMaximumZoomParameter, Float.ulpOfOne)
+    }
+
+    private static func turnSmoothingZoomDemandSupport(
+        turnTravelPixels: Float,
+        turnConfidence: Float
+    ) -> Float {
+        let travelSupport = confidenceRamp(
+            abs(turnTravelPixels),
+            start: adaptiveXTurnTransitionZoomStartPixels,
+            full: adaptiveXTurnTransitionZoomFullPixels
+        )
+        let confidenceSupport = confidenceRamp(
+            clamp(turnConfidence, min: 0.0, max: 1.0),
+            start: adaptiveXTurnTransitionZoomConfidenceStart,
+            full: adaptiveXTurnTransitionZoomConfidenceFull
+        )
+        return min(travelSupport, confidenceSupport)
+    }
+
     private static func turnSmoothingZoomBridgeAuthority(
         turnSmoothingZoom: Double,
-        usesAutoCropTurnSpace: Bool
+        turnConfidence: Float,
+        turnTravelPixels: Float
     ) -> Float {
-        guard usesAutoCropTurnSpace else {
-            return 0.0
-        }
-        let maxZoomScale = clamp(
-            Float(turnSmoothingZoom.isFinite ? turnSmoothingZoom : 1.0),
-            min: 1.0,
-            max: adaptiveXTurnTransitionMaximumZoomScale
-        )
-        let zoomScaleDelta = max(Float(0.0), maxZoomScale - Float(1.0))
-        return confidenceRamp(
-            zoomScaleDelta,
-            start: 0.0,
-            full: adaptiveXTurnTransitionMaximumZoomScale - Float(1.0)
-        )
+        turnSmoothingZoomNormalized(turnSmoothingZoom)
+            * turnSmoothingZoomDemandSupport(
+                turnTravelPixels: turnTravelPixels,
+                turnConfidence: turnConfidence
+            )
     }
 
     private static func turnTransitionBridgeQualitySupport(_ transform: StabilizerAutoTransform) -> Float {
@@ -14049,18 +13995,11 @@ enum AutoStabilizationEstimator {
         return lowerValue + ((upperValue - lowerValue) * interpolation.fraction)
     }
 
-    private static func turnSmoothingOffsetLimit(
-        outputPixels _: Float,
-        baseFraction _: Float,
-        extraFraction _: Float,
-        autoCropFraction _: Float,
-        usesAutoCropTurnSpace _: Bool,
-        strength _: Double
-    ) -> Float {
+    private static func turnSmoothingOffsetLimit() -> Float {
         return Float.infinity
     }
 
-    private static func turnSmoothingRotationLimit(strength _: Double) -> Float {
+    private static func turnSmoothingRotationLimit() -> Float {
         return Float.infinity
     }
 
@@ -16488,8 +16427,7 @@ enum AutoStabilizationEstimator {
         travelPixels: Float,
         baseWindowSeconds: Double,
         panSmoothSeconds: Double,
-        turnSmoothingZoom _: Double,
-        usesAutoCropTurnSpace: Bool
+        turnSmoothingZoom: Double
     ) -> AdaptiveXTurnTiming {
         let baseWindow = baseWindowSeconds.isFinite && baseWindowSeconds > 0.0
             ? baseWindowSeconds
@@ -16497,7 +16435,7 @@ enum AutoStabilizationEstimator {
         guard travelPixels.isFinite, travelPixels > 0.0 else {
             return AdaptiveXTurnTiming(travelPixels: 0.0, windowSeconds: baseWindow, active: false)
         }
-        guard usesAutoCropTurnSpace else {
+        guard turnSmoothingZoomNormalized(turnSmoothingZoom) > Float.ulpOfOne else {
             return AdaptiveXTurnTiming(travelPixels: travelPixels, windowSeconds: baseWindow, active: false)
         }
 
@@ -16546,8 +16484,7 @@ enum AutoStabilizationEstimator {
         baseWindowSeconds: Double,
         panSmoothSeconds: Double,
         outputScale: Float,
-        turnSmoothingZoom: Double,
-        usesAutoCropTurnSpace: Bool
+        turnSmoothingZoom: Double
     ) -> AdaptiveXTurnTiming {
         let travelPixels = monotonicDominantTravel(values, frames: frames, indices: indices)
             * max(0.0, outputScale.isFinite ? abs(outputScale) : 0.0)
@@ -16555,8 +16492,7 @@ enum AutoStabilizationEstimator {
             travelPixels: travelPixels,
             baseWindowSeconds: baseWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
-            turnSmoothingZoom: turnSmoothingZoom,
-            usesAutoCropTurnSpace: usesAutoCropTurnSpace
+            turnSmoothingZoom: turnSmoothingZoom
         )
     }
 
@@ -16567,8 +16503,7 @@ enum AutoStabilizationEstimator {
         baseWindowSeconds: Double,
         panSmoothSeconds: Double,
         outputScale: Float,
-        turnSmoothingZoom: Double,
-        usesAutoCropTurnSpace: Bool
+        turnSmoothingZoom: Double
     ) -> AdaptiveXTurnTiming {
         let safeOutputScale = max(0.0, outputScale.isFinite ? abs(outputScale) : 0.0)
         let travelPixels = paths.reduce(Float(0.0)) { partial, path in
@@ -16578,8 +16513,7 @@ enum AutoStabilizationEstimator {
             travelPixels: travelPixels,
             baseWindowSeconds: baseWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
-            turnSmoothingZoom: turnSmoothingZoom,
-            usesAutoCropTurnSpace: usesAutoCropTurnSpace
+            turnSmoothingZoom: turnSmoothingZoom
         )
     }
 
@@ -16592,8 +16526,7 @@ enum AutoStabilizationEstimator {
         fallbackWindowSeconds: Double? = nil,
         panSmoothSeconds: Double,
         outputScale: Float,
-        turnSmoothingZoom: Double,
-        usesAutoCropTurnSpace: Bool
+        turnSmoothingZoom: Double
     ) -> Float {
         let timing = adaptiveXTurnTiming(
             values,
@@ -16602,8 +16535,7 @@ enum AutoStabilizationEstimator {
             baseWindowSeconds: baseWindowSeconds,
             panSmoothSeconds: panSmoothSeconds,
             outputScale: outputScale,
-            turnSmoothingZoom: turnSmoothingZoom,
-            usesAutoCropTurnSpace: usesAutoCropTurnSpace
+            turnSmoothingZoom: turnSmoothingZoom
         )
         let fallbackWindow = fallbackWindowSeconds ?? baseWindowSeconds
         let activeWindow = timing.active ? max(fallbackWindow, timing.windowSeconds) : fallbackWindow
@@ -16681,8 +16613,7 @@ enum AutoStabilizationEstimator {
         fallbackWindowSeconds: Double? = nil,
         panSmoothSeconds: Double,
         outputScale: Float,
-        turnSmoothingZoom: Double,
-        usesAutoCropTurnSpace: Bool
+        turnSmoothingZoom: Double
     ) -> (path: EstimatedPath, maxTiming: AdaptiveXTurnTiming) {
         guard !values.values.isEmpty else {
             return (
@@ -16719,8 +16650,7 @@ enum AutoStabilizationEstimator {
                 baseWindowSeconds: baseWindowSeconds,
                 panSmoothSeconds: panSmoothSeconds,
                 outputScale: outputScale,
-                turnSmoothingZoom: turnSmoothingZoom,
-                usesAutoCropTurnSpace: usesAutoCropTurnSpace
+                turnSmoothingZoom: turnSmoothingZoom
             )
             if timing.travelPixels > maxTiming.travelPixels || timing.windowSeconds > maxTiming.windowSeconds {
                 maxTiming = timing
@@ -17029,7 +16959,7 @@ enum AutoStabilizationEstimator {
     }
 
     private static func confidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float) -> Float {
-        let requestedRemoval = clamp(Float(strength), min: 0.0, max: maximumTurnSmoothingStrength)
+        let requestedRemoval = turnSmoothingZoomNormalized(strength) * maximumTurnSmoothingCorrectionAuthority
         let confidenceResponse = turnCorrectionConfidenceResponse(confidence)
         let directRemoval = min(requestedRemoval, 1.0) * confidenceResponse
         let confidenceBoost = max(0.0, requestedRemoval - 1.0)

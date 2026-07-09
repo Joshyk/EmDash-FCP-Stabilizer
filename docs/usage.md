@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.7` is the current review baseline for far-field micro-shake.
+Version `1.1.8` is the current review baseline for far-field micro-shake.
 Use schema 48 analysis for review builds so the fps-derived dominant `5x9`
 mesh windows, top/ridge-prioritized far-field rigid X/Y/roll path, and `3x5`
 source-lens local evidence are present. Earlier schemas
@@ -142,27 +142,14 @@ fallbacks.
   tracking support to reduce single-frame gate flicker, then applies a tiny deadband so
   weak frames and high-side gate jumps do not create wave-like image distortion.
   Pull this down if close grass, roads, water, or frame edges start to swim.
-- `Turn Smoothing Strength`: controls how strongly the stabilizer concatenates segmented
-  walking turns in X translation only. It does not change Y or roll. At `0`, long-window turn
-  correction is bypassed; the default is `12.0` and the maximum is `36.0`. Values above `1.0`
-  push through low-confidence gating when stop-and-go panning is still visible, and render
-  output no longer caps TURN at full detected turn-band removal. The turn intent is a monotonic
-  S-curve through the detection window instead of a straight-line fit. The X turn band
-  is measured from the stride-smoothed path instead of the raw frame path, so short landing
-  shock and medium stride wobble are not reintroduced by turn smoothing. The macro X output
-  correction no longer uses a separate render edge-budget cap; crop and edge handling are
-  kept in the Auto Crop / crop-off edge guard paths. TURN confidence requires both tracking
-  evidence and a real X turn band, so low-evidence frames no longer receive a hidden minimum
-  turn correction.
-- `Turn Detection Window`: forward lookahead window for walking turns. The default is
-  `9.0` seconds. This is evaluated against prepared motion paths during render, so changing the slider
-  does not require rebuilding analysis. The UI value is the TURN lookahead horizon, and the UI minimum
-  is the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than SWOB.
-- `Max Turning Smoothing Zoom`: defaults to `1.08`, ranges from `1.00...10.00`, and is
-  the absolute Auto Crop zoom cap for turn demand. It does not change turn correction
-  strength and does not extend the smoothing window. With `Remove Black Edges` enabled
-  the budget becomes Auto Crop zoom; with it disabled the same budget is intentionally
-  exposed as larger black diagnostic edge space.
+- `Turn Smoothing Zoom`: the single turn smoothing control. It defaults to `5.0`,
+  ranges from `0.00...10.00`, and is normalized to `0...1`. At `0`, turn smoothing
+  correction and turn zoom are disabled; at `10`, turn-driven Auto Crop can reach a
+  `1.5x` uniform zoom cap. The actual correction and zoom demand require tracking
+  evidence plus real X-turn travel, so static or low-confidence frames do not receive
+  hidden turn correction. Auto Crop uses `Zoom-In Time`, `Hold Time`, and
+  `Zoom-Out Time` directly, and postpones release when another turn zoom demand is
+  close enough in the future to avoid a zoom-out / zoom-in pulse.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.
@@ -256,8 +243,7 @@ Analysis range starts. For bundle-local caches, pass
 `--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache` for a range-specific file under that root's `caches/` directory. Add
 `--json` for structured output, `--window 0.5` to inspect the strongest frame near
-the note, `--turn-window` to match a non-default Inspector `Turn Detection Window` when it is not `9.0`,
-`--max-turn-zoom` to match `Max Turning Smoothing Zoom` when it is not `1.08`, and
+the note, `--turn-zoom` to match `Turn Smoothing Zoom` when it is not `5.0`, and
 `--output-size 1920x1080` to scale translation estimates to a preview size.
 
 Use `--list-caches` with the bundle cache root to inspect saved cache readiness before
@@ -354,12 +340,12 @@ FxPlug.
   `Source Media Unavailable - Check FCP Proxy`, leaves the Host Analysis cache on disk, and
   does not draw Debug Overlay diagnostics over that placeholder. Switch Viewer playback to
   Original/Optimized or create proxy media before judging the stabilized preview.
-- Render playback combines `Turn Smoothing Strength` and the long `Turn Detection Window`
-  path to build a monotonic S-curve X-only turn intent, then combines it with a per-frame
-  Footstep Jitter impulse path and a fixed `2.0` second Stride Wobble band. Y correction is
-  handled by Footstep Jitter first and Stride Wobble second; Turn Smoothing does not apply to Y.
-  This keeps horizontal segmented turns, fine high-frequency shake, medium walking wobble,
-  and vertical walking wobble tunable without rerunning Host Analysis.
+- Render playback uses `Turn Smoothing Zoom` to build an evidence-gated monotonic S-curve
+  X-only turn intent, then combines it with a per-frame Footstep Jitter impulse path and a
+  fixed `2.0` second Stride Wobble band. Y correction is handled by Footstep Jitter first
+  and Stride Wobble second; Turn Smoothing does not apply to Y. This keeps horizontal
+  segmented turns, fine high-frequency shake, medium walking wobble, and vertical walking
+  wobble tunable without rerunning Host Analysis.
   During monotonic X turns, a render-time turn ownership gate directly reduces Footstep Jitter X/Y/roll
   and Stride Wobble X/Y/roll so broad turn motion is not split
   into small walking corrections. Far-field Warp remains active during turns. The ownership gate also gates the footstep-cleaned X path before

@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.7` uses schema 48 far-field micro-shake analysis. It keeps the
+Version `1.1.8` uses schema 48 far-field micro-shake analysis. It keeps the
 fps-derived multi-window `5x9` far-field mesh evidence, but adds a persisted
 global far-field rigid roll path so short whole-frame Y/roll camera vibration can
 be corrected as a coherent transform instead of a local mountain/cloud warp.
@@ -134,20 +134,15 @@ up to `10.0`; the rotation default is `1.0`. The X band
 uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
 does not fight broad Turn Smoothing during real horizontal turns.
 
-`Turn Smoothing Strength` smooths segmented horizontal walking turns into a
-more continuous S-curve intent. It applies only to X translation, does not change
-Y or roll, defaults to `12.0`, and runs up to `36.0` without a separate hidden
-turn output-edge cap.
-`Turn Detection Window` defaults to `9.0` seconds and comes from the Inspector UI
-value. It is treated as a forward lookahead from the current frame, so future
-large X-turn travel can shape the current smooth target and future turn-zoom
-demand can hold Auto Crop zoom before release. Its UI minimum is the fixed `2.0`
-second Stride Wobble window, so TURN cannot run shorter than SWOB.
-`Max Turning Smoothing Zoom` defaults to `1.08` and ranges from `1.00...10.00`.
-It is an absolute Auto Crop zoom cap for turn demand, not a turn-correction
-strength and not a hidden window-extension control. With `Remove Black Edges`
-enabled that budget becomes smooth Auto Crop zoom; with it disabled the same
-budget is intentionally exposed as diagnostic edge space.
+`Turn Smoothing Zoom` is the single turn smoothing control. It defaults to `5.0`,
+ranges from `0.00...10.00`, and applies only to X translation. The value is
+normalized to `0...1`; `0` disables turn smoothing and turn zoom, while `10`
+allows the turn Auto Crop cap to reach `1.5x`. Actual turn correction and zoom
+demand still require tracking evidence and real X-turn travel, so static or
+low-confidence frames do not get hidden turn correction. Auto Crop uses
+`Zoom-In Time`, `Hold Time`, and `Zoom-Out Time` directly for turn zoom timing;
+when another turn zoom demand is close enough in the future, release is held to
+avoid zoom-out / zoom-in pulsing.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 
@@ -465,8 +460,7 @@ requested `--window` and prints the selected clip time separately from the
 requested note time. For bundle-local caches, pass
 `--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache /path/to/host-analysis-v2.json`. Use `--json` for machine-readable output,
-`--turn-window` to match a non-default Inspector `Turn Detection Window` when it is not `9.0`,
-`--max-turn-zoom` to match `Max Turning Smoothing Zoom` when it is not `1.08`, and
+`--turn-zoom` to match `Turn Smoothing Zoom` when it is not `5.0`, and
 `--output-size 1920x1080` when you want pixel estimates scaled to a target preview size.
 
 Use `--list-caches --cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"`
