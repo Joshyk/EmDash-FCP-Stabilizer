@@ -860,7 +860,8 @@ enum AutoStabilizationEstimator {
     private static let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
     private static let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
     private static let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-    private static let adaptiveXTurnTransitionMaximumZoomParameter: Float = 10.0
+    private static let adaptiveXTurnTransitionStandardStrength: Float = 12.0
+    private static let adaptiveXTurnTransitionMaximumZoomParameter: Float = 36.0
     private static let adaptiveXTurnTransitionZoomStartPixels: Float = 24.0
     private static let adaptiveXTurnTransitionZoomFullPixels: Float = 160.0
     private static let adaptiveXTurnTransitionZoomConfidenceStart: Float = 0.12
@@ -4797,7 +4798,7 @@ enum AutoStabilizationEstimator {
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: rawCenterTransform,
                 bridgeTransform: smoothedTurnTransform
-            )
+            ) * turnSmoothingBridgeBlend(strengths.turnSmoothingZoom)
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
         }
@@ -8361,7 +8362,7 @@ enum AutoStabilizationEstimator {
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: centerTransform,
                 bridgeTransform: smoothedTurnTransform
-            )
+            ) * turnSmoothingBridgeBlend(strengths.turnSmoothingZoom)
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
         }
@@ -10733,7 +10734,7 @@ enum AutoStabilizationEstimator {
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: rawCenterTransform,
                 bridgeTransform: smoothedTurnTransform
-            )
+            ) * turnSmoothingBridgeBlend(strengths.turnSmoothingZoom)
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
         }
@@ -11073,6 +11074,15 @@ enum AutoStabilizationEstimator {
                 turnTravelPixels: turnTravelPixels,
                 turnConfidence: turnConfidence
             )
+    }
+
+    private static func turnSmoothingBridgeBlend(_ value: Double) -> Float {
+        clamp(
+            turnSmoothingZoomNormalized(value)
+                * (adaptiveXTurnTransitionMaximumZoomParameter / adaptiveXTurnTransitionStandardStrength),
+            min: 0.0,
+            max: 1.0
+        )
     }
 
     private static func turnTransitionBridgeQualitySupport(_ transform: StabilizerAutoTransform) -> Float {
@@ -16464,24 +16474,28 @@ enum AutoStabilizationEstimator {
         let requestedWindow = panSmoothSeconds.isFinite && panSmoothSeconds > 0.0
             ? panSmoothSeconds
             : baseWindow
-        let maximumWindow = max(baseWindow, requestedWindow)
+        let strengthWindow = baseWindow * Double(max(
+            0.25,
+            turnSmoothingZoomNormalized(turnSmoothingZoom) * (adaptiveXTurnTransitionMaximumZoomParameter / adaptiveXTurnTransitionStandardStrength)
+        ))
+        let maximumWindow = max(strengthWindow, requestedWindow)
         let targetPixelRate = adaptiveXTurnTransitionTargetPixelRate
         let gateStartPixels = adaptiveXTurnTransitionGateStartPixels
         let gateFullPixels = adaptiveXTurnTransitionGateFullPixels
         let travelWindow = min(
             maximumWindow,
-            max(baseWindow, Double(travelPixels / max(targetPixelRate, Float.ulpOfOne)))
+            max(strengthWindow, Double(travelPixels / max(targetPixelRate, Float.ulpOfOne)))
         )
         let travelGate = confidenceRamp(
             travelPixels,
             start: min(gateStartPixels, gateFullPixels - Float.ulpOfOne),
             full: max(gateFullPixels, gateStartPixels + Float.ulpOfOne)
         )
-        let effectiveWindow = baseWindow + ((travelWindow - baseWindow) * Double(travelGate))
+        let effectiveWindow = strengthWindow + ((travelWindow - strengthWindow) * Double(travelGate))
         return AdaptiveXTurnTiming(
             travelPixels: travelPixels,
             windowSeconds: effectiveWindow,
-            active: effectiveWindow > baseWindow + 0.01
+            active: true
         )
     }
 

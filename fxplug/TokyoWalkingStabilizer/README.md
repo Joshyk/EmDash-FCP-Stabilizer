@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.9` keeps the far-field micro-shake correction baseline on schema 48.
+- Version `1.1.10` keeps the far-field micro-shake correction baseline on schema 48.
   Keep schema 48's fps-derived dominant `5x9` mesh windows as the primary evidence
   for short source-space lens/camera shake up to one second, with the coherent
   rigid far-field X/Y/roll path built from the sky/top and ridge/horizon bands
@@ -285,11 +285,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,
   so long prepared caches do not require repeated full-cache scans during playback.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
-  It defaults to `5.0`, ranges from `0.00...10.00`, and is normalized to `0...1`.
-  At `0`, turn smoothing correction and turn zoom are disabled; at `10`, crop-aware
-  turn demand can reach a `1.5x` uniform Auto Crop cap and X turn-position correction
-  can reach half the render width. At `1`, the X position cap is one tenth of that
-  half-width budget, or `5%` of render width. Actual turn correction and zoom demand
+  It defaults to `12.0` and ranges from `0.00...36.00`. `0` disables turn correction and
+  turn zoom; `12` uses the standard `2.8` second monotonic S-curve transition; and `36`
+  can extend the transition to three times the standard duration while spending the maximum
+  available X-position and crop-aware zoom budget. Actual turn correction and zoom demand
   still require tracking evidence plus real X-turn travel, so static or low-confidence
   frames do not receive hidden turn correction. Auto Crop uses
   `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time` directly and holds release when a
@@ -432,7 +431,7 @@ without repairing, promoting, or deleting them.
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining shake from the prepared motion paths and tracking diagnostics, then
 prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order. Pass
-`--turn-strength` when `Turn Smoothing Strength` is not the default `5.0`.
+`--turn-strength` when `Turn Smoothing Strength` is not the default `12.0`.
 It uses the same footstep-first band split as render, so `SWOB` and `TURN`
 diagnostics are computed from the footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band

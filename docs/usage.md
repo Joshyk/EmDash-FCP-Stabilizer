@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.9` is the current review baseline for far-field micro-shake.
+Version `1.1.10` is the current review baseline for far-field micro-shake.
 Use schema 48 analysis for review builds so the fps-derived dominant `5x9`
 mesh windows, top/ridge-prioritized far-field rigid X/Y/roll path, and `3x5`
 source-lens local evidence are present. Earlier schemas
@@ -142,12 +142,12 @@ fallbacks.
   tracking support to reduce single-frame gate flicker, then applies a tiny deadband so
   weak frames and high-side gate jumps do not create wave-like image distortion.
   Pull this down if close grass, roads, water, or frame edges start to swim.
-- `Turn Smoothing Strength`: the single turn smoothing control. It defaults to `5.0`,
-  ranges from `0.00...10.00`, and is normalized to `0...1`. At `0`, turn smoothing
-  correction and turn zoom are disabled; at `10`, turn-driven Auto Crop can reach a
-  `1.5x` uniform zoom cap and X turn-position correction can reach half the render
-  width. At `1`, the X position cap is one tenth of that half-width budget, or
-  `5%` of render width. The actual correction and zoom demand require tracking
+- `Turn Smoothing Strength`: the X-only turn smoothing control. It defaults to `12.0`
+  and ranges from `0.00...36.00`. At `0`, TURN correction and turn zoom are disabled;
+  at `12`, turns use the standard `2.8` second monotonic S-curve transition; and at
+  `36`, that transition can extend to three times the standard duration. Higher values
+  use more X-position and Auto Crop zoom budget to make the turn move as a smoother,
+  more uniform transition. The actual correction and zoom demand require tracking
   evidence plus real X-turn travel, so static or low-confidence frames do not receive
   hidden turn correction. Auto Crop uses `Zoom-In Time`, `Hold Time`, and
   `Zoom-Out Time` directly, and postpones release when another turn zoom demand is
@@ -245,7 +245,7 @@ Analysis range starts. For bundle-local caches, pass
 `--cache-root "/path/to/library.fcpbundle/Event Name/Analysis Files/TokyoWalkingStabilizerHostAnalysis"` or
 `--cache` for a range-specific file under that root's `caches/` directory. Add
 `--json` for structured output, `--window 0.5` to inspect the strongest frame near
-the note, `--turn-strength` to match `Turn Smoothing Strength` when it is not `5.0`, and
+the note, `--turn-strength` to match `Turn Smoothing Strength` when it is not `12.0`, and
 `--output-size 1920x1080` to scale translation estimates to a preview size.
 
 Use `--list-caches` with the bundle cache root to inspect saved cache readiness before

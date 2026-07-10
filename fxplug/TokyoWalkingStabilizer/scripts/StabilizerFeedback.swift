@@ -18,7 +18,7 @@ private struct Options {
     var limit = 5
     var listCaches = false
     var turnWindowSeconds = renderTurnTransitionSmoothingWindowSeconds
-    var turnStrength = 5.0
+    var turnStrength = 12.0
     var strengths = Strengths.defaults
 }
 
@@ -791,7 +791,8 @@ private let renderTurnTransitionZoomCenterAnchorFade: Float = 0.92
 private let adaptiveXTurnTransitionTargetPixelRate: Float = 42.0
 private let adaptiveXTurnTransitionGateStartPixels: Float = 96.0
 private let adaptiveXTurnTransitionGateFullPixels: Float = 220.0
-private let adaptiveXTurnTransitionMaximumZoomParameter: Float = 10.0
+private let adaptiveXTurnTransitionStandardStrength: Float = 12.0
+private let adaptiveXTurnTransitionMaximumZoomParameter: Float = 36.0
 private let adaptiveXTurnTransitionZoomStartPixels: Float = 24.0
 private let adaptiveXTurnTransitionZoomFullPixels: Float = 160.0
 private let adaptiveXTurnTransitionZoomConfidenceStart: Float = 0.12
@@ -1408,24 +1409,28 @@ private func adaptiveXTurnTiming(
     let requestedWindow = turnWindowSeconds.isFinite && turnWindowSeconds > 0.0
         ? turnWindowSeconds
         : baseWindow
-    let maximumWindow = max(baseWindow, requestedWindow)
+    let strengthWindow = baseWindow * Double(max(
+        0.25,
+        turnSmoothingZoomNormalized(turnSmoothingZoom) * (adaptiveXTurnTransitionMaximumZoomParameter / adaptiveXTurnTransitionStandardStrength)
+    ))
+    let maximumWindow = max(strengthWindow, requestedWindow)
     let targetPixelRate = adaptiveXTurnTransitionTargetPixelRate
     let gateStartPixels = adaptiveXTurnTransitionGateStartPixels
     let gateFullPixels = adaptiveXTurnTransitionGateFullPixels
     let travelWindow = min(
         maximumWindow,
-        max(baseWindow, Double(travelPixels / max(targetPixelRate, Float.ulpOfOne)))
+        max(strengthWindow, Double(travelPixels / max(targetPixelRate, Float.ulpOfOne)))
     )
     let travelGate = confidenceRamp(
         travelPixels,
         start: min(gateStartPixels, gateFullPixels - Float.ulpOfOne),
         full: max(gateFullPixels, gateStartPixels + Float.ulpOfOne)
     )
-    let effectiveWindow = baseWindow + ((travelWindow - baseWindow) * Double(travelGate))
+    let effectiveWindow = strengthWindow + ((travelWindow - strengthWindow) * Double(travelGate))
     return AdaptiveXTurnTiming(
         travelPixels: travelPixels,
         windowSeconds: effectiveWindow,
-        active: effectiveWindow > baseWindow + 0.01
+        active: true
     )
 }
 
@@ -1819,7 +1824,7 @@ private func renderTurnBridgeAssessment(
         centerEdgeQuality: centerSample.edgeQuality,
         bridgeTurnConfidence: bridgedConfidence,
         bridgeMacroX: averagedMacro
-    )
+    ) * turnSmoothingBridgeBlend(options.turnStrength)
     let blendedMacro = centerMacro + ((anchoredMacro - centerMacro) * bridgeBlend)
     let bridgedApplied = abs(blendedMacro)
     return RenderTurnBridgeAssessment(
@@ -1918,6 +1923,15 @@ private func turnSmoothingZoomNormalized(_ value: Double) -> Float {
         max: adaptiveXTurnTransitionMaximumZoomParameter
     )
     return boundedValue / max(adaptiveXTurnTransitionMaximumZoomParameter, Float.ulpOfOne)
+}
+
+private func turnSmoothingBridgeBlend(_ value: Double) -> Float {
+    clamp(
+        turnSmoothingZoomNormalized(value)
+            * (adaptiveXTurnTransitionMaximumZoomParameter / adaptiveXTurnTransitionStandardStrength),
+        min: 0.0,
+        max: 1.0
+    )
 }
 
 private func turnSmoothingZoomDemandSupport(
@@ -5194,13 +5208,13 @@ private func parseOptions() throws -> Options {
             _ = try nextDouble(for: arg)
             throw FeedbackError(description: "--turn-window is retired; Auto Crop Zoom-In/Out controls now determine turn zoom timing.")
         case "--turn-strength":
-            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 10.0)
+            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 36.0)
         case "--max-turn-zoom":
             FileHandle.standardError.write(Data("warning: --max-turn-zoom is deprecated; use --turn-strength.\n".utf8))
-            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 10.0)
+            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 36.0)
         case "--turn-zoom":
             FileHandle.standardError.write(Data("warning: --turn-zoom is deprecated; use --turn-strength.\n".utf8))
-            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 10.0)
+            options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 36.0)
         case "--output-size":
             let value = try nextValue(for: arg)
             let parts = value.lowercased().split(separator: "x")
@@ -5250,7 +5264,7 @@ private func printUsage() {
 
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
-    --turn-strength should match Turn Smoothing Strength when it is not 5.0; range is 0...10.
+    --turn-strength should match Turn Smoothing Strength when it is not 12.0; range is 0...36.
     --turn-zoom and --max-turn-zoom are deprecated aliases for --turn-strength and print a warning when used.
     --turn-window is retired and returns an error.
     --list-caches reports saved cache readiness without repairing cache files.
