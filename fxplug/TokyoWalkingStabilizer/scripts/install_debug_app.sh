@@ -154,6 +154,7 @@ unregister_old_plugins
 unregister_stale_plugins
 
 if [ "$source_app" != "$install_app" ]; then
+	rm -rf "$install_app"
 	ditto "$source_app" "$install_app"
 fi
 touch "$install_app" "$install_plugin"
