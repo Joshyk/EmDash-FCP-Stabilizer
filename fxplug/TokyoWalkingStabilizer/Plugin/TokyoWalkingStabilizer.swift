@@ -51,11 +51,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.11"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 975.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 11.0, 975.0)
+private let tokyoWalkingStabilizerVersion = "1.1.12"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 976.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 12.0, 976.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_421_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_422_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -207,6 +207,7 @@ private struct AutoCropFraming {
     var cropOffEdgeGuardScale: Float = 1.0
     var cropOffEdgeGuardDemandX: Float = 0.0
     var cropOffEdgeGuardActive: Float = 0.0
+    var cropOffTurnReservationActive: Float = 0.0
 
     static let identity = AutoCropFraming(
         scale: 1.0,
@@ -214,7 +215,8 @@ private struct AutoCropFraming {
         telemetry: .empty,
         cropOffEdgeGuardScale: 1.0,
         cropOffEdgeGuardDemandX: 0.0,
-        cropOffEdgeGuardActive: 0.0
+        cropOffEdgeGuardActive: 0.0,
+        cropOffTurnReservationActive: 0.0
     )
 }
 
@@ -2272,90 +2274,21 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return framing
     }
 
-    private static func cropOffEdgeGuardFraming(
-        currentTransform: StabilizerAutoTransform,
-        outputSize: vector_float2,
-        masterStrength: Float,
-        strengths: StabilizerCorrectionStrengths,
-        turnReservation: AutoCropFraming? = nil
+    private static func cropOffTurnReservationFraming(
+        turnReservation: AutoCropFraming
     ) -> AutoCropFraming {
-        guard masterStrength > 0.0001,
-              outputSize.x > 1.0,
-              outputSize.y > 1.0
-        else {
-            return .identity
-        }
-        let reservationIsActive = (turnReservation?.scale ?? 1.0) > Float(1.0) + stabilizerAutoCropKeypointScaleThresholdDelta
+        let reservationIsActive = turnReservation.scale > Float(1.0) + stabilizerAutoCropKeypointScaleThresholdDelta
         let reservationPosition = reservationIsActive
-            ? (turnReservation?.positionPixels ?? vector_float2(0.0, 0.0))
+            ? turnReservation.positionPixels
             : vector_float2(0.0, 0.0)
-        let rigidDemand = max(
-            abs(currentTransform.lensFarFieldRigidShakeOffset.x),
-            abs(currentTransform.lensFarFieldMeshOffset.x)
-        )
-        let bandDemand = max(
-            max(abs(currentTransform.lensBandTopOffset.x), abs(currentTransform.lensBandRidgeOffset.x)),
-            max(
-                abs(currentTransform.lensBandMidOffset.x),
-                max(
-                    max(abs(currentTransform.lensBandTopColumnOffset.x), abs(currentTransform.lensBandRidgeColumnOffset.x)),
-                    max(abs(currentTransform.lensBandMidColumnOffset.x), abs(currentTransform.lensBandRidgeRowPhaseOffset.x))
-                )
-            )
-        )
-        let localDemand = max(
-            max(
-                max(abs(currentTransform.sourceLensShakeLocalTopLeftOffset.x), abs(currentTransform.sourceLensShakeLocalTopCenterOffset.x)),
-                max(abs(currentTransform.sourceLensShakeLocalTopRightOffset.x), abs(currentTransform.sourceLensShakeLocalRidgeLeftOffset.x))
-            ),
-            max(
-                max(abs(currentTransform.sourceLensShakeLocalRidgeCenterOffset.x), abs(currentTransform.sourceLensShakeLocalRidgeRightOffset.x)),
-                max(
-                    abs(currentTransform.sourceLensShakeLocalMidLeftOffset.x),
-                    max(abs(currentTransform.sourceLensShakeLocalMidCenterOffset.x), abs(currentTransform.sourceLensShakeLocalMidRightOffset.x))
-                )
-            )
-        )
-        let globalDemand = max(abs(currentTransform.pixelOffset.x), abs(currentTransform.lensShakePixelOffset.x))
-        let demandX = max(max(rigidDemand, bandDemand), max(localDemand, globalDemand)) * masterStrength
-        let evidence = max(
-            max(currentTransform.lensFarFieldRigidShakeSupport, currentTransform.lensFarFieldMeshSupport),
-            max(currentTransform.lensBandWarpSupport, currentTransform.sourceLensShakeLocalSupport)
-        )
-        guard demandX >= 0.25 || evidence >= 0.06 else {
-            return reservationIsActive
-                ? AutoCropFraming(
-                    scale: 1.0,
-                    positionPixels: reservationPosition,
-                    telemetry: turnReservation?.telemetry ?? .empty,
-                    cropOffEdgeGuardScale: 1.0,
-                    cropOffEdgeGuardDemandX: 0.0,
-                    cropOffEdgeGuardActive: 0.0
-                )
-                : .identity
-        }
-        let halfWidth = max(outputSize.x * 0.5, 1.0)
-        let demandScaleDelta = min(
-            stabilizerCropOffEdgeGuardMaximumScaleDelta,
-            max(0.0, (demandX + stabilizerCropOffEdgeGuardPaddingPixels) / halfWidth)
-        )
-        let scaleDelta = demandX >= stabilizerCropOffEdgeGuardLargeDemandPixels
-            ? max(demandScaleDelta, stabilizerCropOffEdgeGuardMaximumScaleDelta * 0.75)
-            : max(demandScaleDelta, stabilizerCropOffEdgeGuardBaseScaleDelta)
-        let turnExposureSupport = cropOffTurnSmoothingExposureSupport(
-            currentTransform: currentTransform,
-            masterStrength: masterStrength,
-            strengths: strengths
-        )
-        let exposedScaleDelta = scaleDelta * (1.0 - turnExposureSupport)
-        let boundedDelta = min(max(exposedScaleDelta, 0.0), stabilizerCropOffEdgeGuardMaximumScaleDelta)
         return AutoCropFraming(
-            scale: 1.0 + boundedDelta,
+            scale: 1.0,
             positionPixels: reservationPosition,
-            telemetry: reservationIsActive ? (turnReservation?.telemetry ?? .empty) : .empty,
-            cropOffEdgeGuardScale: 1.0 + boundedDelta,
-            cropOffEdgeGuardDemandX: demandX,
-            cropOffEdgeGuardActive: 1.0
+            telemetry: reservationIsActive ? turnReservation.telemetry : .empty,
+            cropOffEdgeGuardScale: 1.0,
+            cropOffEdgeGuardDemandX: 0.0,
+            cropOffEdgeGuardActive: 0.0,
+            cropOffTurnReservationActive: reservationIsActive ? 1.0 : 0.0
         )
     }
 
@@ -10812,11 +10745,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 cacheIdentity: renderCacheIdentity,
                 onPlaybackPreparationReady: cropOffTurnReservationPrepared
             )
-            autoCropFraming = Self.cropOffEdgeGuardFraming(
-                currentTransform: autoTransform,
-                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                masterStrength: masterStrength,
-                strengths: correctionStrengths,
+            autoCropFraming = Self.cropOffTurnReservationFraming(
                 turnReservation: turnReservation
             )
         } else {
@@ -10839,12 +10768,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         } else {
             previewWarmupDecision = .inactive
         }
-        let renderedAutoTransform: StabilizerAutoTransform = previewWarmupDecision.active
+        var renderedAutoTransform: StabilizerAutoTransform = previewWarmupDecision.active
             ? .identity
             : autoTransform
         let renderedAutoCropFraming: AutoCropFraming = previewWarmupDecision.active
             ? .identity
             : autoCropFraming
+        if !state.autoCropEnabled,
+           renderedAutoCropFraming.cropOffTurnReservationActive > 0.5 {
+            let reservationDeltaX = renderedAutoCropFraming.positionPixels.x - renderedAutoTransform.macroPixelOffset.x
+            renderedAutoTransform.macroPixelOffset.x += reservationDeltaX
+            renderedAutoTransform.pixelOffset.x += reservationDeltaX
+            renderedAutoTransform.rawPixelOffset.x += reservationDeltaX
+        }
+        let renderedAutoCropPosition = state.autoCropEnabled
+            ? renderedAutoCropFraming.positionPixels
+            : vector_float2(0.0, 0.0)
         if transformEnabled,
            renderUsesPreparedAnalysis,
            let preparedAnalysis = activePreparedAnalysis {
@@ -10912,7 +10851,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             debugOverlayScale: debugOverlayScale,
             debugMeshOverlayMode: Float(meshOverlayMode),
             autoCropScale: renderedAutoCropFraming.scale,
-            autoCropPositionPixels: renderedAutoCropFraming.positionPixels,
+            autoCropPositionPixels: renderedAutoCropPosition,
             lensBandTopOffset: renderedAutoTransform.lensBandTopOffset * masterStrength,
             lensBandRidgeOffset: renderedAutoTransform.lensBandRidgeOffset * masterStrength,
             lensBandMidOffset: renderedAutoTransform.lensBandMidOffset * masterStrength,
