@@ -51,11 +51,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.12"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 976.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 12.0, 976.0)
+private let tokyoWalkingStabilizerVersion = "1.1.13"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 977.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 13.0, 977.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_422_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_423_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -10776,10 +10776,23 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             : autoCropFraming
         if !state.autoCropEnabled,
            renderedAutoCropFraming.cropOffTurnReservationActive > 0.5 {
-            let reservationDeltaX = renderedAutoCropFraming.positionPixels.x - renderedAutoTransform.macroPixelOffset.x
-            renderedAutoTransform.macroPixelOffset.x += reservationDeltaX
-            renderedAutoTransform.pixelOffset.x += reservationDeltaX
-            renderedAutoTransform.rawPixelOffset.x += reservationDeltaX
+            let reservationDirectionSource = abs(renderedAutoCropFraming.positionPixels.x) > Float.ulpOfOne
+                ? renderedAutoCropFraming.positionPixels.x
+                : renderedAutoTransform.turnDetectedPixelOffset.x
+            let reservationDirection: Float = reservationDirectionSource >= 0.0 ? 1.0 : -1.0
+            let zoomEnvelope = min(
+                max(
+                    (renderedAutoCropFraming.scale - 1.0)
+                        / max(stabilizerMaximumTurnSmoothingZoomScale - 1.0, Float.ulpOfOne),
+                    0.0
+                ),
+                1.0
+            )
+            let maximumReservationPixels = Float(outputWidth) * 0.5 * Self.turnSmoothingZoomNormalized(correctionStrengths.turnSmoothingZoom)
+            let reservationPixels = reservationDirection * maximumReservationPixels * zoomEnvelope
+            renderedAutoTransform.macroPixelOffset.x += reservationPixels
+            renderedAutoTransform.pixelOffset.x += reservationPixels
+            renderedAutoTransform.rawPixelOffset.x += reservationPixels
         }
         let renderedAutoCropPosition = state.autoCropEnabled
             ? renderedAutoCropFraming.positionPixels

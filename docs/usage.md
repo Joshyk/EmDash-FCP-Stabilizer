@@ -153,7 +153,8 @@ fallbacks.
   `Zoom-Out Time` directly, and postpones release when another turn zoom demand is
   close enough in the future to avoid a zoom-out / zoom-in pulse.
   With `Remove Black Edges` off, this same envelope reserves X position at `1.0x`
-  scale and deliberately exposes the needed black edge before the turn.
+  scale. The reservation grows with Turn Smoothing Strength and reaches half the
+  output width at `36`, deliberately exposing the needed black edge before the turn.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.
