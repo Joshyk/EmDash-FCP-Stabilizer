@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.10` uses schema 48 far-field micro-shake analysis. It keeps the
+Version `1.1.16` uses schema 48 far-field micro-shake analysis. It keeps the
 fps-derived multi-window `5x9` far-field mesh evidence, but adds a persisted
 global far-field rigid roll path so short whole-frame Y/roll camera vibration can
 be corrected as a coherent transform instead of a local mountain/cloud warp.
@@ -28,8 +28,8 @@ clouds, and horizons do not locally pulse or swim.
 
 The main correction stages are:
 
-- `Footstep Jitter`: frame-local X/Y/roll impulse removal for landing shock.
-- `Stride Wobble`: medium-period X/Y/roll cleanup after footstep shock.
+- `Camera Jitter`: unified frame-local, medium-period, and global Y/roll camera-motion cleanup.
+  TURN owns only broad X motion; global Y/roll remains controlled by Camera Jitter.
 - `Far-field Warp Strength`: small-clamp deskew, yaw/pitch proxy, and
   perspective trim for distant background shake.
 - `LENS`: source-space far-field stabilization for short ridge/cloud/horizon

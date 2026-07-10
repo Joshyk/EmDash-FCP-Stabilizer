@@ -453,6 +453,7 @@ private struct BandAssessment {
 private struct TurnCorrectionSample {
     let bandX: Float
     let bandY: Float
+    let bandRoll: Float
     let detected: Float
     let applied: Float
     let macroPixelOffsetX: Float
@@ -461,6 +462,7 @@ private struct TurnCorrectionSample {
     let ownership: Float
     let ownershipY: Float
     let trackingConfidence: Float
+    let macroTrackingConfidence: Float
     let walkingTrackingConfidence: Float
     let edgeQuality: Float
 }
@@ -727,6 +729,7 @@ private let strideFullScalePixels: Float = 0.75
 private let strideFullScaleDegrees: Float = 0.16
 private let strideFullResponseScale: Float = 0.55
 private let turnFullScalePixels: Float = 2.0
+private let turnFullScaleDegrees: Float = 0.16
 private let turnOwnershipFootstepXSuppression: Float = 1.0
 private let turnOwnershipFootstepYSuppression: Float = 0.65
 private let turnOwnershipFootstepRollSuppression: Float = 0.55
@@ -1490,11 +1493,14 @@ private func adaptiveXTurnSmoothValue(
 private func turnCorrectionSample(for context: AssessmentContext, index: Int, options: Options) -> TurnCorrectionSample {
     let analysis = context.analysis
     guard analysis.frames.indices.contains(index),
-          context.turnStrideSmoothedXPath.indices.contains(index)
+          context.turnStrideSmoothedXPath.indices.contains(index),
+          context.turnStrideSmoothedYPath.indices.contains(index),
+          context.strideSmoothedRPath.indices.contains(index)
     else {
         return TurnCorrectionSample(
             bandX: 0.0,
             bandY: 0.0,
+            bandRoll: 0.0,
             detected: 0.0,
             applied: 0.0,
             macroPixelOffsetX: 0.0,
@@ -1503,6 +1509,7 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
             ownership: 0.0,
             ownershipY: 0.0,
             trackingConfidence: 0.0,
+            macroTrackingConfidence: 0.0,
             walkingTrackingConfidence: 0.0,
             edgeQuality: 0.0
         )
@@ -1567,6 +1574,14 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
     )
     let turnBandX = context.turnStrideSmoothedXPath[index] - turnSmoothX
     let turnBandY = context.turnStrideSmoothedYPath[index] - turnSmoothY
+    let turnSmoothRoll = timeWeightedAverage(
+        context.strideSmoothedRPath,
+        frames: analysis.frames,
+        indices: turnIndices,
+        centerTime: frame.time,
+        windowSeconds: turnWindowSeconds
+    )
+    let turnBandRoll = context.strideSmoothedRPath[index] - turnSmoothRoll
     let turnOwnershipX = turnOwnershipConfidence(
         values: context.turnStrideSmoothedXPath,
         frames: analysis.frames,
@@ -1589,6 +1604,7 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
     return TurnCorrectionSample(
         bandX: turnBandX,
         bandY: turnBandY,
+        bandRoll: turnBandRoll,
         detected: detected,
         applied: detected * correction,
         macroPixelOffsetX: macroPixelOffsetX,
@@ -1597,6 +1613,7 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
         ownership: turnOwnershipX,
         ownershipY: turnOwnershipY,
         trackingConfidence: tracking,
+        macroTrackingConfidence: turnTracking,
         walkingTrackingConfidence: walkingTracking,
         edgeQuality: edgeQuality
     )
@@ -2026,6 +2043,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let turnSample = turnCorrectionSample(for: context, index: index, options: options)
     let turnBandX = turnSample.bandX
     let turnBandY = turnSample.bandY
+    let turnBandRoll = turnSample.bandRoll
     let turnOwnershipX = turnSample.ownership
     let turnOwnershipY = turnSample.ownershipY
     let rawTurnQ = turnSample.rawConfidence
@@ -2224,6 +2242,23 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let strideQR = max(rawStrideQR * strideRollTurnGate, strideRollFarFieldConfidenceFloor)
     let strideCorrectionX = -(strideX * xScale) * walkingCorrectionFactor(options.strengths.strideX, confidence: strideQX, maxStrength: 10.0)
     let strideCorrectionY = -(strideY * yScale) * verticalWalkingCorrectionFactor(options.strengths.strideY, confidence: strideQY, maxStrength: 10.0)
+    let cameraMacroYConfidence = turnConfidence(
+        bandValue: turnBandY,
+        trackingConfidence: turnSample.macroTrackingConfidence
+    )
+    let cameraMacroRollConfidence = cameraJitterMacroRotationConfidence(
+        bandValue: turnBandRoll,
+        trackingConfidence: turnSample.macroTrackingConfidence
+    )
+    let cameraMacroCorrectionY = -(turnBandY * yScale) * verticalWalkingCorrectionFactor(
+        options.strengths.microY,
+        confidence: cameraMacroYConfidence,
+        maxStrength: 10.0
+    )
+    let cameraMacroCorrectionRoll = -turnBandRoll * walkingCorrectionFactor(
+        options.strengths.microR,
+        confidence: cameraMacroRollConfidence
+    )
     let trajectoryMicroJitterOffset = farFieldWalkingResidualContinuityOffset(
         footstepBandX: footX * xScale,
         footstepBandY: footY * yScale,
@@ -2329,11 +2364,18 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         turnOwnershipY: turnOwnershipY
     )
 
-    let cameraDetected = footDetected + strideDetected + walkingResidualBefore
-    let cameraApplied = footApplied + strideApplied + trajectoryMicroJitterApplied
+    let cameraMacroDetected = abs(turnBandY * yScale) + (abs(turnBandRoll) * 12.0)
+    let cameraMacroApplied = abs(cameraMacroCorrectionY) + (abs(cameraMacroCorrectionRoll) * 12.0)
+    let cameraMacroRemaining = abs((turnBandY * yScale) + cameraMacroCorrectionY)
+        + (abs(turnBandRoll + cameraMacroCorrectionRoll) * 12.0)
+    let cameraDetected = footDetected + strideDetected + walkingResidualBefore + cameraMacroDetected
+    let cameraApplied = footApplied + strideApplied + trajectoryMicroJitterApplied + cameraMacroApplied
     let cameraConfidence = max(
-        (footQX + footQY + footQR) / 3.0,
-        (strideQX + strideQY + strideQR) / 3.0
+        max(
+            (footQX + footQY + footQR) / 3.0,
+            (strideQX + strideQY + strideQR) / 3.0
+        ),
+        max(cameraMacroYConfidence, cameraMacroRollConfidence)
     )
     let farFieldDetected = max(warpDetected, lensBand.detected)
     let farFieldApplied = max(warpApplied, lensBand.applied)
@@ -2342,9 +2384,9 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             name: "CAM",
             detected: cameraDetected,
             applied: cameraApplied,
-            remaining: walkingResidualAfter,
+            remaining: walkingResidualAfter + cameraMacroRemaining,
             confidence: cameraConfidence,
-            note: String(format: "foot X %.3f Y %.3f R %.3f | stride X %.3f Y %.3f R %.3f | traj %.3f %.3f | post %.3f", footX, footY, footR, strideX, strideY, strideR, trajectoryMicroJitterOffset.x, trajectoryMicroJitterOffset.y, walkingResidualAfter)
+            note: String(format: "foot X %.3f Y %.3f R %.3f | stride X %.3f Y %.3f R %.3f | macro Y %.3f R %.3f corr %.3f %.3f | traj %.3f %.3f | post %.3f", footX, footY, footR, strideX, strideY, strideR, turnBandY, turnBandRoll, cameraMacroCorrectionY, cameraMacroCorrectionRoll, trajectoryMicroJitterOffset.x, trajectoryMicroJitterOffset.y, walkingResidualAfter + cameraMacroRemaining)
         ),
         BandAssessment(
             name: "WARP",
@@ -2882,6 +2924,17 @@ private func turnConfidence(bandValue: Float, trackingConfidence: Float) -> Floa
     let magnitude = abs(bandValue)
     let noiseFloor = turnFullScalePixels * 0.08
     let bandQuality = confidenceRamp(magnitude, start: noiseFloor, full: max(noiseFloor + Float.ulpOfOne, turnFullScalePixels))
+    return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
+}
+
+private func cameraJitterMacroRotationConfidence(bandValue: Float, trackingConfidence: Float) -> Float {
+    let magnitude = abs(bandValue)
+    let noiseFloor = turnFullScaleDegrees * 0.08
+    let bandQuality = confidenceRamp(
+        magnitude,
+        start: noiseFloor,
+        full: max(noiseFloor + Float.ulpOfOne, turnFullScaleDegrees)
+    )
     return clamp(trackingConfidence * bandQuality, min: 0.0, max: 1.0)
 }
 

@@ -3767,8 +3767,23 @@ enum AutoStabilizationEstimator {
         let playbackStrideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
 
         let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
-        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
-        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
+        let cameraJitterMacroYConfidence = turnSmoothingConfidence(
+            bandValue: panBandY,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let cameraJitterMacroRollConfidence = turnSmoothingRotationConfidence(
+            bandValue: panBandRoll,
+            trackingConfidence: turnTrackingConfidence
+        )
+        let cameraJitterMacroYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterY,
+            confidence: cameraJitterMacroYConfidence,
+            maxStrength: 10.0
+        )
+        let cameraJitterMacroRollCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterRotation,
+            confidence: cameraJitterMacroRollConfidence
+        )
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -3786,7 +3801,11 @@ enum AutoStabilizationEstimator {
             ),
             0.0
         )
-        let macroRotation: Float = 0.0
+        let cameraJitterMacroPixelOffset = vector_float2(
+            0.0,
+            -panBandY * yScale * positionGain * cameraJitterMacroYCorrectionStrength
+        )
+        let cameraJitterMacroRotation = -panBandRoll * rotationGain * cameraJitterMacroRollCorrectionStrength
         let microPixelLimitX = max(2.0, outputSize.x * 0.055)
         let microPixelLimitY = max(2.0, outputSize.y * 0.055)
         let unattenuatedRawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
@@ -3966,7 +3985,7 @@ enum AutoStabilizationEstimator {
             trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
             farFieldConfidence: farFieldMacroConfidence
         )
-        let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+        let trajectoryContinuityPixelOffset = cameraJitterMacroPixelOffset
         let lensShake = farFieldWarpStrengths.isActive
             ? sourceSpaceLensShakeCorrection(
                 analysis: analysis,
@@ -3988,7 +4007,7 @@ enum AutoStabilizationEstimator {
             + trajectoryMicroJitterPixelOffset
             + trajectoryContinuityPixelOffset
             + lensShake.pixelOffset
-        let rotation = macroRotation + microRotation + strideRotation + lensShake.rotationDegrees
+        let rotation = cameraJitterMacroRotation + microRotation + strideRotation + lensShake.rotationDegrees
         return StabilizerAutoTransform(
             pixelOffset: pixelOffset,
             macroPixelOffset: macroPixelOffset,
@@ -4075,7 +4094,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeLocalMidRightOffset: lensShake.localMidRightOffset,
             sourceLensShakeLocalSupport: lensShake.localSupport,
             sourceLensShakeLocalApplied: lensShake.localApplied,
-            footstepJitterRotationDegrees: macroRotation + microRotation,
+            footstepJitterRotationDegrees: cameraJitterMacroRotation + microRotation,
             strideWobbleRotationDegrees: strideRotation,
             rotationDegrees: rotation,
             turnDetectedPixelOffset: vector_float2(-panBandX * xScale, 0.0),
@@ -4087,8 +4106,8 @@ enum AutoStabilizationEstimator {
             temporalSmoothingWindowSeconds: Float(broadHalfWindow * 2.0),
             effectiveMicroJitterStrength: vector_float3(
                 effectiveMicroXCorrectionStrength,
-                microYCorrectionStrength,
-                microRotationCorrectionStrength
+                max(microYCorrectionStrength, cameraJitterMacroYCorrectionStrength),
+                max(microRotationCorrectionStrength, cameraJitterMacroRollCorrectionStrength)
             ),
             effectiveStrideWobbleStrength: vector_float3(
                 strideXCorrectionStrength,
@@ -4096,7 +4115,10 @@ enum AutoStabilizationEstimator {
                 strideRotationCorrectionStrength
             ),
             warpConfidence: appliedWarpConfidence,
-            microConfidence: playbackMicroConfidence,
+            microConfidence: max(
+                playbackMicroConfidence,
+                max(cameraJitterMacroYConfidence, cameraJitterMacroRollConfidence)
+            ),
             strideConfidence: playbackStrideConfidence,
             turnConfidence: turnTrackingConfidence,
             acceptedBlockCount: acceptedBlockCount,
@@ -7316,8 +7338,23 @@ enum AutoStabilizationEstimator {
             let playbackMicroConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
             let playbackStrideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
             let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
-            let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
-            let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
+            let cameraJitterMacroYConfidence = turnSmoothingConfidence(
+                bandValue: panBandY,
+                trackingConfidence: turnTrackingConfidence
+            )
+            let cameraJitterMacroRollConfidence = turnSmoothingRotationConfidence(
+                bandValue: panBandRoll,
+                trackingConfidence: turnTrackingConfidence
+            )
+            let cameraJitterMacroYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(
+                strengths.cameraJitterY,
+                confidence: cameraJitterMacroYConfidence,
+                maxStrength: 10.0
+            )
+            let cameraJitterMacroRollCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(
+                strengths.cameraJitterRotation,
+                confidence: cameraJitterMacroRollConfidence
+            )
             let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
             let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
             let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -7335,8 +7372,13 @@ enum AutoStabilizationEstimator {
                 ),
                 0.0
             )
-            // TURN owns only X. Y/roll remain in the unified Camera Jitter stage.
-            let macroRotation: Float = 0.0
+            // TURN owns only X. The remaining broad Y/roll trajectory belongs
+            // to Camera Jitter and follows its own axis strengths.
+            let cameraJitterMacroPixelOffset = vector_float2(
+                0.0,
+                -panBandY * yScale * positionGain * cameraJitterMacroYCorrectionStrength
+            )
+            let cameraJitterMacroRotation = -panBandRoll * rotationGain * cameraJitterMacroRollCorrectionStrength
             let microPixelLimitX = max(2.0, outputSize.x * 0.055)
             let microPixelLimitY = max(2.0, outputSize.y * 0.055)
             let unattenuatedRawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
@@ -7520,12 +7562,12 @@ enum AutoStabilizationEstimator {
                 trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
                 farFieldConfidence: farFieldMacroConfidence
             )
-            let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+            let trajectoryContinuityPixelOffset = cameraJitterMacroPixelOffset
             let cameraJitterPixelOffset = microPixelOffset
                 + stridePixelOffset
                 + trajectoryMicroJitterPixelOffset
                 + trajectoryContinuityPixelOffset
-            let cameraJitterRotation = microRotation + strideRotation
+            let cameraJitterRotation = cameraJitterMacroRotation + microRotation + strideRotation
             let lensShake = farFieldWarpStrengths.isActive
                 ? sourceSpaceLensShakeCorrection(
                     analysis: analysis,
@@ -7544,7 +7586,7 @@ enum AutoStabilizationEstimator {
             let pixelOffset = macroPixelOffset
                 + cameraJitterPixelOffset
                 + lensShake.pixelOffset
-            let rotation = macroRotation + cameraJitterRotation + lensShake.rotationDegrees
+            let rotation = cameraJitterRotation + lensShake.rotationDegrees
             return StabilizerAutoTransform(
                 pixelOffset: pixelOffset,
                 macroPixelOffset: macroPixelOffset,
@@ -7643,12 +7685,15 @@ enum AutoStabilizationEstimator {
                 temporalSmoothingWindowSeconds: Float(broadHalfWindow * 2.0),
                 effectiveMicroJitterStrength: vector_float3(
                     max(effectiveMicroXCorrectionStrength, strideXCorrectionStrength),
-                    max(microYCorrectionStrength, strideYCorrectionStrength),
-                    max(microRotationCorrectionStrength, strideRotationCorrectionStrength)
+                    max(max(microYCorrectionStrength, strideYCorrectionStrength), cameraJitterMacroYCorrectionStrength),
+                    max(max(microRotationCorrectionStrength, strideRotationCorrectionStrength), cameraJitterMacroRollCorrectionStrength)
                 ),
                 effectiveStrideWobbleStrength: vector_float3(0.0, 0.0, 0.0),
                 warpConfidence: appliedWarpConfidence,
-                microConfidence: max(playbackMicroConfidence, playbackStrideConfidence),
+                microConfidence: max(
+                    max(playbackMicroConfidence, playbackStrideConfidence),
+                    max(cameraJitterMacroYConfidence, cameraJitterMacroRollConfidence)
+                ),
                 strideConfidence: 0.0,
                 turnConfidence: turnTrackingConfidence,
                 acceptedBlockCount: acceptedBlockCount,
@@ -9019,13 +9064,9 @@ enum AutoStabilizationEstimator {
             turnBandValue: panBandY,
             trackingConfidence: turnTrackingConfidence
         )
-        let turnOwnership = max(turnOwnershipX, turnOwnershipY)
-        let coupledTurnOwnershipY = max(turnOwnershipY, turnOwnershipX * 0.70)
-        let coupledTurnOwnershipRoll = max(turnOwnership, turnOwnershipX * 0.70)
+        let turnOwnership = turnOwnershipX
         let confidenceX = turnBandConfidenceX * turnOwnershipX
-        let confidenceY = turnBandConfidenceY * coupledTurnOwnershipY
-        let confidenceRoll = turnBandConfidenceRoll * coupledTurnOwnershipRoll
-        let confidence = max(confidenceX, confidenceY, confidenceRoll)
+        let confidence = confidenceX
         let combinedTurnCorrectionConfidence = turnCorrectionConfidence(
             confidence: confidence,
             turnOwnership: turnOwnership
@@ -9033,14 +9074,6 @@ enum AutoStabilizationEstimator {
         let turnCorrectionConfidenceX = turnCorrectionConfidence(
             confidence: confidenceX,
             turnOwnership: turnOwnershipX
-        )
-        let turnCorrectionConfidenceY = turnCorrectionConfidence(
-            confidence: confidenceY,
-            turnOwnership: coupledTurnOwnershipY
-        )
-        let turnCorrectionConfidenceRoll = turnCorrectionConfidence(
-            confidence: confidenceRoll,
-            turnOwnership: coupledTurnOwnershipRoll
         )
         let turnShakeSuppression = turnStabilizerShakeSuppression(
             turnOwnership: turnOwnership,
@@ -9154,8 +9187,15 @@ enum AutoStabilizationEstimator {
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
         let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceX)
-        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceY)
-        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceRoll)
+        let cameraJitterMacroYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterY,
+            confidence: turnBandConfidenceY,
+            maxStrength: 10.0
+        )
+        let cameraJitterMacroRollCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterRotation,
+            confidence: turnBandConfidenceRoll
+        )
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -9163,8 +9203,8 @@ enum AutoStabilizationEstimator {
         let strideYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence, maxStrength: 10.0)
         let strideRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleRotation, confidence: strideRollConfidence)
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrengthX
-        let rawMacroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrengthY
-        let rawMacroCompensationRotation = -panBandRoll * rotationGain * panCorrectionStrengthRoll
+        let cameraJitterMacroCompensationY = -panBandY * yScale * positionGain * cameraJitterMacroYCorrectionStrength
+        let cameraJitterMacroCompensationRotation = -panBandRoll * rotationGain * cameraJitterMacroRollCorrectionStrength
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
             limit: turnSmoothingXOffsetLimit(
@@ -9172,8 +9212,6 @@ enum AutoStabilizationEstimator {
                 turnSmoothingStrength: strengths.turnSmoothingZoom
             )
         )
-        let macroCompensationY: Float = 0.0
-        let macroCompensationRotation: Float = 0.0
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
             rawConfidence: max(rawFootstepXConfidence, footstepXFarFieldConfidenceFloor),
@@ -9222,7 +9260,7 @@ enum AutoStabilizationEstimator {
         let strideCompensationX = -strideBandX * xScale * strideXCorrectionStrength
         let strideCompensationY = -strideBandY * yScale * strideYCorrectionStrength
         let strideCompensationRotation = -strideBandRoll * strideRotationCorrectionStrength
-        let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
+        let macroPixelOffset = vector_float2(macroCompensationX, 0.0)
         let microPixelOffset = vector_float2(microCompensationX, microCompensationY)
         let strideWobblePixelOffset = vector_float2(strideCompensationX, strideCompensationY)
         let trajectoryMicroJitterPixelOffset = farFieldWalkingResidualContinuityOffset(
@@ -9238,10 +9276,10 @@ enum AutoStabilizationEstimator {
             trackingConfidence: strideTrackingConfidence,
             farFieldConfidence: farFieldMacroConfidence
         )
-        let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+        let trajectoryContinuityPixelOffset = vector_float2(0.0, cameraJitterMacroCompensationY)
         let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x + trajectoryMicroJitterPixelOffset.x
-        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + trajectoryMicroJitterPixelOffset.y
-        let compensationRotation = macroCompensationRotation + microCompensationRotation + strideCompensationRotation
+        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + trajectoryMicroJitterPixelOffset.y + trajectoryContinuityPixelOffset.y
+        let compensationRotation = cameraJitterMacroCompensationRotation + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrengths = effectiveFarFieldWarpComponentStrengths(Float(strengths.farFieldWarp))
         let shouldEstimateFarFieldWarp = farFieldWarpStrengths.isActive
         let appliedWarpConfidence: Float
@@ -9466,7 +9504,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeLocalMidRightOffset: lensShake.localMidRightOffset,
             sourceLensShakeLocalSupport: lensShake.localSupport,
             sourceLensShakeLocalApplied: lensShake.localApplied,
-            footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
+            footstepJitterRotationDegrees: cameraJitterMacroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation + lensShake.rotationDegrees,
             turnDetectedPixelOffset: vector_float2(-panBandX * xScale, 0.0),
@@ -9478,8 +9516,8 @@ enum AutoStabilizationEstimator {
             temporalSmoothingWindowSeconds: 0.0,
             effectiveMicroJitterStrength: vector_float3(
                 effectiveMicroXCorrectionStrength,
-                microYCorrectionStrength,
-                microRotationCorrectionStrength
+                max(microYCorrectionStrength, cameraJitterMacroYCorrectionStrength),
+                max(microRotationCorrectionStrength, cameraJitterMacroRollCorrectionStrength)
             ),
             effectiveStrideWobbleStrength: vector_float3(
                 strideXCorrectionStrength,
@@ -9487,7 +9525,7 @@ enum AutoStabilizationEstimator {
                 strideRotationCorrectionStrength
             ),
             warpConfidence: appliedWarpConfidence,
-            microConfidence: jitterConfidence,
+            microConfidence: max(jitterConfidence, max(turnBandConfidenceY, turnBandConfidenceRoll)),
             strideConfidence: strideConfidence,
             turnConfidence: combinedTurnCorrectionConfidence,
             acceptedBlockCount: acceptedBlockCount,
@@ -10005,13 +10043,9 @@ enum AutoStabilizationEstimator {
             turnBandValue: panBandY,
             trackingConfidence: turnTrackingConfidence
         )
-        let turnOwnership = max(turnOwnershipX, turnOwnershipY)
-        let coupledTurnOwnershipY = max(turnOwnershipY, turnOwnershipX * 0.70)
-        let coupledTurnOwnershipRoll = max(turnOwnership, turnOwnershipX * 0.70)
+        let turnOwnership = turnOwnershipX
         let confidenceX = turnBandConfidenceX * turnOwnershipX
-        let confidenceY = turnBandConfidenceY * coupledTurnOwnershipY
-        let confidenceRoll = turnBandConfidenceRoll * coupledTurnOwnershipRoll
-        let confidence = max(confidenceX, confidenceY, confidenceRoll)
+        let confidence = confidenceX
         let combinedTurnCorrectionConfidence = turnCorrectionConfidence(
             confidence: confidence,
             turnOwnership: turnOwnership
@@ -10019,14 +10053,6 @@ enum AutoStabilizationEstimator {
         let turnCorrectionConfidenceX = turnCorrectionConfidence(
             confidence: confidenceX,
             turnOwnership: turnOwnershipX
-        )
-        let turnCorrectionConfidenceY = turnCorrectionConfidence(
-            confidence: confidenceY,
-            turnOwnership: coupledTurnOwnershipY
-        )
-        let turnCorrectionConfidenceRoll = turnCorrectionConfidence(
-            confidence: confidenceRoll,
-            turnOwnership: coupledTurnOwnershipRoll
         )
         let rawTurnShakeSuppression = turnStabilizerShakeSuppression(
             turnOwnership: turnOwnership,
@@ -10165,8 +10191,15 @@ enum AutoStabilizationEstimator {
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
         let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceX)
-        let panCorrectionStrengthY = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceY)
-        let panCorrectionStrengthRoll = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceRoll)
+        let cameraJitterMacroYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterY,
+            confidence: turnBandConfidenceY,
+            maxStrength: 10.0
+        )
+        let cameraJitterMacroRollCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterRotation,
+            confidence: turnBandConfidenceRoll
+        )
         let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: footstepXConfidence, maxStrength: 10.0)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: footstepYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: footstepRollConfidence)
@@ -10174,9 +10207,9 @@ enum AutoStabilizationEstimator {
         let strideYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleY, confidence: strideYConfidence, maxStrength: 10.0)
         let strideRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.strideWobbleRotation, confidence: strideRollConfidence)
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrengthX
-        let rawMacroCompensationY = -panBandY * yScale * positionGain * panCorrectionStrengthY
-        let rawMacroCompensationRotation = -panBandRoll * rotationGain * panCorrectionStrengthRoll
-        let detectedTurnPixelOffset = vector_float2(-panBandX * xScale, -panBandY * yScale)
+        let cameraJitterMacroCompensationY = -panBandY * yScale * positionGain * cameraJitterMacroYCorrectionStrength
+        let cameraJitterMacroCompensationRotation = -panBandRoll * rotationGain * cameraJitterMacroRollCorrectionStrength
+        let detectedTurnPixelOffset = vector_float2(-panBandX * xScale, 0.0)
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
             limit: turnSmoothingXOffsetLimit(
@@ -10184,8 +10217,6 @@ enum AutoStabilizationEstimator {
                 turnSmoothingStrength: strengths.turnSmoothingZoom
             )
         )
-        let macroCompensationY: Float = 0.0
-        let macroCompensationRotation: Float = 0.0
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
             rawConfidence: max(rawFootstepXConfidence, footstepXFarFieldConfidenceFloor),
@@ -10239,7 +10270,7 @@ enum AutoStabilizationEstimator {
         let strideCompensationX = -strideBandX * xScale * strideXCorrectionStrength
         let strideCompensationY = -strideBandY * yScale * strideYCorrectionStrength
         let strideCompensationRotation = -strideBandRoll * strideRotationCorrectionStrength
-        let macroPixelOffset = vector_float2(macroCompensationX, macroCompensationY)
+        let macroPixelOffset = vector_float2(macroCompensationX, 0.0)
         let microPixelOffset = vector_float2(microCompensationX, microCompensationY)
         let strideWobblePixelOffset = vector_float2(strideCompensationX, strideCompensationY)
         let trajectoryMicroJitterPixelOffset = farFieldWalkingResidualContinuityOffset(
@@ -10258,10 +10289,10 @@ enum AutoStabilizationEstimator {
             trackingConfidence: strideTrackingConfidence,
             farFieldConfidence: farFieldMacroConfidence
         )
-        let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+        let trajectoryContinuityPixelOffset = vector_float2(0.0, cameraJitterMacroCompensationY)
         let compensationX = macroPixelOffset.x + microPixelOffset.x + strideWobblePixelOffset.x + trajectoryMicroJitterPixelOffset.x
-        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + trajectoryMicroJitterPixelOffset.y
-        let compensationRotation = macroCompensationRotation + microCompensationRotation + strideCompensationRotation
+        let compensationY = macroPixelOffset.y + microPixelOffset.y + strideWobblePixelOffset.y + trajectoryMicroJitterPixelOffset.y + trajectoryContinuityPixelOffset.y
+        let compensationRotation = cameraJitterMacroCompensationRotation + microCompensationRotation + strideCompensationRotation
         let farFieldWarpStrengths = effectiveFarFieldWarpComponentStrengths(Float(strengths.farFieldWarp))
         let shouldEstimateFarFieldWarp = includeFarFieldWarp && farFieldWarpStrengths.isActive
         let appliedWarpConfidence: Float
@@ -10526,7 +10557,7 @@ enum AutoStabilizationEstimator {
             sourceLensShakeLocalMidRightOffset: lensShake.localMidRightOffset,
             sourceLensShakeLocalSupport: lensShake.localSupport,
             sourceLensShakeLocalApplied: lensShake.localApplied,
-            footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
+            footstepJitterRotationDegrees: cameraJitterMacroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation + lensShake.rotationDegrees,
             turnDetectedPixelOffset: detectedTurnPixelOffset,
@@ -10538,8 +10569,8 @@ enum AutoStabilizationEstimator {
             temporalSmoothingWindowSeconds: 0.0,
             effectiveMicroJitterStrength: vector_float3(
                 effectiveMicroXCorrectionStrength,
-                microYCorrectionStrength,
-                microRotationCorrectionStrength
+                max(microYCorrectionStrength, cameraJitterMacroYCorrectionStrength),
+                max(microRotationCorrectionStrength, cameraJitterMacroRollCorrectionStrength)
             ),
             effectiveStrideWobbleStrength: vector_float3(
                 strideXCorrectionStrength,
@@ -10547,7 +10578,7 @@ enum AutoStabilizationEstimator {
                 strideRotationCorrectionStrength
             ),
             warpConfidence: appliedWarpConfidence,
-            microConfidence: jitterConfidence,
+            microConfidence: max(jitterConfidence, max(turnBandConfidenceY, turnBandConfidenceRoll)),
             strideConfidence: strideConfidence,
             turnConfidence: combinedTurnCorrectionConfidence,
             acceptedBlockCount: acceptedBlockCount,

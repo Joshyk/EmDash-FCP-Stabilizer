@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.10` keeps the far-field micro-shake correction baseline on schema 48.
+- Version `1.1.16` keeps the far-field micro-shake correction baseline on schema 48.
   Keep schema 48's fps-derived dominant `5x9` mesh windows as the primary evidence
   for short source-space lens/camera shake up to one second, with the coherent
   rigid far-field X/Y/roll path built from the sky/top and ridge/horizon bands
@@ -225,8 +225,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   walking-camera residuals outside Far-field Warp and the TURN-owned X trajectory. X/Y default
   to `4.0` and range to `10.0`; rotation defaults to `1.0` and ranges to `4.0`. The stage uses
   prepared frame-local, medium walking, and trajectory-continuity evidence as one applied
-  component. Zero tracking evidence remains zero correction, and TURN ownership prevents the
-  same X motion from being corrected twice.
+  component. Broad global Y/roll residuals also remain in Camera Jitter and follow its
+  Y/Rotation strengths. Zero tracking evidence remains zero correction, and TURN ownership
+  prevents the same X motion from being corrected twice.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.

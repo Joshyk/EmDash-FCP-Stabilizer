@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.10` is the current review baseline for far-field micro-shake.
+Version `1.1.16` is the current review baseline for far-field micro-shake.
 Use schema 48 analysis for review builds so the fps-derived dominant `5x9`
 mesh windows, top/ridge-prioritized far-field rigid X/Y/roll path, and `3x5`
 source-lens local evidence are present. Earlier schemas
@@ -73,7 +73,8 @@ fallbacks.
 - `Camera Jitter Stabilization X/Y/Rotation Strength`: the single walking-camera stage outside
   Far-field Warp and TURN-owned X motion. X/Y default to `4.0` and range to `10.0`; rotation
   defaults to `1.0` and ranges to `4.0`. It consolidates prepared frame-local, medium, and
-  trajectory-continuity residuals into one correction component. Zero tracking evidence is
+  trajectory-continuity residuals into one correction component. Its Y/rotation controls also
+  own broad global Y/roll residuals; Turn Smoothing remains X-only. Zero tracking evidence is
   still zero correction, and the TURN ownership gate removes only the detected TURN X motion
   from Camera Jitter input so the two stages cannot correct the same trajectory twice.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
