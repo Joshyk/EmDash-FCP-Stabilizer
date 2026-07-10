@@ -144,6 +144,9 @@ and real X-turn travel, so static or low-confidence frames do not get hidden tur
 `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time` directly for turn zoom timing;
 when another turn zoom demand is close enough in the future, release is held to
 avoid zoom-out / zoom-in pulsing.
+With `Remove Black Edges` off, the same timed plan drives X-position reservation at
+`1.0x` scale, so the required black edge is exposed before the turn instead of
+delaying the position travel until the turn is already underway.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 

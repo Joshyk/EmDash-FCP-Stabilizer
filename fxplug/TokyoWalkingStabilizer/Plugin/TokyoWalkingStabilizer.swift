@@ -51,11 +51,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.10"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 974.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 10.0, 974.0)
+private let tokyoWalkingStabilizerVersion = "1.1.11"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 975.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 11.0, 975.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_420_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_421_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -2276,7 +2276,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         currentTransform: StabilizerAutoTransform,
         outputSize: vector_float2,
         masterStrength: Float,
-        strengths: StabilizerCorrectionStrengths
+        strengths: StabilizerCorrectionStrengths,
+        turnReservation: AutoCropFraming? = nil
     ) -> AutoCropFraming {
         guard masterStrength > 0.0001,
               outputSize.x > 1.0,
@@ -2284,6 +2285,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         else {
             return .identity
         }
+        let reservationIsActive = (turnReservation?.scale ?? 1.0) > Float(1.0) + stabilizerAutoCropKeypointScaleThresholdDelta
+        let reservationPosition = reservationIsActive
+            ? (turnReservation?.positionPixels ?? vector_float2(0.0, 0.0))
+            : vector_float2(0.0, 0.0)
         let rigidDemand = max(
             abs(currentTransform.lensFarFieldRigidShakeOffset.x),
             abs(currentTransform.lensFarFieldMeshOffset.x)
@@ -2318,7 +2323,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             max(currentTransform.lensBandWarpSupport, currentTransform.sourceLensShakeLocalSupport)
         )
         guard demandX >= 0.25 || evidence >= 0.06 else {
-            return .identity
+            return reservationIsActive
+                ? AutoCropFraming(
+                    scale: 1.0,
+                    positionPixels: reservationPosition,
+                    telemetry: turnReservation?.telemetry ?? .empty,
+                    cropOffEdgeGuardScale: 1.0,
+                    cropOffEdgeGuardDemandX: 0.0,
+                    cropOffEdgeGuardActive: 0.0
+                )
+                : .identity
         }
         let halfWidth = max(outputSize.x * 0.5, 1.0)
         let demandScaleDelta = min(
@@ -2337,8 +2351,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let boundedDelta = min(max(exposedScaleDelta, 0.0), stabilizerCropOffEdgeGuardMaximumScaleDelta)
         return AutoCropFraming(
             scale: 1.0 + boundedDelta,
-            positionPixels: vector_float2(0.0, 0.0),
-            telemetry: .empty,
+            positionPixels: reservationPosition,
+            telemetry: reservationIsActive ? (turnReservation?.telemetry ?? .empty) : .empty,
             cropOffEdgeGuardScale: 1.0 + boundedDelta,
             cropOffEdgeGuardDemandX: demandX,
             cropOffEdgeGuardActive: 1.0
@@ -10767,12 +10781,43 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 onPlaybackPreparationReady: autoCropPlaybackPlanPrepared
             )
             autoCropFraming = rawAutoCropFraming
-        } else if renderUsesPreparedAnalysis {
+        } else if renderUsesPreparedAnalysis,
+                  let preparedAnalysis = activePreparedAnalysis {
+            let autoCropRenderTime = activeAnalysisRenderTime ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
+            let autoCropOutputSize = vector_float2(Float(outputWidth), Float(outputHeight))
+            let playbackPreparationCacheIdentity = renderCacheIdentity
+            let cropOffTurnReservationPrepared: () -> Void = { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.publishPlaybackPreparationInvalidationOnMain(
+                    cacheIdentity: playbackPreparationCacheIdentity,
+                    reason: "crop-off turn reservation plan prepared"
+                )
+            }
+            let turnReservation = Self.cachedAutoCropFraming(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: autoCropRenderTime,
+                currentTransform: autoTransform,
+                outputSize: autoCropOutputSize,
+                panSmoothSeconds: 0.0,
+                strengths: correctionStrengths,
+                masterStrength: masterStrength,
+                transitionDuration: state.autoCropTransitionDuration,
+                leadTime: state.autoCropLeadTime,
+                holdTime: state.autoCropHoldTime,
+                samplingProfile: autoCropSamplingProfile,
+                renderQualityLevel: state.renderQualityLevel,
+                analysisRevision: renderStoreRevision,
+                cacheIdentity: renderCacheIdentity,
+                onPlaybackPreparationReady: cropOffTurnReservationPrepared
+            )
             autoCropFraming = Self.cropOffEdgeGuardFraming(
                 currentTransform: autoTransform,
                 outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
                 masterStrength: masterStrength,
-                strengths: correctionStrengths
+                strengths: correctionStrengths,
+                turnReservation: turnReservation
             )
         } else {
             autoCropFraming = .identity

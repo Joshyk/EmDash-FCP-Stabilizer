@@ -293,6 +293,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   frames do not receive hidden turn correction. Auto Crop uses
   `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time` directly and holds release when a
   near-future turn zoom demand would otherwise create a zoom-out / zoom-in pulse.
+  With `Remove Black Edges` off, the same envelope reserves the X position at `1.0x`
+  scale and exposes the needed black edge before the turn starts.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
   original-media validation can happen later when original frames are available. The render
