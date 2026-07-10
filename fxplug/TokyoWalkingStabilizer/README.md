@@ -50,21 +50,12 @@ estimators, or Transform-keyframe writers back into this target.
   validation succeeds, proxy playback renders through the same prepared motion-path,
   correction, confidence, and Debug Overlay path as original/optimized media.
 - Renders from prepared motion paths instead of re-running block matching on every frame.
-- Combines per-frame Footstep Jitter, fixed-window Stride Wobble, Far-field Warp, and
-  broader Turn Smoothing bands so walking-gimbal shake is separated by
-  time scale without rerunning Host Analysis. Footstep Jitter keeps a short `0.18` second
-  confidence-aware smoothing pass around the current render frame after `2.20` second,
-  25-sample zero-phase broad smoothing. Turn Smoothing then gets a separate `2.8` second,
-  29-sample zero-phase transition pass for macro X correction only. That pass weights
-  same-direction, high-confidence TURN corrections over broken center frames and preserves
-  a confident center-frame TURN correction when the bridge average would otherwise weaken it.
-  Strength values above `1.0` use a more assertive confidence boost for TURN only and are
-  no longer capped at full detected turn-band removal. TURN ownership gates are smoothed across `0.90` seconds so FJIT/SWOB do not toggle abruptly
-  during turn entry and exit. TURN owns macro X pan, but Y/roll walking correction and
-  Far-field Warp stay active during turns so gimbal pitch/yaw/roll shake is not
-  muted just because the clip is changing direction. Moderate Footstep Jitter and Stride
-  Wobble bands reach full default response earlier, with the final applied correction still
-  clamped to the detected walking-band removal. Far-field Warp uses a `0.36` second in-range
+- Uses exactly three visible correction stages: Camera Jitter Stabilization for every
+  non-TURN/non-far-field walking residual, Far-field Warp for ridge/horizon/lens evidence,
+  and X-only Turn Smoothing. Camera Jitter consolidates the prepared short, medium, and
+  trajectory-continuity evidence behind one set of X/Y/rotation controls. Turn Smoothing
+  gets a separate `2.8` second, 29-sample zero-phase transition pass and owns only its
+  detected X trajectory; Camera Jitter never re-applies that component. Far-field Warp uses a `0.36` second in-range
   frame-sampled smoothing window with lower fine-motion deadband and no turn suppression,
   so clouds, ridge lines, and mountains stay steadier even if unavoidable residual motion lands
   more on near-ground parallax. Playback Auto Crop keeps the same coverage target but uses
@@ -230,46 +221,12 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 
 ## Stabilization Model
 
-- `Footstep Jitter X Strength`: direct amount for horizontal frame-local footstep correction.
-  The default is `4.0`; values above `1.0` can compensate for weak frame confidence but are
-  clamped during render to avoid inverse shake. The maximum is `10.0`. The walking-band confidence response is more
-  assertive than TURN and WARP for medium-confidence frame evidence, but zero confidence
-  still produces zero correction.
-  Confidence also checks local baseline support and surrounding footstep noise, with the
-  surrounding-noise floor capped below full response so repeated walking motion does not bury
-  a real center-frame landing impulse. During monotonic broad walking turns, a stronger
-  turn-shake gate suppresses X most strongly and reduces Y/roll only when TURN clearly owns
-  the motion, so the broad pan is not reintroduced as small walking corrections that vibrate
-  the frame. The same gate limits Footstep Jitter X removal before Stride Wobble reads the
-  footstep-cleaned path, so Stride does not inherit a turn that Footstep already chopped into
-  small X corrections.
-  The final FJIT X/Y/roll correction uses only a short same-direction, similar-magnitude,
-  confidence-weighted neighborhood so multi-frame jitter is smoother while isolated landing
-  impulses remain centered on the current frame.
-- `Footstep Jitter Y Strength`: direct amount for vertical frame-local footstep correction.
-  The default is `4.0`, and the maximum is `10.0`.
-  Footstep Jitter uses a seconds-based outer-frame linear prediction that skips the center
-  `0.10` second shock region and predicts from outer samples up to `1.0` second away for
-  X/Y/rotation, so landing shock is treated as a frame-level impulse instead of being
-  averaged back into the smooth path. Moderate landing impulses now reach useful confidence
-  a little sooner, while zero evidence and noisy unsupported frames still produce zero
-  correction.
-- `Footstep Jitter Rotation Strength`: direct amount for roll footstep correction. It
-  defaults to `1.0`. Values above `1.0` can
-  compensate when frame-local confidence makes the detected impulse visibly under-corrected,
-  but output remains clamped at full detected-impulse removal.
-- `Stride Wobble X/Y/Rotation Strength`: direct amount for medium-period walking wobble. The
-  render-time window is fixed at `2.0` seconds; there is no user-facing SWOB window. It is
-  measured from the footstep-cleaned path, not the raw or jerk-limited broad path, so it does
-  not erase FJIT twice. Residual gating uses robust window percentiles instead of the single
-  worst frame. Medium SWOB bands reach full confidence earlier than the broad control scale.
-  X and Y default to `4.0` and run up to `10.0`; the rotation default is `1.0`.
-  The X band
-  uses the same turn ownership gate as Footstep Jitter, and Y/roll are also reduced when
-  TURN clearly owns the frame, so medium stride cleanup does not fight broad Turn Smoothing
-  during real horizontal turns. FJIT and SWOB use a count-aware walking-band tracking gate;
-  WARP and TURN keep the stricter tracking gate, and WARP remains active during
-  clear TURN-owned motion so turn-time far-field shake is not muted by a turn cap.
+- `Camera Jitter Stabilization X/Y/Rotation Strength`: direct correction authority for all
+  walking-camera residuals outside Far-field Warp and the TURN-owned X trajectory. X/Y default
+  to `4.0` and range to `10.0`; rotation defaults to `1.0` and ranges to `4.0`. The stage uses
+  prepared frame-local, medium walking, and trajectory-continuity evidence as one applied
+  component. Zero tracking evidence remains zero correction, and TURN ownership prevents the
+  same X motion from being corrected twice.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
@@ -379,8 +336,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   strings, so use the compact runtime/source row in `Debug Overlay` to confirm the active
   render runtime.
 - `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
-  `ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`, confidence (`F Q`, `S Q`, `W Q`,
-  `T Q`), `SMTH`, tracking-quality (`TRK`, `SHRP`, `RES`, `HIT`), walking-band gate `WLK`, and compact
+  `ROLL`, `CAM`, `WARP`, `TURN`, confidence (`C Q`, `W Q`, `T Q`), `SMTH`, tracking-quality, and compact
   runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R###` means
   the current FxPlug runtime is rendering original/optimized frames, and `P###` means proxy
   playback is using the same saved-analysis correction path. The digits are derived from the active FxPlug
@@ -389,8 +345,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   proxy playback. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
-  confidence, applied warp confidence, edge-hit counts, and the Y correction split into footstep,
-  and stride components.
+  confidence, applied warp confidence, edge-hit counts, and the final Camera Jitter component.
 - `Mesh Overlay`: independent from `Debug Overlay`. Use it to show only the far-field mesh,
   only the lens-local mesh, only band guides, or all meshes at once. The lines are thicker
   and color-separated so mesh boundaries can be reviewed without the top-left diagnostic bars.
@@ -398,16 +353,14 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   `X` final horizontal correction,
   `Y` final vertical correction,
   `ROLL` final roll correction,
-  `FJIT` Footstep Jitter correction activity from the fixed second-based impulse range,
-  `SWOB` Stride Wobble correction activity from the fixed internal stride-wobble window,
+  `CAM` Camera Jitter correction activity from the unified nonTURN/non-far-field camera stage,
   `WARP` Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim,
   `TURN` X-only Turn Smoothing,
   `SMTH` temporal smoothing delta,
-  `F Q` Footstep Jitter confidence,
-  `S Q` Stride Wobble confidence,
+  `C Q` Camera Jitter confidence,
   `W Q` applied Far-field Warp confidence after tracking and search-radius safety gates,
   `T Q` Turn Smoothing confidence,
-  `WLK` walking-band tracking gate for FJIT/SWOB,
+  `WLK` walking-band tracking gate for Camera Jitter,
   `TRK` current frame tracking quality,
   `SHRP` frame sharpness/clarity quality where higher means less blur,
   `RES` residual quality where higher means lower block-matching error, and
@@ -433,12 +386,11 @@ without repairing, promoting, or deleting them.
 
 `--time` is clip-relative to the saved Host Analysis range. The tool ranks likely
 remaining shake from the prepared motion paths and tracking diagnostics, then
-prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order. Pass
+prints `CAM`, `WARP`, and `TURN` in render-stage order. Pass
 `--turn-strength` when `Turn Smoothing Strength` is not the default `12.0`.
-It uses the same footstep-first band split as render, so `SWOB` and `TURN`
-diagnostics are computed from the footstep-cleaned path rather than the raw footstep path. `WARP` `q` matches the
+It uses the same unified Camera Jitter composition as render. `WARP` `q` matches the
 applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band
-tracking confidence, FJIT per-axis and SWOB per-axis confidence, residual quality, blur quality, block coverage, edge quality, stable WARP tracking support, and WARP
+tracking confidence, Camera Jitter authority, residual quality, blur quality, block coverage, edge quality, stable WARP tracking support, and WARP
 tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the
 current FxPlug when that happens.

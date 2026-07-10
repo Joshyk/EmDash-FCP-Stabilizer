@@ -725,13 +725,13 @@ collect_render_component_diagnostics() {
 	local component_csv_path="${evidence_dir}/render_components.csv"
 	local component_focus_path="${evidence_dir}/render_components_focus.csv"
 	local component_points_path="${evidence_dir}/render_components_focus_points.csv"
-	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND (eventMessage CONTAINS "Render frame components csv v1" OR eventMessage CONTAINS "Render lens band csv v1" OR eventMessage CONTAINS "Render lens rigid csv v1" OR eventMessage CONTAINS "Render lens local csv v1" OR eventMessage CONTAINS "Render lens ridge line csv v1")'
+	local predicate='(subsystem == "com.justadev.TokyoWalkingStabilizer" OR process == "TokyoWalkingStabilizer XPC Service") AND (eventMessage CONTAINS "Render frame components csv v2" OR eventMessage CONTAINS "Render lens band csv v1" OR eventMessage CONTAINS "Render lens rigid csv v1" OR eventMessage CONTAINS "Render lens local csv v1" OR eventMessage CONTAINS "Render lens ridge line csv v1")'
 	local log_attempt
 	for log_attempt in 1 2 3; do
 		if ! log show --style compact --start "$start_date" --end "$end_date" --predicate "$predicate" >"$component_log_path" 2>&1; then
 			fail "could not read FxPlug render component diagnostics: $component_log_path"
 		fi
-		if grep -q "Render frame components csv v1 |" "$component_log_path"; then
+		if grep -q "Render frame components csv v2 |" "$component_log_path"; then
 			break
 		fi
 		if [[ "$log_attempt" != "3" ]]; then
@@ -754,7 +754,7 @@ csv_path = Path(sys.argv[3])
 focus_path = Path(sys.argv[4])
 points_path = Path(sys.argv[5])
 
-prefix = "Render frame components csv v1 |"
+prefix = "Render frame components csv v2 |"
 lens_prefix = "Render lens band csv v1 |"
 rigid_prefix = "Render lens rigid csv v1 |"
 local_prefix = "Render lens local csv v1 |"
@@ -930,6 +930,30 @@ if missing_far_field_rigid_rows:
 if not rows:
     raise SystemExit(f"Render component diagnostics missing: no '{prefix.strip()}' log rows in {log_path}")
 
+required_stage_fields = [
+    "cameraX", "cameraY", "macroX", "macroY", "lensShakeX", "lensShakeY",
+    "componentResidualX", "componentResidualY", "turnX", "turnY",
+]
+missing_stage_fields = [
+    field for field in required_stage_fields
+    if not any(field in row for row in rows)
+]
+if missing_stage_fields:
+    raise SystemExit(
+        "Render component diagnostics is missing unified 3-stage fields: "
+        f"{', '.join(missing_stage_fields)} log={log_path}"
+    )
+
+obsolete_stage_fields = [
+    field for field in ("microX", "microY", "strideX", "strideY", "trajectoryMicroX", "trajectoryMicroY")
+    if any(field in row for row in rows)
+]
+if obsolete_stage_fields:
+    raise SystemExit(
+        "Render component diagnostics emitted deprecated FJIT/SWOB fields: "
+        f"{', '.join(obsolete_stage_fields)} log={log_path}"
+    )
+
 def float_value(row: dict[str, str], key: str) -> float:
     try:
         value = float(row.get(key, "nan"))
@@ -968,14 +992,8 @@ columns = [
     "pixelOffset.y",
     "macroPixelOffset.x",
     "macroPixelOffset.y",
-    "microPixelOffset.x",
-    "microPixelOffset.y",
-    "strideWobblePixelOffset.x",
-    "strideWobblePixelOffset.y",
-    "trajectoryMicroJitterPixelOffset.x",
-    "trajectoryMicroJitterPixelOffset.y",
-    "trajectoryContinuityPixelOffset.x",
-    "trajectoryContinuityPixelOffset.y",
+    "cameraJitterPixelOffset.x",
+    "cameraJitterPixelOffset.y",
     "lensShakePixelOffset.x",
     "lensShakePixelOffset.y",
     "lensShakeRotationDegrees",
@@ -1075,8 +1093,7 @@ columns = [
     "turnDetectedPixelOffset.x",
     "turnDetectedPixelOffset.y",
     "rotationDegrees",
-    "footstepJitterRotationDegrees",
-    "strideWobbleRotationDegrees",
+    "cameraJitterRotationDegrees",
     "rawRotationDegrees",
     "temporalSmoothingRotationDelta",
     "perspective.x",
@@ -1110,14 +1127,8 @@ source_keys = {
     "pixelOffset.y": "pixelY",
     "macroPixelOffset.x": "macroX",
     "macroPixelOffset.y": "macroY",
-    "microPixelOffset.x": "microX",
-    "microPixelOffset.y": "microY",
-    "strideWobblePixelOffset.x": "strideX",
-    "strideWobblePixelOffset.y": "strideY",
-    "trajectoryMicroJitterPixelOffset.x": "trajectoryMicroX",
-    "trajectoryMicroJitterPixelOffset.y": "trajectoryMicroY",
-    "trajectoryContinuityPixelOffset.x": "trajectoryContinuityX",
-    "trajectoryContinuityPixelOffset.y": "trajectoryContinuityY",
+    "cameraJitterPixelOffset.x": "cameraX",
+    "cameraJitterPixelOffset.y": "cameraY",
     "lensShakePixelOffset.x": "lensShakeX",
     "lensShakePixelOffset.y": "lensShakeY",
     "lensShakeRotationDegrees": "lensShakeRotation",
@@ -1210,8 +1221,7 @@ source_keys = {
     "turnDetectedPixelOffset.x": "turnX",
     "turnDetectedPixelOffset.y": "turnY",
     "rotationDegrees": "rotation",
-    "footstepJitterRotationDegrees": "footstepRotation",
-    "strideWobbleRotationDegrees": "strideRotation",
+    "cameraJitterRotationDegrees": "cameraRotation",
     "rawRotationDegrees": "rawRotation",
     "temporalSmoothingRotationDelta": "smoothingRotationDelta",
     "perspective.x": "perspectiveX",
@@ -3656,12 +3666,10 @@ labels = [
     "X OFFSET",
     "Y OFFSET",
     "ROLL",
-    "FOOT STEP",
-    "STRIDE",
+    "CAM JITTER",
     "FAR WARP",
     "TURN",
-    "FOOT CONF",
-    "STRIDE CONF",
+    "CAM CONF",
     "WARP CONF",
     "TURN CONF",
     "SMOOTH",
@@ -3670,17 +3678,18 @@ labels = [
     "MATCH QUAL",
     "EDGE SAFE",
     "WALK CONF",
-    "CROP ZOOM",
+    "LENS",
+    "RUNTIME",
 ]
 
-overlay_scale = max(float(h) * 0.5 / (18.0 * 13.0), 0.25)
+overlay_scale = max(float(h) * 0.5 / (17.0 * 13.0), 0.25)
 panel_y = 16.0 * overlay_scale
 label_width = 96.0 * overlay_scale
 label_gap = 2.0 * overlay_scale
 bar_width = 180.0 * overlay_scale
 row_height = 13.0 * overlay_scale
 panel_width = label_width + label_gap + bar_width
-panel_height = 19.0 * row_height
+panel_height = 17.0 * row_height
 if panel_y >= h:
     raise SystemExit(f"{label}: predicted Debug Overlay panel origin is outside viewer ROI {w}x{h}")
 

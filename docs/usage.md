@@ -70,65 +70,20 @@ fallbacks.
 
 ## Controls
 
-- `Footstep Jitter X Strength`: direct amount for horizontal footstep-jitter correction. The
-  default is `4.0` and the maximum is `10.0`. Values above `1.0` can push through weak
-  frame evidence when the detected impulse is visibly under-corrected, but render output
-  still clamps at full detected-impulse removal to avoid inverse shake.
-- `Footstep Jitter Y Strength`: direct amount for vertical footstep-jitter correction. The
-  default is `4.0` and the maximum is `10.0`. Footstep Jitter uses an outer-frame linear
-  prediction with seconds-based windows: it skips the center `0.10` second shock region
-  and predicts from outer samples up to `1.0` second away for X/Y/rotation, so footstep
-  landing shock is treated as a frame-level impulse instead of being averaged back into the
-  smooth path.
-- Prepared analysis builds that path from multiple Metal block-matched regions with outlier
-  blocks rejected before render. Footstep Jitter is gated per frame from current tracking
-  quality, block coverage, blur, and whether the center frame actually departs from its
-  outer-frame baseline. The gate also requires local baseline support and compares the
-  center-frame impulse against surrounding footstep noise, so one unsupported edge frame does
-  not produce a strong correction by itself. Moderate landing impulses reach useful
-  confidence a little sooner than the surrounding-noise floor, and that surrounding-noise floor
-  is capped below the full-response point so repeated walking motion does not hide a real
-  center-frame landing shock. Zero evidence remains zero. The final FJIT X/Y/roll correction
-  uses a short same-direction, similar-magnitude, confidence-weighted neighborhood so
-  multi-frame jitter is smoother while isolated landing impulses stay current-frame centered.
-  Walking-band correction eases block coverage only when enough blocks were accepted;
-  Far-field Warp and Turn Smoothing keep the stricter gate. Values above `1.0` can compensate when that
-  frame-local score makes the detected impulse visibly under-corrected, but render output
-  still clamps at full detected-impulse removal to avoid inverse shake. On X,
-  monotonic broad walking turns now apply a stronger turn-shake gate: X is suppressed most
-  strongly, while Y and roll are reduced only when TURN has clear ownership, so a real turn
-  does not get split into small walking corrections that vibrate the frame. The same
-  ownership gate is applied before the footstep-cleaned X path feeds Stride Wobble, so
-  Stride does not inherit turn motion already chopped by Footstep Jitter.
-- `Footstep Jitter Rotation Strength`: direct amount for roll footstep-jitter correction. The
-  default is `1.0` and the maximum is `4.0`. The default balances landing-shock correction
-  with preserving a stable horizon. Values above `1.0` can compensate when
-  frame-local confidence makes the detected impulse visibly under-corrected, but render
-  output still clamps at full detected-impulse removal to avoid inverse shake.
-- `Stride Wobble X Strength`: direct amount for medium-period horizontal walking wobble that
-  is longer than Footstep Jitter but shorter than broad Turn Smoothing. The default is
-  `4.0` and the maximum is `10.0`.
-- `Stride Wobble Y Strength`: direct amount for medium-period vertical walking wobble. The
-  default is `4.0`, so medium vertical follow-through is handled by the stride stage.
-  Stride Wobble uses a fixed internal `2.0` second render-time window; there is no
-  user-facing Stride Wobble window. Its residual gate uses robust window percentiles instead
-  of the single worst residual in the window, and its confidence reaches full response
-  earlier for detected medium bands than for broad pan/turn bands. On X, the
-  same turn ownership gate suppresses stride correction during monotonic broad
-  turns so the medium band does not fight Turn Smoothing.
-- `Stride Wobble Rotation Strength`: direct amount for medium-period roll wobble. The default
-  is `1.0` and the maximum is `4.0`. The correction is measured from the
-  footstep-cleaned baseline and clamped at full detected-band removal during render, so high
-  values do not add inverse shake. It is not measured from the raw or jerk-limited broad path,
-  so Footstep Jitter shock is not removed a second time.
+- `Camera Jitter Stabilization X/Y/Rotation Strength`: the single walking-camera stage outside
+  Far-field Warp and TURN-owned X motion. X/Y default to `4.0` and range to `10.0`; rotation
+  defaults to `1.0` and ranges to `4.0`. It consolidates prepared frame-local, medium, and
+  trajectory-continuity residuals into one correction component. Zero tracking evidence is
+  still zero correction, and the TURN ownership gate removes only the detected TURN X motion
+  from Camera Jitter input so the two stages cannot correct the same trajectory twice.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
 - Prepared Host Analysis motion paths are post-processed with a zero-phase jerk limiter
   before caching. It clamps isolated acceleration spikes in X/Y/roll while preserving the
   total analyzed path endpoint, so real panning is not delayed into a sliding path. Raw
-  Footstep Jitter X/Y/roll impulse paths are saved separately before the limiter is applied,
-  so fine frame-level shake remains available to render-time correction. Short analyzed
+  raw Camera Jitter X/Y/roll evidence is retained before the limiter is applied,
+  so fine frame-level shake remains available to the unified render-time correction. Short analyzed
   ranges are kept in bounds during cleanup so the prepared cache can be saved.
 - `Far-field Warp Strength`: bundled small-clamp correction for distant ridge-line shake. It
   uses upper-frame residual blocks to estimate deskew/shear, yaw/pitch proxy, and perspective
@@ -208,8 +163,8 @@ fallbacks.
   Analyzer`.
 - Older saved timeline instances can keep stale saved Inspector strings, so check the compact
   runtime/source row in `Debug Overlay` when confirming the active render runtime.
-- `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`,
-  `WARP`, `TURN`, live `F Q`/`S Q`/`W Q`/`T Q` confidence, plus `SMTH`,
+- `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `CAM`,
+  `WARP`, `TURN`, live `C Q`/`W Q`/`T Q` confidence, plus `SMTH`,
   `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
   checking runtime behavior. `R###` means the current FxPlug runtime is rendering
   original/optimized frames, while `P###` means proxy playback is using the same
@@ -220,15 +175,13 @@ fallbacks.
   tracking evidence.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When
   enabled, `Host Analysis Status` also shows the current FxPlug version, the raw center-frame transform, the
-  smoothed transform delta, strict tracking, walking-band tracking, motion confidence, blur, residual, the raw `foot q`,
-  the effective Footstep Jitter X/Y/R correction strength, `stride q`, the effective Stride
-  Wobble X/Y/R correction strength, `turn q`, applied `warp q`, shear, yaw/pitch proxy, perspective,
-  edge-hit counts, the X turn and stride components plus Y footstep and stride components.
+  smoothed transform delta, strict tracking, walking-band tracking, motion confidence, blur, residual,
+  Camera Jitter authority, `turn q`, applied `warp q`, shear, yaw/pitch proxy, perspective, and edge-hit counts.
 - `Mesh Overlay`: separate from `Debug Overlay`. Select `Far Field Mesh`, `Lens Local Mesh`,
   `Band Guides`, or `All Meshes` when reviewing source-space cells without drawing the
   diagnostic bars. `Off` leaves the preview clean.
-- Strength values above `1.0` still compensate low-confidence Footstep and Stride Wobble
-  detections. Those walking-band controls use a more assertive
+- Strength values above `1.0` still compensate low-confidence Camera Jitter
+  detections. The walking-band control uses a more assertive
   medium-confidence response than TURN and WARP, but zero confidence still produces zero
   correction.
 
@@ -264,11 +217,10 @@ The listing checks the latest bundle cache and range-specific cache files, repor
 promote cache files.
 
 The CLI does not inspect pixels or start Host Analysis. It reads saved prepared
-paths and prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order,
-while the summary line names the highest remaining band. `FJIT` is measured against
-the outer-frame baseline, then `SWOB` and `TURN` are measured from that
-footstep-cleaned path. It prints strict tracking and walking-band tracking separately,
-FJIT and SWOB per-axis confidence (`qX`, `qY`, `qR`) alongside
+paths and prints `CAM`, `WARP`, and `TURN` in render-stage order,
+while the summary line names the highest remaining stage. `CAM` combines prepared
+frame-local, medium, and trajectory-continuity camera corrections before reporting its
+single authority value. It prints strict tracking and walking-band tracking separately,
 the raw impulse or band values. `WARP` `q` matches the applied `W Q` confidence shown by
 Debug Overlay. With `--time`, the report picks the highest-score frame inside
 the requested `--window` and prints both the requested note time and selected
@@ -302,23 +254,23 @@ FxPlug.
   original/optimized media.
 - Playback uses prepared motion paths from completed analysis. It must not run full
   frame-to-frame block matching on every rendered playback frame. Host Analysis stores
-  separate raw X/Y/roll impulse paths for Footstep Jitter before applying the zero-phase
+  separate raw X/Y/roll Camera Jitter evidence before applying the zero-phase
   jerk limiter used by broader pan and turn stages. Those raw footstep paths and their
   baselines are sampled continuously at render time so panning does not snap between nearest
-  analyzed frames and frame-level shake is not erased before Footstep Jitter can correct it.
+  analyzed frames and frame-level shake is not erased before Camera Jitter can correct it.
   The final automatic transform is also sampled across a `1.20` second, 15-sample symmetric
   render-time window and blended with zero phase. Near clip edges, out-of-range neighboring
   samples are skipped instead of clamped to the first or last analysis frame, so the end
   frames are not over-weighted. This increases preview compute per frame but makes the pan correction as
   smooth as possible without rerunning Host Analysis. Debug output reports the raw
   center-frame transform and the smoothing delta so visible stepping can be diagnosed from
-  the Inspector. Footstep Jitter X/Y and roll use only a short `0.18` second same-direction,
-  confidence-aware pass after the wider Stride/Turn smoothing pass, so fine distant ridge-line
-  shake is smoother without being averaged out by temporal smoothing. Far-field Warp uses a
+  the Inspector. Camera Jitter combines prepared short, medium, and continuity evidence without
+  exposing separate band controls, so fine and medium walking shake are corrected as one component.
+  Far-field Warp uses a
   shorter `0.20` second frame-sampled in-range smoothing window so ridge-line correction
   remains responsive without turning single-frame gate changes into swimming. Render-time window selection uses the sorted Host
   Analysis frame times directly, so long prepared caches do not require repeated full-cache
-  scans during playback. Stride and Turn confidence use robust residual percentiles
+  scans during playback. Camera Jitter and Turn confidence use robust residual percentiles
   rather than the single worst frame in the smoothing window.
 - If a saved Host Analysis cache is loaded while Final Cut Pro is currently playing proxy
   media, render playback uses the loaded cache immediately instead of requiring re-analysis;
@@ -345,18 +297,10 @@ FxPlug.
   `Source Media Unavailable - Check FCP Proxy`, leaves the Host Analysis cache on disk, and
   does not draw Debug Overlay diagnostics over that placeholder. Switch Viewer playback to
   Original/Optimized or create proxy media before judging the stabilized preview.
-- Render playback uses `Turn Smoothing Strength` to build an evidence-gated monotonic S-curve
-  X-only turn intent, then combines it with a per-frame Footstep Jitter impulse path and a
-  fixed `2.0` second Stride Wobble band. Y correction is handled by Footstep Jitter first
-  and Stride Wobble second; Turn Smoothing does not apply to Y. This keeps horizontal
-  segmented turns, fine high-frequency shake, medium walking wobble, and vertical walking
-  wobble tunable without rerunning Host Analysis.
-  During monotonic X turns, a render-time turn ownership gate directly reduces Footstep Jitter X/Y/roll
-  and Stride Wobble X/Y/roll so broad turn motion is not split
-  into small walking corrections. Far-field Warp remains active during turns. The ownership gate also gates the footstep-cleaned X path before
-  Stride input, keeping TURN as the owner of that broad motion through the whole walking-band chain.
-  Footstep Jitter confidence is evaluated on the current render frame instead of inheriting
-  the worst residual from the wider turn-detection window.
+- Render playback applies Camera Jitter Stabilization to all nonTURN/non-far-field camera
+  residuals, Far-field Warp to distant geometry, and Turn Smoothing to its X-only trajectory.
+  During monotonic X turns, TURN removes its owned trajectory from Camera Jitter input while
+  Far-field Warp remains active, so no stage double-corrects the turn.
 - `Far-field Warp Strength` defaults to `1.0` and controls bundled deskew/shear, yaw/pitch
   proxy, and perspective trim. At `0`, warp is fully disabled. At `4`, render clamps keep the
   previous cap of shear `0.016`, yaw/pitch proxy `0.010`, and perspective `0.006`; values up
@@ -367,9 +311,9 @@ FxPlug.
   for moderate 25% Host Analysis evidence, stabilizes that gate with short local tracking
   support, applies only short render-time smoothing, and drops tiny warp deltas through a
   deadband to avoid wave-like image distortion while tuning micro jitter.
-- Host Analysis cache schema `45` stores the original-size-percentage sample path with the
+- Host Analysis cache schema `48` stores the original-size-percentage sample path with the
   far-field-prioritized, zero-phase jerk-limited multi-block motion path, separate raw
-  Footstep Jitter X/Y/roll impulse paths, warp paths, band-specific far-field lens paths
+  Camera Jitter X/Y/roll evidence, warp paths, band-specific far-field lens paths
   and confidence, left/right lens-band column paths, two-way far-field rigid shake X/Y/roll paths,
   far-field `5x9` mesh paths, `3x5` source-lens local paths, fps-derived dominant mesh
   shake windows up to one second, accepted-block counts, blur values, and search-radius

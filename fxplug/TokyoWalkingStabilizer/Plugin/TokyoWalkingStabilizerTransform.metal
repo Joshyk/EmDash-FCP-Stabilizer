@@ -197,38 +197,32 @@ static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeB
         case 2:
             return debugLabelCharAt(index, 82, 79, 76, 76, 0, 0, 0, 0, 0, 0, 0, 0); // ROLL
         case 3:
-            return debugLabelCharAt(index, 70, 79, 79, 84, 0, 83, 84, 69, 80, 0, 0, 0); // FOOT STEP
+            return debugLabelCharAt(index, 67, 65, 77, 0, 74, 73, 84, 84, 69, 82, 0, 0); // CAM JITTER
         case 4:
-            return debugLabelCharAt(index, 83, 84, 82, 73, 68, 69, 0, 0, 0, 0, 0, 0); // STRIDE
-        case 5:
             return debugLabelCharAt(index, 70, 65, 82, 0, 87, 65, 82, 80, 0, 0, 0, 0); // FAR WARP
-        case 6:
+        case 5:
             return debugLabelCharAt(index, 84, 85, 82, 78, 0, 0, 0, 0, 0, 0, 0, 0); // TURN
+        case 6:
+            return debugLabelCharAt(index, 67, 65, 77, 0, 67, 79, 78, 70, 0, 0, 0, 0); // CAM CONF
         case 7:
-            return debugLabelCharAt(index, 70, 79, 79, 84, 0, 67, 79, 78, 70, 0, 0, 0); // FOOT CONF
-        case 8:
-            return debugLabelCharAt(index, 83, 84, 82, 73, 68, 69, 0, 67, 79, 78, 70, 0); // STRIDE CONF
-        case 9:
             return debugLabelCharAt(index, 87, 65, 82, 80, 0, 67, 79, 78, 70, 0, 0, 0); // WARP CONF
-        case 10:
+        case 8:
             return debugLabelCharAt(index, 84, 85, 82, 78, 0, 67, 79, 78, 70, 0, 0, 0); // TURN CONF
-        case 11:
+        case 9:
             return debugLabelCharAt(index, 83, 77, 79, 79, 84, 72, 0, 0, 0, 0, 0, 0); // SMOOTH
-        case 12:
+        case 10:
             return debugLabelCharAt(index, 84, 82, 65, 67, 75, 0, 67, 79, 78, 70, 0, 0); // TRACK CONF
-        case 13:
+        case 11:
             return debugLabelCharAt(index, 83, 72, 65, 82, 80, 78, 69, 83, 83, 0, 0, 0); // SHARPNESS
-        case 14:
+        case 12:
             return debugLabelCharAt(index, 77, 65, 84, 67, 72, 0, 81, 85, 65, 76, 0, 0); // MATCH QUAL
-        case 15:
+        case 13:
             return debugLabelCharAt(index, 69, 68, 71, 69, 0, 83, 65, 70, 69, 0, 0, 0); // EDGE SAFE
-        case 16:
+        case 14:
             return debugLabelCharAt(index, 87, 65, 76, 75, 0, 67, 79, 78, 70, 0, 0, 0); // WALK CONF
-        case 17:
-            return debugLabelCharAt(index, 67, 82, 79, 80, 0, 90, 79, 79, 77, 0, 0, 0); // CROP ZOOM
-        case 18:
+        case 15:
             return debugLabelCharAt(index, 76, 69, 78, 83, 0, 0, 0, 0, 0, 0, 0, 0); // LENS
-        case 19:
+        case 16:
             return debugModeLabelChar(debugMode, runtimeBuild, runtimeVersion, index);
         default:
             return 0;
@@ -706,7 +700,7 @@ fragment float4 fragmentShader(
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;
         float panelWidth = labelWidth + labelGap + barWidth;
-        float panelHeight = 20.0 * rowHeight;
+        float panelHeight = 17.0 * rowHeight;
         if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
@@ -721,36 +715,30 @@ fragment float4 fragmentShader(
             } else if (row == 3) {
                 fill = saturate(transform->diagnostic2.y);
             } else if (row == 4) {
-                fill = saturate(transform->diagnostic2.z);
-            } else if (row == 5) {
                 fill = saturate(transform->diagnostic2.w);
-            } else if (row == 6) {
+            } else if (row == 5) {
                 fill = saturate(transform->diagnostic2.x);
-            } else if (row == 7) {
+            } else if (row == 6) {
                 fill = saturate(transform->diagnostic3.y);
-            } else if (row == 8) {
+            } else if (row == 7) {
                 fill = saturate(transform->diagnostic3.z);
-            } else if (row == 9) {
-                fill = saturate(transform->diagnostic3.w);
-            } else if (row == 10) {
+            } else if (row == 8) {
                 fill = saturate(transform->diagnostic4.x);
-            } else if (row == 11) {
+            } else if (row == 9) {
                 fill = saturate(transform->diagnostic3.x);
-            } else if (row == 12) {
+            } else if (row == 10) {
                 fill = saturate(transform->diagnostic4.y);
-            } else if (row == 13) {
+            } else if (row == 11) {
                 fill = saturate(transform->diagnostic4.z);
-            } else if (row == 14) {
+            } else if (row == 12) {
                 fill = saturate(transform->diagnostic4.w);
-            } else if (row == 15) {
+            } else if (row == 13) {
                 fill = saturate(transform->diagnostic.w);
-            } else if (row == 16) {
+            } else if (row == 14) {
                 fill = saturate(transform->diagnostic5.x);
-            } else if (row == 17) {
-                fill = saturate(transform->diagnostic5.y);
-            } else if (row == 18) {
+            } else if (row == 15) {
                 fill = saturate(transform->diagnostic5.z);
-            } else if (row == 19) {
+            } else if (row == 16) {
                 fill = 1.0;
             }
             float barX = panelX - labelWidth - labelGap;

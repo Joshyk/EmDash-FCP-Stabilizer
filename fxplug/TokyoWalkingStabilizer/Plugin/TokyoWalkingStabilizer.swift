@@ -27,6 +27,8 @@ private enum ParameterID: UInt32 {
     // ID 28 is retired because existing FCP effect instances can persist the
     // old 0-4 slider range for that parameter ID.
     case legacyFarFieldWarpStrength = 28
+    // IDs 29-31 are deprecated Stride Wobble controls. Keep them reserved so
+    // saved timelines deserialize safely, but never register or read them.
     case strideWobbleXStrength = 29
     case strideWobbleYStrength = 30
     case strideWobbleRotationStrength = 31
@@ -51,11 +53,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.14"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 978.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 14.0, 978.0)
+private let tokyoWalkingStabilizerVersion = "1.1.15"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 979.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 15.0, 979.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_423_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_424_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 4.0
 private let stabilizerDefaultWalkingRotationStrength = 1.0
@@ -699,12 +701,9 @@ private struct RenderAnalysisDecisionSignature: Equatable {
 
 private struct StabilizerPluginState {
     var strength: Double
-    var microJitterXStrength: Double
-    var microJitterYStrength: Double
-    var microJitterRotationStrength: Double
-    var strideWobbleXStrength: Double
-    var strideWobbleYStrength: Double
-    var strideWobbleRotationStrength: Double
+    var cameraJitterXStrength: Double
+    var cameraJitterYStrength: Double
+    var cameraJitterRotationStrength: Double
     var farFieldWarpStrength: Double
     var turnSmoothingZoom: Double
     var autoCropTransitionDuration: Double
@@ -1179,7 +1178,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Footstep Jitter X Strength",
+            withName: "Camera Jitter Stabilization X Strength",
             parameterID: ParameterID.xStrength.rawValue,
             defaultValue: stabilizerDefaultWalkingTranslationStrength,
             parameterMin: 0.0,
@@ -1190,7 +1189,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Footstep Jitter Y Strength",
+            withName: "Camera Jitter Stabilization Y Strength",
             parameterID: ParameterID.yStrength.rawValue,
             defaultValue: stabilizerDefaultWalkingTranslationStrength,
             parameterMin: 0.0,
@@ -1201,41 +1200,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             parameterFlags: flags
         )
         paramAPI.addFloatSlider(
-            withName: "Footstep Jitter Rotation Strength",
+            withName: "Camera Jitter Stabilization Rotation Strength",
             parameterID: ParameterID.rotationStrength.rawValue,
-            defaultValue: stabilizerDefaultWalkingRotationStrength,
-            parameterMin: 0.0,
-            parameterMax: 4.0,
-            sliderMin: 0.0,
-            sliderMax: 4.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Stride Wobble X Strength",
-            parameterID: ParameterID.strideWobbleXStrength.rawValue,
-            defaultValue: stabilizerDefaultWalkingTranslationStrength,
-            parameterMin: 0.0,
-            parameterMax: 10.0,
-            sliderMin: 0.0,
-            sliderMax: 10.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Stride Wobble Y Strength",
-            parameterID: ParameterID.strideWobbleYStrength.rawValue,
-            defaultValue: stabilizerDefaultWalkingTranslationStrength,
-            parameterMin: 0.0,
-            parameterMax: 10.0,
-            sliderMin: 0.0,
-            sliderMax: 10.0,
-            delta: 0.01,
-            parameterFlags: flags
-        )
-        paramAPI.addFloatSlider(
-            withName: "Stride Wobble Rotation Strength",
-            parameterID: ParameterID.strideWobbleRotationStrength.rawValue,
             defaultValue: stabilizerDefaultWalkingRotationStrength,
             parameterMin: 0.0,
             parameterMax: 4.0,
@@ -1410,12 +1376,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         var state = StabilizerPluginState(
             strength: 1.0,
-            microJitterXStrength: stabilizerDefaultWalkingTranslationStrength,
-            microJitterYStrength: stabilizerDefaultWalkingTranslationStrength,
-            microJitterRotationStrength: stabilizerDefaultWalkingRotationStrength,
-            strideWobbleXStrength: stabilizerDefaultWalkingTranslationStrength,
-            strideWobbleYStrength: stabilizerDefaultWalkingTranslationStrength,
-            strideWobbleRotationStrength: stabilizerDefaultWalkingRotationStrength,
+            cameraJitterXStrength: stabilizerDefaultWalkingTranslationStrength,
+            cameraJitterYStrength: stabilizerDefaultWalkingTranslationStrength,
+            cameraJitterRotationStrength: stabilizerDefaultWalkingRotationStrength,
             farFieldWarpStrength: stabilizerDefaultFarFieldWarpStrength,
             turnSmoothingZoom: stabilizerDefaultTurnSmoothingZoom,
             autoCropTransitionDuration: stabilizerDefaultAutoCropTransitionDuration,
@@ -1435,12 +1398,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             inputFrameDurationSeconds: .nan
         )
         paramAPI.getFloatValue(&state.strength, fromParameter: ParameterID.strength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.microJitterXStrength, fromParameter: ParameterID.xStrength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.microJitterYStrength, fromParameter: ParameterID.yStrength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.microJitterRotationStrength, fromParameter: ParameterID.rotationStrength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.strideWobbleXStrength, fromParameter: ParameterID.strideWobbleXStrength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.strideWobbleYStrength, fromParameter: ParameterID.strideWobbleYStrength.rawValue, at: renderTime)
-        paramAPI.getFloatValue(&state.strideWobbleRotationStrength, fromParameter: ParameterID.strideWobbleRotationStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.cameraJitterXStrength, fromParameter: ParameterID.xStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.cameraJitterYStrength, fromParameter: ParameterID.yStrength.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.cameraJitterRotationStrength, fromParameter: ParameterID.rotationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.farFieldWarpStrength, fromParameter: ParameterID.farFieldWarpStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.turnSmoothingZoom, fromParameter: ParameterID.turnSmoothingZoom.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.autoCropTransitionDuration, fromParameter: ParameterID.autoCropTransitionDuration.rawValue, at: renderTime)
@@ -7394,23 +7354,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let trackingQuality = max(autoTransform.walkingTrackingConfidence, autoTransform.trackingConfidence)
             let appliedPixelOffset = autoTransform.pixelOffset * masterStrength
             let appliedMacroPixelOffset = autoTransform.macroPixelOffset * masterStrength
-            let appliedMicroPixelOffset = autoTransform.microPixelOffset * masterStrength
-            let appliedStrideWobblePixelOffset = autoTransform.strideWobblePixelOffset * masterStrength
-            let appliedTrajectoryMicroJitterPixelOffset = autoTransform.trajectoryMicroJitterPixelOffset * masterStrength
-            let appliedTrajectoryContinuityPixelOffset = autoTransform.trajectoryContinuityPixelOffset * masterStrength
+            let appliedCameraJitterPixelOffset = (
+                autoTransform.microPixelOffset
+                + autoTransform.strideWobblePixelOffset
+                + autoTransform.trajectoryMicroJitterPixelOffset
+                + autoTransform.trajectoryContinuityPixelOffset
+            ) * masterStrength
             let appliedLensShakePixelOffset = autoTransform.lensShakePixelOffset * masterStrength
             let appliedTurnDetectedPixelOffset = autoTransform.turnDetectedPixelOffset * masterStrength
             let componentPixelOffset = appliedMacroPixelOffset
-                + appliedMicroPixelOffset
-                + appliedStrideWobblePixelOffset
-                + appliedTrajectoryMicroJitterPixelOffset
-                + appliedTrajectoryContinuityPixelOffset
+                + appliedCameraJitterPixelOffset
                 + appliedLensShakePixelOffset
             let componentResidualPixelOffset = appliedPixelOffset - componentPixelOffset
             let appliedTransformDelta = sameIdentity ? transformDelta * masterStrength : vector_float2(0.0, 0.0)
             let appliedRotationDegrees = autoTransform.rotationDegrees * masterStrength
-            let appliedFootstepRotationDegrees = autoTransform.footstepJitterRotationDegrees * masterStrength
-            let appliedStrideRotationDegrees = autoTransform.strideWobbleRotationDegrees * masterStrength
+            let appliedCameraJitterRotationDegrees = (
+                autoTransform.footstepJitterRotationDegrees
+                + autoTransform.strideWobbleRotationDegrees
+            ) * masterStrength
             let appliedRawRotationDegrees = autoTransform.rawRotationDegrees * masterStrength
             let appliedTemporalSmoothingRotationDelta = autoTransform.temporalSmoothingRotationDelta * masterStrength
             let appliedLensShakeRotationDegrees = autoTransform.lensShakeRotationDegrees * masterStrength
@@ -7461,7 +7422,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedSourceLensShakeLocalMidCenterOffset = autoTransform.sourceLensShakeLocalMidCenterOffset * masterStrength
             let appliedSourceLensShakeLocalMidRightOffset = autoTransform.sourceLensShakeLocalMidRightOffset * masterStrength
             let componentMessage = [
-                "Render frame components csv v1 |",
+                "Render frame components csv v2 |",
                 "analysisTime=\(Self.renderCSVValue(analysisSeconds))",
                 "sample=\(Self.renderCSVValue(samplePosition, digits: 3))",
                 "idx=\(lowerIndex)-\(upperIndex)",
@@ -7474,14 +7435,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 "pixelY=\(Self.renderCSVValue(appliedPixelOffset.y))",
                 "macroX=\(Self.renderCSVValue(appliedMacroPixelOffset.x))",
                 "macroY=\(Self.renderCSVValue(appliedMacroPixelOffset.y))",
-                "microX=\(Self.renderCSVValue(appliedMicroPixelOffset.x))",
-                "microY=\(Self.renderCSVValue(appliedMicroPixelOffset.y))",
-                "strideX=\(Self.renderCSVValue(appliedStrideWobblePixelOffset.x))",
-                "strideY=\(Self.renderCSVValue(appliedStrideWobblePixelOffset.y))",
-                "trajectoryMicroX=\(Self.renderCSVValue(appliedTrajectoryMicroJitterPixelOffset.x))",
-                "trajectoryMicroY=\(Self.renderCSVValue(appliedTrajectoryMicroJitterPixelOffset.y))",
-                "trajectoryContinuityX=\(Self.renderCSVValue(appliedTrajectoryContinuityPixelOffset.x))",
-                "trajectoryContinuityY=\(Self.renderCSVValue(appliedTrajectoryContinuityPixelOffset.y))",
+                "cameraX=\(Self.renderCSVValue(appliedCameraJitterPixelOffset.x))",
+                "cameraY=\(Self.renderCSVValue(appliedCameraJitterPixelOffset.y))",
                 "lensShakeX=\(Self.renderCSVValue(appliedLensShakePixelOffset.x))",
                 "lensShakeY=\(Self.renderCSVValue(appliedLensShakePixelOffset.y))",
                 "lensShakeRotation=\(Self.renderCSVValue(appliedLensShakeRotationDegrees))",
@@ -7556,8 +7511,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 "turnX=\(Self.renderCSVValue(appliedTurnDetectedPixelOffset.x))",
                 "turnY=\(Self.renderCSVValue(appliedTurnDetectedPixelOffset.y))",
                 "rotation=\(Self.renderCSVValue(appliedRotationDegrees))",
-                "footstepRotation=\(Self.renderCSVValue(appliedFootstepRotationDegrees))",
-                "strideRotation=\(Self.renderCSVValue(appliedStrideRotationDegrees))",
+                "cameraRotation=\(Self.renderCSVValue(appliedCameraJitterRotationDegrees))",
                 "rawRotation=\(Self.renderCSVValue(appliedRawRotationDegrees))",
                 "smoothingRotationDelta=\(Self.renderCSVValue(appliedTemporalSmoothingRotationDelta))",
                 "perspectiveX=\(Self.renderCSVValue(appliedPerspective.x))",
@@ -10058,10 +10012,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return
         }
 
+        let cameraJitterPixelOffset = autoTransform.microPixelOffset
+            + autoTransform.strideWobblePixelOffset
+            + autoTransform.trajectoryMicroJitterPixelOffset
+            + autoTransform.trajectoryContinuityPixelOffset
+        let cameraJitterRotation = autoTransform.footstepJitterRotationDegrees
+            + autoTransform.strideWobbleRotationDegrees
+        let cameraJitterConfidence = max(autoTransform.microConfidence, autoTransform.strideConfidence)
+        let cameraJitterEffectiveX = max(autoTransform.effectiveMicroJitterStrength.x, autoTransform.effectiveStrideWobbleStrength.x)
+        let cameraJitterEffectiveY = max(autoTransform.effectiveMicroJitterStrength.y, autoTransform.effectiveStrideWobbleStrength.y)
+        let cameraJitterEffectiveRotation = max(autoTransform.effectiveMicroJitterStrength.z, autoTransform.effectiveStrideWobbleStrength.z)
         let cropTelemetry = autoCropFraming.telemetry
         let cropMergeSuffix = cropTelemetry.mergeBypassed ? " bypass" : ""
         let status = String(
-            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | lens %@ %@ %@ q %.2f x %.2f y %.2f r %.3f yp %.5f %.5f band %.2f T %.2f %.2f R %.2f %.2f M %.2f %.2f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | foot raw X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | stride q %.2f eff X %.2f Y %.2f R %.2f | blocks %d/%d edge %d/%d | x turn %.1f stride %.1f | y foot %.1f stride %.1f | traj micro %.2f %.2f cont %.2f %.2f | crop z %.3f miss %d worst %.4f/%.4f@%.1f merge %d/%d%@",
+            format: "Ready (%d) | FxPlug %@ | warp q %.2f shear %.4f %.4f yp %.4f %.4f persp %.4f %.4f | lens %@ %@ %@ q %.2f x %.2f y %.2f r %.3f yp %.5f %.5f band %.2f T %.2f %.2f R %.2f %.2f M %.2f %.2f | turn %.1fs q %.2f smooth %d@%.2fs | X %.1f Y %.1f R %.2f | raw X %.1f Y %.1f R %.2f | smooth dX %.1f dY %.1f dR %.2f | track q %.2f walk q %.2f motion q %.2f blur %.2f resid %.4f | camera X %.3f Y %.3f R %.3f q %.2f eff X %.2f Y %.2f R %.2f | blocks %d/%d edge %d/%d | x turn %.1f camera %.1f | y camera %.1f | crop z %.3f miss %d worst %.4f/%.4f@%.1f merge %d/%d%@",
             frameCount,
             tokyoWalkingStabilizerVersion,
             autoTransform.warpConfidence,
@@ -10105,29 +10069,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform.motionConfidence,
             autoTransform.blurAmount,
             autoTransform.residual,
-            autoTransform.footstepImpulse.x,
-            autoTransform.footstepImpulse.y,
-            autoTransform.footstepImpulse.z,
-            autoTransform.microConfidence,
-            autoTransform.effectiveMicroJitterStrength.x,
-            autoTransform.effectiveMicroJitterStrength.y,
-            autoTransform.effectiveMicroJitterStrength.z,
-            autoTransform.strideConfidence,
-            autoTransform.effectiveStrideWobbleStrength.x,
-            autoTransform.effectiveStrideWobbleStrength.y,
-            autoTransform.effectiveStrideWobbleStrength.z,
+            cameraJitterPixelOffset.x,
+            cameraJitterPixelOffset.y,
+            cameraJitterRotation,
+            cameraJitterConfidence,
+            cameraJitterEffectiveX,
+            cameraJitterEffectiveY,
+            cameraJitterEffectiveRotation,
             autoTransform.acceptedBlockCount,
             autoTransform.totalBlockCount,
             autoTransform.searchRadiusHitCount,
             autoTransform.searchRadiusTotalCount,
             autoTransform.macroPixelOffset.x,
-            autoTransform.strideWobblePixelOffset.x,
-            autoTransform.microPixelOffset.y,
-            autoTransform.strideWobblePixelOffset.y,
-            autoTransform.trajectoryMicroJitterPixelOffset.x,
-            autoTransform.trajectoryMicroJitterPixelOffset.y,
-            autoTransform.trajectoryContinuityPixelOffset.x,
-            autoTransform.trajectoryContinuityPixelOffset.y,
+            cameraJitterPixelOffset.x,
+            cameraJitterPixelOffset.y,
             autoCropFraming.scale,
             cropTelemetry.missCount,
             cropTelemetry.worstPlannedScale,
@@ -10188,7 +10143,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
 
         os_log(
-            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | previewWarming %{public}@ reason %{public}@ | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | FJIT %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f rawCorr %.3f %.3f limitedCorr %.3f %.3f pulseLimited %.3f %.3f | SWOB %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f",
+            "Debug Overlay runtime truth | FxPlug %{public}@ | render %.3f analysis %.3f | prepared yes | stabilization active | previewWarming %{public}@ reason %{public}@ | overlay active | proxy %{public}@ | identity %{public}@ | frames %{public}d | X %.2f Y %.2f R %.3f | raw X %.2f Y %.2f R %.3f | CAM %.3f %.3f %.3f q %.2f eff %.2f %.2f %.2f rawCorr %.3f %.3f limitedCorr %.3f %.3f pulseLimited %.3f %.3f | CAM residual %.2f %.2f %.2f q %.2f eff %.2f %.2f %.2f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -10227,7 +10182,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform.effectiveStrideWobbleStrength.z
         )
         os_log(
-            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f FOOT STEP %.3f STRIDE %.3f FAR WARP %.3f TURN %.3f SMOOTH %.3f CROP ZOOM %.3f LENS %.3f CROP X %.2f CROP Y %.2f CROP MISS %d WORST %.4f/%.4f MERGE %d/%d %{public}@",
+            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f CAM %.3f FAR WARP %.3f TURN %.3f SMOOTH %.3f LENS %.3f CROP X %.2f CROP Y %.2f CROP MISS %d WORST %.4f/%.4f MERGE %d/%d %{public}@",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -10235,11 +10190,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             diagnostic.y,
             diagnostic.z,
             diagnostic2.y,
-            diagnostic2.z,
             diagnostic2.w,
             diagnostic2.x,
             diagnostic3.x,
-            diagnostic5.y,
             diagnostic5.z,
             autoCropFraming.positionPixels.x,
             autoCropFraming.positionPixels.y,
@@ -10251,13 +10204,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFraming.telemetry.mergeBypassed ? "bypass" : "ok"
         )
         os_log(
-            "Debug Overlay bars quality | FxPlug %{public}@ | FOOT CONF %.3f STRIDE CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f MATCH QUAL %.3f EDGE SAFE %.3f WALK CONF %.3f",
+            "Debug Overlay bars quality | FxPlug %{public}@ | CAM CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f MATCH QUAL %.3f EDGE SAFE %.3f WALK CONF %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
             diagnostic3.y,
             diagnostic3.z,
-            diagnostic3.w,
             diagnostic4.x,
             diagnostic4.y,
             diagnostic4.z,
@@ -10401,12 +10353,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let expectedRange = currentRenderExpectedRange(from: state)
         let preferredCacheIdentity = currentPreferredHostAnalysisCacheIdentity()
         let correctionStrengths = StabilizerCorrectionStrengths(
-            microJitterX: state.microJitterXStrength,
-            microJitterY: state.microJitterYStrength,
-            microJitterRotation: state.microJitterRotationStrength,
-            strideWobbleX: state.strideWobbleXStrength,
-            strideWobbleY: state.strideWobbleYStrength,
-            strideWobbleRotation: state.strideWobbleRotationStrength,
+            cameraJitterX: state.cameraJitterXStrength,
+            cameraJitterY: state.cameraJitterYStrength,
+            cameraJitterRotation: state.cameraJitterRotationStrength,
             farFieldWarp: state.farFieldWarpStrength,
             turnSmoothingZoom: state.turnSmoothingZoom
         )
@@ -10596,20 +10545,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 abs(autoTransform.temporalSmoothingRotationDelta) / 0.05
             )
             let temporalSmoothingActivity = min(1.0, separatedTemporalSmoothingActivity)
-            let footstepJitterActivity = min(1.0, max(
-                simd_length(vector_float2(
-                    autoTransform.limitedFootstepCorrection.x / diagnosticScaleX,
-                    autoTransform.limitedFootstepCorrection.y / diagnosticScaleY
-                )),
-                abs(autoTransform.footstepJitterRotationDegrees) / 5.0
-            ))
-            let strideWobbleActivity = min(1.0, max(
-                simd_length(vector_float2(
-                    autoTransform.strideWobblePixelOffset.x / diagnosticScaleX,
-                    autoTransform.strideWobblePixelOffset.y / diagnosticScaleY
-                )),
-                abs(autoTransform.strideWobbleRotationDegrees) / 5.0
-            ))
+            let cameraJitterPixelOffset = autoTransform.microPixelOffset
+                + autoTransform.strideWobblePixelOffset
+                + autoTransform.trajectoryMicroJitterPixelOffset
+                + autoTransform.trajectoryContinuityPixelOffset
+            let cameraJitterRotation = autoTransform.footstepJitterRotationDegrees
+                + autoTransform.strideWobbleRotationDegrees
+            // Camera Jitter is intentionally sub-pixel sensitive: its bar is a
+            // diagnostic of active correction, not a crop-scale displacement.
+            let cameraJitterActivity = sqrt(min(1.0, max(
+                simd_length(cameraJitterPixelOffset),
+                abs(cameraJitterRotation) / 0.05
+            )))
+            let cameraJitterConfidence = max(
+                autoTransform.microConfidence,
+                autoTransform.strideConfidence
+            )
             let farFieldWarpActivity = min(1.0, max(
                 simd_length(autoTransform.shear) / 0.016,
                 simd_length(autoTransform.yawPitchProxy) / 0.010,
@@ -10642,15 +10593,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
             diagnostic2 = vector_float4(
                 turnActivity,
-                footstepJitterActivity,
-                strideWobbleActivity,
+                cameraJitterActivity,
+                0.0,
                 farFieldWarpActivity
             )
             diagnostic3 = vector_float4(
                 temporalSmoothingActivity,
-                min(1.0, autoTransform.microConfidence),
-                min(1.0, autoTransform.strideConfidence),
-                min(1.0, autoTransform.warpConfidence)
+                min(1.0, cameraJitterConfidence),
+                min(1.0, autoTransform.warpConfidence),
+                0.0
             )
             diagnostic4 = vector_float4(
                 min(1.0, autoTransform.turnConfidence),

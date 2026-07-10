@@ -2329,40 +2329,31 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         turnOwnershipY: turnOwnershipY
     )
 
+    let cameraDetected = footDetected + strideDetected + walkingResidualBefore
+    let cameraApplied = footApplied + strideApplied + trajectoryMicroJitterApplied
+    let cameraConfidence = max(
+        (footQX + footQY + footQR) / 3.0,
+        (strideQX + strideQY + strideQR) / 3.0
+    )
+    let farFieldDetected = max(warpDetected, lensBand.detected)
+    let farFieldApplied = max(warpApplied, lensBand.applied)
     let bands = [
         BandAssessment(
-            name: "FJIT",
-            detected: footDetected,
-            applied: footApplied,
-            remaining: max(0.0, footDetected - footApplied),
-            confidence: (footQX + footQY + footQR) / 3.0,
-            note: String(format: "foot raw X %.3f Y %.3f R %.3f qX %.2f qY %.2f qR %.2f ffX %.2f ffY %.2f ffR %.2f rescue %.2f %.2f corr %.3f %.3f limited %.3f %.3f", footX, footY, footR, footQX, footQY, footQR, footstepXFarFieldConfidenceFloor, footstepYFarFieldConfidenceFloor, footstepRollFarFieldConfidenceFloor, footstepXWalkingRescueConfidenceFloor, footstepYWalkingRescueConfidenceFloor, rawFootCorrectionX, rawFootCorrectionY, limitedFootCorrectionX, limitedFootCorrectionY)
-        ),
-        BandAssessment(
-            name: "SWOB",
-            detected: strideDetected,
-            applied: strideApplied,
-            remaining: max(0.0, strideDetected - strideApplied),
-            confidence: (strideQX + strideQY + strideQR) / 3.0,
-            note: String(format: "stride band X %.3f Y %.3f R %.3f rawQ %.2f %.2f %.2f qX %.2f qY %.2f qR %.2f ffX %.2f ffY %.2f ffR %.2f rescue %.2f %.2f", strideX, strideY, strideR, rawStrideQX, rawStrideQY, rawStrideQR, strideQX, strideQY, strideQR, strideXFarFieldConfidenceFloor, strideYFarFieldConfidenceFloor, strideRollFarFieldConfidenceFloor, strideXRescueConfidenceFloor, strideYRescueConfidenceFloor)
-        ),
-        BandAssessment(
-            name: "TRJM",
-            detected: walkingResidualBefore,
-            applied: trajectoryMicroJitterApplied,
+            name: "CAM",
+            detected: cameraDetected,
+            applied: cameraApplied,
             remaining: walkingResidualAfter,
-            confidence: max(farFieldTurnOwnedXSupport, max(strideTracking, analysis.farFieldConfidence[index])),
-            note: String(format: "walking residual before X %.3f Y %.3f trajMicro %.3f %.3f after %.3f", walkingResidualBeforeX, walkingResidualBeforeY, trajectoryMicroJitterOffset.x, trajectoryMicroJitterOffset.y, walkingResidualAfter)
+            confidence: cameraConfidence,
+            note: String(format: "foot X %.3f Y %.3f R %.3f | stride X %.3f Y %.3f R %.3f | traj %.3f %.3f | post %.3f", footX, footY, footR, strideX, strideY, strideR, trajectoryMicroJitterOffset.x, trajectoryMicroJitterOffset.y, walkingResidualAfter)
         ),
         BandAssessment(
             name: "WARP",
-            detected: warpDetected,
-            applied: warpApplied,
-            remaining: max(0.0, warpDetected - warpApplied),
-            confidence: appliedWarpConfidence,
-            note: String(format: "dimensionless warp band raw q %.2f stable q %.2f gate %.2f trkGate %.2f edgeGate %.2f stableTrk %.2f", rawWarpConfidence, stableWarpConfidence, warpGate, warpGateComponents.trackingGate, warpGateComponents.edgeGate, warpTracking)
+            detected: farFieldDetected,
+            applied: farFieldApplied,
+            remaining: max(0.0, farFieldDetected - farFieldApplied),
+            confidence: max(appliedWarpConfidence, lensBand.confidence),
+            note: String(format: "warp q %.2f stable %.2f gate %.2f trk %.2f edge %.2f | lens %@", rawWarpConfidence, stableWarpConfidence, warpGate, warpTracking, warpGateComponents.edgeGate, lensBand.note)
         ),
-        lensBand,
         BandAssessment(
             name: "TURN",
             detected: turnDetected,
@@ -5226,18 +5217,21 @@ private func parseOptions() throws -> Options {
             options.json = true
         case "--limit":
             options.limit = max(1, Int(try nextDouble(for: arg)))
-        case "--micro-x":
-            options.strengths.microX = try nextDouble(for: arg)
-        case "--micro-y":
-            options.strengths.microY = try nextDouble(for: arg)
-        case "--micro-r":
-            options.strengths.microR = try nextDouble(for: arg)
-        case "--stride-x":
-            options.strengths.strideX = try nextDouble(for: arg)
-        case "--stride-y":
-            options.strengths.strideY = try nextDouble(for: arg)
-        case "--stride-r":
-            options.strengths.strideR = try nextDouble(for: arg)
+        case "--camera-x":
+            let value = try nextDouble(for: arg)
+            options.strengths.microX = value
+            options.strengths.strideX = value
+        case "--camera-y":
+            let value = try nextDouble(for: arg)
+            options.strengths.microY = value
+            options.strengths.strideY = value
+        case "--camera-r":
+            let value = try nextDouble(for: arg)
+            options.strengths.microR = value
+            options.strengths.strideR = value
+        case "--micro-x", "--micro-y", "--micro-r", "--stride-x", "--stride-y", "--stride-r":
+            _ = try nextDouble(for: arg)
+            throw FeedbackError(description: "\(arg) is retired; use --camera-x, --camera-y, or --camera-r.")
         case "--turn":
             _ = try nextDouble(for: arg)
             throw FeedbackError(description: "--turn is retired; use --turn-strength for turn smoothing correction and zoom authority.")
@@ -5265,6 +5259,7 @@ private func printUsage() {
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
     --turn-strength should match Turn Smoothing Strength when it is not 12.0; range is 0...36.
+    --camera-x, --camera-y, and --camera-r override the matching Camera Jitter Stabilization strengths.
     --turn-zoom and --max-turn-zoom are deprecated aliases for --turn-strength and print a warning when used.
     --turn-window is retired and returns an error.
     --list-caches reports saved cache readiness without repairing cache files.

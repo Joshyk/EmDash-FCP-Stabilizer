@@ -237,22 +237,25 @@ struct StabilizerAutoTransform {
 }
 
 struct StabilizerCorrectionStrengths {
-    let microJitterX: Double
-    let microJitterY: Double
-    let microJitterRotation: Double
-    let strideWobbleX: Double
-    let strideWobbleY: Double
-    let strideWobbleRotation: Double
+    let cameraJitterX: Double
+    let cameraJitterY: Double
+    let cameraJitterRotation: Double
     let farFieldWarp: Double
     let turnSmoothingZoom: Double
 
+    // The estimator still uses its prepared short/medium residual measurements,
+    // but they are one Camera Jitter stage with one set of user strengths.
+    var microJitterX: Double { cameraJitterX }
+    var microJitterY: Double { cameraJitterY }
+    var microJitterRotation: Double { cameraJitterRotation }
+    var strideWobbleX: Double { cameraJitterX }
+    var strideWobbleY: Double { cameraJitterY }
+    var strideWobbleRotation: Double { cameraJitterRotation }
+
     static let defaultStrengths = StabilizerCorrectionStrengths(
-        microJitterX: 1.0,
-        microJitterY: 1.0,
-        microJitterRotation: 0.5,
-        strideWobbleX: 1.0,
-        strideWobbleY: 1.0,
-        strideWobbleRotation: 0.5,
+        cameraJitterX: 1.0,
+        cameraJitterY: 1.0,
+        cameraJitterRotation: 0.5,
         farFieldWarp: 0.5,
         turnSmoothingZoom: 5.0
     )
@@ -3781,15 +3784,9 @@ enum AutoStabilizationEstimator {
                     turnSmoothingStrength: strengths.turnSmoothingZoom
                 )
             ),
-            softLimit(
-                -panBandY * yScale * positionGain * panCorrectionStrengthY,
-                limit: turnSmoothingOffsetLimit()
-            )
+            0.0
         )
-        let macroRotation = softLimit(
-            -panBandRoll * rotationGain * panCorrectionStrengthRoll,
-            limit: turnSmoothingRotationLimit()
-        )
+        let macroRotation: Float = 0.0
         let microPixelLimitX = max(2.0, outputSize.x * 0.055)
         let microPixelLimitY = max(2.0, outputSize.y * 0.055)
         let unattenuatedRawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
@@ -4081,7 +4078,7 @@ enum AutoStabilizationEstimator {
             footstepJitterRotationDegrees: macroRotation + microRotation,
             strideWobbleRotationDegrees: strideRotation,
             rotationDegrees: rotation,
-            turnDetectedPixelOffset: vector_float2(-panBandX * xScale, -panBandY * yScale),
+            turnDetectedPixelOffset: vector_float2(-panBandX * xScale, 0.0),
             rawPixelOffset: pixelOffset,
             rawRotationDegrees: rotation,
             temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
@@ -7336,15 +7333,10 @@ enum AutoStabilizationEstimator {
                         turnSmoothingStrength: strengths.turnSmoothingZoom
                     )
                 ),
-                softLimit(
-                    -panBandY * yScale * positionGain * panCorrectionStrengthY,
-                    limit: turnSmoothingOffsetLimit()
-                )
+                0.0
             )
-            let macroRotation = softLimit(
-                -panBandRoll * rotationGain * panCorrectionStrengthRoll,
-                limit: turnSmoothingRotationLimit()
-            )
+            // TURN owns only X. Y/roll remain in the unified Camera Jitter stage.
+            let macroRotation: Float = 0.0
             let microPixelLimitX = max(2.0, outputSize.x * 0.055)
             let microPixelLimitY = max(2.0, outputSize.y * 0.055)
             let unattenuatedRawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
@@ -7529,6 +7521,11 @@ enum AutoStabilizationEstimator {
                 farFieldConfidence: farFieldMacroConfidence
             )
             let trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+            let cameraJitterPixelOffset = microPixelOffset
+                + stridePixelOffset
+                + trajectoryMicroJitterPixelOffset
+                + trajectoryContinuityPixelOffset
+            let cameraJitterRotation = microRotation + strideRotation
             let lensShake = farFieldWarpStrengths.isActive
                 ? sourceSpaceLensShakeCorrection(
                     analysis: analysis,
@@ -7545,19 +7542,16 @@ enum AutoStabilizationEstimator {
                 )
                 : SourceSpaceLensShakeCorrection()
             let pixelOffset = macroPixelOffset
-                + microPixelOffset
-                + stridePixelOffset
-                + trajectoryMicroJitterPixelOffset
-                + trajectoryContinuityPixelOffset
+                + cameraJitterPixelOffset
                 + lensShake.pixelOffset
-            let rotation = macroRotation + microRotation + strideRotation + lensShake.rotationDegrees
+            let rotation = macroRotation + cameraJitterRotation + lensShake.rotationDegrees
             return StabilizerAutoTransform(
                 pixelOffset: pixelOffset,
                 macroPixelOffset: macroPixelOffset,
-                microPixelOffset: microPixelOffset,
-                strideWobblePixelOffset: stridePixelOffset,
-                trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
-                trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
+                microPixelOffset: cameraJitterPixelOffset,
+                strideWobblePixelOffset: vector_float2(0.0, 0.0),
+                trajectoryMicroJitterPixelOffset: vector_float2(0.0, 0.0),
+                trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
                 lensShakePixelOffset: lensShake.pixelOffset,
                 lensShakeRotationDegrees: lensShake.rotationDegrees,
                 lensShakeYawPitch: lensShake.yawPitch,
@@ -7637,10 +7631,10 @@ enum AutoStabilizationEstimator {
             sourceLensShakeLocalMidRightOffset: lensShake.localMidRightOffset,
             sourceLensShakeLocalSupport: lensShake.localSupport,
             sourceLensShakeLocalApplied: lensShake.localApplied,
-                footstepJitterRotationDegrees: macroRotation + microRotation,
-                strideWobbleRotationDegrees: strideRotation,
+                footstepJitterRotationDegrees: cameraJitterRotation,
+                strideWobbleRotationDegrees: 0.0,
                 rotationDegrees: rotation,
-                turnDetectedPixelOffset: vector_float2(-panBandX * xScale, -panBandY * yScale),
+                turnDetectedPixelOffset: vector_float2(-panBandX * xScale, 0.0),
                 rawPixelOffset: pixelOffset,
                 rawRotationDegrees: rotation,
                 temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
@@ -7648,18 +7642,14 @@ enum AutoStabilizationEstimator {
                 temporalSmoothingSampleCount: 25,
                 temporalSmoothingWindowSeconds: Float(broadHalfWindow * 2.0),
                 effectiveMicroJitterStrength: vector_float3(
-                    effectiveMicroXCorrectionStrength,
-                    microYCorrectionStrength,
-                    microRotationCorrectionStrength
+                    max(effectiveMicroXCorrectionStrength, strideXCorrectionStrength),
+                    max(microYCorrectionStrength, strideYCorrectionStrength),
+                    max(microRotationCorrectionStrength, strideRotationCorrectionStrength)
                 ),
-                effectiveStrideWobbleStrength: vector_float3(
-                    strideXCorrectionStrength,
-                    strideYCorrectionStrength,
-                    strideRotationCorrectionStrength
-                ),
+                effectiveStrideWobbleStrength: vector_float3(0.0, 0.0, 0.0),
                 warpConfidence: appliedWarpConfidence,
-                microConfidence: playbackMicroConfidence,
-                strideConfidence: playbackStrideConfidence,
+                microConfidence: max(playbackMicroConfidence, playbackStrideConfidence),
+                strideConfidence: 0.0,
                 turnConfidence: turnTrackingConfidence,
                 acceptedBlockCount: acceptedBlockCount,
                 totalBlockCount: totalBlockCount,
@@ -7676,7 +7666,7 @@ enum AutoStabilizationEstimator {
                     rawMicroPixelOffsetX,
                     rawMicroPixelOffsetY
                 ),
-                limitedFootstepCorrection: microPixelOffset,
+                limitedFootstepCorrection: cameraJitterPixelOffset,
                 footstepPulseLimited: vector_float2(
                     limitedMicroPixelOffsetX.limitedAmount,
                     limitedMicroPixelOffsetY.limitedAmount
@@ -9182,14 +9172,8 @@ enum AutoStabilizationEstimator {
                 turnSmoothingStrength: strengths.turnSmoothingZoom
             )
         )
-        let macroCompensationY = softLimit(
-            rawMacroCompensationY,
-            limit: turnSmoothingOffsetLimit()
-        )
-        let macroCompensationRotation = softLimit(
-            rawMacroCompensationRotation,
-            limit: turnSmoothingRotationLimit()
-        )
+        let macroCompensationY: Float = 0.0
+        let macroCompensationRotation: Float = 0.0
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
             rawConfidence: max(rawFootstepXConfidence, footstepXFarFieldConfidenceFloor),
@@ -9485,7 +9469,7 @@ enum AutoStabilizationEstimator {
             footstepJitterRotationDegrees: macroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
             rotationDegrees: compensationRotation + lensShake.rotationDegrees,
-            turnDetectedPixelOffset: vector_float2(-panBandX * xScale, -panBandY * yScale),
+            turnDetectedPixelOffset: vector_float2(-panBandX * xScale, 0.0),
             rawPixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
             rawRotationDegrees: compensationRotation + lensShake.rotationDegrees,
             temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
@@ -10200,14 +10184,8 @@ enum AutoStabilizationEstimator {
                 turnSmoothingStrength: strengths.turnSmoothingZoom
             )
         )
-        let macroCompensationY = softLimit(
-            rawMacroCompensationY,
-            limit: turnSmoothingOffsetLimit()
-        )
-        let macroCompensationRotation = softLimit(
-            rawMacroCompensationRotation,
-            limit: turnSmoothingRotationLimit()
-        )
+        let macroCompensationY: Float = 0.0
+        let macroCompensationRotation: Float = 0.0
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
             rawConfidence: max(rawFootstepXConfidence, footstepXFarFieldConfidenceFloor),
@@ -16938,32 +16916,13 @@ enum AutoStabilizationEstimator {
         trackingConfidence: Float,
         edgeQuality: Float
     ) -> Float {
-        let farFieldSupport = confidenceRamp(
-            clamp(farFieldConfidence, min: 0.0, max: 1.0),
-            start: farFieldWalkingBandConfidenceStart,
-            full: farFieldWalkingBandConfidenceFull
-        )
-        let warpSupport = confidenceRamp(
-            clamp(warpConfidence, min: 0.0, max: 1.0),
-            start: farFieldWarpConsensusGateStart,
-            full: farFieldWarpConsensusGateFull
-        )
-        let trackingSupport = confidenceRamp(
-            clamp(trackingConfidence, min: 0.0, max: 1.0),
-            start: farFieldWalkingBandTrackingStart,
-            full: farFieldWalkingBandTrackingFull
-        )
-        let edgeSupport = confidenceRamp(
-            clamp(edgeQuality, min: 0.0, max: 1.0),
-            start: farFieldWarpEdgeQualityGateStart,
-            full: farFieldWarpEdgeQualityGateFull
-        )
-        let evidenceSupport = max(farFieldSupport, warpSupport * 0.65)
-        return clamp(
-            farFieldWalkingBandBlendMax * evidenceSupport * trackingSupport * edgeSupport,
-            min: 0.0,
-            max: farFieldWalkingBandBlendMax
-        )
+        // Far-field translation/mesh evidence belongs exclusively to Far-field Warp.
+        // Camera Jitter consumes the prepared global walking trajectory only.
+        _ = farFieldConfidence
+        _ = warpConfidence
+        _ = trackingConfidence
+        _ = edgeQuality
+        return 0.0
     }
 
     private static func blendedFarFieldBand(
