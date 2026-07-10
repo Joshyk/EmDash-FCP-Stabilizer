@@ -51,9 +51,9 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.13"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 977.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 13.0, 977.0)
+private let tokyoWalkingStabilizerVersion = "1.1.14"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 978.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 14.0, 978.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_423_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
@@ -207,7 +207,6 @@ private struct AutoCropFraming {
     var cropOffEdgeGuardScale: Float = 1.0
     var cropOffEdgeGuardDemandX: Float = 0.0
     var cropOffEdgeGuardActive: Float = 0.0
-    var cropOffTurnReservationActive: Float = 0.0
 
     static let identity = AutoCropFraming(
         scale: 1.0,
@@ -215,8 +214,7 @@ private struct AutoCropFraming {
         telemetry: .empty,
         cropOffEdgeGuardScale: 1.0,
         cropOffEdgeGuardDemandX: 0.0,
-        cropOffEdgeGuardActive: 0.0,
-        cropOffTurnReservationActive: 0.0
+        cropOffEdgeGuardActive: 0.0
     )
 }
 
@@ -2274,21 +2272,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         return framing
     }
 
-    private static func cropOffTurnReservationFraming(
-        turnReservation: AutoCropFraming
+    private static func cropOffDiagnosticFraming(
+        autoCropFraming: AutoCropFraming
     ) -> AutoCropFraming {
-        let reservationIsActive = turnReservation.scale > Float(1.0) + stabilizerAutoCropKeypointScaleThresholdDelta
-        let reservationPosition = reservationIsActive
-            ? turnReservation.positionPixels
-            : vector_float2(0.0, 0.0)
         return AutoCropFraming(
             scale: 1.0,
-            positionPixels: reservationPosition,
-            telemetry: reservationIsActive ? turnReservation.telemetry : .empty,
+            positionPixels: autoCropFraming.positionPixels,
+            telemetry: autoCropFraming.telemetry,
             cropOffEdgeGuardScale: 1.0,
             cropOffEdgeGuardDemandX: 0.0,
-            cropOffEdgeGuardActive: 0.0,
-            cropOffTurnReservationActive: reservationIsActive ? 1.0 : 0.0
+            cropOffEdgeGuardActive: 0.0
         )
     }
 
@@ -10719,13 +10712,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let autoCropRenderTime = activeAnalysisRenderTime ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             let autoCropOutputSize = vector_float2(Float(outputWidth), Float(outputHeight))
             let playbackPreparationCacheIdentity = renderCacheIdentity
-            let cropOffTurnReservationPrepared: () -> Void = { [weak self] in
+            let cropOffDiagnosticFramingPrepared: () -> Void = { [weak self] in
                 guard let self else {
                     return
                 }
                 self.publishPlaybackPreparationInvalidationOnMain(
                     cacheIdentity: playbackPreparationCacheIdentity,
-                    reason: "crop-off turn reservation plan prepared"
+                    reason: "crop-off diagnostic framing plan prepared"
                 )
             }
             let turnReservation = Self.cachedAutoCropFraming(
@@ -10743,10 +10736,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 renderQualityLevel: state.renderQualityLevel,
                 analysisRevision: renderStoreRevision,
                 cacheIdentity: renderCacheIdentity,
-                onPlaybackPreparationReady: cropOffTurnReservationPrepared
+                onPlaybackPreparationReady: cropOffDiagnosticFramingPrepared
             )
-            autoCropFraming = Self.cropOffTurnReservationFraming(
-                turnReservation: turnReservation
+            autoCropFraming = Self.cropOffDiagnosticFraming(
+                autoCropFraming: turnReservation
             )
         } else {
             autoCropFraming = .identity
@@ -10774,25 +10767,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let renderedAutoCropFraming: AutoCropFraming = previewWarmupDecision.active
             ? .identity
             : autoCropFraming
-        if !state.autoCropEnabled,
-           renderedAutoCropFraming.cropOffTurnReservationActive > 0.5 {
-            let reservationDirectionSource = abs(renderedAutoCropFraming.positionPixels.x) > Float.ulpOfOne
-                ? renderedAutoCropFraming.positionPixels.x
-                : renderedAutoTransform.turnDetectedPixelOffset.x
-            let reservationDirection: Float = reservationDirectionSource >= 0.0 ? 1.0 : -1.0
-            let zoomEnvelope = min(
-                max(
-                    (renderedAutoCropFraming.scale - 1.0)
-                        / max(stabilizerMaximumTurnSmoothingZoomScale - 1.0, Float.ulpOfOne),
-                    0.0
-                ),
-                1.0
-            )
-            let maximumReservationPixels = Float(outputWidth) * 0.5 * Self.turnSmoothingZoomNormalized(correctionStrengths.turnSmoothingZoom)
-            let reservationPixels = reservationDirection * maximumReservationPixels * zoomEnvelope
-            renderedAutoTransform.macroPixelOffset.x += reservationPixels
-            renderedAutoTransform.pixelOffset.x += reservationPixels
-            renderedAutoTransform.rawPixelOffset.x += reservationPixels
+        if !state.autoCropEnabled {
+            // Keep the X center path identical to the crop-on render. With crop on,
+            // the shader adds this position before subtracting the stabilization path.
+            // At 1.0x, subtracting the same value from that path is algebraically the
+            // same center motion while deliberately leaving the uncovered edge visible.
+            let matchingPositionOffset = -renderedAutoCropFraming.positionPixels.x
+            renderedAutoTransform.macroPixelOffset.x += matchingPositionOffset
+            renderedAutoTransform.pixelOffset.x += matchingPositionOffset
+            renderedAutoTransform.rawPixelOffset.x += matchingPositionOffset
         }
         let renderedAutoCropPosition = state.autoCropEnabled
             ? renderedAutoCropFraming.positionPixels

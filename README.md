@@ -144,9 +144,9 @@ and real X-turn travel, so static or low-confidence frames do not get hidden tur
 `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time` directly for turn zoom timing;
 when another turn zoom demand is close enough in the future, release is held to
 avoid zoom-out / zoom-in pulsing.
-With `Remove Black Edges` off, the same timed plan drives an X-position reservation at
-`1.0x` scale. Its peak is proportional to `Turn Smoothing Strength`, reaching half of
-the output width at `36`, so the required black edge is exposed before and through the turn.
+`Remove Black Edges` does not change the turn's X-position path: both states use the
+same timed plan and center motion. When it is off, the effect remains at `1.0x` and
+shows the uncovered edge; when it is on, Auto Crop zoom hides that same edge.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 

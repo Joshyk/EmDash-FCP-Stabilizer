@@ -152,9 +152,9 @@ fallbacks.
   hidden turn correction. Auto Crop uses `Zoom-In Time`, `Hold Time`, and
   `Zoom-Out Time` directly, and postpones release when another turn zoom demand is
   close enough in the future to avoid a zoom-out / zoom-in pulse.
-  With `Remove Black Edges` off, this same envelope reserves X position at `1.0x`
-  scale. The reservation grows with Turn Smoothing Strength and reaches half the
-  output width at `36`, deliberately exposing the needed black edge before the turn.
+  `Remove Black Edges` does not alter this X-position envelope: on and off use the
+  same center motion. Off remains at `1.0x` and exposes the uncovered edge; on uses
+  Auto Crop zoom solely to hide that same edge.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.
