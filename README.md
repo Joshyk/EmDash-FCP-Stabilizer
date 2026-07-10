@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.16` uses schema 48 far-field micro-shake analysis. It keeps the
+Version `1.1.17` uses schema 48 far-field micro-shake analysis. It keeps the
 fps-derived multi-window `5x9` far-field mesh evidence, but adds a persisted
 global far-field rigid roll path so short whole-frame Y/roll camera vibration can
 be corrected as a coherent transform instead of a local mountain/cloud warp.

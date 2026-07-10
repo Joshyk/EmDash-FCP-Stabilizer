@@ -53,9 +53,9 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.16"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 980.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 16.0, 980.0)
+private let tokyoWalkingStabilizerVersion = "1.1.17"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 981.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 17.0, 981.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_424_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
@@ -7437,6 +7437,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 "macroY=\(Self.renderCSVValue(appliedMacroPixelOffset.y))",
                 "cameraX=\(Self.renderCSVValue(appliedCameraJitterPixelOffset.x))",
                 "cameraY=\(Self.renderCSVValue(appliedCameraJitterPixelOffset.y))",
+                "componentResidualX=\(Self.renderCSVValue(componentResidualPixelOffset.x))",
+                "componentResidualY=\(Self.renderCSVValue(componentResidualPixelOffset.y))",
+                "turnX=\(Self.renderCSVValue(appliedTurnDetectedPixelOffset.x))",
+                "turnY=\(Self.renderCSVValue(appliedTurnDetectedPixelOffset.y))",
                 "lensShakeX=\(Self.renderCSVValue(appliedLensShakePixelOffset.x))",
                 "lensShakeY=\(Self.renderCSVValue(appliedLensShakePixelOffset.y))",
                 "lensShakeRotation=\(Self.renderCSVValue(appliedLensShakeRotationDegrees))",
@@ -7506,10 +7510,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 "sourceLensShakeLocalMidCenterY=\(Self.renderCSVValue(appliedSourceLensShakeLocalMidCenterOffset.y))",
                 "sourceLensShakeLocalMidRightX=\(Self.renderCSVValue(appliedSourceLensShakeLocalMidRightOffset.x))",
                 "sourceLensShakeLocalMidRightY=\(Self.renderCSVValue(appliedSourceLensShakeLocalMidRightOffset.y))",
-                "componentResidualX=\(Self.renderCSVValue(componentResidualPixelOffset.x))",
-                "componentResidualY=\(Self.renderCSVValue(componentResidualPixelOffset.y))",
-                "turnX=\(Self.renderCSVValue(appliedTurnDetectedPixelOffset.x))",
-                "turnY=\(Self.renderCSVValue(appliedTurnDetectedPixelOffset.y))",
                 "rotation=\(Self.renderCSVValue(appliedRotationDegrees))",
                 "cameraRotation=\(Self.renderCSVValue(appliedCameraJitterRotationDegrees))",
                 "rawRotation=\(Self.renderCSVValue(appliedRawRotationDegrees))",
