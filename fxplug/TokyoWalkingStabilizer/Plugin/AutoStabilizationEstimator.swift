@@ -1165,6 +1165,14 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryWarpRate: Float = 0.040
     private static let playbackTrajectoryMaximumWarpStep: Float = 0.00070
     private static let playbackTrajectoryMinimumWarpStep: Float = 0.00010
+    private static let playbackTrajectoryRigidYSupportStart: Float = 0.55
+    private static let playbackTrajectoryRigidYSupportFull: Float = 0.85
+    private static let playbackTrajectoryRigidYShapeStart: Float = 0.72
+    private static let playbackTrajectoryRigidYShapeFull: Float = 0.95
+    private static let playbackTrajectoryRigidYTwoWayStart: Float = 0.70
+    private static let playbackTrajectoryRigidYTwoWayFull: Float = 0.90
+    private static let playbackTrajectoryRigidYCorrectionMatchStartPixels: Float = 0.05
+    private static let playbackTrajectoryRigidYCorrectionMatchFullPixels: Float = 0.35
     private static let playbackTrajectoryFootstepAuthorityGateStart: Float = 0.18
     private static let playbackTrajectoryFootstepAuthorityGateFull: Float = 0.62
     private static let playbackTrajectoryFootstepStepScale: Float = 0.45
@@ -7977,10 +7985,38 @@ enum AutoStabilizationEstimator {
         let lensRotationLimit = rotationLimit * 0.72
         let lensLocalRollLimit = (lensRotationLimit * .pi) / 180.0
 
+        let rigidYCorrectionMismatch = abs(
+            current.lensShakePixelOffset.y - current.lensFarFieldRigidGlobalYOffset
+        )
+        let rigidYCorrectionMatch = 1.0 - confidenceRamp(
+            rigidYCorrectionMismatch,
+            start: playbackTrajectoryRigidYCorrectionMatchStartPixels,
+            full: playbackTrajectoryRigidYCorrectionMatchFullPixels
+        )
+        let rigidYAuthority = current.lensFarFieldRigidShakeApplied > 0.5
+            ? confidenceRamp(
+                current.lensFarFieldRigidShakeSupport,
+                start: playbackTrajectoryRigidYSupportStart,
+                full: playbackTrajectoryRigidYSupportFull
+            ) * confidenceRamp(
+                current.lensFarFieldRigidShakeShapeConsistency,
+                start: playbackTrajectoryRigidYShapeStart,
+                full: playbackTrajectoryRigidYShapeFull
+            ) * confidenceRamp(
+                current.lensFarFieldRigidShakeForwardBackwardConsistency,
+                start: playbackTrajectoryRigidYTwoWayStart,
+                full: playbackTrajectoryRigidYTwoWayFull
+            ) * rigidYCorrectionMatch
+            : 0.0
+        let rigidYTargetStep = abs(
+            current.lensFarFieldRigidGlobalYOffset - previous.lensShakePixelOffset.y
+        )
+        let lensYLimit = max(lensPixelLimit, rigidYTargetStep * rigidYAuthority)
+
         limited.lensShakePixelOffset.y = playbackTrajectoryLimitedScalar(
             current.lensShakePixelOffset.y,
             previous: previous.lensShakePixelOffset.y,
-            limit: lensPixelLimit
+            limit: lensYLimit
         )
         limited.lensShakeRotationDegrees = playbackTrajectoryLimitedScalar(
             current.lensShakeRotationDegrees,

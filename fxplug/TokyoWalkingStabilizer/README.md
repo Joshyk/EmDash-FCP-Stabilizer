@@ -26,12 +26,14 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.17` keeps the far-field micro-shake correction baseline on schema 48.
+- Version `1.1.18` keeps the far-field micro-shake correction baseline on schema 48.
   Keep schema 48's fps-derived dominant `5x9` mesh windows as the primary evidence
   for short source-space lens/camera shake up to one second, with the coherent
   rigid far-field X/Y/roll path built from the sky/top and ridge/horizon bands
   instead of lower mountain/mid-band parallax. `3x5` source-lens local evidence
-  still feeds the coherent low-order correction. Do not
+  still feeds the coherent low-order correction. Strong coherent rigid-Y evidence
+  may follow its prepared Y path beyond the ordinary local-lens per-frame step
+  cap; weak or inconsistent evidence remains under the normal limiter. Do not
   return to a fixed 10-frame detector or a visible local mesh warp that makes
   mountains, clouds, or horizons pulse.
 - Requires schema 48 far-field `5x9` mesh paths, fps-derived dominant mesh shake

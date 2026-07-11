@@ -18,10 +18,12 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.17` uses schema 48 far-field micro-shake analysis. It keeps the
+Version `1.1.18` uses schema 48 far-field micro-shake analysis. It keeps the
 fps-derived multi-window `5x9` far-field mesh evidence, but adds a persisted
 global far-field rigid roll path so short whole-frame Y/roll camera vibration can
 be corrected as a coherent transform instead of a local mountain/cloud warp.
+Strong, internally consistent rigid-Y evidence is allowed to follow that prepared
+path without the ordinary local-lens per-frame step cap suppressing the correction.
 Future tuning should preserve that seconds-based detector, avoid fixed-frame
 shake windows, and keep the rendered correction coherent enough that mountains,
 clouds, and horizons do not locally pulse or swim.
