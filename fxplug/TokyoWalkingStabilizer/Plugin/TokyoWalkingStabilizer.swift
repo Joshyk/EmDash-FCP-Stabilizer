@@ -53,9 +53,9 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.18"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 982.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 18.0, 982.0)
+private let tokyoWalkingStabilizerVersion = "1.1.19"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 983.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 19.0, 983.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_424_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
@@ -7359,7 +7359,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 + autoTransform.strideWobblePixelOffset
                 + autoTransform.trajectoryMicroJitterPixelOffset
                 + autoTransform.trajectoryContinuityPixelOffset
+                + autoTransform.cameraRigidPixelOffset
             ) * masterStrength
+            let appliedCameraRigidPixelOffset = autoTransform.cameraRigidPixelOffset * masterStrength
             let appliedLensShakePixelOffset = autoTransform.lensShakePixelOffset * masterStrength
             let appliedTurnDetectedPixelOffset = autoTransform.turnDetectedPixelOffset * masterStrength
             let componentPixelOffset = appliedMacroPixelOffset
@@ -7371,7 +7373,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedCameraJitterRotationDegrees = (
                 autoTransform.footstepJitterRotationDegrees
                 + autoTransform.strideWobbleRotationDegrees
+                + autoTransform.cameraRigidRotationDegrees
             ) * masterStrength
+            let appliedCameraRigidRotationDegrees = autoTransform.cameraRigidRotationDegrees * masterStrength
             let appliedRawRotationDegrees = autoTransform.rawRotationDegrees * masterStrength
             let appliedTemporalSmoothingRotationDelta = autoTransform.temporalSmoothingRotationDelta * masterStrength
             let appliedLensShakeRotationDegrees = autoTransform.lensShakeRotationDegrees * masterStrength
@@ -7406,6 +7410,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let appliedLensFarFieldRigidGlobalRollDegrees = autoTransform.lensFarFieldRigidGlobalRollDegrees * masterStrength
             let componentRigidDiagnostics = [
                 "lensFarFieldRigidRollResidual=\(Self.renderCSVValue(appliedLensFarFieldRigidRollResidual))",
+                "lensFarFieldRigidSupportX=\(Self.renderCSVValue(autoTransform.lensFarFieldRigidShakeSupportX))",
+                "lensFarFieldRigidSupportY=\(Self.renderCSVValue(autoTransform.lensFarFieldRigidShakeSupportY))",
                 "lensFarFieldRigidRollSupport=\(Self.renderCSVValue(autoTransform.lensFarFieldRigidRollSupport))",
                 "lensFarFieldRigidGlobalY=\(Self.renderCSVValue(appliedLensFarFieldRigidGlobalYOffset))",
                 "lensFarFieldRigidGlobalRoll=\(Self.renderCSVValue(appliedLensFarFieldRigidGlobalRollDegrees))",
@@ -7437,6 +7443,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 "macroY=\(Self.renderCSVValue(appliedMacroPixelOffset.y))",
                 "cameraX=\(Self.renderCSVValue(appliedCameraJitterPixelOffset.x))",
                 "cameraY=\(Self.renderCSVValue(appliedCameraJitterPixelOffset.y))",
+                "cameraRigidX=\(Self.renderCSVValue(appliedCameraRigidPixelOffset.x))",
+                "cameraRigidY=\(Self.renderCSVValue(appliedCameraRigidPixelOffset.y))",
+                "cameraRigidRotation=\(Self.renderCSVValue(appliedCameraRigidRotationDegrees))",
                 "componentResidualX=\(Self.renderCSVValue(componentResidualPixelOffset.x))",
                 "componentResidualY=\(Self.renderCSVValue(componentResidualPixelOffset.y))",
                 "turnX=\(Self.renderCSVValue(appliedTurnDetectedPixelOffset.x))",
@@ -10016,9 +10025,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             + autoTransform.strideWobblePixelOffset
             + autoTransform.trajectoryMicroJitterPixelOffset
             + autoTransform.trajectoryContinuityPixelOffset
+            + autoTransform.cameraRigidPixelOffset
         let cameraJitterRotation = autoTransform.footstepJitterRotationDegrees
             + autoTransform.strideWobbleRotationDegrees
-        let cameraJitterConfidence = max(autoTransform.microConfidence, autoTransform.strideConfidence)
+            + autoTransform.cameraRigidRotationDegrees
+        let cameraJitterConfidence = max(
+            max(autoTransform.microConfidence, autoTransform.strideConfidence),
+            max(autoTransform.lensFarFieldRigidShakeSupport, autoTransform.lensFarFieldRigidRollSupport)
+        )
         let cameraJitterEffectiveX = max(autoTransform.effectiveMicroJitterStrength.x, autoTransform.effectiveStrideWobbleStrength.x)
         let cameraJitterEffectiveY = max(autoTransform.effectiveMicroJitterStrength.y, autoTransform.effectiveStrideWobbleStrength.y)
         let cameraJitterEffectiveRotation = max(autoTransform.effectiveMicroJitterStrength.z, autoTransform.effectiveStrideWobbleStrength.z)
@@ -10549,8 +10563,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 + autoTransform.strideWobblePixelOffset
                 + autoTransform.trajectoryMicroJitterPixelOffset
                 + autoTransform.trajectoryContinuityPixelOffset
+                + autoTransform.cameraRigidPixelOffset
             let cameraJitterRotation = autoTransform.footstepJitterRotationDegrees
                 + autoTransform.strideWobbleRotationDegrees
+                + autoTransform.cameraRigidRotationDegrees
             // Camera Jitter is intentionally sub-pixel sensitive: its bar is a
             // diagnostic of active correction, not a crop-scale displacement.
             let cameraJitterActivity = sqrt(min(1.0, max(
@@ -10558,8 +10574,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 abs(cameraJitterRotation) / 0.05
             )))
             let cameraJitterConfidence = max(
-                autoTransform.microConfidence,
-                autoTransform.strideConfidence
+                max(autoTransform.microConfidence, autoTransform.strideConfidence),
+                max(autoTransform.lensFarFieldRigidShakeSupport, autoTransform.lensFarFieldRigidRollSupport)
             )
             let farFieldWarpActivity = min(1.0, max(
                 simd_length(autoTransform.shear) / 0.016,
@@ -10575,15 +10591,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 simd_length(autoTransform.lensShakeYawPitch) / 0.0015,
                 simd_length(autoTransform.lensShakeShear) / 0.0025,
                 simd_length(autoTransform.lensShakePerspective) / 0.0012,
-                autoTransform.lensShakeSupport,
                 simd_length(autoTransform.lensBandTopOffset) / max(diagnosticScaleX, Float.ulpOfOne),
                 simd_length(autoTransform.lensBandRidgeOffset) / max(diagnosticScaleX, Float.ulpOfOne),
-                simd_length(autoTransform.lensBandMidOffset) / max(diagnosticScaleX, Float.ulpOfOne),
-                autoTransform.lensBandWarpSupport,
-                autoTransform.lensFarFieldRigidShakeSupport,
-                autoTransform.lensFarFieldRigidRollSupport,
-                abs(autoTransform.lensFarFieldRigidGlobalYOffset) / max(diagnosticScaleY, Float.ulpOfOne),
-                abs(autoTransform.lensFarFieldRigidGlobalRollDegrees) / 0.08
+                simd_length(autoTransform.lensBandMidOffset) / max(diagnosticScaleX, Float.ulpOfOne)
             ))
             diagnostic = vector_float4(
                 min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),

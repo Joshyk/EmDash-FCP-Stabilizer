@@ -14,6 +14,8 @@ struct StabilizerAutoTransform {
     var strideWobblePixelOffset: vector_float2
     var trajectoryMicroJitterPixelOffset: vector_float2
     var trajectoryContinuityPixelOffset: vector_float2
+    var cameraRigidPixelOffset: vector_float2 = vector_float2(0.0, 0.0)
+    var cameraRigidRotationDegrees: Float = 0.0
     var lensShakePixelOffset: vector_float2
     var lensShakeRotationDegrees: Float
     var lensShakeYawPitch: vector_float2
@@ -51,9 +53,16 @@ struct StabilizerAutoTransform {
     var lensBandModelMask: Int32
     var lensFarFieldRigidShakeOffset: vector_float2
     var lensFarFieldRigidShakeSupport: Float
+    var lensFarFieldRigidShakeSupportX: Float = 0.0
+    var lensFarFieldRigidShakeSupportY: Float = 0.0
     var lensFarFieldRigidShakeApplied: Float
     var lensFarFieldRigidShakeShapeConsistency: Float
+    var lensFarFieldRigidShakeShapeConsistencyX: Float = 0.0
+    var lensFarFieldRigidShakeShapeConsistencyY: Float = 0.0
     var lensFarFieldRigidShakeForwardBackwardConsistency: Float
+    var lensFarFieldRigidShakeForwardBackwardConsistencyX: Float = 0.0
+    var lensFarFieldRigidShakeForwardBackwardConsistencyY: Float = 0.0
+    var lensFarFieldRigidShakeRollForwardBackwardConsistency: Float = 0.0
     var lensFarFieldRigidShakeLocalWarpSuppressed: Float
     var lensFarFieldRigidXQuiverScore: Float = 0.0
     var lensFarFieldRigidXBeforeLimiter: Float = 0.0
@@ -527,9 +536,16 @@ struct StabilizerPreparedAnalysis {
     let farFieldRigidShakePathY: [Float]
     let farFieldRigidShakePathRoll: [Float]
     let farFieldRigidShakeSupport: [Float]
+    let farFieldRigidShakeSupportX: [Float]
+    let farFieldRigidShakeSupportY: [Float]
     let farFieldRigidShakeRollSupport: [Float]
     let farFieldRigidShakeShapeConsistency: [Float]
+    let farFieldRigidShakeShapeConsistencyX: [Float]
+    let farFieldRigidShakeShapeConsistencyY: [Float]
     let farFieldRigidShakeForwardBackwardConsistency: [Float]
+    let farFieldRigidShakeForwardBackwardConsistencyX: [Float]
+    let farFieldRigidShakeForwardBackwardConsistencyY: [Float]
+    let farFieldRigidShakeRollForwardBackwardConsistency: [Float]
     let farFieldMeshRows: Int
     let farFieldMeshColumns: Int
     let farFieldMeshPathX: [Float]
@@ -947,16 +963,6 @@ enum AutoStabilizationEstimator {
     private static let farFieldWalkingResidualContinuityBandStartPixels: Float = 2.0
     private static let farFieldWalkingResidualContinuityBandFullPixels: Float = 12.0
     private static let farFieldWalkingResidualContinuityMaximumResidualScale: Float = 0.92
-    private static let turnOwnedFootstepXFineFadeStartPixels: Float = 28.0
-    private static let turnOwnedFootstepXFineFadeFullPixels: Float = 72.0
-    private static let turnOwnedFootstepXRescueConfidenceFloorMax: Float = 0.34
-    private static let turnOwnedFootstepXRescueBandStartPixels: Float = 18.0
-    private static let turnOwnedFootstepXRescueBandFullPixels: Float = 58.0
-    private static let turnOwnedFootstepXRescueSupportStart: Float = 0.02
-    private static let turnOwnedFootstepXRescueSupportFull: Float = 0.12
-    private static let turnOwnedFootstepXRescueTurnEvidenceStart: Float = 0.48
-    private static let turnOwnedFootstepXRescueTurnEvidenceFull: Float = 0.68
-    private static let turnOwnedFootstepXRescueTurnEvidenceScale: Float = 0.85
     private static let turnMacroOwnershipBandStartPixels: Float = 16.0
     private static let turnMacroOwnershipBandFullPixels: Float = 96.0
     private static let turnMacroOwnershipTravelStartPixels: Float = 24.0
@@ -1165,14 +1171,6 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryWarpRate: Float = 0.040
     private static let playbackTrajectoryMaximumWarpStep: Float = 0.00070
     private static let playbackTrajectoryMinimumWarpStep: Float = 0.00010
-    private static let playbackTrajectoryRigidYSupportStart: Float = 0.55
-    private static let playbackTrajectoryRigidYSupportFull: Float = 0.85
-    private static let playbackTrajectoryRigidYShapeStart: Float = 0.72
-    private static let playbackTrajectoryRigidYShapeFull: Float = 0.95
-    private static let playbackTrajectoryRigidYTwoWayStart: Float = 0.70
-    private static let playbackTrajectoryRigidYTwoWayFull: Float = 0.90
-    private static let playbackTrajectoryRigidYCorrectionMatchStartPixels: Float = 0.05
-    private static let playbackTrajectoryRigidYCorrectionMatchFullPixels: Float = 0.35
     private static let playbackTrajectoryFootstepAuthorityGateStart: Float = 0.18
     private static let playbackTrajectoryFootstepAuthorityGateFull: Float = 0.62
     private static let playbackTrajectoryFootstepStepScale: Float = 0.45
@@ -1370,9 +1368,16 @@ enum AutoStabilizationEstimator {
         var bandModelMask: Int32 = 0
         var farFieldRigidOffset: vector_float2 = vector_float2(0.0, 0.0)
         var farFieldRigidSupport: Float = 0.0
+        var farFieldRigidSupportX: Float = 0.0
+        var farFieldRigidSupportY: Float = 0.0
         var farFieldRigidApplied: Float = 0.0
         var farFieldRigidShapeConsistency: Float = 0.0
+        var farFieldRigidShapeConsistencyX: Float = 0.0
+        var farFieldRigidShapeConsistencyY: Float = 0.0
         var farFieldRigidForwardBackwardConsistency: Float = 0.0
+        var farFieldRigidForwardBackwardConsistencyX: Float = 0.0
+        var farFieldRigidForwardBackwardConsistencyY: Float = 0.0
+        var farFieldRigidRollForwardBackwardConsistency: Float = 0.0
         var farFieldRigidLocalWarpSuppressed: Float = 0.0
         var farFieldRigidXQuiverScore: Float = 0.0
         var farFieldRigidXBeforeLimiter: Float = 0.0
@@ -2440,9 +2445,16 @@ enum AutoStabilizationEstimator {
         let pathY: [Float]
         let pathRoll: [Float]
         let support: [Float]
+        let supportX: [Float]
+        let supportY: [Float]
         let rollSupport: [Float]
         let shapeConsistency: [Float]
+        let shapeConsistencyX: [Float]
+        let shapeConsistencyY: [Float]
         let forwardBackwardConsistency: [Float]
+        let forwardBackwardConsistencyX: [Float]
+        let forwardBackwardConsistencyY: [Float]
+        let rollForwardBackwardConsistency: [Float]
     }
 
     static func farFieldRigidShakePreparedPaths(
@@ -2463,34 +2475,30 @@ enum AutoStabilizationEstimator {
             topConfidence.count, ridgeConfidence.count, midConfidence.count
         ].min() ?? 0
         guard frameCount > 0 else {
-            return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], pathRoll: [], support: [], rollSupport: [], shapeConsistency: [], forwardBackwardConsistency: [])
+            return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], pathRoll: [], support: [], supportX: [], supportY: [], rollSupport: [], shapeConsistency: [], shapeConsistencyX: [], shapeConsistencyY: [], forwardBackwardConsistency: [], forwardBackwardConsistencyX: [], forwardBackwardConsistencyY: [], rollForwardBackwardConsistency: [])
         }
 
         var pathX = Array(repeating: Float(0.0), count: frameCount)
         var pathY = Array(repeating: Float(0.0), count: frameCount)
         var pathRoll = Array(repeating: Float(0.0), count: frameCount)
         var support = Array(repeating: Float(0.0), count: frameCount)
+        var supportX = Array(repeating: Float(0.0), count: frameCount)
+        var supportY = Array(repeating: Float(0.0), count: frameCount)
         var rollSupport = Array(repeating: Float(0.0), count: frameCount)
         var shapeConsistency = Array(repeating: Float(0.0), count: frameCount)
+        var shapeConsistencyX = Array(repeating: Float(0.0), count: frameCount)
+        var shapeConsistencyY = Array(repeating: Float(0.0), count: frameCount)
         var forwardBackwardConsistency = Array(repeating: Float(0.0), count: frameCount)
+        var forwardBackwardConsistencyX = Array(repeating: Float(0.0), count: frameCount)
+        var forwardBackwardConsistencyY = Array(repeating: Float(0.0), count: frameCount)
+        var rollForwardBackwardConsistency = Array(repeating: Float(0.0), count: frameCount)
 
         for index in 0..<frameCount {
-            let commonX = (topX[index] * 0.25) + (ridgeX[index] * 0.50) + (midX[index] * 0.25)
-            let commonY = (topY[index] * 0.25) + (ridgeY[index] * 0.50) + (midY[index] * 0.25)
+            let commonX = (topX[index] * 0.35) + (ridgeX[index] * 0.65)
+            let commonY = (topY[index] * 0.35) + (ridgeY[index] * 0.65)
             pathX[index] = commonX
             pathY[index] = commonY
             pathRoll[index] = rollDegrees[index]
-
-            let topDelta = hypotf(topX[index] - commonX, topY[index] - commonY)
-            let ridgeDelta = hypotf(ridgeX[index] - commonX, ridgeY[index] - commonY)
-            let midDelta = hypotf(midX[index] - commonX, midY[index] - commonY)
-            let shapeDisagreement = max(topDelta, max(ridgeDelta, midDelta))
-            let shape = 1.0 - confidenceRamp(
-                shapeDisagreement,
-                start: farFieldRigidShakeShapeStartPixels,
-                full: farFieldRigidShakeShapeFullPixels
-            )
-            shapeConsistency[index] = clamp(shape, min: 0.0, max: 1.0)
         }
 
         let radius = farFieldRigidShakeTwoWayRadiusFrames
@@ -2500,9 +2508,16 @@ enum AutoStabilizationEstimator {
                 pathY: pathY,
                 pathRoll: pathRoll,
                 support: support,
+                supportX: supportX,
+                supportY: supportY,
                 rollSupport: rollSupport,
                 shapeConsistency: shapeConsistency,
-                forwardBackwardConsistency: forwardBackwardConsistency
+                shapeConsistencyX: shapeConsistencyX,
+                shapeConsistencyY: shapeConsistencyY,
+                forwardBackwardConsistency: forwardBackwardConsistency,
+                forwardBackwardConsistencyX: forwardBackwardConsistencyX,
+                forwardBackwardConsistencyY: forwardBackwardConsistencyY,
+                rollForwardBackwardConsistency: rollForwardBackwardConsistency
             )
         }
 
@@ -2513,12 +2528,36 @@ enum AutoStabilizationEstimator {
             let backwardY = pathY[index] - ((2.0 * pathY[index + 1]) - pathY[index + 2])
             let forwardRoll = pathRoll[index] - ((2.0 * pathRoll[index - 1]) - pathRoll[index - 2])
             let backwardRoll = pathRoll[index] - ((2.0 * pathRoll[index + 1]) - pathRoll[index + 2])
-            let residualMagnitude = (hypotf(forwardX, forwardY) + hypotf(backwardX, backwardY)) * 0.5
-            let residualMismatch = hypotf(forwardX - backwardX, forwardY - backwardY)
             let rollResidualMagnitude = (abs(forwardRoll) + abs(backwardRoll)) * 0.5
             let rollResidualMismatch = abs(forwardRoll - backwardRoll)
-            let twoWay = 1.0 - confidenceRamp(
-                residualMismatch,
+            let topForwardX = topX[index] - ((2.0 * topX[index - 1]) - topX[index - 2])
+            let topForwardY = topY[index] - ((2.0 * topY[index - 1]) - topY[index - 2])
+            let topBackwardX = topX[index] - ((2.0 * topX[index + 1]) - topX[index + 2])
+            let topBackwardY = topY[index] - ((2.0 * topY[index + 1]) - topY[index + 2])
+            let ridgeForwardX = ridgeX[index] - ((2.0 * ridgeX[index - 1]) - ridgeX[index - 2])
+            let ridgeForwardY = ridgeY[index] - ((2.0 * ridgeY[index - 1]) - ridgeY[index - 2])
+            let ridgeBackwardX = ridgeX[index] - ((2.0 * ridgeX[index + 1]) - ridgeX[index + 2])
+            let ridgeBackwardY = ridgeY[index] - ((2.0 * ridgeY[index + 1]) - ridgeY[index + 2])
+            let shapeX = 1.0 - confidenceRamp(
+                max(abs(topForwardX - ridgeForwardX), abs(topBackwardX - ridgeBackwardX)),
+                start: farFieldRigidShakeShapeStartPixels,
+                full: farFieldRigidShakeShapeFullPixels
+            )
+            let shapeY = 1.0 - confidenceRamp(
+                max(abs(topForwardY - ridgeForwardY), abs(topBackwardY - ridgeBackwardY)),
+                start: farFieldRigidShakeShapeStartPixels,
+                full: farFieldRigidShakeShapeFullPixels
+            )
+            shapeConsistencyX[index] = clamp(shapeX, min: 0.0, max: 1.0)
+            shapeConsistencyY[index] = clamp(shapeY, min: 0.0, max: 1.0)
+            shapeConsistency[index] = max(shapeConsistencyX[index], shapeConsistencyY[index])
+            let twoWayX = 1.0 - confidenceRamp(
+                abs(forwardX - backwardX),
+                start: farFieldRigidShakeForwardBackwardStartPixels,
+                full: farFieldRigidShakeForwardBackwardFullPixels
+            )
+            let twoWayY = 1.0 - confidenceRamp(
+                abs(forwardY - backwardY),
                 start: farFieldRigidShakeForwardBackwardStartPixels,
                 full: farFieldRigidShakeForwardBackwardFullPixels
             )
@@ -2527,9 +2566,15 @@ enum AutoStabilizationEstimator {
                 start: lensShakeRollStartDegrees,
                 full: lensShakeRollFullDegrees * 1.6
             )
-            let confidence = min(topConfidence[index], min(ridgeConfidence[index], midConfidence[index]))
-            let evidence = confidenceRamp(
-                residualMagnitude,
+            let confidence = min(topConfidence[index], ridgeConfidence[index])
+            let confidenceGate = confidenceRamp(confidence, start: 0.08, full: 0.36)
+            let evidenceX = confidenceRamp(
+                (abs(forwardX) + abs(backwardX)) * 0.5,
+                start: farFieldRigidShakeResidualStartPixels,
+                full: farFieldRigidShakeResidualFullPixels
+            )
+            let evidenceY = confidenceRamp(
+                (abs(forwardY) + abs(backwardY)) * 0.5,
                 start: farFieldRigidShakeResidualStartPixels,
                 full: farFieldRigidShakeResidualFullPixels
             )
@@ -2538,21 +2583,23 @@ enum AutoStabilizationEstimator {
                 start: lensShakeRollStartDegrees,
                 full: lensShakeRollFullDegrees
             )
-            forwardBackwardConsistency[index] = clamp(twoWay, min: 0.0, max: 1.0)
-            support[index] = clamp(
-                confidenceRamp(confidence, start: 0.08, full: 0.36)
-                    * shapeConsistency[index]
-                    * forwardBackwardConsistency[index]
-                    * evidence,
+            forwardBackwardConsistencyX[index] = clamp(twoWayX, min: 0.0, max: 1.0)
+            forwardBackwardConsistencyY[index] = clamp(twoWayY, min: 0.0, max: 1.0)
+            forwardBackwardConsistency[index] = max(forwardBackwardConsistencyX[index], forwardBackwardConsistencyY[index])
+            rollForwardBackwardConsistency[index] = clamp(rollTwoWay, min: 0.0, max: 1.0)
+            supportX[index] = clamp(
+                confidenceGate * shapeConsistencyX[index] * forwardBackwardConsistencyX[index] * evidenceX,
                 min: 0.0,
                 max: 1.0
             )
+            supportY[index] = clamp(
+                confidenceGate * shapeConsistencyY[index] * forwardBackwardConsistencyY[index] * evidenceY,
+                min: 0.0,
+                max: 1.0
+            )
+            support[index] = max(supportX[index], supportY[index])
             rollSupport[index] = clamp(
-                confidenceRamp(confidence, start: 0.08, full: 0.36)
-                    * shapeConsistency[index]
-                    * forwardBackwardConsistency[index]
-                    * clamp(rollTwoWay, min: 0.0, max: 1.0)
-                    * rollEvidence,
+                confidenceGate * rollForwardBackwardConsistency[index] * rollEvidence,
                 min: 0.0,
                 max: 1.0
             )
@@ -2563,9 +2610,16 @@ enum AutoStabilizationEstimator {
             pathY: pathY,
             pathRoll: pathRoll,
             support: support,
+            supportX: supportX,
+            supportY: supportY,
             rollSupport: rollSupport,
             shapeConsistency: shapeConsistency,
-            forwardBackwardConsistency: forwardBackwardConsistency
+            shapeConsistencyX: shapeConsistencyX,
+            shapeConsistencyY: shapeConsistencyY,
+            forwardBackwardConsistency: forwardBackwardConsistency,
+            forwardBackwardConsistencyX: forwardBackwardConsistencyX,
+            forwardBackwardConsistencyY: forwardBackwardConsistencyY,
+            rollForwardBackwardConsistency: rollForwardBackwardConsistency
         )
     }
 
@@ -3994,13 +4048,13 @@ enum AutoStabilizationEstimator {
             farFieldConfidence: farFieldMacroConfidence
         )
         let trajectoryContinuityPixelOffset = cameraJitterMacroPixelOffset
-        let lensShake = farFieldWarpStrengths.isActive
+        let rawLensShake = (farFieldWarpStrengths.isActive || strengths.cameraJitterX > 0.0 || strengths.cameraJitterY > 0.0 || strengths.cameraJitterRotation > 0.0)
             ? sourceSpaceLensShakeCorrection(
                 analysis: analysis,
                 frames: frames,
                 interpolation: interpolation,
                 outputScale: vector_float2(xScale, yScale),
-                warpConfidence: appliedWarpConfidence,
+                warpConfidence: max(appliedWarpConfidence, max(farFieldMacroConfidence, smoothedWalkingTrackingConfidence)),
                 farFieldConfidence: farFieldMacroConfidence,
                 trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
                 edgeQuality: farFieldWarpEdgeQuality,
@@ -4009,13 +4063,17 @@ enum AutoStabilizationEstimator {
                 cache: cache
             )
             : SourceSpaceLensShakeCorrection()
+        let lensShake = farFieldWarpStrengths.isActive
+            ? rawLensShake
+            : correctionWithLocalWarpDisabled(rawLensShake)
+        let cameraRigid = cameraRigidCorrection(from: lensShake, strengths: strengths)
         let pixelOffset = macroPixelOffset
             + microPixelOffset
             + stridePixelOffset
             + trajectoryMicroJitterPixelOffset
             + trajectoryContinuityPixelOffset
-            + lensShake.pixelOffset
-        let rotation = cameraJitterMacroRotation + microRotation + strideRotation + lensShake.rotationDegrees
+            + cameraRigid.pixelOffset
+        let rotation = cameraJitterMacroRotation + microRotation + strideRotation + cameraRigid.rotationDegrees
         return StabilizerAutoTransform(
             pixelOffset: pixelOffset,
             macroPixelOffset: macroPixelOffset,
@@ -4023,8 +4081,10 @@ enum AutoStabilizationEstimator {
             strideWobblePixelOffset: stridePixelOffset,
             trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
             trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
-            lensShakePixelOffset: lensShake.pixelOffset,
-            lensShakeRotationDegrees: lensShake.rotationDegrees,
+            cameraRigidPixelOffset: cameraRigid.pixelOffset,
+            cameraRigidRotationDegrees: cameraRigid.rotationDegrees,
+            lensShakePixelOffset: vector_float2(0.0, 0.0),
+            lensShakeRotationDegrees: 0.0,
             lensShakeYawPitch: lensShake.yawPitch,
             lensShakeShear: lensShake.shear,
             lensShakePerspective: lensShake.perspective,
@@ -4060,9 +4120,16 @@ enum AutoStabilizationEstimator {
             lensBandModelMask: lensShake.bandModelMask,
             lensFarFieldRigidShakeOffset: lensShake.farFieldRigidOffset,
             lensFarFieldRigidShakeSupport: lensShake.farFieldRigidSupport,
+            lensFarFieldRigidShakeSupportX: lensShake.farFieldRigidSupportX,
+            lensFarFieldRigidShakeSupportY: lensShake.farFieldRigidSupportY,
             lensFarFieldRigidShakeApplied: lensShake.farFieldRigidApplied,
             lensFarFieldRigidShakeShapeConsistency: lensShake.farFieldRigidShapeConsistency,
+            lensFarFieldRigidShakeShapeConsistencyX: lensShake.farFieldRigidShapeConsistencyX,
+            lensFarFieldRigidShakeShapeConsistencyY: lensShake.farFieldRigidShapeConsistencyY,
             lensFarFieldRigidShakeForwardBackwardConsistency: lensShake.farFieldRigidForwardBackwardConsistency,
+            lensFarFieldRigidShakeForwardBackwardConsistencyX: lensShake.farFieldRigidForwardBackwardConsistencyX,
+            lensFarFieldRigidShakeForwardBackwardConsistencyY: lensShake.farFieldRigidForwardBackwardConsistencyY,
+            lensFarFieldRigidShakeRollForwardBackwardConsistency: lensShake.farFieldRigidRollForwardBackwardConsistency,
             lensFarFieldRigidShakeLocalWarpSuppressed: lensShake.farFieldRigidLocalWarpSuppressed,
             lensFarFieldRigidXQuiverScore: lensShake.farFieldRigidXQuiverScore,
             lensFarFieldRigidXBeforeLimiter: lensShake.farFieldRigidXBeforeLimiter,
@@ -4456,6 +4523,8 @@ enum AutoStabilizationEstimator {
         let samples = filteredSamples.count >= 3 ? filteredSamples : rawSamples
         var smoothedTransform = weightedAverageTransform(samples)
         preserveLensShakeDiagnostics(from: centerTransform, into: &smoothedTransform)
+        smoothedTransform.cameraRigidPixelOffset = centerTransform.cameraRigidPixelOffset
+        smoothedTransform.cameraRigidRotationDegrees = centerTransform.cameraRigidRotationDegrees
         smoothedTransform.microPixelOffset = centerTransform.microPixelOffset
         smoothedTransform.footstepJitterRotationDegrees = centerTransform.footstepJitterRotationDegrees
         smoothedTransform.pixelOffset = smoothedTransform.macroPixelOffset
@@ -4463,9 +4532,11 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.trajectoryMicroJitterPixelOffset
             + smoothedTransform.trajectoryContinuityPixelOffset
+            + smoothedTransform.cameraRigidPixelOffset
             + smoothedTransform.lensShakePixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
+            + smoothedTransform.cameraRigidRotationDegrees
             + smoothedTransform.lensShakeRotationDegrees
         smoothedTransform.turnDetectedPixelOffset = centerTransform.turnDetectedPixelOffset
         smoothedTransform.rawPixelOffset = centerTransform.pixelOffset
@@ -4852,6 +4923,8 @@ enum AutoStabilizationEstimator {
         smoothedTransform.shear = smoothedWarpTransform.shear * temporalWarpScale
         smoothedTransform.perspective = smoothedWarpTransform.perspective * temporalWarpScale
         preserveLensShakeDiagnostics(from: rawCenterTransform, into: &smoothedTransform)
+        smoothedTransform.cameraRigidPixelOffset = rawCenterTransform.cameraRigidPixelOffset
+        smoothedTransform.cameraRigidRotationDegrees = rawCenterTransform.cameraRigidRotationDegrees
 
         let footstep = smoothedFootstepJitter(centerTransform: rawCenterTransform)
         smoothedTransform.microPixelOffset = footstep.microPixelOffset
@@ -4873,9 +4946,11 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.trajectoryMicroJitterPixelOffset
             + smoothedTransform.trajectoryContinuityPixelOffset
+            + smoothedTransform.cameraRigidPixelOffset
             + smoothedTransform.lensShakePixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
+            + smoothedTransform.cameraRigidRotationDegrees
             + smoothedTransform.lensShakeRotationDegrees
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
@@ -7576,13 +7651,13 @@ enum AutoStabilizationEstimator {
                 + trajectoryMicroJitterPixelOffset
                 + trajectoryContinuityPixelOffset
             let cameraJitterRotation = cameraJitterMacroRotation + microRotation + strideRotation
-            let lensShake = farFieldWarpStrengths.isActive
+            let rawLensShake = (farFieldWarpStrengths.isActive || strengths.cameraJitterX > 0.0 || strengths.cameraJitterY > 0.0 || strengths.cameraJitterRotation > 0.0)
                 ? sourceSpaceLensShakeCorrection(
                     analysis: analysis,
                     frames: frames,
                     interpolation: FrameInterpolation(lowerIndex: index, upperIndex: index, fraction: 0.0),
                     outputScale: vector_float2(xScale, yScale),
-                    warpConfidence: appliedWarpConfidence,
+                    warpConfidence: max(appliedWarpConfidence, max(farFieldMacroConfidence, smoothedWalkingTrackingConfidence)),
                     farFieldConfidence: farFieldMacroConfidence,
                     trackingConfidence: max(strideContinuityConfidence, smoothedWalkingTrackingConfidence),
                     edgeQuality: farFieldWarpEdgeQuality,
@@ -7591,10 +7666,14 @@ enum AutoStabilizationEstimator {
                     cache: cache
                 )
                 : SourceSpaceLensShakeCorrection()
+            let lensShake = farFieldWarpStrengths.isActive
+                ? rawLensShake
+                : correctionWithLocalWarpDisabled(rawLensShake)
+            let cameraRigid = cameraRigidCorrection(from: lensShake, strengths: strengths)
             let pixelOffset = macroPixelOffset
                 + cameraJitterPixelOffset
-                + lensShake.pixelOffset
-            let rotation = cameraJitterRotation + lensShake.rotationDegrees
+                + cameraRigid.pixelOffset
+            let rotation = cameraJitterRotation + cameraRigid.rotationDegrees
             return StabilizerAutoTransform(
                 pixelOffset: pixelOffset,
                 macroPixelOffset: macroPixelOffset,
@@ -7602,8 +7681,10 @@ enum AutoStabilizationEstimator {
                 strideWobblePixelOffset: vector_float2(0.0, 0.0),
                 trajectoryMicroJitterPixelOffset: vector_float2(0.0, 0.0),
                 trajectoryContinuityPixelOffset: vector_float2(0.0, 0.0),
-                lensShakePixelOffset: lensShake.pixelOffset,
-                lensShakeRotationDegrees: lensShake.rotationDegrees,
+                cameraRigidPixelOffset: cameraRigid.pixelOffset,
+                cameraRigidRotationDegrees: cameraRigid.rotationDegrees,
+                lensShakePixelOffset: vector_float2(0.0, 0.0),
+                lensShakeRotationDegrees: 0.0,
                 lensShakeYawPitch: lensShake.yawPitch,
                 lensShakeShear: lensShake.shear,
                 lensShakePerspective: lensShake.perspective,
@@ -7639,9 +7720,16 @@ enum AutoStabilizationEstimator {
                 lensBandModelMask: lensShake.bandModelMask,
                 lensFarFieldRigidShakeOffset: lensShake.farFieldRigidOffset,
                 lensFarFieldRigidShakeSupport: lensShake.farFieldRigidSupport,
+                lensFarFieldRigidShakeSupportX: lensShake.farFieldRigidSupportX,
+                lensFarFieldRigidShakeSupportY: lensShake.farFieldRigidSupportY,
                 lensFarFieldRigidShakeApplied: lensShake.farFieldRigidApplied,
                 lensFarFieldRigidShakeShapeConsistency: lensShake.farFieldRigidShapeConsistency,
+                lensFarFieldRigidShakeShapeConsistencyX: lensShake.farFieldRigidShapeConsistencyX,
+                lensFarFieldRigidShakeShapeConsistencyY: lensShake.farFieldRigidShapeConsistencyY,
                 lensFarFieldRigidShakeForwardBackwardConsistency: lensShake.farFieldRigidForwardBackwardConsistency,
+                lensFarFieldRigidShakeForwardBackwardConsistencyX: lensShake.farFieldRigidForwardBackwardConsistencyX,
+                lensFarFieldRigidShakeForwardBackwardConsistencyY: lensShake.farFieldRigidForwardBackwardConsistencyY,
+                lensFarFieldRigidShakeRollForwardBackwardConsistency: lensShake.farFieldRigidRollForwardBackwardConsistency,
                 lensFarFieldRigidShakeLocalWarpSuppressed: lensShake.farFieldRigidLocalWarpSuppressed,
                 lensFarFieldRigidXQuiverScore: lensShake.farFieldRigidXQuiverScore,
                 lensFarFieldRigidXBeforeLimiter: lensShake.farFieldRigidXBeforeLimiter,
@@ -7832,6 +7920,7 @@ enum AutoStabilizationEstimator {
             + transform.strideWobblePixelOffset
             + transform.trajectoryMicroJitterPixelOffset
             + transform.trajectoryContinuityPixelOffset
+            + transform.cameraRigidPixelOffset
             + transform.lensShakePixelOffset
     }
 
@@ -7911,9 +8000,16 @@ enum AutoStabilizationEstimator {
         target.lensBandRollingShutterScore = source.lensBandRollingShutterScore
         target.lensBandModelMask = source.lensBandModelMask
         target.lensFarFieldRigidShakeSupport = source.lensFarFieldRigidShakeSupport
+        target.lensFarFieldRigidShakeSupportX = source.lensFarFieldRigidShakeSupportX
+        target.lensFarFieldRigidShakeSupportY = source.lensFarFieldRigidShakeSupportY
         target.lensFarFieldRigidShakeApplied = source.lensFarFieldRigidShakeApplied
         target.lensFarFieldRigidShakeShapeConsistency = source.lensFarFieldRigidShakeShapeConsistency
+        target.lensFarFieldRigidShakeShapeConsistencyX = source.lensFarFieldRigidShakeShapeConsistencyX
+        target.lensFarFieldRigidShakeShapeConsistencyY = source.lensFarFieldRigidShakeShapeConsistencyY
         target.lensFarFieldRigidShakeForwardBackwardConsistency = source.lensFarFieldRigidShakeForwardBackwardConsistency
+        target.lensFarFieldRigidShakeForwardBackwardConsistencyX = source.lensFarFieldRigidShakeForwardBackwardConsistencyX
+        target.lensFarFieldRigidShakeForwardBackwardConsistencyY = source.lensFarFieldRigidShakeForwardBackwardConsistencyY
+        target.lensFarFieldRigidShakeRollForwardBackwardConsistency = source.lensFarFieldRigidShakeRollForwardBackwardConsistency
         target.lensFarFieldRigidShakeLocalWarpSuppressed = source.lensFarFieldRigidShakeLocalWarpSuppressed
         target.lensFarFieldRigidXQuiverScore = source.lensFarFieldRigidXQuiverScore
         target.lensFarFieldRigidXBeforeLimiter = source.lensFarFieldRigidXBeforeLimiter
@@ -7985,38 +8081,40 @@ enum AutoStabilizationEstimator {
         let lensRotationLimit = rotationLimit * 0.72
         let lensLocalRollLimit = (lensRotationLimit * .pi) / 180.0
 
-        let rigidYCorrectionMismatch = abs(
-            current.lensShakePixelOffset.y - current.lensFarFieldRigidGlobalYOffset
-        )
-        let rigidYCorrectionMatch = 1.0 - confidenceRamp(
-            rigidYCorrectionMismatch,
-            start: playbackTrajectoryRigidYCorrectionMatchStartPixels,
-            full: playbackTrajectoryRigidYCorrectionMatchFullPixels
-        )
-        let rigidYAuthority = current.lensFarFieldRigidShakeApplied > 0.5
-            ? confidenceRamp(
-                current.lensFarFieldRigidShakeSupport,
-                start: playbackTrajectoryRigidYSupportStart,
-                full: playbackTrajectoryRigidYSupportFull
-            ) * confidenceRamp(
-                current.lensFarFieldRigidShakeShapeConsistency,
-                start: playbackTrajectoryRigidYShapeStart,
-                full: playbackTrajectoryRigidYShapeFull
-            ) * confidenceRamp(
-                current.lensFarFieldRigidShakeForwardBackwardConsistency,
-                start: playbackTrajectoryRigidYTwoWayStart,
-                full: playbackTrajectoryRigidYTwoWayFull
-            ) * rigidYCorrectionMatch
+        let rigidXAuthority = current.lensFarFieldRigidShakeApplied > 0.5
+            ? confidenceRamp(current.lensFarFieldRigidShakeSupportX, start: lensShakeMinimumSupport, full: 0.62)
             : 0.0
-        let rigidYTargetStep = abs(
-            current.lensFarFieldRigidGlobalYOffset - previous.lensShakePixelOffset.y
+        let rigidYAuthority = current.lensFarFieldRigidShakeApplied > 0.5
+            ? confidenceRamp(current.lensFarFieldRigidShakeSupportY, start: lensShakeMinimumSupport, full: 0.62)
+            : 0.0
+        let rigidRotationAuthority = current.lensFarFieldRigidRollApplied > 0.5
+            ? confidenceRamp(current.lensFarFieldRigidRollSupport, start: lensShakeMinimumSupport, full: 0.62)
+            : 0.0
+        let cameraRigidXLimit = max(
+            lensPixelLimit,
+            abs(current.cameraRigidPixelOffset.x - previous.cameraRigidPixelOffset.x) * rigidXAuthority
         )
-        let lensYLimit = max(lensPixelLimit, rigidYTargetStep * rigidYAuthority)
-
-        limited.lensShakePixelOffset.y = playbackTrajectoryLimitedScalar(
-            current.lensShakePixelOffset.y,
-            previous: previous.lensShakePixelOffset.y,
-            limit: lensYLimit
+        let cameraRigidYLimit = max(
+            lensPixelLimit,
+            abs(current.cameraRigidPixelOffset.y - previous.cameraRigidPixelOffset.y) * rigidYAuthority
+        )
+        let cameraRigidRotationLimit = max(
+            lensRotationLimit,
+            abs(current.cameraRigidRotationDegrees - previous.cameraRigidRotationDegrees) * rigidRotationAuthority
+        )
+        limited.cameraRigidPixelOffset = vector_float2(
+            playbackTrajectoryLimitedScalar(current.cameraRigidPixelOffset.x, previous: previous.cameraRigidPixelOffset.x, limit: cameraRigidXLimit),
+            playbackTrajectoryLimitedScalar(current.cameraRigidPixelOffset.y, previous: previous.cameraRigidPixelOffset.y, limit: cameraRigidYLimit)
+        )
+        limited.cameraRigidRotationDegrees = playbackTrajectoryLimitedScalar(
+            current.cameraRigidRotationDegrees,
+            previous: previous.cameraRigidRotationDegrees,
+            limit: cameraRigidRotationLimit
+        )
+        limited.lensShakePixelOffset = playbackTrajectoryLimitedVector(
+            current.lensShakePixelOffset,
+            previous: previous.lensShakePixelOffset,
+            limit: lensPixelLimit
         )
         limited.lensShakeRotationDegrees = playbackTrajectoryLimitedScalar(
             current.lensShakeRotationDegrees,
@@ -8170,7 +8268,9 @@ enum AutoStabilizationEstimator {
             limit: pixelLimit * 0.65
         )
         let componentPixelOffset = playbackTrajectoryComposedNonLensPixelOffset(limited)
-        let previousNonLensPixelOffset = previous.pixelOffset - previous.lensShakePixelOffset
+        let previousNonLensPixelOffset = previous.pixelOffset
+            - previous.cameraRigidPixelOffset
+            - previous.lensShakePixelOffset
         let finalPixelOffset = playbackTrajectoryLimitedVector(
             componentPixelOffset,
             previous: previousNonLensPixelOffset,
@@ -8191,14 +8291,16 @@ enum AutoStabilizationEstimator {
         )
         let componentRotation = limited.footstepJitterRotationDegrees
             + limited.strideWobbleRotationDegrees
-        let previousNonLensRotation = previous.rotationDegrees - previous.lensShakeRotationDegrees
+        let previousNonLensRotation = previous.rotationDegrees
+            - previous.cameraRigidRotationDegrees
+            - previous.lensShakeRotationDegrees
         let finalRotation = playbackTrajectoryLimitedScalar(
             componentRotation,
             previous: previousNonLensRotation,
             limit: rotationLimit * finalRotationLimitScale
         )
         limited.strideWobbleRotationDegrees += finalRotation - componentRotation
-        limited.rotationDegrees = finalRotation + limited.lensShakeRotationDegrees
+        limited.rotationDegrees = finalRotation + limited.cameraRigidRotationDegrees + limited.lensShakeRotationDegrees
 
         limited.yawPitchProxy = playbackTrajectoryLimitedVector(
             current.yawPitchProxy,
@@ -8257,9 +8359,11 @@ enum AutoStabilizationEstimator {
             + transform.strideWobblePixelOffset
             + transform.trajectoryMicroJitterPixelOffset
             + transform.trajectoryContinuityPixelOffset
+            + transform.cameraRigidPixelOffset
             + transform.lensShakePixelOffset
         transform.rotationDegrees = transform.footstepJitterRotationDegrees
             + transform.strideWobbleRotationDegrees
+            + transform.cameraRigidRotationDegrees
             + transform.lensShakeRotationDegrees
         return playbackTrajectoryTransformWithDiagnosticMetadata(
             transform,
@@ -8396,6 +8500,8 @@ enum AutoStabilizationEstimator {
             ? centerTransform
             : weightedAverageTransform(broadSamples)
         preserveLensShakeDiagnostics(from: centerTransform, into: &smoothedTransform)
+        smoothedTransform.cameraRigidPixelOffset = centerTransform.cameraRigidPixelOffset
+        smoothedTransform.cameraRigidRotationDegrees = centerTransform.cameraRigidRotationDegrees
 
         let turnSamples = playbackTrajectoryTurnTransitionSamples(
             centerTransform: centerTransform,
@@ -8485,9 +8591,11 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.trajectoryMicroJitterPixelOffset
             + smoothedTransform.trajectoryContinuityPixelOffset
+            + smoothedTransform.cameraRigidPixelOffset
             + smoothedTransform.lensShakePixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
+            + smoothedTransform.cameraRigidRotationDegrees
             + smoothedTransform.lensShakeRotationDegrees
         smoothedTransform.rawPixelOffset = centerTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = centerTransform.rotationDegrees
@@ -9435,13 +9543,13 @@ enum AutoStabilizationEstimator {
             shear = vector_float2(0.0, 0.0)
             perspective = vector_float2(0.0, 0.0)
         }
-        let lensShake = shouldEstimateFarFieldWarp
+        let rawLensShake = (shouldEstimateFarFieldWarp || strengths.cameraJitterX > 0.0 || strengths.cameraJitterY > 0.0 || strengths.cameraJitterRotation > 0.0)
             ? sourceSpaceLensShakeCorrection(
                 analysis: analysis,
                 frames: frames,
                 interpolation: frameInterpolation,
                 outputScale: vector_float2(xScale, yScale),
-                warpConfidence: appliedWarpConfidence,
+                warpConfidence: max(appliedWarpConfidence, max(farFieldMacroConfidence, trackingConfidence)),
                 farFieldConfidence: farFieldMacroConfidence,
                 trackingConfidence: trackingConfidence,
                 edgeQuality: searchRadiusEdgeQuality(
@@ -9453,16 +9561,22 @@ enum AutoStabilizationEstimator {
                 cache: cache
             )
             : SourceSpaceLensShakeCorrection(reasonCode: 0)
+        let lensShake = shouldEstimateFarFieldWarp
+            ? rawLensShake
+            : correctionWithLocalWarpDisabled(rawLensShake)
+        let cameraRigid = cameraRigidCorrection(from: lensShake, strengths: strengths)
 
         return StabilizerAutoTransform(
-            pixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
+            pixelOffset: vector_float2(compensationX, compensationY) + cameraRigid.pixelOffset,
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
             trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
             trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
-            lensShakePixelOffset: lensShake.pixelOffset,
-            lensShakeRotationDegrees: lensShake.rotationDegrees,
+            cameraRigidPixelOffset: cameraRigid.pixelOffset,
+            cameraRigidRotationDegrees: cameraRigid.rotationDegrees,
+            lensShakePixelOffset: vector_float2(0.0, 0.0),
+            lensShakeRotationDegrees: 0.0,
             lensShakeYawPitch: lensShake.yawPitch,
             lensShakeShear: lensShake.shear,
             lensShakePerspective: lensShake.perspective,
@@ -9498,9 +9612,16 @@ enum AutoStabilizationEstimator {
             lensBandModelMask: lensShake.bandModelMask,
             lensFarFieldRigidShakeOffset: lensShake.farFieldRigidOffset,
             lensFarFieldRigidShakeSupport: lensShake.farFieldRigidSupport,
+            lensFarFieldRigidShakeSupportX: lensShake.farFieldRigidSupportX,
+            lensFarFieldRigidShakeSupportY: lensShake.farFieldRigidSupportY,
             lensFarFieldRigidShakeApplied: lensShake.farFieldRigidApplied,
             lensFarFieldRigidShakeShapeConsistency: lensShake.farFieldRigidShapeConsistency,
+            lensFarFieldRigidShakeShapeConsistencyX: lensShake.farFieldRigidShapeConsistencyX,
+            lensFarFieldRigidShakeShapeConsistencyY: lensShake.farFieldRigidShapeConsistencyY,
             lensFarFieldRigidShakeForwardBackwardConsistency: lensShake.farFieldRigidForwardBackwardConsistency,
+            lensFarFieldRigidShakeForwardBackwardConsistencyX: lensShake.farFieldRigidForwardBackwardConsistencyX,
+            lensFarFieldRigidShakeForwardBackwardConsistencyY: lensShake.farFieldRigidForwardBackwardConsistencyY,
+            lensFarFieldRigidShakeRollForwardBackwardConsistency: lensShake.farFieldRigidRollForwardBackwardConsistency,
             lensFarFieldRigidShakeLocalWarpSuppressed: lensShake.farFieldRigidLocalWarpSuppressed,
             lensFarFieldRigidXQuiverScore: lensShake.farFieldRigidXQuiverScore,
             lensFarFieldRigidXBeforeLimiter: lensShake.farFieldRigidXBeforeLimiter,
@@ -9542,10 +9663,10 @@ enum AutoStabilizationEstimator {
             sourceLensShakeLocalApplied: lensShake.localApplied,
             footstepJitterRotationDegrees: cameraJitterMacroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
-            rotationDegrees: compensationRotation + lensShake.rotationDegrees,
+            rotationDegrees: compensationRotation + cameraRigid.rotationDegrees,
             turnDetectedPixelOffset: vector_float2(-panBandX * xScale, 0.0),
-            rawPixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
-            rawRotationDegrees: compensationRotation + lensShake.rotationDegrees,
+            rawPixelOffset: vector_float2(compensationX, compensationY) + cameraRigid.pixelOffset,
+            rawRotationDegrees: compensationRotation + cameraRigid.rotationDegrees,
             temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
             temporalSmoothingRotationDelta: 0.0,
             temporalSmoothingSampleCount: 1,
@@ -10489,13 +10610,13 @@ enum AutoStabilizationEstimator {
             shear = vector_float2(0.0, 0.0)
             perspective = vector_float2(0.0, 0.0)
         }
-        let lensShake = shouldEstimateFarFieldWarp
+        let rawLensShake = (shouldEstimateFarFieldWarp || strengths.cameraJitterX > 0.0 || strengths.cameraJitterY > 0.0 || strengths.cameraJitterRotation > 0.0)
             ? sourceSpaceLensShakeCorrection(
                 analysis: analysis,
                 frames: frames,
                 interpolation: frameInterpolation,
                 outputScale: vector_float2(xScale, yScale),
-                warpConfidence: appliedWarpConfidence,
+                warpConfidence: max(appliedWarpConfidence, max(farFieldMacroConfidence, trackingConfidence)),
                 farFieldConfidence: farFieldMacroConfidence,
                 trackingConfidence: trackingConfidence,
                 edgeQuality: searchRadiusEdgeQuality(
@@ -10507,15 +10628,21 @@ enum AutoStabilizationEstimator {
                 cache: cache
             )
             : SourceSpaceLensShakeCorrection()
+        let lensShake = shouldEstimateFarFieldWarp
+            ? rawLensShake
+            : correctionWithLocalWarpDisabled(rawLensShake)
+        let cameraRigid = cameraRigidCorrection(from: lensShake, strengths: strengths)
         return StabilizerAutoTransform(
-            pixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
+            pixelOffset: vector_float2(compensationX, compensationY) + cameraRigid.pixelOffset,
             macroPixelOffset: macroPixelOffset,
             microPixelOffset: microPixelOffset,
             strideWobblePixelOffset: strideWobblePixelOffset,
             trajectoryMicroJitterPixelOffset: trajectoryMicroJitterPixelOffset,
             trajectoryContinuityPixelOffset: trajectoryContinuityPixelOffset,
-            lensShakePixelOffset: lensShake.pixelOffset,
-            lensShakeRotationDegrees: lensShake.rotationDegrees,
+            cameraRigidPixelOffset: cameraRigid.pixelOffset,
+            cameraRigidRotationDegrees: cameraRigid.rotationDegrees,
+            lensShakePixelOffset: vector_float2(0.0, 0.0),
+            lensShakeRotationDegrees: 0.0,
             lensShakeYawPitch: lensShake.yawPitch,
             lensShakeShear: lensShake.shear,
             lensShakePerspective: lensShake.perspective,
@@ -10551,9 +10678,16 @@ enum AutoStabilizationEstimator {
             lensBandModelMask: lensShake.bandModelMask,
             lensFarFieldRigidShakeOffset: lensShake.farFieldRigidOffset,
             lensFarFieldRigidShakeSupport: lensShake.farFieldRigidSupport,
+            lensFarFieldRigidShakeSupportX: lensShake.farFieldRigidSupportX,
+            lensFarFieldRigidShakeSupportY: lensShake.farFieldRigidSupportY,
             lensFarFieldRigidShakeApplied: lensShake.farFieldRigidApplied,
             lensFarFieldRigidShakeShapeConsistency: lensShake.farFieldRigidShapeConsistency,
+            lensFarFieldRigidShakeShapeConsistencyX: lensShake.farFieldRigidShapeConsistencyX,
+            lensFarFieldRigidShakeShapeConsistencyY: lensShake.farFieldRigidShapeConsistencyY,
             lensFarFieldRigidShakeForwardBackwardConsistency: lensShake.farFieldRigidForwardBackwardConsistency,
+            lensFarFieldRigidShakeForwardBackwardConsistencyX: lensShake.farFieldRigidForwardBackwardConsistencyX,
+            lensFarFieldRigidShakeForwardBackwardConsistencyY: lensShake.farFieldRigidForwardBackwardConsistencyY,
+            lensFarFieldRigidShakeRollForwardBackwardConsistency: lensShake.farFieldRigidRollForwardBackwardConsistency,
             lensFarFieldRigidShakeLocalWarpSuppressed: lensShake.farFieldRigidLocalWarpSuppressed,
             lensFarFieldRigidXQuiverScore: lensShake.farFieldRigidXQuiverScore,
             lensFarFieldRigidXBeforeLimiter: lensShake.farFieldRigidXBeforeLimiter,
@@ -10595,10 +10729,10 @@ enum AutoStabilizationEstimator {
             sourceLensShakeLocalApplied: lensShake.localApplied,
             footstepJitterRotationDegrees: cameraJitterMacroCompensationRotation + microCompensationRotation,
             strideWobbleRotationDegrees: strideCompensationRotation,
-            rotationDegrees: compensationRotation + lensShake.rotationDegrees,
+            rotationDegrees: compensationRotation + cameraRigid.rotationDegrees,
             turnDetectedPixelOffset: detectedTurnPixelOffset,
-            rawPixelOffset: vector_float2(compensationX, compensationY) + lensShake.pixelOffset,
-            rawRotationDegrees: compensationRotation + lensShake.rotationDegrees,
+            rawPixelOffset: vector_float2(compensationX, compensationY) + cameraRigid.pixelOffset,
+            rawRotationDegrees: compensationRotation + cameraRigid.rotationDegrees,
             temporalSmoothingPixelDelta: vector_float2(0.0, 0.0),
             temporalSmoothingRotationDelta: 0.0,
             temporalSmoothingSampleCount: 1,
@@ -10742,6 +10876,8 @@ enum AutoStabilizationEstimator {
         }
         var smoothedTransform = weightedAverageTransform(broadTransformSamples)
         preserveLensShakeDiagnostics(from: rawCenterTransform, into: &smoothedTransform)
+        smoothedTransform.cameraRigidPixelOffset = rawCenterTransform.cameraRigidPixelOffset
+        smoothedTransform.cameraRigidRotationDegrees = rawCenterTransform.cameraRigidRotationDegrees
         let turnTransitionSamples = turnTransitionSmoothingSamples(
             centerTransform: rawCenterTransform,
             analysis: analysis,
@@ -10834,9 +10970,11 @@ enum AutoStabilizationEstimator {
             + smoothedTransform.strideWobblePixelOffset
             + smoothedTransform.trajectoryMicroJitterPixelOffset
             + smoothedTransform.trajectoryContinuityPixelOffset
+            + smoothedTransform.cameraRigidPixelOffset
             + smoothedTransform.lensShakePixelOffset
         smoothedTransform.rotationDegrees = smoothedTransform.footstepJitterRotationDegrees
             + smoothedTransform.strideWobbleRotationDegrees
+            + smoothedTransform.cameraRigidRotationDegrees
             + smoothedTransform.lensShakeRotationDegrees
         smoothedTransform.rawPixelOffset = rawCenterTransform.pixelOffset
         smoothedTransform.rawRotationDegrees = rawCenterTransform.rotationDegrees
@@ -11400,6 +11538,8 @@ enum AutoStabilizationEstimator {
         var strideWobblePixelOffset = vector_float2(0.0, 0.0)
         var trajectoryMicroJitterPixelOffset = vector_float2(0.0, 0.0)
         var trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
+        var cameraRigidPixelOffset = vector_float2(0.0, 0.0)
+        var cameraRigidRotationDegrees: Float = 0.0
         var lensShakePixelOffset = vector_float2(0.0, 0.0)
         var lensShakeRotationDegrees: Float = 0.0
         var lensShakeYawPitch = vector_float2(0.0, 0.0)
@@ -11519,6 +11659,8 @@ enum AutoStabilizationEstimator {
             strideWobblePixelOffset += transform.strideWobblePixelOffset * weight
             trajectoryMicroJitterPixelOffset += transform.trajectoryMicroJitterPixelOffset * weight
             trajectoryContinuityPixelOffset += transform.trajectoryContinuityPixelOffset * weight
+            cameraRigidPixelOffset += transform.cameraRigidPixelOffset * weight
+            cameraRigidRotationDegrees += transform.cameraRigidRotationDegrees * weight
             lensShakePixelOffset += transform.lensShakePixelOffset * weight
             lensShakeRotationDegrees += transform.lensShakeRotationDegrees * weight
             lensShakeYawPitch += transform.lensShakeYawPitch * weight
@@ -11639,6 +11781,7 @@ enum AutoStabilizationEstimator {
         let averagedStrideWobblePixelOffset = strideWobblePixelOffset / totalWeight
         let averagedTrajectoryMicroJitterPixelOffset = trajectoryMicroJitterPixelOffset / totalWeight
         let averagedTrajectoryContinuityPixelOffset = trajectoryContinuityPixelOffset / totalWeight
+        let averagedCameraRigidPixelOffset = cameraRigidPixelOffset / totalWeight
         let averagedLensShakePixelOffset = lensShakePixelOffset / totalWeight
 
         return StabilizerAutoTransform(
@@ -11647,12 +11790,15 @@ enum AutoStabilizationEstimator {
                 + averagedStrideWobblePixelOffset
                 + averagedTrajectoryMicroJitterPixelOffset
                 + averagedTrajectoryContinuityPixelOffset
+                + averagedCameraRigidPixelOffset
                 + averagedLensShakePixelOffset,
             macroPixelOffset: averagedMacroPixelOffset,
             microPixelOffset: averagedMicroPixelOffset,
             strideWobblePixelOffset: averagedStrideWobblePixelOffset,
             trajectoryMicroJitterPixelOffset: averagedTrajectoryMicroJitterPixelOffset,
             trajectoryContinuityPixelOffset: averagedTrajectoryContinuityPixelOffset,
+            cameraRigidPixelOffset: averagedCameraRigidPixelOffset,
+            cameraRigidRotationDegrees: cameraRigidRotationDegrees / totalWeight,
             lensShakePixelOffset: averagedLensShakePixelOffset,
             lensShakeRotationDegrees: lensShakeRotationDegrees / totalWeight,
             lensShakeYawPitch: lensShakeYawPitch / totalWeight,
@@ -12005,9 +12151,16 @@ enum AutoStabilizationEstimator {
               farFieldRigidShake.pathY.count == sortedFrames.count,
               farFieldRigidShake.pathRoll.count == sortedFrames.count,
               farFieldRigidShake.support.count == sortedFrames.count,
+              farFieldRigidShake.supportX.count == sortedFrames.count,
+              farFieldRigidShake.supportY.count == sortedFrames.count,
               farFieldRigidShake.rollSupport.count == sortedFrames.count,
               farFieldRigidShake.shapeConsistency.count == sortedFrames.count,
-              farFieldRigidShake.forwardBackwardConsistency.count == sortedFrames.count else {
+              farFieldRigidShake.shapeConsistencyX.count == sortedFrames.count,
+              farFieldRigidShake.shapeConsistencyY.count == sortedFrames.count,
+              farFieldRigidShake.forwardBackwardConsistency.count == sortedFrames.count,
+              farFieldRigidShake.forwardBackwardConsistencyX.count == sortedFrames.count,
+              farFieldRigidShake.forwardBackwardConsistencyY.count == sortedFrames.count,
+              farFieldRigidShake.rollForwardBackwardConsistency.count == sortedFrames.count else {
             throw metalError("far-field rigid shake preparation produced incomplete current-schema paths")
         }
         return StabilizerPreparedAnalysis(
@@ -12060,9 +12213,16 @@ enum AutoStabilizationEstimator {
             farFieldRigidShakePathY: farFieldRigidShake.pathY,
             farFieldRigidShakePathRoll: farFieldRigidShake.pathRoll,
             farFieldRigidShakeSupport: farFieldRigidShake.support,
+            farFieldRigidShakeSupportX: farFieldRigidShake.supportX,
+            farFieldRigidShakeSupportY: farFieldRigidShake.supportY,
             farFieldRigidShakeRollSupport: farFieldRigidShake.rollSupport,
             farFieldRigidShakeShapeConsistency: farFieldRigidShake.shapeConsistency,
+            farFieldRigidShakeShapeConsistencyX: farFieldRigidShake.shapeConsistencyX,
+            farFieldRigidShakeShapeConsistencyY: farFieldRigidShake.shapeConsistencyY,
             farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShake.forwardBackwardConsistency,
+            farFieldRigidShakeForwardBackwardConsistencyX: farFieldRigidShake.forwardBackwardConsistencyX,
+            farFieldRigidShakeForwardBackwardConsistencyY: farFieldRigidShake.forwardBackwardConsistencyY,
+            farFieldRigidShakeRollForwardBackwardConsistency: farFieldRigidShake.rollForwardBackwardConsistency,
             farFieldMeshRows: farFieldMeshRows,
             farFieldMeshColumns: farFieldMeshColumns,
             farFieldMeshPathX: rawFarFieldMeshPathX,
@@ -14346,6 +14506,75 @@ enum AutoStabilizationEstimator {
         return clamp(scaledValue, min: -limit * strength, max: limit * strength)
     }
 
+    private static func cameraRigidCorrection(
+        from lensShake: SourceSpaceLensShakeCorrection,
+        strengths: StabilizerCorrectionStrengths
+    ) -> (pixelOffset: vector_float2, rotationDegrees: Float) {
+        let translationConfidence = clamp(
+            max(lensShake.farFieldRigidSupport, lensShake.support),
+            min: 0.0,
+            max: 1.0
+        )
+        let rotationConfidence = clamp(
+            max(lensShake.farFieldRigidRollSupport, lensShake.support),
+            min: 0.0,
+            max: 1.0
+        )
+        let xStrength = walkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterX,
+            confidence: translationConfidence
+        )
+        let yStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterY,
+            confidence: translationConfidence
+        )
+        let rotationStrength = walkingConfidenceCompensatedCorrectionFactor(
+            strengths.cameraJitterRotation,
+            confidence: rotationConfidence
+        )
+        return (
+            vector_float2(lensShake.pixelOffset.x * xStrength, lensShake.pixelOffset.y * yStrength),
+            lensShake.rotationDegrees * rotationStrength
+        )
+    }
+
+    private static func correctionWithLocalWarpDisabled(
+        _ source: SourceSpaceLensShakeCorrection
+    ) -> SourceSpaceLensShakeCorrection {
+        var result = SourceSpaceLensShakeCorrection()
+        result.pixelOffset = source.pixelOffset
+        result.rotationDegrees = source.rotationDegrees
+        result.score = source.score
+        result.support = source.support
+        result.windowFrames = source.windowFrames
+        result.windowSeconds = source.windowSeconds
+        result.axisMask = source.axisMask
+        result.reasonCode = source.reasonCode
+        result.rollingShutterCandidate = source.rollingShutterCandidate
+        result.farFieldRigidOffset = source.farFieldRigidOffset
+        result.farFieldRigidSupport = source.farFieldRigidSupport
+        result.farFieldRigidSupportX = source.farFieldRigidSupportX
+        result.farFieldRigidSupportY = source.farFieldRigidSupportY
+        result.farFieldRigidApplied = source.farFieldRigidApplied
+        result.farFieldRigidShapeConsistency = source.farFieldRigidShapeConsistency
+        result.farFieldRigidShapeConsistencyX = source.farFieldRigidShapeConsistencyX
+        result.farFieldRigidShapeConsistencyY = source.farFieldRigidShapeConsistencyY
+        result.farFieldRigidForwardBackwardConsistency = source.farFieldRigidForwardBackwardConsistency
+        result.farFieldRigidForwardBackwardConsistencyX = source.farFieldRigidForwardBackwardConsistencyX
+        result.farFieldRigidForwardBackwardConsistencyY = source.farFieldRigidForwardBackwardConsistencyY
+        result.farFieldRigidRollForwardBackwardConsistency = source.farFieldRigidRollForwardBackwardConsistency
+        result.farFieldRigidLocalWarpSuppressed = source.farFieldRigidLocalWarpSuppressed
+        result.farFieldRigidXQuiverScore = source.farFieldRigidXQuiverScore
+        result.farFieldRigidXBeforeLimiter = source.farFieldRigidXBeforeLimiter
+        result.farFieldRigidXAfterLimiter = source.farFieldRigidXAfterLimiter
+        result.farFieldRigidRollResidual = source.farFieldRigidRollResidual
+        result.farFieldRigidRollSupport = source.farFieldRigidRollSupport
+        result.farFieldRigidGlobalYOffset = source.farFieldRigidGlobalYOffset
+        result.farFieldRigidGlobalRollDegrees = source.farFieldRigidGlobalRollDegrees
+        result.farFieldRigidRollApplied = source.farFieldRigidRollApplied
+        return result
+    }
+
     private static func sourceSpaceLensShakeCorrection(
         analysis: StabilizerPreparedAnalysis,
         frames: [StabilizerAnalysisFrame],
@@ -14853,9 +15082,16 @@ enum AutoStabilizationEstimator {
             && analysis.farFieldRigidShakePathY.count == frames.count
             && analysis.farFieldRigidShakePathRoll.count == frames.count
             && analysis.farFieldRigidShakeSupport.count == frames.count
+            && analysis.farFieldRigidShakeSupportX.count == frames.count
+            && analysis.farFieldRigidShakeSupportY.count == frames.count
             && analysis.farFieldRigidShakeRollSupport.count == frames.count
             && analysis.farFieldRigidShakeShapeConsistency.count == frames.count
+            && analysis.farFieldRigidShakeShapeConsistencyX.count == frames.count
+            && analysis.farFieldRigidShakeShapeConsistencyY.count == frames.count
             && analysis.farFieldRigidShakeForwardBackwardConsistency.count == frames.count
+            && analysis.farFieldRigidShakeForwardBackwardConsistencyX.count == frames.count
+            && analysis.farFieldRigidShakeForwardBackwardConsistencyY.count == frames.count
+            && analysis.farFieldRigidShakeRollForwardBackwardConsistency.count == frames.count
         let farFieldMeshBinCount = analysis.farFieldMeshRows * analysis.farFieldMeshColumns
         let hasFarFieldMeshPaths = analysis.farFieldMeshRows == farFieldMeshRows
             && analysis.farFieldMeshColumns == farFieldMeshColumns
@@ -14975,22 +15211,39 @@ enum AutoStabilizationEstimator {
                 residual(kind: .farFieldRigidShakeX, values: analysis.farFieldRigidShakePathX) * outputScale.x,
                 residual(kind: .farFieldRigidShakeY, values: analysis.farFieldRigidShakePathY) * outputScale.y
             )
+            let rawRigidRollResidual = residual(
+                kind: .farFieldRigidShakeRoll,
+                values: analysis.farFieldRigidShakePathRoll
+            )
             var rigidResidual = vector_float2(
                 pulseSmoothedPixelResidual(kind: .farFieldRigidShakeX, values: analysis.farFieldRigidShakePathX, scale: outputScale.x),
                 pulseSmoothedPixelResidual(kind: .farFieldRigidShakeY, values: analysis.farFieldRigidShakePathY, scale: outputScale.y)
             )
-            let rigidRollResidual = pulseSmoothedDegreeRollResidual(kind: .farFieldRigidShakeRoll, values: analysis.farFieldRigidShakePathRoll)
+            var rigidRollResidual = pulseSmoothedDegreeRollResidual(kind: .farFieldRigidShakeRoll, values: analysis.farFieldRigidShakePathRoll)
             let rawRigidMagnitude = simd_length(rawRigidResidual)
             let preparedRigidSupport = interpolatedValue(analysis.farFieldRigidShakeSupport, using: interpolation)
+            let preparedRigidSupportX = interpolatedValue(analysis.farFieldRigidShakeSupportX, using: interpolation)
+            let preparedRigidSupportY = interpolatedValue(analysis.farFieldRigidShakeSupportY, using: interpolation)
             let preparedRigidRollSupport = interpolatedValue(analysis.farFieldRigidShakeRollSupport, using: interpolation)
             let shapeConsistency = interpolatedValue(analysis.farFieldRigidShakeShapeConsistency, using: interpolation)
+            let shapeConsistencyX = interpolatedValue(analysis.farFieldRigidShakeShapeConsistencyX, using: interpolation)
+            let shapeConsistencyY = interpolatedValue(analysis.farFieldRigidShakeShapeConsistencyY, using: interpolation)
             let forwardBackwardConsistency = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistency, using: interpolation)
+            let forwardBackwardConsistencyX = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistencyX, using: interpolation)
+            let forwardBackwardConsistencyY = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistencyY, using: interpolation)
+            let rollForwardBackwardConsistency = interpolatedValue(analysis.farFieldRigidShakeRollForwardBackwardConsistency, using: interpolation)
             let deltaCoherenceSupport = farFieldRigidDeltaCoherenceSupport()
             let deltaCoherenceAuthority = confidenceRamp(deltaCoherenceSupport, start: 0.08, full: 0.34)
             let effectivePreparedRigidSupport = max(preparedRigidSupport, deltaCoherenceAuthority)
-            let effectivePreparedRigidRollSupport = max(preparedRigidRollSupport, deltaCoherenceAuthority)
+            let effectivePreparedRigidSupportX = max(preparedRigidSupportX, deltaCoherenceAuthority)
+            let effectivePreparedRigidSupportY = max(preparedRigidSupportY, deltaCoherenceAuthority)
+            let effectivePreparedRigidRollSupport = preparedRigidRollSupport
             let effectiveShapeConsistency = max(shapeConsistency, deltaCoherenceAuthority)
+            let effectiveShapeConsistencyX = max(shapeConsistencyX, deltaCoherenceAuthority)
+            let effectiveShapeConsistencyY = max(shapeConsistencyY, deltaCoherenceAuthority)
             let effectiveForwardBackwardConsistency = max(forwardBackwardConsistency, deltaCoherenceAuthority * 0.92)
+            let effectiveForwardBackwardConsistencyX = max(forwardBackwardConsistencyX, deltaCoherenceAuthority * 0.92)
+            let effectiveForwardBackwardConsistencyY = max(forwardBackwardConsistencyY, deltaCoherenceAuthority * 0.92)
             if deltaCoherenceSupport >= lensShakeMinimumSupport {
                 result.bandModelMask |= 4194304
             }
@@ -15244,12 +15497,12 @@ enum AutoStabilizationEstimator {
                 }
             }
 	            let coherentXShapeAuthority = confidenceRamp(
-	                effectiveShapeConsistency,
+	                effectiveShapeConsistencyX,
 	                start: farFieldCoherentSlabXShapeStart,
 	                full: farFieldCoherentSlabXShapeFull
 	            )
 	            let coherentXTwoWayAuthority = confidenceRamp(
-	                effectiveForwardBackwardConsistency,
+	                effectiveForwardBackwardConsistencyX,
 	                start: farFieldCoherentSlabXTwoWayStart,
 	                full: farFieldCoherentSlabXTwoWayFull
 	            )
@@ -15283,12 +15536,12 @@ enum AutoStabilizationEstimator {
                 }
             }
 	            let coherentYShapeAuthority = confidenceRamp(
-	                effectiveShapeConsistency,
+	                effectiveShapeConsistencyY,
 	                start: farFieldCoherentSlabYShapeStart,
 	                full: farFieldCoherentSlabYShapeFull
 	            )
 	            let coherentYTwoWayAuthority = confidenceRamp(
-	                effectiveForwardBackwardConsistency,
+	                effectiveForwardBackwardConsistencyY,
 	                start: farFieldCoherentSlabYTwoWayStart,
 	                full: farFieldCoherentSlabYTwoWayFull
 	            )
@@ -15311,32 +15564,56 @@ enum AutoStabilizationEstimator {
                     result.bandModelMask |= 4096
                 }
             }
+            let frameLocalAuthorityX = confidenceRamp(effectivePreparedRigidSupportX, start: 0.42, full: 0.78)
+                * confidenceRamp(effectiveShapeConsistencyX, start: 0.54, full: 0.88)
+                * confidenceRamp(effectiveForwardBackwardConsistencyX, start: 0.48, full: 0.84)
+            let frameLocalAuthorityY = confidenceRamp(effectivePreparedRigidSupportY, start: 0.42, full: 0.78)
+                * confidenceRamp(effectiveShapeConsistencyY, start: 0.54, full: 0.88)
+                * confidenceRamp(effectiveForwardBackwardConsistencyY, start: 0.48, full: 0.84)
+            let frameLocalRollAuthority = confidenceRamp(effectivePreparedRigidRollSupport, start: 0.42, full: 0.78)
+                * confidenceRamp(rollForwardBackwardConsistency, start: 0.48, full: 0.84)
+            rigidResidual.x += (rawRigidResidual.x - rigidResidual.x) * frameLocalAuthorityX
+            rigidResidual.y += (rawRigidResidual.y - rigidResidual.y) * frameLocalAuthorityY
+            rigidRollResidual += (rawRigidRollResidual - rigidRollResidual) * frameLocalRollAuthority
             let lowFrequencyRigidSupport = lowFrequencyRigidPriority
                 * confidenceRamp(simd_length(rigidResidual), start: 0.05, full: 0.48)
-	            let rigidSupport = max(
-	                confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70)
-	                * confidenceRamp(effectivePreparedRigidSupport, start: 0.08, full: 0.36)
-	                * confidenceRamp(effectiveShapeConsistency, start: 0.44, full: 0.82)
-	                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.36, full: 0.78)
-	                * qualitySupport
-	                * turnScale,
-                max(
-                    meshRigidSupport * confidenceRamp(simd_length(rigidResidual), start: 0.08, full: 0.70),
-                    lowFrequencyRigidSupport
-                )
+	            let rigidSupportX = max(
+	                confidenceRamp(abs(rigidResidual.x), start: 0.08, full: 0.70)
+	                    * confidenceRamp(effectivePreparedRigidSupportX, start: 0.08, full: 0.36)
+	                    * confidenceRamp(effectiveShapeConsistencyX, start: 0.44, full: 0.82)
+	                    * confidenceRamp(effectiveForwardBackwardConsistencyX, start: 0.36, full: 0.78)
+	                    * qualitySupport,
+                    meshRigidSupport * confidenceRamp(abs(rigidResidual.x), start: 0.08, full: 0.70)
 	            )
+	            let rigidSupportY = max(
+	                confidenceRamp(abs(rigidResidual.y), start: 0.08, full: 0.70)
+	                    * confidenceRamp(effectivePreparedRigidSupportY, start: 0.08, full: 0.36)
+	                    * confidenceRamp(effectiveShapeConsistencyY, start: 0.44, full: 0.82)
+	                    * confidenceRamp(effectiveForwardBackwardConsistencyY, start: 0.36, full: 0.78)
+	                    * qualitySupport,
+                    max(
+                        meshRigidSupport * confidenceRamp(abs(rigidResidual.y), start: 0.08, full: 0.70),
+                        lowFrequencyRigidSupport
+                    )
+	            )
+	            let rigidSupport = max(rigidSupportX, rigidSupportY)
 	            let rigidRollSupport = confidenceRamp(abs(rigidRollResidual), start: lensShakeRollStartDegrees, full: lensShakeRollFullDegrees)
 	                * confidenceRamp(effectivePreparedRigidRollSupport, start: 0.08, full: 0.36)
-	                * confidenceRamp(effectiveShapeConsistency, start: 0.44, full: 0.82)
-	                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.36, full: 0.78)
+	                * confidenceRamp(rollForwardBackwardConsistency, start: 0.20, full: 0.72)
 	                * qualitySupport
-	                * turnScale
             result.farFieldRigidOffset = rigidResidual
             result.farFieldRigidSupport = clamp(rigidSupport, min: 0.0, max: 1.0)
+            result.farFieldRigidSupportX = clamp(rigidSupportX, min: 0.0, max: 1.0)
+            result.farFieldRigidSupportY = clamp(rigidSupportY, min: 0.0, max: 1.0)
             result.farFieldRigidRollResidual = rigidRollResidual
             result.farFieldRigidRollSupport = clamp(rigidRollSupport, min: 0.0, max: 1.0)
 	            result.farFieldRigidShapeConsistency = clamp(effectiveShapeConsistency, min: 0.0, max: 1.0)
+	            result.farFieldRigidShapeConsistencyX = clamp(effectiveShapeConsistencyX, min: 0.0, max: 1.0)
+	            result.farFieldRigidShapeConsistencyY = clamp(effectiveShapeConsistencyY, min: 0.0, max: 1.0)
 	            result.farFieldRigidForwardBackwardConsistency = clamp(effectiveForwardBackwardConsistency, min: 0.0, max: 1.0)
+	            result.farFieldRigidForwardBackwardConsistencyX = clamp(effectiveForwardBackwardConsistencyX, min: 0.0, max: 1.0)
+	            result.farFieldRigidForwardBackwardConsistencyY = clamp(effectiveForwardBackwardConsistencyY, min: 0.0, max: 1.0)
+	            result.farFieldRigidRollForwardBackwardConsistency = clamp(rollForwardBackwardConsistency, min: 0.0, max: 1.0)
 	            let rigidOnlyEvidence = clamp(
 	                confidenceRamp(result.farFieldRigidSupport, start: farFieldRigidOnlyGuardSupportStart, full: farFieldRigidOnlyGuardSupportFull)
 	                    * confidenceRamp(effectiveShapeConsistency, start: farFieldRigidOnlyGuardShapeStart, full: farFieldRigidOnlyGuardShapeFull)
@@ -15363,8 +15640,13 @@ enum AutoStabilizationEstimator {
                     clamp(-rigidResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
                     clamp(-rigidResidual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
                 )
+                let globalXSupport = confidenceRamp(
+                    result.farFieldRigidSupportX,
+                    start: lensShakeMinimumSupport,
+                    full: 0.62
+                )
                 let globalYSupport = confidenceRamp(
-                    result.farFieldRigidSupport,
+                    result.farFieldRigidSupportY,
                     start: lensShakeMinimumSupport,
                     full: 0.62
                 )
@@ -15373,28 +15655,32 @@ enum AutoStabilizationEstimator {
                     min: -lensShakeRollingGlobalYMaximumCorrection,
                     max: lensShakeRollingGlobalYMaximumCorrection
                 )
+                let globalXOffset = clamp(
+                    rigidOffset.x * globalXSupport,
+                    min: -lensShakePixelMaximumCorrection,
+                    max: lensShakePixelMaximumCorrection
+                )
                 let rigidRollCorrection = clamp(
                     -rigidRollResidual * rigidRollSupport,
                     min: -lensShakeRotationMaximumCorrectionDegrees,
                     max: lensShakeRotationMaximumCorrectionDegrees
                 )
-                result.pixelOffset.y = globalYOffset
+                result.pixelOffset = vector_float2(globalXOffset, globalYOffset)
                 result.farFieldRigidGlobalYOffset = globalYOffset
                 result.farFieldRigidGlobalRollDegrees = rigidRollCorrection
-                result.bandTopOffset = vector_float2(rigidOffset.x, 0.0)
-                result.bandRidgeOffset = vector_float2(rigidOffset.x, 0.0)
-                result.bandMidOffset = vector_float2(rigidOffset.x, 0.0)
+                result.bandTopOffset = vector_float2(0.0, 0.0)
+                result.bandRidgeOffset = vector_float2(0.0, 0.0)
+                result.bandMidOffset = vector_float2(0.0, 0.0)
                 result.bandModelMask |= 128
                 result.bandModelMask |= 1048576
-                result.farFieldRigidApplied = result.farFieldRigidSupport >= lensShakeMinimumSupport ? 1.0 : 0.0
+                result.farFieldRigidApplied = max(result.farFieldRigidSupportX, result.farFieldRigidSupportY) >= lensShakeMinimumSupport ? 1.0 : 0.0
+                if abs(globalXOffset) >= 0.00001 { result.axisMask |= 1 }
+                if abs(globalYOffset) >= 0.00001 { result.axisMask |= 2 }
                 if rigidRollSupport >= lensShakeMinimumSupport, abs(rigidRollCorrection) >= 0.00001 {
                     result.rotationDegrees = rigidRollCorrection
                     result.farFieldRigidRollApplied = 1.0
                     result.axisMask |= 4
                     maximumAppliedSupport = max(maximumAppliedSupport, rigidRollSupport)
-                }
-                if abs(rigidOffset.x) >= 0.02 {
-                    result.bandWarpApplied = 1.0
                 }
                 let appliedRigidSupport = max(result.farFieldRigidSupport, result.farFieldRigidRollSupport)
                 if result.farFieldRigidApplied > 0.5 || result.farFieldRigidRollApplied > 0.5 || rigidBranchSupport >= lensShakeMinimumSupport {
@@ -17698,16 +17984,12 @@ enum AutoStabilizationEstimator {
         bandPixels: Float,
         turnOwnership: Float
     ) -> Float {
-        guard bandPixels.isFinite else {
+        guard bandPixels.isFinite, turnOwnership.isFinite else {
             return 0.0
         }
-        let turnSupport = confidenceRamp(turnOwnership, start: 0.18, full: 0.56)
-        let largeBandFade = confidenceRamp(
-            abs(bandPixels),
-            start: turnOwnedFootstepXFineFadeStartPixels,
-            full: turnOwnedFootstepXFineFadeFullPixels
-        )
-        return clamp(1.0 - (turnSupport * largeBandFade), min: 0.0, max: 1.0)
+        // Turn owns only the low-frequency pan. Fine X remains under Camera
+        // Jitter authority even while turn confidence is fully active.
+        return 1.0
     }
 
     private static func turnOwnedFootstepXRescueConfidenceFloor(
@@ -17725,39 +18007,8 @@ enum AutoStabilizationEstimator {
         else {
             return 0.0
         }
-        let suppressedFineGate = 1.0 - clamp(fineGate, min: 0.0, max: 1.0)
-        guard suppressedFineGate > 0.0 else {
-            return 0.0
-        }
-        let turnSupport = max(
-            confidenceRamp(turnShakeSuppression, start: 0.18, full: 0.56),
-            confidenceRamp(turnOwnership, start: 0.18, full: 0.56)
-        )
-        let bandSupport = confidenceRamp(
-            abs(bandPixels),
-            start: turnOwnedFootstepXRescueBandStartPixels,
-            full: turnOwnedFootstepXRescueBandFullPixels
-        )
-        let farFieldEvidenceSupport = confidenceRamp(
-            farFieldSupport,
-            start: turnOwnedFootstepXRescueSupportStart,
-            full: turnOwnedFootstepXRescueSupportFull
-        )
-        let turnEvidenceSupport = confidenceRamp(
-            turnOwnership,
-            start: turnOwnedFootstepXRescueTurnEvidenceStart,
-            full: turnOwnedFootstepXRescueTurnEvidenceFull
-        ) * turnOwnedFootstepXRescueTurnEvidenceScale
-        let evidenceSupport = max(farFieldEvidenceSupport, turnEvidenceSupport)
-        return clamp(
-            turnOwnedFootstepXRescueConfidenceFloorMax
-                * suppressedFineGate
-                * turnSupport
-                * bandSupport
-                * evidenceSupport,
-            min: 0.0,
-            max: turnOwnedFootstepXRescueConfidenceFloorMax
-        )
+        // Fine X is no longer suppressed by Turn, so no rescue floor applies.
+        return 0.0
     }
 
     private static func farFieldFootstepConfidenceFloor(

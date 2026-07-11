@@ -46,6 +46,10 @@ private struct PersistedHostAnalysisCache: Codable {
     let sampleWidth: Int
     let sampleHeight: Int
     let eventName: String?
+    let sourceMediaKind: String?
+    let sourceWidth: Int?
+    let sourceHeight: Int?
+    let sourceFileName: String?
     let frames: [PersistedHostAnalysisFrame]
     let residuals: [Float]?
     let rollMotion: [Float]?
@@ -85,9 +89,16 @@ private struct PersistedHostAnalysisCache: Codable {
     let farFieldRigidShakePathY: [Float]?
     let farFieldRigidShakePathRoll: [Float]?
     let farFieldRigidShakeSupport: [Float]?
+    let farFieldRigidShakeSupportX: [Float]?
+    let farFieldRigidShakeSupportY: [Float]?
     let farFieldRigidShakeRollSupport: [Float]?
     let farFieldRigidShakeShapeConsistency: [Float]?
+    let farFieldRigidShakeShapeConsistencyX: [Float]?
+    let farFieldRigidShakeShapeConsistencyY: [Float]?
     let farFieldRigidShakeForwardBackwardConsistency: [Float]?
+    let farFieldRigidShakeForwardBackwardConsistencyX: [Float]?
+    let farFieldRigidShakeForwardBackwardConsistencyY: [Float]?
+    let farFieldRigidShakeRollForwardBackwardConsistency: [Float]?
     let farFieldMeshRows: Int?
     let farFieldMeshColumns: Int?
     let farFieldMeshPathX: [Float]?
@@ -264,8 +275,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 48
-    private static let supportedCacheSchemaVersions: Set<Int> = [48]
+    private static let cacheSchemaVersion = 49
+    private static let supportedCacheSchemaVersions: Set<Int> = [49]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1809,6 +1820,10 @@ final class StabilizerHostAnalysisStore {
             sampleWidth: sampleWidth,
             sampleHeight: sampleHeight,
             eventName: eventName,
+            sourceMediaKind: "original-media",
+            sourceWidth: sampleWidth,
+            sourceHeight: sampleHeight,
+            sourceFileName: clipLabel,
             frames: framesToPersist.map {
                 PersistedHostAnalysisFrame(
                     time: $0.time,
@@ -1855,9 +1870,16 @@ final class StabilizerHostAnalysisStore {
             farFieldRigidShakePathY: prepared.farFieldRigidShakePathY,
             farFieldRigidShakePathRoll: prepared.farFieldRigidShakePathRoll,
             farFieldRigidShakeSupport: prepared.farFieldRigidShakeSupport,
+            farFieldRigidShakeSupportX: prepared.farFieldRigidShakeSupportX,
+            farFieldRigidShakeSupportY: prepared.farFieldRigidShakeSupportY,
             farFieldRigidShakeRollSupport: prepared.farFieldRigidShakeRollSupport,
             farFieldRigidShakeShapeConsistency: prepared.farFieldRigidShakeShapeConsistency,
+            farFieldRigidShakeShapeConsistencyX: prepared.farFieldRigidShakeShapeConsistencyX,
+            farFieldRigidShakeShapeConsistencyY: prepared.farFieldRigidShakeShapeConsistencyY,
             farFieldRigidShakeForwardBackwardConsistency: prepared.farFieldRigidShakeForwardBackwardConsistency,
+            farFieldRigidShakeForwardBackwardConsistencyX: prepared.farFieldRigidShakeForwardBackwardConsistencyX,
+            farFieldRigidShakeForwardBackwardConsistencyY: prepared.farFieldRigidShakeForwardBackwardConsistencyY,
+            farFieldRigidShakeRollForwardBackwardConsistency: prepared.farFieldRigidShakeRollForwardBackwardConsistency,
             farFieldMeshRows: prepared.farFieldMeshRows,
             farFieldMeshColumns: prepared.farFieldMeshColumns,
             farFieldMeshPathX: prepared.farFieldMeshPathX,
@@ -2037,9 +2059,16 @@ final class StabilizerHostAnalysisStore {
                 farFieldRigidShakePathY: analysis.farFieldRigidShakePathY,
                 farFieldRigidShakePathRoll: analysis.farFieldRigidShakePathRoll,
                 farFieldRigidShakeSupport: analysis.farFieldRigidShakeSupport,
+                farFieldRigidShakeSupportX: analysis.farFieldRigidShakeSupportX,
+                farFieldRigidShakeSupportY: analysis.farFieldRigidShakeSupportY,
                 farFieldRigidShakeRollSupport: analysis.farFieldRigidShakeRollSupport,
                 farFieldRigidShakeShapeConsistency: analysis.farFieldRigidShakeShapeConsistency,
+                farFieldRigidShakeShapeConsistencyX: analysis.farFieldRigidShakeShapeConsistencyX,
+                farFieldRigidShakeShapeConsistencyY: analysis.farFieldRigidShakeShapeConsistencyY,
                 farFieldRigidShakeForwardBackwardConsistency: analysis.farFieldRigidShakeForwardBackwardConsistency,
+                farFieldRigidShakeForwardBackwardConsistencyX: analysis.farFieldRigidShakeForwardBackwardConsistencyX,
+                farFieldRigidShakeForwardBackwardConsistencyY: analysis.farFieldRigidShakeForwardBackwardConsistencyY,
+                farFieldRigidShakeRollForwardBackwardConsistency: analysis.farFieldRigidShakeRollForwardBackwardConsistency,
                 farFieldMeshRows: analysis.farFieldMeshRows,
                 farFieldMeshColumns: analysis.farFieldMeshColumns,
                 farFieldMeshPathX: analysis.farFieldMeshPathX,
@@ -3028,6 +3057,19 @@ final class StabilizerHostAnalysisStore {
     }
 
     private static func preparedAnalysis(from cache: PersistedHostAnalysisCache, frames: [StabilizerAnalysisFrame]) throws -> StabilizerPreparedAnalysis {
+        guard cache.sourceMediaKind == "original-media" || cache.sourceMediaKind == "asset-src",
+              let sourceWidth = cache.sourceWidth,
+              let sourceHeight = cache.sourceHeight,
+              sourceWidth > 0,
+              sourceHeight > 0,
+              let sourceFileName = cache.sourceFileName,
+              !sourceFileName.isEmpty else {
+            throw NSError(
+                domain: "com.justadev.TokyoWalkingStabilizer",
+                code: Int(kFxError_AnalysisError),
+                userInfo: [NSLocalizedDescriptionKey: "schema 49 cache is missing validated original-media provenance"]
+            )
+        }
         if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frames.count) {
             throw NSError(
                 domain: "com.justadev.TokyoWalkingStabilizer",
@@ -3097,9 +3139,16 @@ final class StabilizerHostAnalysisStore {
             cache.farFieldRigidShakePathY,
             cache.farFieldRigidShakePathRoll,
             cache.farFieldRigidShakeSupport,
+            cache.farFieldRigidShakeSupportX,
+            cache.farFieldRigidShakeSupportY,
             cache.farFieldRigidShakeRollSupport,
             cache.farFieldRigidShakeShapeConsistency,
+            cache.farFieldRigidShakeShapeConsistencyX,
+            cache.farFieldRigidShakeShapeConsistencyY,
             cache.farFieldRigidShakeForwardBackwardConsistency,
+            cache.farFieldRigidShakeForwardBackwardConsistencyX,
+            cache.farFieldRigidShakeForwardBackwardConsistencyY,
+            cache.farFieldRigidShakeRollForwardBackwardConsistency,
             cache.farFieldMeshDominantWindowFrames,
             cache.farFieldMeshDominantWindowSeconds,
             cache.farFieldMeshDominantSupport
@@ -3171,9 +3220,16 @@ final class StabilizerHostAnalysisStore {
            let farFieldRigidShakePathY = cache.farFieldRigidShakePathY,
            let farFieldRigidShakePathRoll = cache.farFieldRigidShakePathRoll,
            let farFieldRigidShakeSupport = cache.farFieldRigidShakeSupport,
+           let farFieldRigidShakeSupportX = cache.farFieldRigidShakeSupportX,
+           let farFieldRigidShakeSupportY = cache.farFieldRigidShakeSupportY,
            let farFieldRigidShakeRollSupport = cache.farFieldRigidShakeRollSupport,
            let farFieldRigidShakeShapeConsistency = cache.farFieldRigidShakeShapeConsistency,
+           let farFieldRigidShakeShapeConsistencyX = cache.farFieldRigidShakeShapeConsistencyX,
+           let farFieldRigidShakeShapeConsistencyY = cache.farFieldRigidShakeShapeConsistencyY,
            let farFieldRigidShakeForwardBackwardConsistency = cache.farFieldRigidShakeForwardBackwardConsistency,
+           let farFieldRigidShakeForwardBackwardConsistencyX = cache.farFieldRigidShakeForwardBackwardConsistencyX,
+           let farFieldRigidShakeForwardBackwardConsistencyY = cache.farFieldRigidShakeForwardBackwardConsistencyY,
+           let farFieldRigidShakeRollForwardBackwardConsistency = cache.farFieldRigidShakeRollForwardBackwardConsistency,
            let farFieldMeshPathX = cache.farFieldMeshPathX,
            let farFieldMeshPathY = cache.farFieldMeshPathY,
            let farFieldMeshSupport = cache.farFieldMeshSupport,
@@ -3256,9 +3312,16 @@ final class StabilizerHostAnalysisStore {
                 farFieldRigidShakePathY: farFieldRigidShakePathY,
                 farFieldRigidShakePathRoll: farFieldRigidShakePathRoll,
                 farFieldRigidShakeSupport: farFieldRigidShakeSupport,
+                farFieldRigidShakeSupportX: farFieldRigidShakeSupportX,
+                farFieldRigidShakeSupportY: farFieldRigidShakeSupportY,
                 farFieldRigidShakeRollSupport: farFieldRigidShakeRollSupport,
                 farFieldRigidShakeShapeConsistency: farFieldRigidShakeShapeConsistency,
+                farFieldRigidShakeShapeConsistencyX: farFieldRigidShakeShapeConsistencyX,
+                farFieldRigidShakeShapeConsistencyY: farFieldRigidShakeShapeConsistencyY,
                 farFieldRigidShakeForwardBackwardConsistency: farFieldRigidShakeForwardBackwardConsistency,
+                farFieldRigidShakeForwardBackwardConsistencyX: farFieldRigidShakeForwardBackwardConsistencyX,
+                farFieldRigidShakeForwardBackwardConsistencyY: farFieldRigidShakeForwardBackwardConsistencyY,
+                farFieldRigidShakeRollForwardBackwardConsistency: farFieldRigidShakeRollForwardBackwardConsistency,
                 farFieldMeshRows: farFieldMeshRows,
                 farFieldMeshColumns: farFieldMeshColumns,
                 farFieldMeshPathX: farFieldMeshPathX,
@@ -3350,9 +3413,16 @@ final class StabilizerHostAnalysisStore {
             ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
             ("farFieldRigidShakePathRoll", cache.farFieldRigidShakePathRoll),
             ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
+            ("farFieldRigidShakeSupportX", cache.farFieldRigidShakeSupportX),
+            ("farFieldRigidShakeSupportY", cache.farFieldRigidShakeSupportY),
             ("farFieldRigidShakeRollSupport", cache.farFieldRigidShakeRollSupport),
             ("farFieldRigidShakeShapeConsistency", cache.farFieldRigidShakeShapeConsistency),
-            ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency)
+            ("farFieldRigidShakeShapeConsistencyX", cache.farFieldRigidShakeShapeConsistencyX),
+            ("farFieldRigidShakeShapeConsistencyY", cache.farFieldRigidShakeShapeConsistencyY),
+            ("farFieldRigidShakeForwardBackwardConsistency", cache.farFieldRigidShakeForwardBackwardConsistency),
+            ("farFieldRigidShakeForwardBackwardConsistencyX", cache.farFieldRigidShakeForwardBackwardConsistencyX),
+            ("farFieldRigidShakeForwardBackwardConsistencyY", cache.farFieldRigidShakeForwardBackwardConsistencyY),
+            ("farFieldRigidShakeRollForwardBackwardConsistency", cache.farFieldRigidShakeRollForwardBackwardConsistency)
         ])
         guard let rows = cache.farFieldMeshRows,
               let columns = cache.farFieldMeshColumns
@@ -3656,6 +3726,10 @@ final class StabilizerHostAnalysisStore {
                 sampleWidth: cache.sampleWidth,
                 sampleHeight: cache.sampleHeight,
                 eventName: cache.eventName,
+                sourceMediaKind: cache.sourceMediaKind,
+                sourceWidth: cache.sourceWidth,
+                sourceHeight: cache.sourceHeight,
+                sourceFileName: cache.sourceFileName,
                 frames: [],
                 residuals: cache.residuals,
                 rollMotion: cache.rollMotion,
@@ -3695,9 +3769,16 @@ final class StabilizerHostAnalysisStore {
                 farFieldRigidShakePathY: cache.farFieldRigidShakePathY,
                 farFieldRigidShakePathRoll: cache.farFieldRigidShakePathRoll,
                 farFieldRigidShakeSupport: cache.farFieldRigidShakeSupport,
+                farFieldRigidShakeSupportX: cache.farFieldRigidShakeSupportX,
+                farFieldRigidShakeSupportY: cache.farFieldRigidShakeSupportY,
                 farFieldRigidShakeRollSupport: cache.farFieldRigidShakeRollSupport,
                 farFieldRigidShakeShapeConsistency: cache.farFieldRigidShakeShapeConsistency,
+                farFieldRigidShakeShapeConsistencyX: cache.farFieldRigidShakeShapeConsistencyX,
+                farFieldRigidShakeShapeConsistencyY: cache.farFieldRigidShakeShapeConsistencyY,
                 farFieldRigidShakeForwardBackwardConsistency: cache.farFieldRigidShakeForwardBackwardConsistency,
+                farFieldRigidShakeForwardBackwardConsistencyX: cache.farFieldRigidShakeForwardBackwardConsistencyX,
+                farFieldRigidShakeForwardBackwardConsistencyY: cache.farFieldRigidShakeForwardBackwardConsistencyY,
+                farFieldRigidShakeRollForwardBackwardConsistency: cache.farFieldRigidShakeRollForwardBackwardConsistency,
                 farFieldMeshRows: cache.farFieldMeshRows,
                 farFieldMeshColumns: cache.farFieldMeshColumns,
                 farFieldMeshPathX: cache.farFieldMeshPathX,
