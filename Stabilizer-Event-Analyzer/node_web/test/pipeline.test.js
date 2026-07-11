@@ -42,8 +42,8 @@ function analysisResult(assetId = "r2", name = "P1000307") {
     mediaKind: "original-media",
     sourceMediaFingerprint: "aaa:bbb:ccc",
     cacheFileName: `host-analysis-v2-${name}.json`,
-    cacheIdentity: `49:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:${name}`,
-    cacheSchemaVersion: 49,
+    cacheIdentity: `50:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:${name}`,
+    cacheSchemaVersion: 50,
     durationSeconds: 10.01,
     sampleScalePercent: 10,
     sampleWidth: 192,
@@ -78,6 +78,9 @@ function writeCachePayload(root, result = analysisResult()) {
       farFieldRigidShakePathX: frameZeros,
       farFieldRigidShakePathY: frameZeros,
       farFieldRigidShakePathRoll: frameZeros,
+      cameraRigidTargetX: frameZeros,
+      cameraRigidTargetY: frameZeros,
+      cameraRigidTargetRollDegrees: frameZeros,
       farFieldRigidShakeSupport: frameZeros,
       farFieldRigidShakeSupportX: frameZeros,
       farFieldRigidShakeSupportY: frameZeros,
@@ -265,7 +268,7 @@ test("list_event_assets reads original media clips from an FCP library bundle", 
     pkg.packageDirectory,
     path.join(retainedRoot, "Library_fcpbundle", "Event-A", path.basename(pkg.packageDirectory))
   );
-  assert.match(path.basename(pkg.packageDirectory), /^LibraryClip__schema49__sample10__frames300__[0-9a-f]{8}$/);
+  assert.match(path.basename(pkg.packageDirectory), /^LibraryClip__schema50__sample10__frames300__[0-9a-f]{8}$/);
   const manifest = JSON.parse(fs.readFileSync(pkg.manifestPath, "utf8"));
   assert.equal(manifest.eventName, "Event A");
   assert.equal(manifest.eventRoot, fs.realpathSync(path.join(bundle, "Event A")));
@@ -500,8 +503,8 @@ test("build_stabilizer_fcpxml_import inserts Stabilizer filter", () => {
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "49:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 49,
+          cacheIdentity: "50:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 50,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -624,8 +627,8 @@ test("build_stabilizer_fcpxml_import attaches video refs to parent clips", () =>
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "49:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 49,
+          cacheIdentity: "50:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 50,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -694,8 +697,8 @@ test("build_stabilizer_fcpxml_import preserves marker order before filters", () 
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "49:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 49,
+          cacheIdentity: "50:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 50,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -765,8 +768,8 @@ test("build_stabilizer_fcpxml_import removes legacy Stabilizer Transform filters
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "49:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 49,
+          cacheIdentity: "50:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 50,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -838,8 +841,8 @@ test("build_stabilizer_fcpxml_import can emit only analyzed assets", () => {
       results: [
         {
           assetId: "r2",
-          cacheIdentity: "49:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
-          cacheSchemaVersion: 49,
+          cacheIdentity: "50:0:6006:20:1920:1080:300:aaa:bbb:ccc:end6006:P1000307",
+          cacheSchemaVersion: 50,
           sampleScalePercent: 100,
           sampleWidth: 1920,
           sampleHeight: 1080,
@@ -1005,7 +1008,7 @@ test("build_stabilizer_fcpxml_import emits one package directory per footage", (
   assert.equal(payload.insertedFilters, 2);
   assert.equal(payload.packages.length, 1);
   const pkg = payload.packages[0];
-  assert.match(path.basename(pkg.packageDirectory), /^P1000307__schema49__sample10__frames300__[0-9a-f]{8}$/);
+  assert.match(path.basename(pkg.packageDirectory), /^P1000307__schema50__sample10__frames300__[0-9a-f]{8}$/);
   assert.equal(pkg.packageDirectoryName, path.basename(pkg.packageDirectory));
   assert.equal(pkg.packageBundleLabel, "minimal-event");
   assert.equal(pkg.packageEventLabel, "gh6");
@@ -1069,7 +1072,7 @@ test("build_stabilizer_fcpxml_import reuses deterministic package directory for 
   const first = run("python3", args);
   const second = run("python3", args);
   assert.equal(second.packages[0].packageDirectory, first.packages[0].packageDirectory);
-  assert.match(path.basename(second.packages[0].packageDirectory), /^P1000307__schema49__sample10__frames300__[0-9a-f]{8}$/);
+  assert.match(path.basename(second.packages[0].packageDirectory), /^P1000307__schema50__sample10__frames300__[0-9a-f]{8}$/);
   assert.equal(fs.existsSync(path.join(second.packages[0].outputPackage, "Info.fcpxml")), true);
 });
 
@@ -1103,7 +1106,7 @@ test("build_stabilizer_fcpxml_import separates deterministic package directories
 
   const changed = {
     ...result,
-    cacheIdentity: "49:0:6006:20:1920:1080:300:ddd:eee:fff:end6006:P1000307",
+    cacheIdentity: "50:0:6006:20:1920:1080:300:ddd:eee:fff:end6006:P1000307",
     cacheFileName: "host-analysis-v2-P1000307-different.json",
     firstFingerprint: "ddd",
     middleFingerprint: "eee",
@@ -1122,7 +1125,7 @@ test("build_stabilizer_fcpxml_import separates deterministic package directories
   );
   const second = run("python3", args);
   assert.notEqual(second.packages[0].packageDirectory, first.packages[0].packageDirectory);
-  assert.match(path.basename(second.packages[0].packageDirectory), /^P1000307__schema49__sample10__frames300__[0-9a-f]{8}$/);
+  assert.match(path.basename(second.packages[0].packageDirectory), /^P1000307__schema50__sample10__frames300__[0-9a-f]{8}$/);
   assert.equal(fs.existsSync(path.join(first.packages[0].outputPackage, "Info.fcpxml")), true);
   assert.equal(fs.existsSync(path.join(second.packages[0].outputPackage, "Info.fcpxml")), true);
 });

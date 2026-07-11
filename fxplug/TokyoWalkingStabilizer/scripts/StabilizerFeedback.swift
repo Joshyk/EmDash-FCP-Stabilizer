@@ -94,6 +94,9 @@ private struct PersistedHostAnalysisCache: Decodable {
     let farFieldRigidShakePathX: [Float]?
     let farFieldRigidShakePathY: [Float]?
     let farFieldRigidShakePathRoll: [Float]?
+    let cameraRigidTargetX: [Float]?
+    let cameraRigidTargetY: [Float]?
+    let cameraRigidTargetRollDegrees: [Float]?
     let farFieldRigidShakeSupport: [Float]?
     let farFieldRigidShakeSupportX: [Float]?
     let farFieldRigidShakeSupportY: [Float]?
@@ -219,6 +222,9 @@ private struct Analysis {
     let farFieldRigidShakePathX: [Float]
     let farFieldRigidShakePathY: [Float]
     let farFieldRigidShakePathRoll: [Float]
+    let cameraRigidTargetX: [Float]
+    let cameraRigidTargetY: [Float]
+    let cameraRigidTargetRollDegrees: [Float]
     let farFieldRigidShakeSupport: [Float]
     let farFieldRigidShakeSupportX: [Float]
     let farFieldRigidShakeSupportY: [Float]
@@ -275,7 +281,7 @@ private struct Analysis {
               sourceHeight > 0,
               let sourceFileName = cache.sourceFileName,
               !sourceFileName.isEmpty else {
-            throw FeedbackError(description: "schema 49 cache is missing validated original-media provenance")
+            throw FeedbackError(description: "schema 50 cache is missing validated original-media provenance")
         }
         let frames = try cache.frames.map { persisted -> AnalysisFrame in
             guard let fingerprint = persisted.fingerprint, !fingerprint.isEmpty else {
@@ -376,6 +382,9 @@ private struct Analysis {
         farFieldRigidShakePathX = try requireFloatArray(cache.farFieldRigidShakePathX, "farFieldRigidShakePathX", count: frames.count)
         farFieldRigidShakePathY = try requireFloatArray(cache.farFieldRigidShakePathY, "farFieldRigidShakePathY", count: frames.count)
         farFieldRigidShakePathRoll = try requireFloatArray(cache.farFieldRigidShakePathRoll, "farFieldRigidShakePathRoll", count: frames.count)
+        cameraRigidTargetX = try requireFloatArray(cache.cameraRigidTargetX, "cameraRigidTargetX", count: frames.count)
+        cameraRigidTargetY = try requireFloatArray(cache.cameraRigidTargetY, "cameraRigidTargetY", count: frames.count)
+        cameraRigidTargetRollDegrees = try requireFloatArray(cache.cameraRigidTargetRollDegrees, "cameraRigidTargetRollDegrees", count: frames.count)
         farFieldRigidShakeSupport = try requireFloatArray(cache.farFieldRigidShakeSupport, "farFieldRigidShakeSupport", count: frames.count)
         farFieldRigidShakeSupportX = try requireFloatArray(cache.farFieldRigidShakeSupportX, "farFieldRigidShakeSupportX", count: frames.count)
         farFieldRigidShakeSupportY = try requireFloatArray(cache.farFieldRigidShakeSupportY, "farFieldRigidShakeSupportY", count: frames.count)
@@ -905,7 +914,7 @@ private let expectedFarFieldMeshBinCount = expectedFarFieldMeshRows * expectedFa
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [49]
+private let supportedCacheSchemaVersions: Set<Int> = [50]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
     _ = cache
@@ -1039,6 +1048,9 @@ private func floatComparisonInputs(baseline: Analysis, compared: Analysis) -> [(
         ("farFieldRigidShakePathX", baseline.farFieldRigidShakePathX, compared.farFieldRigidShakePathX),
         ("farFieldRigidShakePathY", baseline.farFieldRigidShakePathY, compared.farFieldRigidShakePathY),
         ("farFieldRigidShakePathRoll", baseline.farFieldRigidShakePathRoll, compared.farFieldRigidShakePathRoll),
+        ("cameraRigidTargetX", baseline.cameraRigidTargetX, compared.cameraRigidTargetX),
+        ("cameraRigidTargetY", baseline.cameraRigidTargetY, compared.cameraRigidTargetY),
+        ("cameraRigidTargetRollDegrees", baseline.cameraRigidTargetRollDegrees, compared.cameraRigidTargetRollDegrees),
         ("farFieldRigidShakeSupport", baseline.farFieldRigidShakeSupport, compared.farFieldRigidShakeSupport),
         ("farFieldRigidShakeSupportX", baseline.farFieldRigidShakeSupportX, compared.farFieldRigidShakeSupportX),
         ("farFieldRigidShakeSupportY", baseline.farFieldRigidShakeSupportY, compared.farFieldRigidShakeSupportY),
@@ -1315,6 +1327,9 @@ private func preparedCacheIssue(_ cache: PersistedHostAnalysisCache) -> String? 
         ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
         ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
         ("farFieldRigidShakePathRoll", cache.farFieldRigidShakePathRoll),
+        ("cameraRigidTargetX", cache.cameraRigidTargetX),
+        ("cameraRigidTargetY", cache.cameraRigidTargetY),
+        ("cameraRigidTargetRollDegrees", cache.cameraRigidTargetRollDegrees),
         ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
         ("farFieldRigidShakeSupportX", cache.farFieldRigidShakeSupportX),
         ("farFieldRigidShakeSupportY", cache.farFieldRigidShakeSupportY),
@@ -3962,6 +3977,9 @@ private func sourceSpaceLensShakeBand(
     let hasFarFieldRigidShakePaths = analysis.farFieldRigidShakePathX.count == analysis.frames.count
         && analysis.farFieldRigidShakePathY.count == analysis.frames.count
         && analysis.farFieldRigidShakePathRoll.count == analysis.frames.count
+        && analysis.cameraRigidTargetX.count == analysis.frames.count
+        && analysis.cameraRigidTargetY.count == analysis.frames.count
+        && analysis.cameraRigidTargetRollDegrees.count == analysis.frames.count
         && analysis.farFieldRigidShakeSupport.count == analysis.frames.count
         && analysis.farFieldRigidShakeSupportX.count == analysis.frames.count
         && analysis.farFieldRigidShakeSupportY.count == analysis.frames.count
@@ -3974,12 +3992,12 @@ private func sourceSpaceLensShakeBand(
         && analysis.farFieldRigidShakeForwardBackwardConsistencyY.count == analysis.frames.count
         && analysis.farFieldRigidShakeRollForwardBackwardConsistency.count == analysis.frames.count
     if hasFarFieldRigidShakePaths {
-        let rawRigidResidualX = residual(analysis.farFieldRigidShakePathX) * xScale
-        let rawRigidResidualY = residual(analysis.farFieldRigidShakePathY) * yScale
-        let rawRigidRollResidual = residual(analysis.farFieldRigidShakePathRoll)
-        var rigidResidualX = pulseSmoothedPixelResidual(analysis.farFieldRigidShakePathX, scale: xScale)
-        var rigidResidualY = pulseSmoothedPixelResidual(analysis.farFieldRigidShakePathY, scale: yScale)
-        var rigidRollResidual = pulseSmoothedDegreeRollResidual(analysis.farFieldRigidShakePathRoll)
+        let rawRigidResidualX = analysis.cameraRigidTargetX[index] * xScale
+        let rawRigidResidualY = analysis.cameraRigidTargetY[index] * yScale
+        let rawRigidRollResidual = analysis.cameraRigidTargetRollDegrees[index]
+        var rigidResidualX = rawRigidResidualX
+        var rigidResidualY = rawRigidResidualY
+        var rigidRollResidual = rawRigidRollResidual
         let rawRigidMagnitude = hypotf(rawRigidResidualX, rawRigidResidualY)
         let preparedRigidSupport = analysis.farFieldRigidShakeSupport[index]
         let preparedRigidSupportX = analysis.farFieldRigidShakeSupportX[index]
@@ -3992,18 +4010,18 @@ private func sourceSpaceLensShakeBand(
         let forwardBackwardConsistencyX = analysis.farFieldRigidShakeForwardBackwardConsistencyX[index]
         let forwardBackwardConsistencyY = analysis.farFieldRigidShakeForwardBackwardConsistencyY[index]
         let rollForwardBackwardConsistency = analysis.farFieldRigidShakeRollForwardBackwardConsistency[index]
-        let deltaCoherenceSupport = farFieldRigidDeltaCoherenceSupport()
-        let deltaCoherenceAuthority = confidenceRamp(deltaCoherenceSupport, start: 0.08, full: 0.34)
-        let effectivePreparedRigidSupport = max(preparedRigidSupport, deltaCoherenceAuthority)
-        let effectivePreparedRigidSupportX = max(preparedRigidSupportX, deltaCoherenceAuthority)
-        let effectivePreparedRigidSupportY = max(preparedRigidSupportY, deltaCoherenceAuthority)
+        let deltaCoherenceSupport = Float(0.0)
+        let deltaCoherenceAuthority = Float(0.0)
+        let effectivePreparedRigidSupport = preparedRigidSupport
+        let effectivePreparedRigidSupportX = preparedRigidSupportX
+        let effectivePreparedRigidSupportY = preparedRigidSupportY
         let effectivePreparedRigidRollSupport = preparedRigidRollSupport
-        let effectiveShapeConsistency = max(shapeConsistency, deltaCoherenceAuthority)
-        let effectiveShapeConsistencyX = max(shapeConsistencyX, deltaCoherenceAuthority)
-        let effectiveShapeConsistencyY = max(shapeConsistencyY, deltaCoherenceAuthority)
-        let effectiveForwardBackwardConsistency = max(forwardBackwardConsistency, deltaCoherenceAuthority * 0.92)
-        let effectiveForwardBackwardConsistencyX = max(forwardBackwardConsistencyX, deltaCoherenceAuthority * 0.92)
-        let effectiveForwardBackwardConsistencyY = max(forwardBackwardConsistencyY, deltaCoherenceAuthority * 0.92)
+        let effectiveShapeConsistency = shapeConsistency
+        let effectiveShapeConsistencyX = shapeConsistencyX
+        let effectiveShapeConsistencyY = shapeConsistencyY
+        let effectiveForwardBackwardConsistency = forwardBackwardConsistency
+        let effectiveForwardBackwardConsistencyX = forwardBackwardConsistencyX
+        let effectiveForwardBackwardConsistencyY = forwardBackwardConsistencyY
         let lowFrequencyRigidPriority = lowFrequencySupport
             * confidenceRamp(rawRigidMagnitude, start: 0.08, full: 0.66)
             * confidenceRamp(max(effectivePreparedRigidSupport, dominantSupport), start: 0.10, full: 0.56)

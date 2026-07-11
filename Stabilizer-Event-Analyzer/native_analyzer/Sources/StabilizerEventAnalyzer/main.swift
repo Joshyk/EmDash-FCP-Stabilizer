@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 49
+private let cacheSchemaVersion = 50
 private let farFieldMeshRows = 5
 private let farFieldMeshColumns = 9
 private let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
@@ -1057,6 +1057,9 @@ struct PreparedAnalysis {
     let farFieldRigidShakePathX: [Float]
     let farFieldRigidShakePathY: [Float]
     let farFieldRigidShakePathRoll: [Float]
+    let cameraRigidTargetX: [Float]
+    let cameraRigidTargetY: [Float]
+    let cameraRigidTargetRollDegrees: [Float]
     let farFieldRigidShakeSupport: [Float]
     let farFieldRigidShakeSupportX: [Float]
     let farFieldRigidShakeSupportY: [Float]
@@ -1156,6 +1159,9 @@ struct PersistedHostAnalysisCache: Encodable {
     let farFieldRigidShakePathX: [Float]?
     let farFieldRigidShakePathY: [Float]?
     let farFieldRigidShakePathRoll: [Float]?
+    let cameraRigidTargetX: [Float]?
+    let cameraRigidTargetY: [Float]?
+    let cameraRigidTargetRollDegrees: [Float]?
     let farFieldRigidShakeSupport: [Float]?
     let farFieldRigidShakeSupportX: [Float]?
     let farFieldRigidShakeSupportY: [Float]?
@@ -3887,6 +3893,8 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         columns: farFieldMeshColumns
     )
     let farFieldRigidShake = farFieldRigidShakePreparedPaths(
+        frameTimes: frames.map(\.time),
+        dominantWindowSeconds: farFieldMeshDominantWindows.windowSeconds,
         topX: lensBandTopPathX,
         topY: lensBandTopPathY,
         ridgeX: lensBandRidgePathX,
@@ -3901,6 +3909,9 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
     guard farFieldRigidShake.pathX.count == frames.count,
           farFieldRigidShake.pathY.count == frames.count,
           farFieldRigidShake.pathRoll.count == frames.count,
+          farFieldRigidShake.targetX.count == frames.count,
+          farFieldRigidShake.targetY.count == frames.count,
+          farFieldRigidShake.targetRollDegrees.count == frames.count,
           farFieldRigidShake.support.count == frames.count,
           farFieldRigidShake.supportX.count == frames.count,
           farFieldRigidShake.supportY.count == frames.count,
@@ -3962,6 +3973,9 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         farFieldRigidShakePathX: farFieldRigidShake.pathX,
         farFieldRigidShakePathY: farFieldRigidShake.pathY,
         farFieldRigidShakePathRoll: farFieldRigidShake.pathRoll,
+        cameraRigidTargetX: farFieldRigidShake.targetX,
+        cameraRigidTargetY: farFieldRigidShake.targetY,
+        cameraRigidTargetRollDegrees: farFieldRigidShake.targetRollDegrees,
         farFieldRigidShakeSupport: farFieldRigidShake.support,
         farFieldRigidShakeSupportX: farFieldRigidShake.supportX,
         farFieldRigidShakeSupportY: farFieldRigidShake.supportY,
@@ -4109,6 +4123,9 @@ private struct FarFieldRigidShakePreparedPaths {
     let pathX: [Float]
     let pathY: [Float]
     let pathRoll: [Float]
+    let targetX: [Float]
+    let targetY: [Float]
+    let targetRollDegrees: [Float]
     let support: [Float]
     let supportX: [Float]
     let supportY: [Float]
@@ -4130,6 +4147,8 @@ private func preparedConfidenceRamp(_ value: Float, start: Float, full: Float) -
 }
 
 private func farFieldRigidShakePreparedPaths(
+    frameTimes: [Double],
+    dominantWindowSeconds: [Float],
     topX: [Float],
     topY: [Float],
     ridgeX: [Float],
@@ -4142,17 +4161,21 @@ private func farFieldRigidShakePreparedPaths(
     midConfidence: [Float]
 ) -> FarFieldRigidShakePreparedPaths {
     let frameCount = [
+        frameTimes.count, dominantWindowSeconds.count,
         topX.count, topY.count, ridgeX.count, ridgeY.count, midX.count, midY.count,
         rollDegrees.count,
         topConfidence.count, ridgeConfidence.count, midConfidence.count
     ].min() ?? 0
     guard frameCount > 0 else {
-        return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], pathRoll: [], support: [], supportX: [], supportY: [], rollSupport: [], shapeConsistency: [], shapeConsistencyX: [], shapeConsistencyY: [], forwardBackwardConsistency: [], forwardBackwardConsistencyX: [], forwardBackwardConsistencyY: [], rollForwardBackwardConsistency: [])
+        return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], pathRoll: [], targetX: [], targetY: [], targetRollDegrees: [], support: [], supportX: [], supportY: [], rollSupport: [], shapeConsistency: [], shapeConsistencyX: [], shapeConsistencyY: [], forwardBackwardConsistency: [], forwardBackwardConsistencyX: [], forwardBackwardConsistencyY: [], rollForwardBackwardConsistency: [])
     }
 
     var pathX = Array(repeating: Float(0.0), count: frameCount)
     var pathY = Array(repeating: Float(0.0), count: frameCount)
     var pathRoll = Array(repeating: Float(0.0), count: frameCount)
+    var targetX = Array(repeating: Float(0.0), count: frameCount)
+    var targetY = Array(repeating: Float(0.0), count: frameCount)
+    var targetRollDegrees = Array(repeating: Float(0.0), count: frameCount)
     var support = Array(repeating: Float(0.0), count: frameCount)
     var supportX = Array(repeating: Float(0.0), count: frameCount)
     var supportY = Array(repeating: Float(0.0), count: frameCount)
@@ -4174,54 +4197,82 @@ private func farFieldRigidShakePreparedPaths(
 
     }
 
+    func prediction(_ values: [Float], index: Int) -> Float {
+        let window = min(1.0, max(0.05, Double(dominantWindowSeconds[index])))
+        let inner = max(0.13, window * 0.56)
+        let outer = min(1.0, max(0.44, window * 3.0))
+        let centerTime = frameTimes[index]
+        var points: [(x: Float, y: Float)] = []
+        if index > 0 {
+            for sample in stride(from: index - 1, through: 0, by: -1) {
+                let offset = frameTimes[sample] - centerTime
+                let distance = abs(offset)
+                if distance > outer { break }
+                if distance > inner { points.append((Float(offset), values[sample])) }
+            }
+        }
+        if index + 1 < frameCount {
+            for sample in (index + 1)..<frameCount {
+                let offset = frameTimes[sample] - centerTime
+                let distance = abs(offset)
+                if distance > outer { break }
+                if distance > inner { points.append((Float(offset), values[sample])) }
+            }
+        }
+        guard points.count >= 3 else { return values[index] }
+        let count = Float(points.count)
+        let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
+        let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
+        let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
+        let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
+        let denominator = (count * sumXX) - (sumX * sumX)
+        return abs(denominator) > Float.ulpOfOne
+            ? ((sumY * sumXX) - (sumX * sumXY)) / denominator
+            : sumY / count
+    }
+
+    var topTargetX = targetX
+    var topTargetY = targetY
+    var ridgeTargetX = targetX
+    var ridgeTargetY = targetY
+    for index in 0..<frameCount {
+        targetX[index] = pathX[index] - prediction(pathX, index: index)
+        targetY[index] = pathY[index] - prediction(pathY, index: index)
+        targetRollDegrees[index] = pathRoll[index] - prediction(pathRoll, index: index)
+        topTargetX[index] = topX[index] - prediction(topX, index: index)
+        topTargetY[index] = topY[index] - prediction(topY, index: index)
+        ridgeTargetX[index] = ridgeX[index] - prediction(ridgeX, index: index)
+        ridgeTargetY[index] = ridgeY[index] - prediction(ridgeY, index: index)
+    }
+
     let radius = farFieldRigidShakeTwoWayRadiusFrames
     guard frameCount > radius * 2 else {
-        return FarFieldRigidShakePreparedPaths(pathX: pathX, pathY: pathY, pathRoll: pathRoll, support: support, supportX: supportX, supportY: supportY, rollSupport: rollSupport, shapeConsistency: shapeConsistency, shapeConsistencyX: shapeConsistencyX, shapeConsistencyY: shapeConsistencyY, forwardBackwardConsistency: forwardBackwardConsistency, forwardBackwardConsistencyX: forwardBackwardConsistencyX, forwardBackwardConsistencyY: forwardBackwardConsistencyY, rollForwardBackwardConsistency: rollForwardBackwardConsistency)
+        return FarFieldRigidShakePreparedPaths(pathX: pathX, pathY: pathY, pathRoll: pathRoll, targetX: targetX, targetY: targetY, targetRollDegrees: targetRollDegrees, support: support, supportX: supportX, supportY: supportY, rollSupport: rollSupport, shapeConsistency: shapeConsistency, shapeConsistencyX: shapeConsistencyX, shapeConsistencyY: shapeConsistencyY, forwardBackwardConsistency: forwardBackwardConsistency, forwardBackwardConsistencyX: forwardBackwardConsistencyX, forwardBackwardConsistencyY: forwardBackwardConsistencyY, rollForwardBackwardConsistency: rollForwardBackwardConsistency)
     }
 
     for index in radius..<(frameCount - radius) {
-        let forwardX = pathX[index] - ((2.0 * pathX[index - 1]) - pathX[index - 2])
-        let forwardY = pathY[index] - ((2.0 * pathY[index - 1]) - pathY[index - 2])
-        let backwardX = pathX[index] - ((2.0 * pathX[index + 1]) - pathX[index + 2])
-        let backwardY = pathY[index] - ((2.0 * pathY[index + 1]) - pathY[index + 2])
-        let forwardRoll = pathRoll[index] - ((2.0 * pathRoll[index - 1]) - pathRoll[index - 2])
-        let backwardRoll = pathRoll[index] - ((2.0 * pathRoll[index + 1]) - pathRoll[index + 2])
-        let rollResidualMagnitude = (abs(forwardRoll) + abs(backwardRoll)) * 0.5
-        let rollResidualMismatch = abs(forwardRoll - backwardRoll)
-        let topForwardX = topX[index] - ((2.0 * topX[index - 1]) - topX[index - 2])
-        let topForwardY = topY[index] - ((2.0 * topY[index - 1]) - topY[index - 2])
-        let topBackwardX = topX[index] - ((2.0 * topX[index + 1]) - topX[index + 2])
-        let topBackwardY = topY[index] - ((2.0 * topY[index + 1]) - topY[index + 2])
-        let ridgeForwardX = ridgeX[index] - ((2.0 * ridgeX[index - 1]) - ridgeX[index - 2])
-        let ridgeForwardY = ridgeY[index] - ((2.0 * ridgeY[index - 1]) - ridgeY[index - 2])
-        let ridgeBackwardX = ridgeX[index] - ((2.0 * ridgeX[index + 1]) - ridgeX[index + 2])
-        let ridgeBackwardY = ridgeY[index] - ((2.0 * ridgeY[index + 1]) - ridgeY[index + 2])
+        let forwardX = targetX[index]
+        let forwardY = targetY[index]
+        let backwardX = targetX[index]
+        let backwardY = targetY[index]
+        let rollResidualMagnitude = abs(targetRollDegrees[index])
         shapeConsistencyX[index] = clamp(
-            1.0 - preparedConfidenceRamp(max(abs(topForwardX - ridgeForwardX), abs(topBackwardX - ridgeBackwardX)), start: farFieldRigidShakeShapeStartPixels, full: farFieldRigidShakeShapeFullPixels),
+            1.0 - preparedConfidenceRamp(abs(topTargetX[index] - ridgeTargetX[index]), start: farFieldRigidShakeShapeStartPixels, full: farFieldRigidShakeShapeFullPixels),
             0.0,
             1.0
         )
         shapeConsistencyY[index] = clamp(
-            1.0 - preparedConfidenceRamp(max(abs(topForwardY - ridgeForwardY), abs(topBackwardY - ridgeBackwardY)), start: farFieldRigidShakeShapeStartPixels, full: farFieldRigidShakeShapeFullPixels),
+            1.0 - preparedConfidenceRamp(abs(topTargetY[index] - ridgeTargetY[index]), start: farFieldRigidShakeShapeStartPixels, full: farFieldRigidShakeShapeFullPixels),
             0.0,
             1.0
         )
         shapeConsistency[index] = max(shapeConsistencyX[index], shapeConsistencyY[index])
-        let twoWayX = 1.0 - preparedConfidenceRamp(
-            abs(forwardX - backwardX),
-            start: farFieldRigidShakeForwardBackwardStartPixels,
-            full: farFieldRigidShakeForwardBackwardFullPixels
-        )
-        let twoWayY = 1.0 - preparedConfidenceRamp(
-            abs(forwardY - backwardY),
-            start: farFieldRigidShakeForwardBackwardStartPixels,
-            full: farFieldRigidShakeForwardBackwardFullPixels
-        )
-        let rollTwoWay = 1.0 - preparedConfidenceRamp(
-            rollResidualMismatch,
-            start: farFieldRigidShakeRollResidualStartDegrees,
-            full: farFieldRigidShakeRollResidualFullDegrees * 1.6
-        )
+        // Schema 50 treats two-way evidence as agreement between independently
+        // tracked far-field regions, not sign agreement across time. A real
+        // short-period reversal is therefore retained.
+        let twoWayX = shapeConsistencyX[index]
+        let twoWayY = shapeConsistencyY[index]
+        let rollTwoWay = Float(1.0)
         let confidence = min(topConfidence[index], ridgeConfidence[index])
         let confidenceGate = preparedConfidenceRamp(confidence, start: 0.08, full: 0.36)
         forwardBackwardConsistencyX[index] = clamp(twoWayX, 0.0, 1.0)
@@ -4258,6 +4309,9 @@ private func farFieldRigidShakePreparedPaths(
         pathX: pathX,
         pathY: pathY,
         pathRoll: pathRoll,
+        targetX: targetX,
+        targetY: targetY,
+        targetRollDegrees: targetRollDegrees,
         support: support,
         supportX: supportX,
         supportY: supportY,
@@ -4941,6 +4995,9 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         farFieldRigidShakePathX: prepared.farFieldRigidShakePathX,
         farFieldRigidShakePathY: prepared.farFieldRigidShakePathY,
         farFieldRigidShakePathRoll: prepared.farFieldRigidShakePathRoll,
+        cameraRigidTargetX: prepared.cameraRigidTargetX,
+        cameraRigidTargetY: prepared.cameraRigidTargetY,
+        cameraRigidTargetRollDegrees: prepared.cameraRigidTargetRollDegrees,
         farFieldRigidShakeSupport: prepared.farFieldRigidShakeSupport,
         farFieldRigidShakeSupportX: prepared.farFieldRigidShakeSupportX,
         farFieldRigidShakeSupportY: prepared.farFieldRigidShakeSupportY,
@@ -5257,6 +5314,9 @@ private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationU
         try writeOptionalFloatArrayField("farFieldRigidShakePathX", cache.farFieldRigidShakePathX)
         try writeOptionalFloatArrayField("farFieldRigidShakePathY", cache.farFieldRigidShakePathY)
         try writeOptionalFloatArrayField("farFieldRigidShakePathRoll", cache.farFieldRigidShakePathRoll)
+        try writeOptionalFloatArrayField("cameraRigidTargetX", cache.cameraRigidTargetX)
+        try writeOptionalFloatArrayField("cameraRigidTargetY", cache.cameraRigidTargetY)
+        try writeOptionalFloatArrayField("cameraRigidTargetRollDegrees", cache.cameraRigidTargetRollDegrees)
         try writeOptionalFloatArrayField("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport)
         try writeOptionalFloatArrayField("farFieldRigidShakeSupportX", cache.farFieldRigidShakeSupportX)
         try writeOptionalFloatArrayField("farFieldRigidShakeSupportY", cache.farFieldRigidShakeSupportY)

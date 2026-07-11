@@ -18,7 +18,11 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.19` uses schema 49 all-axis Camera Jitter analysis. It stores
+Version `1.1.20` uses schema 50 all-axis Camera Jitter analysis. It stores
+frame-local Camera Rigid X/Y/roll targets with independent top/ridge regional
+agreement. The render trajectory also removes sustained alternating Y
+over-correction from the non-rigid Camera Jitter components while preserving
+the stored Camera Rigid Y target.
 independent X/Y/roll support from frame-local top/ridge residuals, keeps coherent
 fine X/Y/roll outside the 2.2-second Turn/Stride smoother, and records validated
 original-media provenance. Turn owns only broad X; Camera Jitter owns short
@@ -362,7 +366,7 @@ Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, source-space ridge shake
 paths, two-way far-field rigid shake X/Y/roll paths, far-field `5x9` mesh paths,
 fps-derived dominant far-field shake windows up to one second, and fingerprints
-instead of every frame's full luma sample. Schema 49 is the current write and
+instead of every frame's full luma sample. Schema 50 is the current write and
 read format so render can use axis-specific far-field evidence plus coherent global
 X/Y/roll correction while keeping the visible correction low-order enough to avoid
 local mountain/cloud pulsing. Earlier

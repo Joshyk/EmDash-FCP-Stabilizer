@@ -16,6 +16,7 @@ struct StabilizerAutoTransform {
     var trajectoryContinuityPixelOffset: vector_float2
     var cameraRigidPixelOffset: vector_float2 = vector_float2(0.0, 0.0)
     var cameraRigidRotationDegrees: Float = 0.0
+    var cameraJitterCadenceCorrectionY: Float = 0.0
     var lensShakePixelOffset: vector_float2
     var lensShakeRotationDegrees: Float
     var lensShakeYawPitch: vector_float2
@@ -535,6 +536,9 @@ struct StabilizerPreparedAnalysis {
     let farFieldRigidShakePathX: [Float]
     let farFieldRigidShakePathY: [Float]
     let farFieldRigidShakePathRoll: [Float]
+    let cameraRigidTargetX: [Float]
+    let cameraRigidTargetY: [Float]
+    let cameraRigidTargetRollDegrees: [Float]
     let farFieldRigidShakeSupport: [Float]
     let farFieldRigidShakeSupportX: [Float]
     let farFieldRigidShakeSupportY: [Float]
@@ -1572,6 +1576,9 @@ enum AutoStabilizationEstimator {
         combineFloats(analysis.farFieldRigidShakePathX)
         combineFloats(analysis.farFieldRigidShakePathY)
         combineFloats(analysis.farFieldRigidShakePathRoll)
+        combineFloats(analysis.cameraRigidTargetX)
+        combineFloats(analysis.cameraRigidTargetY)
+        combineFloats(analysis.cameraRigidTargetRollDegrees)
         combineFloats(analysis.farFieldRigidShakeSupport)
         combineFloats(analysis.farFieldRigidShakeRollSupport)
         combineFloats(analysis.farFieldRigidShakeShapeConsistency)
@@ -2444,6 +2451,9 @@ enum AutoStabilizationEstimator {
         let pathX: [Float]
         let pathY: [Float]
         let pathRoll: [Float]
+        let targetX: [Float]
+        let targetY: [Float]
+        let targetRollDegrees: [Float]
         let support: [Float]
         let supportX: [Float]
         let supportY: [Float]
@@ -2458,6 +2468,8 @@ enum AutoStabilizationEstimator {
     }
 
     static func farFieldRigidShakePreparedPaths(
+        frameTimes: [Double],
+        dominantWindowSeconds: [Float],
         topX: [Float],
         topY: [Float],
         ridgeX: [Float],
@@ -2470,17 +2482,21 @@ enum AutoStabilizationEstimator {
         midConfidence: [Float]
     ) -> FarFieldRigidShakePreparedPaths {
         let frameCount = [
+            frameTimes.count, dominantWindowSeconds.count,
             topX.count, topY.count, ridgeX.count, ridgeY.count, midX.count, midY.count,
             rollDegrees.count,
             topConfidence.count, ridgeConfidence.count, midConfidence.count
         ].min() ?? 0
         guard frameCount > 0 else {
-            return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], pathRoll: [], support: [], supportX: [], supportY: [], rollSupport: [], shapeConsistency: [], shapeConsistencyX: [], shapeConsistencyY: [], forwardBackwardConsistency: [], forwardBackwardConsistencyX: [], forwardBackwardConsistencyY: [], rollForwardBackwardConsistency: [])
+            return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], pathRoll: [], targetX: [], targetY: [], targetRollDegrees: [], support: [], supportX: [], supportY: [], rollSupport: [], shapeConsistency: [], shapeConsistencyX: [], shapeConsistencyY: [], forwardBackwardConsistency: [], forwardBackwardConsistencyX: [], forwardBackwardConsistencyY: [], rollForwardBackwardConsistency: [])
         }
 
         var pathX = Array(repeating: Float(0.0), count: frameCount)
         var pathY = Array(repeating: Float(0.0), count: frameCount)
         var pathRoll = Array(repeating: Float(0.0), count: frameCount)
+        var targetX = Array(repeating: Float(0.0), count: frameCount)
+        var targetY = Array(repeating: Float(0.0), count: frameCount)
+        var targetRollDegrees = Array(repeating: Float(0.0), count: frameCount)
         var support = Array(repeating: Float(0.0), count: frameCount)
         var supportX = Array(repeating: Float(0.0), count: frameCount)
         var supportY = Array(repeating: Float(0.0), count: frameCount)
@@ -2501,12 +2517,63 @@ enum AutoStabilizationEstimator {
             pathRoll[index] = rollDegrees[index]
         }
 
+        func prediction(_ values: [Float], index: Int) -> Float {
+            let window = min(1.0, max(0.05, Double(dominantWindowSeconds[index])))
+            let inner = max(0.13, window * 0.56)
+            let outer = min(1.0, max(0.44, window * 3.0))
+            let centerTime = frameTimes[index]
+            var points: [(x: Float, y: Float)] = []
+            if index > 0 {
+                for sample in stride(from: index - 1, through: 0, by: -1) {
+                    let offset = frameTimes[sample] - centerTime
+                    let distance = abs(offset)
+                    if distance > outer { break }
+                    if distance > inner { points.append((Float(offset), values[sample])) }
+                }
+            }
+            if index + 1 < frameCount {
+                for sample in (index + 1)..<frameCount {
+                    let offset = frameTimes[sample] - centerTime
+                    let distance = abs(offset)
+                    if distance > outer { break }
+                    if distance > inner { points.append((Float(offset), values[sample])) }
+                }
+            }
+            guard points.count >= 3 else { return values[index] }
+            let count = Float(points.count)
+            let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
+            let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
+            let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
+            let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
+            let denominator = (count * sumXX) - (sumX * sumX)
+            return abs(denominator) > Float.ulpOfOne
+                ? ((sumY * sumXX) - (sumX * sumXY)) / denominator
+                : sumY / count
+        }
+
+        var topTargetX = targetX
+        var topTargetY = targetY
+        var ridgeTargetX = targetX
+        var ridgeTargetY = targetY
+        for index in 0..<frameCount {
+            targetX[index] = pathX[index] - prediction(pathX, index: index)
+            targetY[index] = pathY[index] - prediction(pathY, index: index)
+            targetRollDegrees[index] = pathRoll[index] - prediction(pathRoll, index: index)
+            topTargetX[index] = topX[index] - prediction(topX, index: index)
+            topTargetY[index] = topY[index] - prediction(topY, index: index)
+            ridgeTargetX[index] = ridgeX[index] - prediction(ridgeX, index: index)
+            ridgeTargetY[index] = ridgeY[index] - prediction(ridgeY, index: index)
+        }
+
         let radius = farFieldRigidShakeTwoWayRadiusFrames
         guard frameCount > radius * 2 else {
             return FarFieldRigidShakePreparedPaths(
                 pathX: pathX,
                 pathY: pathY,
                 pathRoll: pathRoll,
+                targetX: targetX,
+                targetY: targetY,
+                targetRollDegrees: targetRollDegrees,
                 support: support,
                 supportX: supportX,
                 supportY: supportY,
@@ -2522,50 +2589,27 @@ enum AutoStabilizationEstimator {
         }
 
         for index in radius..<(frameCount - radius) {
-            let forwardX = pathX[index] - ((2.0 * pathX[index - 1]) - pathX[index - 2])
-            let forwardY = pathY[index] - ((2.0 * pathY[index - 1]) - pathY[index - 2])
-            let backwardX = pathX[index] - ((2.0 * pathX[index + 1]) - pathX[index + 2])
-            let backwardY = pathY[index] - ((2.0 * pathY[index + 1]) - pathY[index + 2])
-            let forwardRoll = pathRoll[index] - ((2.0 * pathRoll[index - 1]) - pathRoll[index - 2])
-            let backwardRoll = pathRoll[index] - ((2.0 * pathRoll[index + 1]) - pathRoll[index + 2])
-            let rollResidualMagnitude = (abs(forwardRoll) + abs(backwardRoll)) * 0.5
-            let rollResidualMismatch = abs(forwardRoll - backwardRoll)
-            let topForwardX = topX[index] - ((2.0 * topX[index - 1]) - topX[index - 2])
-            let topForwardY = topY[index] - ((2.0 * topY[index - 1]) - topY[index - 2])
-            let topBackwardX = topX[index] - ((2.0 * topX[index + 1]) - topX[index + 2])
-            let topBackwardY = topY[index] - ((2.0 * topY[index + 1]) - topY[index + 2])
-            let ridgeForwardX = ridgeX[index] - ((2.0 * ridgeX[index - 1]) - ridgeX[index - 2])
-            let ridgeForwardY = ridgeY[index] - ((2.0 * ridgeY[index - 1]) - ridgeY[index - 2])
-            let ridgeBackwardX = ridgeX[index] - ((2.0 * ridgeX[index + 1]) - ridgeX[index + 2])
-            let ridgeBackwardY = ridgeY[index] - ((2.0 * ridgeY[index + 1]) - ridgeY[index + 2])
+            let forwardX = targetX[index]
+            let forwardY = targetY[index]
+            let backwardX = targetX[index]
+            let backwardY = targetY[index]
+            let rollResidualMagnitude = abs(targetRollDegrees[index])
             let shapeX = 1.0 - confidenceRamp(
-                max(abs(topForwardX - ridgeForwardX), abs(topBackwardX - ridgeBackwardX)),
+                abs(topTargetX[index] - ridgeTargetX[index]),
                 start: farFieldRigidShakeShapeStartPixels,
                 full: farFieldRigidShakeShapeFullPixels
             )
             let shapeY = 1.0 - confidenceRamp(
-                max(abs(topForwardY - ridgeForwardY), abs(topBackwardY - ridgeBackwardY)),
+                abs(topTargetY[index] - ridgeTargetY[index]),
                 start: farFieldRigidShakeShapeStartPixels,
                 full: farFieldRigidShakeShapeFullPixels
             )
             shapeConsistencyX[index] = clamp(shapeX, min: 0.0, max: 1.0)
             shapeConsistencyY[index] = clamp(shapeY, min: 0.0, max: 1.0)
             shapeConsistency[index] = max(shapeConsistencyX[index], shapeConsistencyY[index])
-            let twoWayX = 1.0 - confidenceRamp(
-                abs(forwardX - backwardX),
-                start: farFieldRigidShakeForwardBackwardStartPixels,
-                full: farFieldRigidShakeForwardBackwardFullPixels
-            )
-            let twoWayY = 1.0 - confidenceRamp(
-                abs(forwardY - backwardY),
-                start: farFieldRigidShakeForwardBackwardStartPixels,
-                full: farFieldRigidShakeForwardBackwardFullPixels
-            )
-            let rollTwoWay = 1.0 - confidenceRamp(
-                rollResidualMismatch,
-                start: lensShakeRollStartDegrees,
-                full: lensShakeRollFullDegrees * 1.6
-            )
+            let twoWayX = shapeConsistencyX[index]
+            let twoWayY = shapeConsistencyY[index]
+            let rollTwoWay = Float(1.0)
             let confidence = min(topConfidence[index], ridgeConfidence[index])
             let confidenceGate = confidenceRamp(confidence, start: 0.08, full: 0.36)
             let evidenceX = confidenceRamp(
@@ -2609,6 +2653,9 @@ enum AutoStabilizationEstimator {
             pathX: pathX,
             pathY: pathY,
             pathRoll: pathRoll,
+            targetX: targetX,
+            targetY: targetY,
+            targetRollDegrees: targetRollDegrees,
             support: support,
             supportX: supportX,
             supportY: supportY,
@@ -5238,6 +5285,7 @@ enum AutoStabilizationEstimator {
         scaled.strideWobblePixelOffset = scalePixelVector(transform.strideWobblePixelOffset, xScale: xScale, yScale: yScale)
         scaled.trajectoryMicroJitterPixelOffset = scalePixelVector(transform.trajectoryMicroJitterPixelOffset, xScale: xScale, yScale: yScale)
         scaled.trajectoryContinuityPixelOffset = scalePixelVector(transform.trajectoryContinuityPixelOffset, xScale: xScale, yScale: yScale)
+        scaled.cameraJitterCadenceCorrectionY = transform.cameraJitterCadenceCorrectionY * yScale
         scaled.lensShakePixelOffset = scalePixelVector(transform.lensShakePixelOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandTopOffset = scalePixelVector(transform.lensBandTopOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandRidgeOffset = scalePixelVector(transform.lensBandRidgeOffset, xScale: xScale, yScale: yScale)
@@ -5367,9 +5415,23 @@ enum AutoStabilizationEstimator {
                 microJitterSuppressed.maximumPixelDeviation
             )
         }
+        let alternatingYFiltered = playbackTrajectoryAlternatingYFilteredTransforms(
+            frames: frames,
+            transforms: microJitterSuppressed.transforms,
+            outputSize: outputSize
+        )
+        if alternatingYFiltered.pixelFrameCount > 0 {
+            os_log(
+                "Playback trajectory alternating Y filter | pixelFrames %d maxDeviation %.3f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                alternatingYFiltered.pixelFrameCount,
+                alternatingYFiltered.maximumPixelDeviation
+            )
+        }
         let postShockLimitedTransforms = playbackTrajectoryZeroPhaseLimitedTransforms(
             frames: frames,
-            rawTransforms: microJitterSuppressed.transforms,
+            rawTransforms: alternatingYFiltered.transforms,
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
@@ -6255,6 +6317,84 @@ enum AutoStabilizationEstimator {
         }
 
         return diagnostics
+    }
+
+    private static func playbackTrajectoryAlternatingYFilteredTransforms(
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform],
+        outputSize: vector_float2
+    ) -> PlaybackTrajectoryDespikeResult {
+        guard frames.count == transforms.count, transforms.count >= 5 else {
+            return PlaybackTrajectoryDespikeResult(
+                transforms: transforms,
+                pixelFrameCount: 0,
+                rotationFrameCount: 0,
+                maximumPixelDeviation: 0.0,
+                maximumRotationDeviation: 0.0
+            )
+        }
+        func nonRigidCameraY(_ transform: StabilizerAutoTransform) -> Float {
+            transform.microPixelOffset.y
+                + transform.strideWobblePixelOffset.y
+                + transform.trajectoryMicroJitterPixelOffset.y
+                + transform.trajectoryContinuityPixelOffset.y
+        }
+        let values = transforms.map(nonRigidCameraY)
+        let outputReference = max(Float(1.0), min(outputSize.x, outputSize.y))
+        let minimumAmplitude = max(Float(0.75), outputReference * 0.00035)
+        let maximumCorrection = max(Float(6.0), outputReference * 0.006)
+        var result = transforms
+        var appliedCount = 0
+        var maximumDeviation = Float(0.0)
+        for index in 2..<(transforms.count - 2) {
+            let previous2 = values[index - 2]
+            let previous = values[index - 1]
+            let current = values[index]
+            let next = values[index + 1]
+            let next2 = values[index + 2]
+            let leftStep = current - previous
+            let rightStep = next - current
+            let previousStep = previous - previous2
+            let nextStep = next2 - next
+            let alternating = leftStep * rightStep < 0.0
+                && previousStep * leftStep < 0.0
+                && rightStep * nextStep < 0.0
+            let amplitude = min(abs(leftStep), abs(rightStep))
+            let outerAgreement = abs(previous - next) <= max(minimumAmplitude * 1.5, amplitude * 0.45)
+            let farFieldAgreement = max(
+                transforms[index].lensFarFieldRigidShakeShapeConsistencyY,
+                transforms[index].lensFarFieldRigidShakeSupportY
+            )
+            guard alternating,
+                  outerAgreement,
+                  amplitude >= minimumAmplitude,
+                  farFieldAgreement >= 0.35
+            else {
+                continue
+            }
+            let binomialTarget = (previous + (current * 2.0) + next) * 0.25
+            let authority = confidenceRamp(amplitude, start: minimumAmplitude, full: minimumAmplitude * 3.0)
+                * confidenceRamp(farFieldAgreement, start: 0.35, full: 0.78)
+            let correction = clamp(
+                (binomialTarget - current) * authority,
+                min: -maximumCorrection,
+                max: maximumCorrection
+            )
+            guard abs(correction) > 0.01 else { continue }
+            result[index].trajectoryContinuityPixelOffset.y += correction
+            result[index].pixelOffset.y += correction
+            result[index].temporalSmoothingPixelDelta.y += correction
+            result[index].cameraJitterCadenceCorrectionY += correction
+            appliedCount += 1
+            maximumDeviation = max(maximumDeviation, abs(current - binomialTarget))
+        }
+        return PlaybackTrajectoryDespikeResult(
+            transforms: result,
+            pixelFrameCount: appliedCount,
+            rotationFrameCount: 0,
+            maximumPixelDeviation: maximumDeviation,
+            maximumRotationDeviation: 0.0
+        )
     }
 
     private static func playbackTrajectoryLandingShockLimitedTransforms(
@@ -11539,6 +11679,7 @@ enum AutoStabilizationEstimator {
         var trajectoryMicroJitterPixelOffset = vector_float2(0.0, 0.0)
         var trajectoryContinuityPixelOffset = vector_float2(0.0, 0.0)
         var cameraRigidPixelOffset = vector_float2(0.0, 0.0)
+        var cameraJitterCadenceCorrectionY = Float(0.0)
         var cameraRigidRotationDegrees: Float = 0.0
         var lensShakePixelOffset = vector_float2(0.0, 0.0)
         var lensShakeRotationDegrees: Float = 0.0
@@ -11660,6 +11801,7 @@ enum AutoStabilizationEstimator {
             trajectoryMicroJitterPixelOffset += transform.trajectoryMicroJitterPixelOffset * weight
             trajectoryContinuityPixelOffset += transform.trajectoryContinuityPixelOffset * weight
             cameraRigidPixelOffset += transform.cameraRigidPixelOffset * weight
+            cameraJitterCadenceCorrectionY += transform.cameraJitterCadenceCorrectionY * weight
             cameraRigidRotationDegrees += transform.cameraRigidRotationDegrees * weight
             lensShakePixelOffset += transform.lensShakePixelOffset * weight
             lensShakeRotationDegrees += transform.lensShakeRotationDegrees * weight
@@ -11799,6 +11941,7 @@ enum AutoStabilizationEstimator {
             trajectoryContinuityPixelOffset: averagedTrajectoryContinuityPixelOffset,
             cameraRigidPixelOffset: averagedCameraRigidPixelOffset,
             cameraRigidRotationDegrees: cameraRigidRotationDegrees / totalWeight,
+            cameraJitterCadenceCorrectionY: cameraJitterCadenceCorrectionY / totalWeight,
             lensShakePixelOffset: averagedLensShakePixelOffset,
             lensShakeRotationDegrees: lensShakeRotationDegrees / totalWeight,
             lensShakeYawPitch: lensShakeYawPitch / totalWeight,
@@ -12136,6 +12279,8 @@ enum AutoStabilizationEstimator {
             columns: farFieldMeshColumns
         )
         let farFieldRigidShake = farFieldRigidShakePreparedPaths(
+            frameTimes: sortedFrames.map(\.time),
+            dominantWindowSeconds: farFieldMeshDominantWindows.windowSeconds,
             topX: rawLensBandTopPathX,
             topY: rawLensBandTopPathY,
             ridgeX: rawLensBandRidgePathX,
@@ -12150,6 +12295,9 @@ enum AutoStabilizationEstimator {
         guard farFieldRigidShake.pathX.count == sortedFrames.count,
               farFieldRigidShake.pathY.count == sortedFrames.count,
               farFieldRigidShake.pathRoll.count == sortedFrames.count,
+              farFieldRigidShake.targetX.count == sortedFrames.count,
+              farFieldRigidShake.targetY.count == sortedFrames.count,
+              farFieldRigidShake.targetRollDegrees.count == sortedFrames.count,
               farFieldRigidShake.support.count == sortedFrames.count,
               farFieldRigidShake.supportX.count == sortedFrames.count,
               farFieldRigidShake.supportY.count == sortedFrames.count,
@@ -12212,6 +12360,9 @@ enum AutoStabilizationEstimator {
             farFieldRigidShakePathX: farFieldRigidShake.pathX,
             farFieldRigidShakePathY: farFieldRigidShake.pathY,
             farFieldRigidShakePathRoll: farFieldRigidShake.pathRoll,
+            cameraRigidTargetX: farFieldRigidShake.targetX,
+            cameraRigidTargetY: farFieldRigidShake.targetY,
+            cameraRigidTargetRollDegrees: farFieldRigidShake.targetRollDegrees,
             farFieldRigidShakeSupport: farFieldRigidShake.support,
             farFieldRigidShakeSupportX: farFieldRigidShake.supportX,
             farFieldRigidShakeSupportY: farFieldRigidShake.supportY,
@@ -15081,6 +15232,9 @@ enum AutoStabilizationEstimator {
         let hasFarFieldRigidShakePaths = analysis.farFieldRigidShakePathX.count == frames.count
             && analysis.farFieldRigidShakePathY.count == frames.count
             && analysis.farFieldRigidShakePathRoll.count == frames.count
+            && analysis.cameraRigidTargetX.count == frames.count
+            && analysis.cameraRigidTargetY.count == frames.count
+            && analysis.cameraRigidTargetRollDegrees.count == frames.count
             && analysis.farFieldRigidShakeSupport.count == frames.count
             && analysis.farFieldRigidShakeSupportX.count == frames.count
             && analysis.farFieldRigidShakeSupportY.count == frames.count
@@ -15208,18 +15362,12 @@ enum AutoStabilizationEstimator {
 
         if hasFarFieldRigidShakePaths {
             let rawRigidResidual = vector_float2(
-                residual(kind: .farFieldRigidShakeX, values: analysis.farFieldRigidShakePathX) * outputScale.x,
-                residual(kind: .farFieldRigidShakeY, values: analysis.farFieldRigidShakePathY) * outputScale.y
+                interpolatedValue(analysis.cameraRigidTargetX, using: interpolation) * outputScale.x,
+                interpolatedValue(analysis.cameraRigidTargetY, using: interpolation) * outputScale.y
             )
-            let rawRigidRollResidual = residual(
-                kind: .farFieldRigidShakeRoll,
-                values: analysis.farFieldRigidShakePathRoll
-            )
-            var rigidResidual = vector_float2(
-                pulseSmoothedPixelResidual(kind: .farFieldRigidShakeX, values: analysis.farFieldRigidShakePathX, scale: outputScale.x),
-                pulseSmoothedPixelResidual(kind: .farFieldRigidShakeY, values: analysis.farFieldRigidShakePathY, scale: outputScale.y)
-            )
-            var rigidRollResidual = pulseSmoothedDegreeRollResidual(kind: .farFieldRigidShakeRoll, values: analysis.farFieldRigidShakePathRoll)
+            let rawRigidRollResidual = interpolatedValue(analysis.cameraRigidTargetRollDegrees, using: interpolation)
+            var rigidResidual = rawRigidResidual
+            var rigidRollResidual = rawRigidRollResidual
             let rawRigidMagnitude = simd_length(rawRigidResidual)
             let preparedRigidSupport = interpolatedValue(analysis.farFieldRigidShakeSupport, using: interpolation)
             let preparedRigidSupportX = interpolatedValue(analysis.farFieldRigidShakeSupportX, using: interpolation)
@@ -15232,21 +15380,18 @@ enum AutoStabilizationEstimator {
             let forwardBackwardConsistencyX = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistencyX, using: interpolation)
             let forwardBackwardConsistencyY = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistencyY, using: interpolation)
             let rollForwardBackwardConsistency = interpolatedValue(analysis.farFieldRigidShakeRollForwardBackwardConsistency, using: interpolation)
-            let deltaCoherenceSupport = farFieldRigidDeltaCoherenceSupport()
-            let deltaCoherenceAuthority = confidenceRamp(deltaCoherenceSupport, start: 0.08, full: 0.34)
-            let effectivePreparedRigidSupport = max(preparedRigidSupport, deltaCoherenceAuthority)
-            let effectivePreparedRigidSupportX = max(preparedRigidSupportX, deltaCoherenceAuthority)
-            let effectivePreparedRigidSupportY = max(preparedRigidSupportY, deltaCoherenceAuthority)
+            let deltaCoherenceSupport = Float(0.0)
+            let deltaCoherenceAuthority = Float(0.0)
+            let effectivePreparedRigidSupport = preparedRigidSupport
+            let effectivePreparedRigidSupportX = preparedRigidSupportX
+            let effectivePreparedRigidSupportY = preparedRigidSupportY
             let effectivePreparedRigidRollSupport = preparedRigidRollSupport
-            let effectiveShapeConsistency = max(shapeConsistency, deltaCoherenceAuthority)
-            let effectiveShapeConsistencyX = max(shapeConsistencyX, deltaCoherenceAuthority)
-            let effectiveShapeConsistencyY = max(shapeConsistencyY, deltaCoherenceAuthority)
-            let effectiveForwardBackwardConsistency = max(forwardBackwardConsistency, deltaCoherenceAuthority * 0.92)
-            let effectiveForwardBackwardConsistencyX = max(forwardBackwardConsistencyX, deltaCoherenceAuthority * 0.92)
-            let effectiveForwardBackwardConsistencyY = max(forwardBackwardConsistencyY, deltaCoherenceAuthority * 0.92)
-            if deltaCoherenceSupport >= lensShakeMinimumSupport {
-                result.bandModelMask |= 4194304
-            }
+            let effectiveShapeConsistency = shapeConsistency
+            let effectiveShapeConsistencyX = shapeConsistencyX
+            let effectiveShapeConsistencyY = shapeConsistencyY
+            let effectiveForwardBackwardConsistency = forwardBackwardConsistency
+            let effectiveForwardBackwardConsistencyX = forwardBackwardConsistencyX
+            let effectiveForwardBackwardConsistencyY = forwardBackwardConsistencyY
             let lowFrequencyRigidPriority = lowFrequencySupport
                 * confidenceRamp(rawRigidMagnitude, start: 0.08, full: 0.66)
                 * confidenceRamp(max(effectivePreparedRigidSupport, dominantWindowSupport), start: 0.10, full: 0.56)

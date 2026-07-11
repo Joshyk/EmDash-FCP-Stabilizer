@@ -88,6 +88,9 @@ private struct PersistedHostAnalysisCache: Codable {
     let farFieldRigidShakePathX: [Float]?
     let farFieldRigidShakePathY: [Float]?
     let farFieldRigidShakePathRoll: [Float]?
+    let cameraRigidTargetX: [Float]?
+    let cameraRigidTargetY: [Float]?
+    let cameraRigidTargetRollDegrees: [Float]?
     let farFieldRigidShakeSupport: [Float]?
     let farFieldRigidShakeSupportX: [Float]?
     let farFieldRigidShakeSupportY: [Float]?
@@ -275,8 +278,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 49
-    private static let supportedCacheSchemaVersions: Set<Int> = [49]
+    private static let cacheSchemaVersion = 50
+    private static let supportedCacheSchemaVersions: Set<Int> = [50]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1869,6 +1872,9 @@ final class StabilizerHostAnalysisStore {
             farFieldRigidShakePathX: prepared.farFieldRigidShakePathX,
             farFieldRigidShakePathY: prepared.farFieldRigidShakePathY,
             farFieldRigidShakePathRoll: prepared.farFieldRigidShakePathRoll,
+            cameraRigidTargetX: prepared.cameraRigidTargetX,
+            cameraRigidTargetY: prepared.cameraRigidTargetY,
+            cameraRigidTargetRollDegrees: prepared.cameraRigidTargetRollDegrees,
             farFieldRigidShakeSupport: prepared.farFieldRigidShakeSupport,
             farFieldRigidShakeSupportX: prepared.farFieldRigidShakeSupportX,
             farFieldRigidShakeSupportY: prepared.farFieldRigidShakeSupportY,
@@ -2058,6 +2064,9 @@ final class StabilizerHostAnalysisStore {
                 farFieldRigidShakePathX: analysis.farFieldRigidShakePathX,
                 farFieldRigidShakePathY: analysis.farFieldRigidShakePathY,
                 farFieldRigidShakePathRoll: analysis.farFieldRigidShakePathRoll,
+                cameraRigidTargetX: analysis.cameraRigidTargetX,
+                cameraRigidTargetY: analysis.cameraRigidTargetY,
+                cameraRigidTargetRollDegrees: analysis.cameraRigidTargetRollDegrees,
                 farFieldRigidShakeSupport: analysis.farFieldRigidShakeSupport,
                 farFieldRigidShakeSupportX: analysis.farFieldRigidShakeSupportX,
                 farFieldRigidShakeSupportY: analysis.farFieldRigidShakeSupportY,
@@ -3067,7 +3076,7 @@ final class StabilizerHostAnalysisStore {
             throw NSError(
                 domain: "com.justadev.TokyoWalkingStabilizer",
                 code: Int(kFxError_AnalysisError),
-                userInfo: [NSLocalizedDescriptionKey: "schema 49 cache is missing validated original-media provenance"]
+                userInfo: [NSLocalizedDescriptionKey: "schema 50 cache is missing validated original-media provenance"]
             )
         }
         if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frames.count) {
@@ -3138,6 +3147,9 @@ final class StabilizerHostAnalysisStore {
             cache.farFieldRigidShakePathX,
             cache.farFieldRigidShakePathY,
             cache.farFieldRigidShakePathRoll,
+            cache.cameraRigidTargetX,
+            cache.cameraRigidTargetY,
+            cache.cameraRigidTargetRollDegrees,
             cache.farFieldRigidShakeSupport,
             cache.farFieldRigidShakeSupportX,
             cache.farFieldRigidShakeSupportY,
@@ -3219,6 +3231,9 @@ final class StabilizerHostAnalysisStore {
            let farFieldRigidShakePathX = cache.farFieldRigidShakePathX,
            let farFieldRigidShakePathY = cache.farFieldRigidShakePathY,
            let farFieldRigidShakePathRoll = cache.farFieldRigidShakePathRoll,
+           let cameraRigidTargetX = cache.cameraRigidTargetX,
+           let cameraRigidTargetY = cache.cameraRigidTargetY,
+           let cameraRigidTargetRollDegrees = cache.cameraRigidTargetRollDegrees,
            let farFieldRigidShakeSupport = cache.farFieldRigidShakeSupport,
            let farFieldRigidShakeSupportX = cache.farFieldRigidShakeSupportX,
            let farFieldRigidShakeSupportY = cache.farFieldRigidShakeSupportY,
@@ -3311,6 +3326,9 @@ final class StabilizerHostAnalysisStore {
                 farFieldRigidShakePathX: farFieldRigidShakePathX,
                 farFieldRigidShakePathY: farFieldRigidShakePathY,
                 farFieldRigidShakePathRoll: farFieldRigidShakePathRoll,
+                cameraRigidTargetX: cameraRigidTargetX,
+                cameraRigidTargetY: cameraRigidTargetY,
+                cameraRigidTargetRollDegrees: cameraRigidTargetRollDegrees,
                 farFieldRigidShakeSupport: farFieldRigidShakeSupport,
                 farFieldRigidShakeSupportX: farFieldRigidShakeSupportX,
                 farFieldRigidShakeSupportY: farFieldRigidShakeSupportY,
@@ -3412,6 +3430,9 @@ final class StabilizerHostAnalysisStore {
             ("farFieldRigidShakePathX", cache.farFieldRigidShakePathX),
             ("farFieldRigidShakePathY", cache.farFieldRigidShakePathY),
             ("farFieldRigidShakePathRoll", cache.farFieldRigidShakePathRoll),
+            ("cameraRigidTargetX", cache.cameraRigidTargetX),
+            ("cameraRigidTargetY", cache.cameraRigidTargetY),
+            ("cameraRigidTargetRollDegrees", cache.cameraRigidTargetRollDegrees),
             ("farFieldRigidShakeSupport", cache.farFieldRigidShakeSupport),
             ("farFieldRigidShakeSupportX", cache.farFieldRigidShakeSupportX),
             ("farFieldRigidShakeSupportY", cache.farFieldRigidShakeSupportY),
@@ -3768,6 +3789,9 @@ final class StabilizerHostAnalysisStore {
                 farFieldRigidShakePathX: cache.farFieldRigidShakePathX,
                 farFieldRigidShakePathY: cache.farFieldRigidShakePathY,
                 farFieldRigidShakePathRoll: cache.farFieldRigidShakePathRoll,
+                cameraRigidTargetX: cache.cameraRigidTargetX,
+                cameraRigidTargetY: cache.cameraRigidTargetY,
+                cameraRigidTargetRollDegrees: cache.cameraRigidTargetRollDegrees,
                 farFieldRigidShakeSupport: cache.farFieldRigidShakeSupport,
                 farFieldRigidShakeSupportX: cache.farFieldRigidShakeSupportX,
                 farFieldRigidShakeSupportY: cache.farFieldRigidShakeSupportY,
