@@ -3892,9 +3892,30 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         rows: farFieldMeshRows,
         columns: farFieldMeshColumns
     )
+    var dominantMeshPathX: [Float] = []
+    var dominantMeshPathY: [Float] = []
+    dominantMeshPathX.reserveCapacity(frames.count)
+    dominantMeshPathY.reserveCapacity(frames.count)
+    for index in frames.indices {
+        let cell = Int(farFieldMeshDominantWindows.cell[index])
+        let flatIndex = (cell * frames.count) + index
+        if cell >= 0,
+           cell < farFieldMeshBinCount,
+           flatFarFieldMeshPathX.indices.contains(flatIndex),
+           flatFarFieldMeshPathY.indices.contains(flatIndex) {
+            dominantMeshPathX.append(flatFarFieldMeshPathX[flatIndex])
+            dominantMeshPathY.append(flatFarFieldMeshPathY[flatIndex])
+        } else {
+            dominantMeshPathX.append((lensBandTopPathX[index] * 0.35) + (lensBandRidgePathX[index] * 0.65))
+            dominantMeshPathY.append((lensBandTopPathY[index] * 0.35) + (lensBandRidgePathY[index] * 0.65))
+        }
+    }
     let farFieldRigidShake = farFieldRigidShakePreparedPaths(
         frameTimes: frames.map(\.time),
         dominantWindowSeconds: farFieldMeshDominantWindows.windowSeconds,
+        dominantMeshX: dominantMeshPathX,
+        dominantMeshY: dominantMeshPathY,
+        dominantMeshSupport: farFieldMeshDominantWindows.support,
         topX: lensBandTopPathX,
         topY: lensBandTopPathY,
         ridgeX: lensBandRidgePathX,
@@ -4149,6 +4170,9 @@ private func preparedConfidenceRamp(_ value: Float, start: Float, full: Float) -
 private func farFieldRigidShakePreparedPaths(
     frameTimes: [Double],
     dominantWindowSeconds: [Float],
+    dominantMeshX: [Float],
+    dominantMeshY: [Float],
+    dominantMeshSupport: [Float],
     topX: [Float],
     topY: [Float],
     ridgeX: [Float],
@@ -4162,6 +4186,7 @@ private func farFieldRigidShakePreparedPaths(
 ) -> FarFieldRigidShakePreparedPaths {
     let frameCount = [
         frameTimes.count, dominantWindowSeconds.count,
+        dominantMeshX.count, dominantMeshY.count, dominantMeshSupport.count,
         topX.count, topY.count, ridgeX.count, ridgeY.count, midX.count, midY.count,
         rollDegrees.count,
         topConfidence.count, ridgeConfidence.count, midConfidence.count
@@ -4235,6 +4260,8 @@ private func farFieldRigidShakePreparedPaths(
     var topTargetY = targetY
     var ridgeTargetX = targetX
     var ridgeTargetY = targetY
+    var dominantTargetX = targetX
+    var dominantTargetY = targetY
     for index in 0..<frameCount {
         targetX[index] = pathX[index] - prediction(pathX, index: index)
         targetY[index] = pathY[index] - prediction(pathY, index: index)
@@ -4243,6 +4270,8 @@ private func farFieldRigidShakePreparedPaths(
         topTargetY[index] = topY[index] - prediction(topY, index: index)
         ridgeTargetX[index] = ridgeX[index] - prediction(ridgeX, index: index)
         ridgeTargetY[index] = ridgeY[index] - prediction(ridgeY, index: index)
+        dominantTargetX[index] = dominantMeshX[index] - prediction(dominantMeshX, index: index)
+        dominantTargetY[index] = dominantMeshY[index] - prediction(dominantMeshY, index: index)
     }
 
     let radius = farFieldRigidShakeTwoWayRadiusFrames
@@ -4256,16 +4285,21 @@ private func farFieldRigidShakePreparedPaths(
         let backwardX = targetX[index]
         let backwardY = targetY[index]
         let rollResidualMagnitude = abs(targetRollDegrees[index])
-        shapeConsistencyX[index] = clamp(
+        let topRidgeShapeX = clamp(
             1.0 - preparedConfidenceRamp(abs(topTargetX[index] - ridgeTargetX[index]), start: farFieldRigidShakeShapeStartPixels, full: farFieldRigidShakeShapeFullPixels),
             0.0,
             1.0
         )
-        shapeConsistencyY[index] = clamp(
+        let topRidgeShapeY = clamp(
             1.0 - preparedConfidenceRamp(abs(topTargetY[index] - ridgeTargetY[index]), start: farFieldRigidShakeShapeStartPixels, full: farFieldRigidShakeShapeFullPixels),
             0.0,
             1.0
         )
+        let dominantAuthority = preparedConfidenceRamp(dominantMeshSupport[index], start: 0.18, full: 0.68)
+        let dominantAgreementX = 1.0 - preparedConfidenceRamp(abs(targetX[index] - dominantTargetX[index]), start: farFieldRigidShakeShapeStartPixels * 1.5, full: farFieldRigidShakeShapeFullPixels * 2.0)
+        let dominantAgreementY = 1.0 - preparedConfidenceRamp(abs(targetY[index] - dominantTargetY[index]), start: farFieldRigidShakeShapeStartPixels * 1.5, full: farFieldRigidShakeShapeFullPixels * 2.0)
+        shapeConsistencyX[index] = max(topRidgeShapeX, dominantAgreementX * dominantAuthority * 0.85)
+        shapeConsistencyY[index] = max(topRidgeShapeY, dominantAgreementY * dominantAuthority * 0.85)
         shapeConsistency[index] = max(shapeConsistencyX[index], shapeConsistencyY[index])
         // Schema 50 treats two-way evidence as agreement between independently
         // tracked far-field regions, not sign agreement across time. A real
