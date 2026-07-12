@@ -1028,8 +1028,8 @@ enum AutoStabilizationEstimator {
     private static let lensShakePixelFullPixels: Float = 0.85
     private static let lensShakeRollingGlobalXMaximumCorrection: Float = 1.4
     private static let lensShakeRollingGlobalYMaximumCorrection: Float = 8.0
-    private static let cameraRigidYMaximumOutputFraction: Float = 0.01
-    private static let cameraRigidYMaximumCorrectionCeiling: Float = 32.0
+    private static let cameraRigidYMaximumOutputFraction: Float = 0.015
+    private static let cameraRigidYMaximumCorrectionCeiling: Float = 48.0
     private static let lensShakeRollingGlobalPixelSupportFull: Float = 0.46
     private static let lensShakeRollingGlobalPixelUnsafeFull: Float = 0.82
     private static let lensShakeRollingGlobalMeshXSupportStart: Float = 0.42

@@ -18,14 +18,14 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.23` uses schema 51 all-axis Camera Jitter analysis. It stores
+Version `1.1.24` uses schema 51 all-axis Camera Jitter analysis. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
 fine X/Y/roll outside the 2.2-second Turn/Stride smoother, and records validated
 original-media provenance. Turn owns only broad X; Camera Jitter owns short
 whole-frame X/Y/roll correction.
-Camera Rigid Y uses a render-height-relative safety bound, so full-resolution
+Camera Rigid Y uses a 1.5%-of-render-height safety bound, so full-resolution
 source targets are not truncated by a fixed low pixel cap before proxy scaling.
 Schema 51 removes a centered one-second quadratic X baseline before storing the
 Camera Rigid X target, so sustained pan curvature remains Turn-owned without

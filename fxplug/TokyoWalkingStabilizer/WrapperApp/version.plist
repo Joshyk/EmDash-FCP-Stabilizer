@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>BuildVersion</key>
-	<string>987</string>
+	<string>988</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.23</string>
+	<string>1.1.24</string>
 	<key>CFBundleVersion</key>
-	<string>987</string>
+	<string>988</string>
 	<key>ProjectName</key>
 	<string>FxPlugExtras</string>
 	<key>SourceVersion</key>
