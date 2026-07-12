@@ -1028,6 +1028,8 @@ enum AutoStabilizationEstimator {
     private static let lensShakePixelFullPixels: Float = 0.85
     private static let lensShakeRollingGlobalXMaximumCorrection: Float = 1.4
     private static let lensShakeRollingGlobalYMaximumCorrection: Float = 8.0
+    private static let cameraRigidYMaximumOutputFraction: Float = 0.01
+    private static let cameraRigidYMaximumCorrectionCeiling: Float = 32.0
     private static let lensShakeRollingGlobalPixelSupportFull: Float = 0.46
     private static let lensShakeRollingGlobalPixelUnsafeFull: Float = 0.82
     private static let lensShakeRollingGlobalMeshXSupportStart: Float = 0.42
@@ -5510,6 +5512,7 @@ enum AutoStabilizationEstimator {
         scaled.strideWobblePixelOffset = scalePixelVector(transform.strideWobblePixelOffset, xScale: xScale, yScale: yScale)
         scaled.trajectoryMicroJitterPixelOffset = scalePixelVector(transform.trajectoryMicroJitterPixelOffset, xScale: xScale, yScale: yScale)
         scaled.trajectoryContinuityPixelOffset = scalePixelVector(transform.trajectoryContinuityPixelOffset, xScale: xScale, yScale: yScale)
+        scaled.cameraRigidPixelOffset = scalePixelVector(transform.cameraRigidPixelOffset, xScale: xScale, yScale: yScale)
         scaled.cameraJitterCadenceCorrectionY = transform.cameraJitterCadenceCorrectionY * yScale
         scaled.lensShakePixelOffset = scalePixelVector(transform.lensShakePixelOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandTopOffset = scalePixelVector(transform.lensBandTopOffset, xScale: xScale, yScale: yScale)
@@ -5528,6 +5531,8 @@ enum AutoStabilizationEstimator {
         scaled.lensBandRidgeRowPhaseOffset = scalePixelVector(transform.lensBandRidgeRowPhaseOffset, xScale: xScale, yScale: yScale)
         scaled.lensBandMidRowPhaseOffset = scalePixelVector(transform.lensBandMidRowPhaseOffset, xScale: xScale, yScale: yScale)
         scaled.lensFarFieldRigidShakeOffset = scalePixelVector(transform.lensFarFieldRigidShakeOffset, xScale: xScale, yScale: yScale)
+        scaled.lensFarFieldMeshOffset = scalePixelVector(transform.lensFarFieldMeshOffset, xScale: xScale, yScale: yScale)
+        scaled.lensFarFieldRigidGlobalYOffset = transform.lensFarFieldRigidGlobalYOffset * yScale
         scaled.turnDetectedPixelOffset = scalePixelVector(transform.turnDetectedPixelOffset, xScale: xScale, yScale: yScale)
         scaled.rawPixelOffset = scalePixelVector(transform.rawPixelOffset, xScale: xScale, yScale: yScale)
         scaled.temporalSmoothingPixelDelta = scalePixelVector(transform.temporalSmoothingPixelDelta, xScale: xScale, yScale: yScale)
@@ -15962,9 +15967,17 @@ enum AutoStabilizationEstimator {
             result.bandWarpSupport = max(result.bandWarpSupport, result.farFieldRigidSupport)
             let rigidBranchSupport = max(result.farFieldRigidSupport, result.farFieldRigidRollSupport)
             if rigidBranchSupport >= lensShakeMinimumSupport {
+                let outputHeight = Float(max(1, frames[interpolation.lowerIndex].sampleHeight)) * outputScale.y
+                let rigidYMaximumCorrection = min(
+                    cameraRigidYMaximumCorrectionCeiling,
+                    max(
+                        lensShakeRollingGlobalYMaximumCorrection,
+                        outputHeight * cameraRigidYMaximumOutputFraction
+                    )
+                )
                 let rigidOffset = vector_float2(
                     clamp(-rigidResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
-                    clamp(-rigidResidual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                    clamp(-rigidResidual.y, min: -rigidYMaximumCorrection, max: rigidYMaximumCorrection)
                 )
                 let globalXSupport = confidenceRamp(
                     result.farFieldRigidSupportX,
@@ -15978,8 +15991,8 @@ enum AutoStabilizationEstimator {
                 )
                 let globalYOffset = clamp(
                     rigidOffset.y * globalYSupport,
-                    min: -lensShakeRollingGlobalYMaximumCorrection,
-                    max: lensShakeRollingGlobalYMaximumCorrection
+                    min: -rigidYMaximumCorrection,
+                    max: rigidYMaximumCorrection
                 )
                 let globalXOffset = clamp(
                     rigidOffset.x * globalXSupport,
