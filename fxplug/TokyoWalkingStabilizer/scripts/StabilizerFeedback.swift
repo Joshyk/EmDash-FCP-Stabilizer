@@ -23,6 +23,9 @@ private struct Options {
 }
 
 private struct Strengths {
+    var cameraX: Double
+    var cameraY: Double
+    var cameraR: Double
     var microX: Double
     var microY: Double
     var microR: Double
@@ -32,6 +35,9 @@ private struct Strengths {
     var warp: Double
 
     static let defaults = Strengths(
+        cameraX: 2.0,
+        cameraY: 2.0,
+        cameraR: 0.5,
         microX: 4.0,
         microY: 4.0,
         microR: 1.0,
@@ -2417,7 +2423,10 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         turnOwnershipY: turnOwnershipY,
         cameraStrengthX: options.strengths.microX,
         cameraStrengthY: options.strengths.microY,
-        cameraStrengthR: options.strengths.microR
+        cameraStrengthR: options.strengths.microR,
+        cameraLimitXPercent: options.strengths.cameraX,
+        cameraLimitYPercent: options.strengths.cameraY,
+        cameraLimitRotationDegrees: options.strengths.cameraR
     )
 
     let cameraMacroDetected = abs(turnBandY * yScale) + (abs(turnBandRoll) * 12.0)
@@ -3655,7 +3664,10 @@ private func sourceSpaceLensShakeBand(
     turnOwnershipY: Float,
     cameraStrengthX: Double,
     cameraStrengthY: Double,
-    cameraStrengthR: Double
+    cameraStrengthR: Double,
+    cameraLimitXPercent: Double,
+    cameraLimitYPercent: Double,
+    cameraLimitRotationDegrees: Double
 ) -> BandAssessment {
     guard analysis.frames.indices.contains(index) else {
         return BandAssessment(name: "LENS", detected: 0.0, applied: 0.0, remaining: 0.0, confidence: 0.0, note: "no frame")
@@ -4361,9 +4373,13 @@ private func sourceSpaceLensShakeBand(
         let yStrength = verticalWalkingCorrectionFactor(cameraStrengthY, confidence: yConfidence)
         let rotationStrength = walkingCorrectionFactor(cameraStrengthR, confidence: rigidRollSupport)
         let detected = abs(rigidResidualX) + abs(rigidResidualY) + (abs(rigidRollResidual) * 12.0)
-        let applied = abs(rigidResidualX * xStrength)
-            + abs(rigidResidualY * yStrength)
-            + (abs(rigidRollResidual * rotationStrength) * 12.0)
+        let rigidXLimit = analysis.sampleWidth > 0 ? Float(analysis.sampleWidth) * xScale * Float(min(max(cameraLimitXPercent, 0.0), 5.0) / 100.0) : 0.0
+        let rigidYLimit = analysis.sampleHeight > 0 ? Float(analysis.sampleHeight) * yScale * Float(min(max(cameraLimitYPercent, 0.0), 5.0) / 100.0) : 0.0
+        let rigidRollLimit = Float(min(max(cameraLimitRotationDegrees, 0.0), 2.0))
+        let appliedRigidX = min(abs(rigidResidualX * xStrength), rigidXLimit)
+        let appliedRigidY = min(abs(rigidResidualY * yStrength), rigidYLimit)
+        let appliedRigidRoll = min(abs(rigidRollResidual * rotationStrength), rigidRollLimit)
+        let applied = appliedRigidX + appliedRigidY + (appliedRigidRoll * 12.0)
         let reason = boundedSupport >= lensShakeMinimumSupport ? "farFieldRigid" : "farFieldRigidSuppressed"
         return BandAssessment(
             name: "LENS",
@@ -4371,7 +4387,7 @@ private func sourceSpaceLensShakeBand(
             applied: applied,
             remaining: max(0.0, detected - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f roll %.5f raw %.3f %.3f rawRoll %.5f support %.2f supportX %.2f supportY %.2f rollSupport %.2f prepared %.2f rollPrepared %.2f shapeX %.2f shapeY %.2f twoWayX %.2f twoWayY %.2f rollTwoWay %.2f deltaRigid %.2f deltaAuthority %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f dominantMeshYBlend %.2f shortYBoost %.2f parallaxDamp %.2f coherentX %.2f coherentY %.2f rolling %.2f meshSupport %.2f meshBlend %.2f meshMaxDelta %.2f meshOpposing %.0f rawReinforceBlend %.2f xQuiver %.2f yQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f yBeforeLimiter %.3f yAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rigidRollResidual, rawRigidResidualX, rawRigidResidualY, rawRigidRollResidual, boundedSupport, rigidSupportX, rigidSupportY, rigidRollSupport, preparedRigidSupport, preparedRigidRollSupport, effectiveShapeConsistencyX, effectiveShapeConsistencyY, effectiveForwardBackwardConsistencyX, effectiveForwardBackwardConsistencyY, rollForwardBackwardConsistency, deltaCoherenceSupport, deltaCoherenceAuthority, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, dominantMeshYBlend, shortWindowRigidYBoost, parallaxWarpDamping, coherentSlabXAuthority, coherentSlabYAuthority, rollingShutterCandidate, meshSupport, meshBlend, meshMaxBinDelta, meshOpposingBins, rawReinforcementBlend, xQuiverScore, yQuiverScore, xBeforeQuiverLimiter, rigidResidualX, yBeforeQuiverLimiter, rigidResidualY, rigidOnlyGuard, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f roll %.5f cap %.3f %.3f %.3f applied %.3f %.3f %.3f raw %.3f %.3f rawRoll %.5f support %.2f supportX %.2f supportY %.2f rollSupport %.2f prepared %.2f rollPrepared %.2f shapeX %.2f shapeY %.2f twoWayX %.2f twoWayY %.2f rollTwoWay %.2f deltaRigid %.2f deltaAuthority %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f dominantMeshYBlend %.2f shortYBoost %.2f parallaxDamp %.2f coherentX %.2f coherentY %.2f rolling %.2f meshSupport %.2f meshBlend %.2f meshMaxDelta %.2f meshOpposing %.0f rawReinforceBlend %.2f xQuiver %.2f yQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f yBeforeLimiter %.3f yAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rigidRollResidual, rigidXLimit, rigidYLimit, rigidRollLimit, appliedRigidX, appliedRigidY, appliedRigidRoll, rawRigidResidualX, rawRigidResidualY, rawRigidRollResidual, boundedSupport, rigidSupportX, rigidSupportY, rigidRollSupport, preparedRigidSupport, preparedRigidRollSupport, effectiveShapeConsistencyX, effectiveShapeConsistencyY, effectiveForwardBackwardConsistencyX, effectiveForwardBackwardConsistencyY, rollForwardBackwardConsistency, deltaCoherenceSupport, deltaCoherenceAuthority, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, dominantMeshYBlend, shortWindowRigidYBoost, parallaxWarpDamping, coherentSlabXAuthority, coherentSlabYAuthority, rollingShutterCandidate, meshSupport, meshBlend, meshMaxBinDelta, meshOpposingBins, rawReinforcementBlend, xQuiverScore, yQuiverScore, xBeforeQuiverLimiter, rigidResidualX, yBeforeQuiverLimiter, rigidResidualY, rigidOnlyGuard, reason)
         )
     }
 
@@ -5320,17 +5336,20 @@ private func parseOptions() throws -> Options {
         case "--limit":
             options.limit = max(1, Int(try nextDouble(for: arg)))
         case "--camera-x":
-            let value = try nextDouble(for: arg)
-            options.strengths.microX = value
-            options.strengths.strideX = value
+            let value = min(max(0.0, try nextDouble(for: arg)), 5.0)
+            options.strengths.cameraX = value
+            options.strengths.microX = value * 2.0
+            options.strengths.strideX = value * 2.0
         case "--camera-y":
-            let value = try nextDouble(for: arg)
-            options.strengths.microY = value
-            options.strengths.strideY = value
+            let value = min(max(0.0, try nextDouble(for: arg)), 5.0)
+            options.strengths.cameraY = value
+            options.strengths.microY = value * 2.0
+            options.strengths.strideY = value * 2.0
         case "--camera-r":
-            let value = try nextDouble(for: arg)
-            options.strengths.microR = value
-            options.strengths.strideR = value
+            let value = min(max(0.0, try nextDouble(for: arg)), 2.0)
+            options.strengths.cameraR = value
+            options.strengths.microR = value * 2.0
+            options.strengths.strideR = value * 2.0
         case "--micro-x", "--micro-y", "--micro-r", "--stride-x", "--stride-y", "--stride-r":
             _ = try nextDouble(for: arg)
             throw FeedbackError(description: "\(arg) is retired; use --camera-x, --camera-y, or --camera-r.")
@@ -5361,7 +5380,8 @@ private func printUsage() {
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
     --turn-strength should match Turn Smoothing Strength when it is not 12.0; range is 0...36.
-    --camera-x, --camera-y, and --camera-r override the matching Camera Jitter Stabilization strengths.
+    --camera-x and --camera-y are Camera Rigid maximum corrections in output percent (0...5).
+    --camera-r is Camera Rigid maximum correction in degrees (0...2).
     --turn-zoom and --max-turn-zoom are deprecated aliases for --turn-strength and print a warning when used.
     --turn-window is retired and returns an error.
     --list-caches reports saved cache readiness without repairing cache files.

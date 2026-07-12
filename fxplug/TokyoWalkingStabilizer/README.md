@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.25` keeps the all-axis Camera Jitter baseline on schema 51 and applies supported frame-local rigid X/Y/roll without a playback slew ramp or fixed low source-pixel X/Y cap.
+- Version `1.1.26` keeps the all-axis Camera Jitter baseline on schema 51 and applies supported frame-local rigid X/Y/roll with explicit output-relative X/Y and roll-degree limits.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
@@ -230,9 +230,12 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 
 ## Stabilization Model
 
-- `Camera Jitter Stabilization X/Y/Rotation Strength`: direct correction authority for all
-  walking-camera residuals outside Far-field Warp and the TURN-owned X trajectory. X/Y default
-  to `4.0` and range to `10.0`; rotation defaults to `1.0` and ranges to `4.0`. The stage uses
+- `Camera Jitter X/Y Max Correction (%)` and `Camera Jitter ROLL Max Correction (°)`: Camera
+  Rigid final limits for walking-camera residuals outside Far-field Warp and the TURN-owned X
+  trajectory. X/Y default to `2%` and range `0...5%` of render output; roll defaults to `0.5°`
+  and ranges `0...2°`. The final Camera Rigid transform is clamped again after Overall Strength.
+  Footstep and Stride retain their prepared short/medium detection and share these inputs without
+  exposing separate controls. The stage uses
   prepared frame-local, medium walking, and trajectory-continuity evidence as one applied
   component. Broad global Y/roll residuals also remain in Camera Jitter and follow its
   Y/Rotation strengths. Zero tracking evidence remains zero correction, and TURN ownership

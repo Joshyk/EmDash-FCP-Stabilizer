@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.25` is the current review baseline for all-axis Camera Jitter.
+Version `1.1.26` is the current review baseline for all-axis Camera Jitter.
 Use schema 51 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;
@@ -79,14 +79,17 @@ fallbacks.
 
 ## Controls
 
-- `Camera Jitter Stabilization X/Y/Rotation Strength`: the single walking-camera stage outside
-  Far-field Warp and TURN-owned X motion. X/Y default to `4.0` and range to `10.0`; rotation
-  defaults to `1.0` and ranges to `4.0`. It consolidates prepared frame-local, medium, and
+- `Camera Jitter X/Y Max Correction (%)` and `Camera Jitter ROLL Max Correction (°)`: the
+  single walking-camera stage outside Far-field Warp and TURN-owned X motion. X/Y default to
+  `2%` and range from `0...5%` of the render output; roll defaults to `0.5°` and ranges from
+  `0...2°`. These are Camera Rigid final limits, including after `Overall Strength`; they do
+  not alter the separate Footstep/Stride detection bands. The controls consolidate prepared frame-local, medium, and
   trajectory-continuity residuals into one correction component. Its Y/rotation controls also
   own broad global Y/roll residuals; Turn Smoothing remains X-only. Zero tracking evidence is
   still zero correction, and the TURN ownership gate removes only the detected TURN X motion
   from Camera Jitter input so the two stages cannot correct the same trajectory twice.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
+  Camera Rigid remains clamped to its X/Y/ROLL maximum correction limits after this multiplier.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug
   overlay output.
 - Prepared Host Analysis motion paths are post-processed with a zero-phase jerk limiter

@@ -247,6 +247,9 @@ struct StabilizerAutoTransform {
 }
 
 struct StabilizerCorrectionStrengths {
+    // Camera Rigid reads X/Y as output-percent limits and rotation as a degree
+    // limit. Footstep/Stride retain their established normalized authority by
+    // mapping that new UI range back onto their former controls.
     let cameraJitterX: Double
     let cameraJitterY: Double
     let cameraJitterRotation: Double
@@ -255,16 +258,16 @@ struct StabilizerCorrectionStrengths {
 
     // The estimator still uses its prepared short/medium residual measurements,
     // but they are one Camera Jitter stage with one set of user strengths.
-    var microJitterX: Double { cameraJitterX }
-    var microJitterY: Double { cameraJitterY }
-    var microJitterRotation: Double { cameraJitterRotation }
-    var strideWobbleX: Double { cameraJitterX }
-    var strideWobbleY: Double { cameraJitterY }
-    var strideWobbleRotation: Double { cameraJitterRotation }
+    var microJitterX: Double { min(max(cameraJitterX, 0.0), 5.0) * 2.0 }
+    var microJitterY: Double { min(max(cameraJitterY, 0.0), 5.0) * 2.0 }
+    var microJitterRotation: Double { min(max(cameraJitterRotation, 0.0), 2.0) * 2.0 }
+    var strideWobbleX: Double { microJitterX }
+    var strideWobbleY: Double { microJitterY }
+    var strideWobbleRotation: Double { microJitterRotation }
 
     static let defaultStrengths = StabilizerCorrectionStrengths(
-        cameraJitterX: 1.0,
-        cameraJitterY: 1.0,
+        cameraJitterX: 2.0,
+        cameraJitterY: 2.0,
         cameraJitterRotation: 0.5,
         farFieldWarp: 0.5,
         turnSmoothingZoom: 5.0
@@ -4336,13 +4339,14 @@ enum AutoStabilizationEstimator {
                 edgeQuality: farFieldWarpEdgeQuality,
                 turnShakeSuppression: playbackTurnShakeSuppression,
                 turnOwnership: vector_float2(playbackTurnOwnershipX, playbackTurnOwnershipY),
+                strengths: strengths,
                 cache: cache
             )
             : SourceSpaceLensShakeCorrection()
         let lensShake = farFieldWarpStrengths.isActive
             ? rawLensShake
             : correctionWithLocalWarpDisabled(rawLensShake)
-        let cameraRigid = cameraRigidCorrection(from: lensShake, strengths: strengths)
+        let cameraRigid = cameraRigidCorrection(from: lensShake)
         let pixelOffset = macroPixelOffset
             + microPixelOffset
             + stridePixelOffset
@@ -8035,13 +8039,14 @@ enum AutoStabilizationEstimator {
                     edgeQuality: farFieldWarpEdgeQuality,
                     turnShakeSuppression: playbackTurnShakeSuppression,
                     turnOwnership: vector_float2(playbackTurnOwnershipX, playbackTurnOwnershipY),
+                    strengths: strengths,
                     cache: cache
                 )
                 : SourceSpaceLensShakeCorrection()
             let lensShake = farFieldWarpStrengths.isActive
                 ? rawLensShake
                 : correctionWithLocalWarpDisabled(rawLensShake)
-            let cameraRigid = cameraRigidCorrection(from: lensShake, strengths: strengths)
+            let cameraRigid = cameraRigidCorrection(from: lensShake)
             let pixelOffset = macroPixelOffset
                 + cameraJitterPixelOffset
                 + cameraRigid.pixelOffset
@@ -9908,13 +9913,14 @@ enum AutoStabilizationEstimator {
                 ),
                 turnShakeSuppression: turnShakeSuppression,
                 turnOwnership: vector_float2(turnOwnershipX, turnOwnershipY),
+                strengths: strengths,
                 cache: cache
             )
             : SourceSpaceLensShakeCorrection(reasonCode: 0)
         let lensShake = shouldEstimateFarFieldWarp
             ? rawLensShake
             : correctionWithLocalWarpDisabled(rawLensShake)
-        let cameraRigid = cameraRigidCorrection(from: lensShake, strengths: strengths)
+        let cameraRigid = cameraRigidCorrection(from: lensShake)
 
         return StabilizerAutoTransform(
             pixelOffset: vector_float2(compensationX, compensationY) + cameraRigid.pixelOffset,
@@ -10975,13 +10981,14 @@ enum AutoStabilizationEstimator {
                 ),
                 turnShakeSuppression: turnShakeSuppression,
                 turnOwnership: vector_float2(turnOwnershipX, turnOwnershipY),
+                strengths: strengths,
                 cache: cache
             )
             : SourceSpaceLensShakeCorrection()
         let lensShake = shouldEstimateFarFieldWarp
             ? rawLensShake
             : correctionWithLocalWarpDisabled(rawLensShake)
-        let cameraRigid = cameraRigidCorrection(from: lensShake, strengths: strengths)
+        let cameraRigid = cameraRigidCorrection(from: lensShake)
         return StabilizerAutoTransform(
             pixelOffset: vector_float2(compensationX, compensationY) + cameraRigid.pixelOffset,
             macroPixelOffset: macroPixelOffset,
@@ -14873,8 +14880,7 @@ enum AutoStabilizationEstimator {
     }
 
     private static func cameraRigidCorrection(
-        from lensShake: SourceSpaceLensShakeCorrection,
-        strengths: StabilizerCorrectionStrengths
+        from lensShake: SourceSpaceLensShakeCorrection
     ) -> (pixelOffset: vector_float2, rotationDegrees: Float) {
         let translationConfidence = clamp(
             max(lensShake.farFieldRigidSupport, lensShake.support),
@@ -14886,18 +14892,10 @@ enum AutoStabilizationEstimator {
             min: 0.0,
             max: 1.0
         )
-        let xStrength = walkingConfidenceCompensatedCorrectionFactor(
-            strengths.cameraJitterX,
-            confidence: translationConfidence
-        )
-        let yStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(
-            strengths.cameraJitterY,
-            confidence: translationConfidence
-        )
-        let rotationStrength = walkingConfidenceCompensatedCorrectionFactor(
-            strengths.cameraJitterRotation,
-            confidence: rotationConfidence
-        )
+        // The unit UI is the final limit, not an additional authority scalar.
+        let xStrength = walkingConfidenceCompensatedCorrectionFactor(4.0, confidence: translationConfidence)
+        let yStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(4.0, confidence: translationConfidence)
+        let rotationStrength = walkingConfidenceCompensatedCorrectionFactor(4.0, confidence: rotationConfidence)
         return (
             vector_float2(lensShake.pixelOffset.x * xStrength, lensShake.pixelOffset.y * yStrength),
             lensShake.rotationDegrees * rotationStrength
@@ -14952,6 +14950,7 @@ enum AutoStabilizationEstimator {
         edgeQuality: Float,
         turnShakeSuppression: Float,
         turnOwnership: vector_float2,
+        strengths: StabilizerCorrectionStrengths,
         cache: RenderEstimateCache
     ) -> SourceSpaceLensShakeCorrection {
         guard frames.count >= 5,
@@ -15971,20 +15970,11 @@ enum AutoStabilizationEstimator {
             if rigidBranchSupport >= lensShakeMinimumSupport {
                 let outputWidth = Float(max(1, frames[interpolation.lowerIndex].sampleWidth)) * outputScale.x
                 let outputHeight = Float(max(1, frames[interpolation.lowerIndex].sampleHeight)) * outputScale.y
-                let rigidXMaximumCorrection = min(
-                    cameraRigidXMaximumCorrectionCeiling,
-                    max(
-                        lensShakePixelMaximumCorrection,
-                        outputWidth * cameraRigidXMaximumOutputFraction
-                    )
-                )
-                let rigidYMaximumCorrection = min(
-                    cameraRigidYMaximumCorrectionCeiling,
-                    max(
-                        lensShakeRollingGlobalYMaximumCorrection,
-                        outputHeight * cameraRigidYMaximumOutputFraction
-                    )
-                )
+                let rigidXMaximumCorrection = outputWidth
+                    * Float(min(max(strengths.cameraJitterX, 0.0), 5.0) / 100.0)
+                let rigidYMaximumCorrection = outputHeight
+                    * Float(min(max(strengths.cameraJitterY, 0.0), 5.0) / 100.0)
+                let rigidRollMaximumCorrection = Float(min(max(strengths.cameraJitterRotation, 0.0), 2.0))
                 let rigidOffset = vector_float2(
                     clamp(-rigidResidual.x, min: -rigidXMaximumCorrection, max: rigidXMaximumCorrection),
                     clamp(-rigidResidual.y, min: -rigidYMaximumCorrection, max: rigidYMaximumCorrection)
@@ -16011,8 +16001,8 @@ enum AutoStabilizationEstimator {
                 )
                 let rigidRollCorrection = clamp(
                     -rigidRollResidual * rigidRollSupport,
-                    min: -lensShakeRotationMaximumCorrectionDegrees,
-                    max: lensShakeRotationMaximumCorrectionDegrees
+                    min: -rigidRollMaximumCorrection,
+                    max: rigidRollMaximumCorrection
                 )
                 result.pixelOffset = vector_float2(globalXOffset, globalYOffset)
                 result.farFieldRigidGlobalYOffset = globalYOffset
