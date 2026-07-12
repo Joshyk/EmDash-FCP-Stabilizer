@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.21` is the current review baseline for all-axis Camera Jitter.
+Version `1.1.22` is the current review baseline for all-axis Camera Jitter.
 Use schema 51 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;
@@ -179,6 +179,8 @@ fallbacks.
   saved-analysis correction path; the digits are derived from the active FxPlug version.
   The overlay scales from the current render output so the top-left panel occupies roughly
   half of the viewer height in original, optimized, and proxy playback.
+  `X`, `Y`, and `CAM` use a fine-motion render-pixel scale, so subpixel-to-few-pixel
+  Camera Jitter corrections remain visible instead of reading as empty or permanently full.
   `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
   tracking evidence.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When

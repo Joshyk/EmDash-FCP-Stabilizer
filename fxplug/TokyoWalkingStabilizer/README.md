@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.21` keeps the all-axis Camera Jitter baseline on schema 51.
+- Version `1.1.22` keeps the all-axis Camera Jitter baseline on schema 51 and applies supported frame-local rigid X/Y/roll without a playback slew ramp.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
@@ -352,7 +352,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   playback is using the same saved-analysis correction path. The digits are derived from the active FxPlug
   version. The overlay scales from the current render output so
   the top-left panel occupies roughly half of the viewer height in original, optimized, and
-  proxy playback. These labels are raw English control/diagnostic
+  proxy playback. `X`, `Y`, and `CAM` use a fine-motion render-pixel scale so
+  frame-local Camera Jitter changes remain readable. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the final Camera Jitter component.

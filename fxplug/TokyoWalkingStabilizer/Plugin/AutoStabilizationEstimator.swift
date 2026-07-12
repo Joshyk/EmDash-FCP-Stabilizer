@@ -8446,36 +8446,14 @@ enum AutoStabilizationEstimator {
         let lensRotationLimit = rotationLimit * 0.72
         let lensLocalRollLimit = (lensRotationLimit * .pi) / 180.0
 
-        let rigidXAuthority = current.lensFarFieldRigidShakeApplied > 0.5
-            ? confidenceRamp(current.lensFarFieldRigidShakeSupportX, start: lensShakeMinimumSupport, full: 0.62)
-            : 0.0
-        let rigidYAuthority = current.lensFarFieldRigidShakeApplied > 0.5
-            ? confidenceRamp(current.lensFarFieldRigidShakeSupportY, start: lensShakeMinimumSupport, full: 0.62)
-            : 0.0
-        let rigidRotationAuthority = current.lensFarFieldRigidRollApplied > 0.5
-            ? confidenceRamp(current.lensFarFieldRigidRollSupport, start: lensShakeMinimumSupport, full: 0.62)
-            : 0.0
-        let cameraRigidXLimit = max(
-            lensPixelLimit,
-            abs(current.cameraRigidPixelOffset.x - previous.cameraRigidPixelOffset.x) * rigidXAuthority
-        )
-        let cameraRigidYLimit = max(
-            lensPixelLimit,
-            abs(current.cameraRigidPixelOffset.y - previous.cameraRigidPixelOffset.y) * rigidYAuthority
-        )
-        let cameraRigidRotationLimit = max(
-            lensRotationLimit,
-            abs(current.cameraRigidRotationDegrees - previous.cameraRigidRotationDegrees) * rigidRotationAuthority
-        )
-        limited.cameraRigidPixelOffset = vector_float2(
-            playbackTrajectoryLimitedScalar(current.cameraRigidPixelOffset.x, previous: previous.cameraRigidPixelOffset.x, limit: cameraRigidXLimit),
-            playbackTrajectoryLimitedScalar(current.cameraRigidPixelOffset.y, previous: previous.cameraRigidPixelOffset.y, limit: cameraRigidYLimit)
-        )
-        limited.cameraRigidRotationDegrees = playbackTrajectoryLimitedScalar(
-            current.cameraRigidRotationDegrees,
-            previous: previous.cameraRigidRotationDegrees,
-            limit: cameraRigidRotationLimit
-        )
+        // Schema 51 camera-rigid targets are already frame-local and carry
+        // independent X/Y/roll support plus forward/backward consistency.
+        // A second playback slew limit turns a supported 2-5 frame impulse into
+        // a delayed ramp and leaves the original ridge jump visible. Preserve
+        // the authoritative center-frame correction here; unsupported isolated
+        // spikes have already been rejected by the prepared evidence path.
+        limited.cameraRigidPixelOffset = current.cameraRigidPixelOffset
+        limited.cameraRigidRotationDegrees = current.cameraRigidRotationDegrees
         limited.lensShakePixelOffset = playbackTrajectoryLimitedVector(
             current.lensShakePixelOffset,
             previous: previous.lensShakePixelOffset,

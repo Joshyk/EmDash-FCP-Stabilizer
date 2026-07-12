@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.21` uses schema 51 all-axis Camera Jitter analysis. It stores
+Version `1.1.22` uses schema 51 all-axis Camera Jitter analysis. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
@@ -216,6 +216,8 @@ version. It does not control black outside-source pixels; `Edge Display Mode`
 controls that separately.
 The overlay scales from the current render output so the top-left panel occupies
 roughly half of the viewer height in original, optimized, and proxy playback.
+Its `X`, `Y`, and `CAM` activity bars use a fine-motion render-pixel scale so
+frame-local Camera Jitter changes remain readable.
 `Mesh Overlay` is separate from `Debug Overlay`: it can show the far-field mesh,
 lens-local mesh, band guides, or all meshes without drawing the top-left bars.
 Mesh families use distinct thicker colors so source-space cell boundaries remain

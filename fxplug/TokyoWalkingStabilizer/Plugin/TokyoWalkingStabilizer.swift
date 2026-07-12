@@ -53,9 +53,9 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.21"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 985.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 21.0, 985.0)
+private let tokyoWalkingStabilizerVersion = "1.1.22"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 986.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 22.0, 986.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
 private let tokyoWalkingStabilizerRenderRevisionSeed = 1_424_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
@@ -10528,8 +10528,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let diagnostic4: vector_float4
         var diagnostic5: vector_float4
         if debugOverlayActive {
-            let diagnosticScaleX = max(1.0, Float(outputWidth) * 0.05)
-            let diagnosticScaleY = max(1.0, Float(outputHeight) * 0.05)
+            // X/Y OFFSET and CAM JITTER report the final render correction.
+            // Use a fine-motion scale so subpixel-to-few-pixel corrections are
+            // visible in both proxy and original playback instead of appearing
+            // empty at the old five-percent crop scale.
+            let diagnosticScaleX = max(4.0, Float(outputWidth) * 0.004)
+            let diagnosticScaleY = max(4.0, Float(outputHeight) * 0.004)
             let turnScaleX = max(1.0, Float(outputWidth) * 0.01)
             let turnScaleY = max(1.0, Float(outputHeight) * 0.01)
             let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.01)
@@ -10570,10 +10574,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 + autoTransform.cameraRigidRotationDegrees
             // Camera Jitter is intentionally sub-pixel sensitive: its bar is a
             // diagnostic of active correction, not a crop-scale displacement.
-            let cameraJitterActivity = sqrt(min(1.0, max(
-                simd_length(cameraJitterPixelOffset),
+            let cameraJitterActivity = min(1.0, max(
+                abs(cameraJitterPixelOffset.x) / diagnosticScaleX,
+                abs(cameraJitterPixelOffset.y) / diagnosticScaleY,
                 abs(cameraJitterRotation) / 0.05
-            )))
+            ))
             let cameraJitterConfidence = max(
                 max(autoTransform.microConfidence, autoTransform.strideConfidence),
                 max(autoTransform.lensFarFieldRigidShakeSupport, autoTransform.lensFarFieldRigidRollSupport)
