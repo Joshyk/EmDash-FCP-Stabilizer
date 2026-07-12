@@ -5345,8 +5345,7 @@ private func parseOptions() throws -> Options {
         case "--window":
             options.windowSeconds = max(0.0, try nextDouble(for: arg))
         case "--turn-window":
-            _ = try nextDouble(for: arg)
-            throw FeedbackError(description: "--turn-window is retired; Auto Crop Zoom-In/Out controls now determine turn zoom timing.")
+            options.turnWindowSeconds = min(max(0.5, try nextDouble(for: arg)), 8.0)
         case "--turn-strength":
             options.turnStrength = min(max(0.0, try nextDouble(for: arg)), 36.0)
         case "--max-turn-zoom":
@@ -5414,7 +5413,7 @@ private func printUsage() {
     --camera-x and --camera-y are Camera Rigid maximum corrections in output percent (0...5).
     --camera-r is Camera Rigid maximum correction in degrees (0...2).
     --turn-zoom and --max-turn-zoom are deprecated aliases for --turn-strength and print a warning when used.
-    --turn-window is retired and returns an error.
+    --turn-window should match Turn Transition Window (s); range is 0.5...8.0.
     --list-caches reports saved cache readiness without repairing cache files.
     --compare-cache validates saved cache equivalence; float arrays may differ only within --compare-tolerance.
     """)

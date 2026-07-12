@@ -255,6 +255,7 @@ struct StabilizerCorrectionStrengths {
     let cameraJitterRotation: Double
     let farFieldWarp: Double
     let turnSmoothingZoom: Double
+    let turnTransitionWindowSeconds: Double
 
     // The estimator still uses its prepared short/medium residual measurements,
     // but they are one Camera Jitter stage with one set of user strengths.
@@ -270,7 +271,8 @@ struct StabilizerCorrectionStrengths {
         cameraJitterY: 2.0,
         cameraJitterRotation: 0.5,
         farFieldWarp: 0.5,
-        turnSmoothingZoom: 5.0
+        turnSmoothingZoom: 5.0,
+        turnTransitionWindowSeconds: 2.8
     )
 }
 
@@ -1822,7 +1824,7 @@ enum AutoStabilizationEstimator {
                 preparedAnalysis: analysis,
                 renderSeconds: analysis.frames[index].time,
                 outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
+                panSmoothSeconds: max(panSmoothSeconds, strengths.turnTransitionWindowSeconds),
                 strengths: strengths,
                 cache: self,
                 limitFootstepContinuity: limitFootstepContinuity,
@@ -8871,7 +8873,8 @@ enum AutoStabilizationEstimator {
             frames: frames,
             transforms: rawTransforms,
             panSmoothSeconds: panSmoothSeconds,
-            turnSmoothingZoom: strengths.turnSmoothingZoom
+            turnSmoothingZoom: strengths.turnSmoothingZoom,
+            turnTransitionWindowSeconds: strengths.turnTransitionWindowSeconds
         )
         if !turnSamples.isEmpty {
             let smoothedTurnTransform = weightedAverageTransform(turnSamples)
@@ -9009,7 +9012,8 @@ enum AutoStabilizationEstimator {
         frames: [StabilizerAnalysisFrame],
         transforms: [StabilizerAutoTransform],
         panSmoothSeconds: Double,
-        turnSmoothingZoom: Double
+        turnSmoothingZoom: Double,
+        turnTransitionWindowSeconds: Double
     ) -> [(transform: StabilizerAutoTransform, weight: Float)] {
         guard let firstTime = frames.first?.time,
               let lastTime = frames.last?.time
@@ -9019,7 +9023,7 @@ enum AutoStabilizationEstimator {
         let timing = adaptiveXTurnTiming(
             travelPixels: abs(centerTransform.turnDetectedPixelOffset.x),
             baseWindowSeconds: renderTurnTransitionSmoothingWindowSeconds,
-            panSmoothSeconds: panSmoothSeconds,
+            panSmoothSeconds: max(panSmoothSeconds, turnTransitionWindowSeconds),
             turnSmoothingZoom: turnSmoothingZoom
         )
         let transitionWindowSeconds = timing.windowSeconds
@@ -11485,7 +11489,7 @@ enum AutoStabilizationEstimator {
                 analysis: analysis,
                 renderSeconds: sampleSeconds,
                 outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
+                panSmoothSeconds: max(panSmoothSeconds, strengths.turnTransitionWindowSeconds),
                 strengths: strengths,
                 cache: cache,
                 limitFootstepContinuity: false,

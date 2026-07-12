@@ -169,6 +169,7 @@
 		<target object="10036" channel="./8" name="Camera Jitter ROLL Max Correction (°)"/>
 		<target object="10036" channel="./45" name="Far-field Warp Strength"/>
 		<target object="10036" channel="./46" name="Turn Smoothing Strength"/>
+		<target object="10036" channel="./48" name="Turn Transition Window (s)"/>
 		<target object="10036" channel="./41" name="Remove Black Edges"/>
 		<target object="10036" channel="./42" name="Auto Crop Zoom-Out Time"/>
 		<target object="10036" channel="./43" name="Auto Crop Zoom-In Time"/>
@@ -275,6 +276,7 @@
 				<parameter name="Overall Strength" id="1" flags="12884901904" default="1" value="1"/>
 				<parameter name="Far-field Warp Strength" id="45" flags="12884901904" default="1" value="1"/>
 				<parameter name="Turn Smoothing Strength" id="46" flags="12884901904" default="12" value="12"/>
+				<parameter name="Turn Transition Window (s)" id="48" flags="12884901904" default="2.8" value="2.8"/>
 				<parameter name="Remove Black Edges" id="41" flags="12884901904" default="1" value="1"/>
 				<parameter name="Auto Crop Zoom-Out Time" id="42" flags="12884901904" default="10" value="10"/>
 				<parameter name="Auto Crop Zoom-In Time" id="43" flags="12884901904" default="10" value="10"/>
@@ -285,7 +287,7 @@
 				<parameter name="Debug Overlay" id="10" flags="12884901904" default="0" value="0"/>
 				<parameter name="Start Host Analysis" id="14" flags="12884901906"/>
 				<parameter name="Clear Host Analysis Cache" id="17" flags="12884901906"/>
-			<parameter name="Host Analysis Status" id="15" flags="12884901909" default="External Analysis Required - Run Event Analyzer | FxPlug 1.1.28" value="External Analysis Required - Run Event Analyzer | FxPlug 1.1.28"/>
+			<parameter name="Host Analysis Status" id="15" flags="12884901909" default="External Analysis Required - Run Event Analyzer | FxPlug 1.1.29" value="External Analysis Required - Run Event Analyzer | FxPlug 1.1.29"/>
 				<parameter name="Sample Info" id="32" flags="12884901909" default="Sample: unknown -> - | Analysis: -" value="Sample: unknown -> - | Analysis: -"/>
 				<parameter name="Queue" id="36" flags="12884901911" default="Queue: -" value="Queue: -"/>
 				<parameter name="Host Analysis Cache Identity" id="33" flags="12884901906" default="" value=""/>

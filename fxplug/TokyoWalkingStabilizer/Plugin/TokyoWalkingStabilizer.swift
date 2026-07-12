@@ -46,6 +46,7 @@ private enum ParameterID: UInt32 {
     case farFieldWarpStrength = 45
     case turnSmoothingZoom = 46
     case meshOverlayMode = 47
+    case turnTransitionWindow = 48
 }
 
 private struct StabilizerInfoFields {
@@ -53,16 +54,17 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.28"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 992.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 28.0, 992.0)
+private let tokyoWalkingStabilizerVersion = "1.1.29"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 993.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 29.0, 993.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_427_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_428_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
 private let stabilizerDefaultFarFieldWarpStrength = 1.0
 private let stabilizerDefaultTurnSmoothingZoom = 12.0
+private let stabilizerDefaultTurnTransitionWindow = 2.8
 private let stabilizerMaximumTurnSmoothingZoom = 36.0
 private let stabilizerMaximumTurnSmoothingZoomScale: Float = 1.5
 private let stabilizerMaximumFarFieldWarpStrength = 12.0
@@ -583,6 +585,7 @@ private struct AutoCropFramingCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let farFieldWarp: UInt64
     let turnSmoothingZoom: UInt64
+    let turnTransitionWindow: UInt64
     let currentTransform: AutoCropTransformSignature
 }
 
@@ -608,6 +611,7 @@ private struct AutoCropScaleDemandCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let farFieldWarp: UInt64
     let turnSmoothingZoom: UInt64
+    let turnTransitionWindow: UInt64
     let centerTransform: AutoCropTransformSignature
 }
 
@@ -632,6 +636,7 @@ private struct AutoCropZoomPlanCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let farFieldWarp: UInt64
     let turnSmoothingZoom: UInt64
+    let turnTransitionWindow: UInt64
 }
 
 private struct AutoCropPlaybackScalePlanCacheKey: Hashable {
@@ -655,6 +660,7 @@ private struct AutoCropPlaybackScalePlanCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let farFieldWarp: UInt64
     let turnSmoothingZoom: UInt64
+    let turnTransitionWindow: UInt64
 }
 
 private struct StabilizerAutoTransformCacheKey: Hashable {
@@ -680,6 +686,7 @@ private struct StabilizerAutoTransformCacheKey: Hashable {
     let strideWobbleRotation: UInt64
     let farFieldWarp: UInt64
     let turnSmoothingZoom: UInt64
+    let turnTransitionWindow: UInt64
 }
 
 private struct RenderAnalysisDecisionSignature: Equatable {
@@ -706,6 +713,7 @@ private struct StabilizerPluginState {
     var cameraJitterRotationStrength: Double
     var farFieldWarpStrength: Double
     var turnSmoothingZoom: Double
+    var turnTransitionWindow: Double
     var autoCropTransitionDuration: Double
     var autoCropLeadTime: Double
     var autoCropHoldTime: Double
@@ -1232,6 +1240,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             delta: 0.01,
             parameterFlags: flags
         )
+        paramAPI.addFloatSlider(
+            withName: "Turn Transition Window (s)",
+            parameterID: ParameterID.turnTransitionWindow.rawValue,
+            defaultValue: stabilizerDefaultTurnTransitionWindow,
+            parameterMin: 0.5,
+            parameterMax: 8.0,
+            sliderMin: 0.5,
+            sliderMax: 8.0,
+            delta: 0.05,
+            parameterFlags: flags
+        )
         paramAPI.addToggleButton(
             withName: "Remove Black Edges",
             parameterID: ParameterID.autoCropEnabled.rawValue,
@@ -1381,6 +1400,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cameraJitterRotationStrength: stabilizerDefaultWalkingRotationStrength,
             farFieldWarpStrength: stabilizerDefaultFarFieldWarpStrength,
             turnSmoothingZoom: stabilizerDefaultTurnSmoothingZoom,
+            turnTransitionWindow: stabilizerDefaultTurnTransitionWindow,
             autoCropTransitionDuration: stabilizerDefaultAutoCropTransitionDuration,
             autoCropLeadTime: stabilizerDefaultAutoCropLeadTime,
             autoCropHoldTime: stabilizerDefaultAutoCropHoldTime,
@@ -1403,6 +1423,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         paramAPI.getFloatValue(&state.cameraJitterRotationStrength, fromParameter: ParameterID.rotationStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.farFieldWarpStrength, fromParameter: ParameterID.farFieldWarpStrength.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.turnSmoothingZoom, fromParameter: ParameterID.turnSmoothingZoom.rawValue, at: renderTime)
+        paramAPI.getFloatValue(&state.turnTransitionWindow, fromParameter: ParameterID.turnTransitionWindow.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.autoCropTransitionDuration, fromParameter: ParameterID.autoCropTransitionDuration.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.autoCropLeadTime, fromParameter: ParameterID.autoCropLeadTime.rawValue, at: renderTime)
         paramAPI.getFloatValue(&state.autoCropHoldTime, fromParameter: ParameterID.autoCropHoldTime.rawValue, at: renderTime)
@@ -2044,7 +2065,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleY: strengths.strideWobbleY.bitPattern,
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
-            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
+            turnTransitionWindow: strengths.turnTransitionWindowSeconds.bitPattern
         )
 
         autoTransformCacheLock.lock()
@@ -2191,6 +2213,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
             turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
+            turnTransitionWindow: strengths.turnTransitionWindowSeconds.bitPattern,
             currentTransform: AutoCropTransformSignature(framingTransform)
         )
 
@@ -2501,6 +2524,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
             turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
+            turnTransitionWindow: strengths.turnTransitionWindowSeconds.bitPattern,
             centerTransform: AutoCropTransformSignature(centerTransform)
         )
 
@@ -2607,7 +2631,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleY: strengths.strideWobbleY.bitPattern,
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
-            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
+            turnTransitionWindow: strengths.turnTransitionWindowSeconds.bitPattern
         )
 
         autoCropZoomPlanCacheLock.lock()
@@ -2679,7 +2704,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             strideWobbleY: strengths.strideWobbleY.bitPattern,
             strideWobbleRotation: strengths.strideWobbleRotation.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
-            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
+            turnTransitionWindow: strengths.turnTransitionWindowSeconds.bitPattern
         )
     }
 
@@ -10407,7 +10433,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cameraJitterY: state.cameraJitterYStrength,
             cameraJitterRotation: state.cameraJitterRotationStrength,
             farFieldWarp: state.farFieldWarpStrength,
-            turnSmoothingZoom: state.turnSmoothingZoom
+            turnSmoothingZoom: state.turnSmoothingZoom,
+            turnTransitionWindowSeconds: state.turnTransitionWindow
         )
         let configuredProjectBundleCache = transformEnabled
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)

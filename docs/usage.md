@@ -113,6 +113,9 @@ fallbacks.
 - `Turn Smoothing Strength`: the X-only turn smoothing control. It defaults to `12.0`;
   high values now raise the transition bridge floor and release center anchoring earlier for
   an unmistakably smoother long X pan, without changing Camera Jitter X.
+- `Turn Transition Window (s)`: the X-pan transition duration, from `0.5...8.0` seconds
+  and defaulting to `2.8`. It controls when Turn begins its pre-roll and how long the X
+  transition is spread; it does not change Turn correction amplitude.
   and ranges from `0.00...36.00`. At `0`, TURN correction and turn zoom are disabled;
   at `12`, turns use the standard `2.8` second monotonic S-curve transition; and at
   `36`, that transition can extend to three times the standard duration. Higher values
