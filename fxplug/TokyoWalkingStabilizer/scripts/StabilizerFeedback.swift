@@ -839,6 +839,9 @@ private let adaptiveXTurnTransitionZoomStartPixels: Float = 24.0
 private let adaptiveXTurnTransitionZoomFullPixels: Float = 160.0
 private let adaptiveXTurnTransitionZoomConfidenceStart: Float = 0.12
 private let adaptiveXTurnTransitionZoomConfidenceFull: Float = 0.35
+private let adaptiveXTurnTransitionHighStrengthBlendFloor: Float = 0.78
+private let adaptiveXTurnTransitionHighStrengthBlendStartPixels: Float = 24.0
+private let adaptiveXTurnTransitionHighStrengthBlendFullPixels: Float = 96.0
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -1899,7 +1902,8 @@ private func renderTurnBridgeAssessment(
         centerWalkingTrackingConfidence: centerSample.walkingTrackingConfidence,
         centerEdgeQuality: centerSample.edgeQuality,
         bridgeTurnConfidence: bridgedConfidence,
-        bridgeMacroX: averagedMacro
+        bridgeMacroX: averagedMacro,
+        turnSmoothingStrength: options.turnStrength,
     ) * turnSmoothingBridgeBlend(options.turnStrength)
     let blendedMacro = centerMacro + ((anchoredMacro - centerMacro) * bridgeBlend)
     let bridgedApplied = abs(blendedMacro)
@@ -1920,7 +1924,8 @@ private func turnTransitionBridgeBlend(
     centerWalkingTrackingConfidence: Float,
     centerEdgeQuality: Float,
     bridgeTurnConfidence: Float,
-    bridgeMacroX: Float
+    bridgeMacroX: Float,
+    turnSmoothingStrength: Double
 ) -> Float {
     let centerEdgeSupport = turnTransitionBridgeEdgeSupport(edgeQuality: centerEdgeQuality)
     let centerTrackingQualitySupport = turnTransitionBridgeQualitySupport(
@@ -1946,8 +1951,15 @@ private func turnTransitionBridgeBlend(
             start: renderTurnTransitionBridgeLowEdgeMacroStartPixels,
             full: renderTurnTransitionBridgeLowEdgeMacroFullPixels
         )
+    let highStrengthBlendFloor = turnSmoothingZoomNormalized(turnSmoothingStrength)
+        * adaptiveXTurnTransitionHighStrengthBlendFloor
+        * confidenceRamp(
+            abs(bridgeMacroX),
+            start: adaptiveXTurnTransitionHighStrengthBlendStartPixels,
+            full: adaptiveXTurnTransitionHighStrengthBlendFullPixels
+        )
     return clamp(
-        max(gatedBlend, lowEdgeLargeTurnBlend),
+        max(gatedBlend, max(lowEdgeLargeTurnBlend, highStrengthBlendFloor)),
         min: renderTurnTransitionBridgeMinimumBlend,
         max: renderTurnTransitionBridgeMaximumBlend
     )
@@ -2016,13 +2028,13 @@ private func turnSmoothingZoomDemandSupport(
 ) -> Float {
     let travelSupport = confidenceRamp(
         abs(turnTravelPixels),
-        start: adaptiveXTurnTransitionZoomStartPixels,
-        full: adaptiveXTurnTransitionZoomFullPixels
+        start: adaptiveXTurnTransitionZoomStartPixels * 0.5,
+        full: adaptiveXTurnTransitionZoomFullPixels * 0.60
     )
     let confidenceSupport = confidenceRamp(
         clamp(turnConfidence, min: 0.0, max: 1.0),
-        start: adaptiveXTurnTransitionZoomConfidenceStart,
-        full: adaptiveXTurnTransitionZoomConfidenceFull
+        start: adaptiveXTurnTransitionZoomConfidenceStart * 0.5,
+        full: adaptiveXTurnTransitionZoomConfidenceFull * 0.80
     )
     return min(travelSupport, confidenceSupport)
 }

@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.26` is the current review baseline for all-axis Camera Jitter.
+Version `1.1.27` is the current review baseline for all-axis Camera Jitter.
 Use schema 51 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;
@@ -110,7 +110,9 @@ fallbacks.
   tracking support to reduce single-frame gate flicker, then applies a tiny deadband so
   weak frames and high-side gate jumps do not create wave-like image distortion.
   Pull this down if close grass, roads, water, or frame edges start to swim.
-- `Turn Smoothing Strength`: the X-only turn smoothing control. It defaults to `12.0`
+- `Turn Smoothing Strength`: the X-only turn smoothing control. It defaults to `12.0`;
+  high values now raise the transition bridge floor and release center anchoring earlier for
+  an unmistakably smoother long X pan, without changing Camera Jitter X.
   and ranges from `0.00...36.00`. At `0`, TURN correction and turn zoom are disabled;
   at `12`, turns use the standard `2.8` second monotonic S-curve transition; and at
   `36`, that transition can extend to three times the standard duration. Higher values

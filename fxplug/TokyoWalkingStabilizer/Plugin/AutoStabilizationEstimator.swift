@@ -892,6 +892,9 @@ enum AutoStabilizationEstimator {
     private static let adaptiveXTurnTransitionZoomFullPixels: Float = 160.0
     private static let adaptiveXTurnTransitionZoomConfidenceStart: Float = 0.12
     private static let adaptiveXTurnTransitionZoomConfidenceFull: Float = 0.35
+    private static let adaptiveXTurnTransitionHighStrengthBlendFloor: Float = 0.78
+    private static let adaptiveXTurnTransitionHighStrengthBlendStartPixels: Float = 24.0
+    private static let adaptiveXTurnTransitionHighStrengthBlendFullPixels: Float = 96.0
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.44
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -5175,7 +5178,8 @@ enum AutoStabilizationEstimator {
             )
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: rawCenterTransform,
-                bridgeTransform: smoothedTurnTransform
+                bridgeTransform: smoothedTurnTransform,
+                turnSmoothingStrength: strengths.turnSmoothingZoom
             ) * turnSmoothingBridgeBlend(strengths.turnSmoothingZoom)
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
@@ -8893,7 +8897,8 @@ enum AutoStabilizationEstimator {
             )
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: centerTransform,
-                bridgeTransform: smoothedTurnTransform
+                bridgeTransform: smoothedTurnTransform,
+                turnSmoothingStrength: strengths.turnSmoothingZoom
             ) * turnSmoothingBridgeBlend(strengths.turnSmoothingZoom)
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
@@ -11271,7 +11276,8 @@ enum AutoStabilizationEstimator {
             )
             let bridgeBlend = turnTransitionBridgeBlend(
                 centerTransform: rawCenterTransform,
-                bridgeTransform: smoothedTurnTransform
+                bridgeTransform: smoothedTurnTransform,
+                turnSmoothingStrength: strengths.turnSmoothingZoom
             ) * turnSmoothingBridgeBlend(strengths.turnSmoothingZoom)
             smoothedTransform.macroPixelOffset += (bridgedMacroOffset - smoothedTransform.macroPixelOffset) * bridgeBlend
             smoothedTransform.turnConfidence = smoothedTurnTransform.turnConfidence
@@ -11545,7 +11551,8 @@ enum AutoStabilizationEstimator {
 
     private static func turnTransitionBridgeBlend(
         centerTransform: StabilizerAutoTransform,
-        bridgeTransform: StabilizerAutoTransform
+        bridgeTransform: StabilizerAutoTransform,
+        turnSmoothingStrength: Double
     ) -> Float {
         let centerEdgeQuality = searchRadiusEdgeQuality(
             hitCount: centerTransform.searchRadiusHitCount,
@@ -11571,8 +11578,15 @@ enum AutoStabilizationEstimator {
                 start: renderTurnTransitionBridgeLowEdgeMacroStartPixels,
                 full: renderTurnTransitionBridgeLowEdgeMacroFullPixels
             )
+        let highStrengthBlendFloor = turnSmoothingZoomNormalized(turnSmoothingStrength)
+            * adaptiveXTurnTransitionHighStrengthBlendFloor
+            * confidenceRamp(
+                abs(centerTransform.turnDetectedPixelOffset.x),
+                start: adaptiveXTurnTransitionHighStrengthBlendStartPixels,
+                full: adaptiveXTurnTransitionHighStrengthBlendFullPixels
+            )
         return clamp(
-            max(gatedBlend, lowEdgeLargeTurnBlend),
+            max(gatedBlend, max(lowEdgeLargeTurnBlend, highStrengthBlendFloor)),
             min: renderTurnTransitionBridgeMinimumBlend,
             max: renderTurnTransitionBridgeMaximumBlend
         )
@@ -11593,13 +11607,13 @@ enum AutoStabilizationEstimator {
     ) -> Float {
         let travelSupport = confidenceRamp(
             abs(turnTravelPixels),
-            start: adaptiveXTurnTransitionZoomStartPixels,
-            full: adaptiveXTurnTransitionZoomFullPixels
+            start: adaptiveXTurnTransitionZoomStartPixels * 0.5,
+            full: adaptiveXTurnTransitionZoomFullPixels * 0.60
         )
         let confidenceSupport = confidenceRamp(
             clamp(turnConfidence, min: 0.0, max: 1.0),
-            start: adaptiveXTurnTransitionZoomConfidenceStart,
-            full: adaptiveXTurnTransitionZoomConfidenceFull
+            start: adaptiveXTurnTransitionZoomConfidenceStart * 0.5,
+            full: adaptiveXTurnTransitionZoomConfidenceFull * 0.80
         )
         return min(travelSupport, confidenceSupport)
     }

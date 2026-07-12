@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.26` keeps the all-axis Camera Jitter baseline on schema 51 and applies supported frame-local rigid X/Y/roll with explicit output-relative X/Y and roll-degree limits.
+- Version `1.1.27` keeps the all-axis Camera Jitter baseline on schema 51 and makes high Turn Smoothing Strength values increase the X-pan bridge directly without altering Camera Jitter fine X.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
@@ -255,6 +255,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   image distortion. Render-time window lookup uses the sorted Host Analysis times directly,
   so long prepared caches do not require repeated full-cache scans during playback.
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
+  High values increase the X-pan bridge floor and release center anchoring earlier; Camera
+  Jitter continues to own short-period X during the pan.
   It defaults to `12.0` and ranges from `0.00...36.00`. `0` disables turn correction and
   turn zoom; `12` uses the standard `2.8` second monotonic S-curve transition; and `36`
   can extend the transition to three times the standard duration while spending the maximum
