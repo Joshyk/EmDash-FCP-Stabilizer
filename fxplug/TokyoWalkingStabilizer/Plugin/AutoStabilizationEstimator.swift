@@ -17179,11 +17179,10 @@ enum AutoStabilizationEstimator {
         let requestedWindow = panSmoothSeconds.isFinite && panSmoothSeconds > 0.0
             ? panSmoothSeconds
             : baseWindow
-        let strengthWindow = baseWindow * Double(max(
-            0.25,
-            turnSmoothingZoomNormalized(turnSmoothingZoom) * (adaptiveXTurnTransitionMaximumZoomParameter / adaptiveXTurnTransitionStandardStrength)
-        ))
-        let maximumWindow = max(strengthWindow, requestedWindow)
+        // The dedicated Turn Transition Window owns duration. Strength only
+        // controls how much of the X turn trajectory is applied.
+        let strengthWindow = requestedWindow
+        let maximumWindow = requestedWindow
         let targetPixelRate = adaptiveXTurnTransitionTargetPixelRate
         let gateStartPixels = adaptiveXTurnTransitionGateStartPixels
         let gateFullPixels = adaptiveXTurnTransitionGateFullPixels

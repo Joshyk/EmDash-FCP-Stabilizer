@@ -1477,11 +1477,9 @@ private func adaptiveXTurnTiming(
     let requestedWindow = turnWindowSeconds.isFinite && turnWindowSeconds > 0.0
         ? turnWindowSeconds
         : baseWindow
-    let strengthWindow = baseWindow * Double(max(
-        0.25,
-        turnSmoothingZoomNormalized(turnSmoothingZoom) * (adaptiveXTurnTransitionMaximumZoomParameter / adaptiveXTurnTransitionStandardStrength)
-    ))
-    let maximumWindow = max(strengthWindow, requestedWindow)
+    // Turn Transition Window owns duration; strength owns X amplitude only.
+    let strengthWindow = requestedWindow
+    let maximumWindow = requestedWindow
     let targetPixelRate = adaptiveXTurnTransitionTargetPixelRate
     let gateStartPixels = adaptiveXTurnTransitionGateStartPixels
     let gateFullPixels = adaptiveXTurnTransitionGateFullPixels
