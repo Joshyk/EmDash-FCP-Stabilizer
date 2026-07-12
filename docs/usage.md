@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.1.30` is the current review baseline for all-axis Camera Jitter.
+Version `1.1.31` is the current review baseline for all-axis Camera Jitter.
 Use schema 51 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;
@@ -110,24 +110,15 @@ fallbacks.
   tracking support to reduce single-frame gate flicker, then applies a tiny deadband so
   weak frames and high-side gate jumps do not create wave-like image distortion.
   Pull this down if close grass, roads, water, or frame edges start to swim.
-- `Turn Smoothing Strength`: the X-only turn smoothing control. It defaults to `12.0`;
-  high values now raise the transition bridge floor and release center anchoring earlier for
-  an unmistakably smoother long X pan, without changing Camera Jitter X.
-- `Turn Transition Window (s)`: the X-pan transition duration, from `0.5...8.0` seconds
-  and defaulting to `2.8`. It controls when Turn begins its pre-roll and how long the X
-  transition is spread; it does not change Turn correction amplitude.
-  and ranges from `0.00...36.00`. At `0`, TURN correction and turn zoom are disabled;
-  at `12`, turns use the standard `2.8` second monotonic S-curve transition; and at
-  `36`, that transition can extend to three times the standard duration. Higher values
-  use more X-position and Auto Crop zoom budget to make the turn move as a smoother,
-  more uniform transition. The actual correction and zoom demand require tracking
-  evidence plus real X-turn travel, so static or low-confidence frames do not receive
-  hidden turn correction. Auto Crop uses `Zoom-In Time`, `Hold Time`, and
-  `Zoom-Out Time` directly, and postpones release when another turn zoom demand is
-  close enough in the future to avoid a zoom-out / zoom-in pulse.
-  `Remove Black Edges` does not alter this X-position envelope: on and off use the
-  same center motion. Off remains at `1.0x` and exposes the uncovered edge; on uses
-  Auto Crop zoom solely to hide that same edge.
+- `Turn Smoothing Strength`: the X-only correction-amplitude control. It defaults to
+  `12.0`, ranges from `0.00...36.00`, and does not choose the turn duration or window.
+- `Turn Transition Window (s)`: the `0.5...8.0` second same-direction X-pan span that
+  Turn groups as one event before distributing it with an S curve. Larger values own
+  more surrounding pan, start earlier, and make the same movement slower; they are not a
+  second amplitude control.
+- `Remove Black Edges`: off is a true diagnostic mode. It forces `1.0x` scale and removes
+  Auto Crop's look-ahead position reservation, so visible edge movement comes only from
+  the stabilized TURN/Camera Jitter transform. On enables Auto Crop to hide those edges.
 - `Remove Black Edges`: default on. Applies dynamic Auto Crop framing during render.
   Turn it off to skip Auto Crop crop-safe framing while checking playback cost;
   `Edge Display Mode` then directly controls outside-source pixels.

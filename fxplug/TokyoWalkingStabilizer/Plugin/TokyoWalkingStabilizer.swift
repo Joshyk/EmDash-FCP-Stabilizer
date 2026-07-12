@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.30"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 994.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 30.0, 994.0)
+private let tokyoWalkingStabilizerVersion = "1.1.31"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 995.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 31.0, 995.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_429_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_430_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -2253,19 +2253,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFramingCache.removeValue(forKey: oldestKey)
         }
         return framing
-    }
-
-    private static func cropOffDiagnosticFraming(
-        autoCropFraming: AutoCropFraming
-    ) -> AutoCropFraming {
-        return AutoCropFraming(
-            scale: 1.0,
-            positionPixels: autoCropFraming.positionPixels,
-            telemetry: autoCropFraming.telemetry,
-            cropOffEdgeGuardScale: 1.0,
-            cropOffEdgeGuardDemandX: 0.0,
-            cropOffEdgeGuardActive: 0.0
-        )
     }
 
     private static func turnSmoothingZoomNormalized(_ value: Double) -> Float {
@@ -10736,41 +10723,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 onPlaybackPreparationReady: autoCropPlaybackPlanPrepared
             )
             autoCropFraming = rawAutoCropFraming
-        } else if renderUsesPreparedAnalysis,
-                  let preparedAnalysis = activePreparedAnalysis {
-            let autoCropRenderTime = activeAnalysisRenderTime ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
-            let autoCropOutputSize = vector_float2(Float(outputWidth), Float(outputHeight))
-            let playbackPreparationCacheIdentity = renderCacheIdentity
-            let cropOffDiagnosticFramingPrepared: () -> Void = { [weak self] in
-                guard let self else {
-                    return
-                }
-                self.publishPlaybackPreparationInvalidationOnMain(
-                    cacheIdentity: playbackPreparationCacheIdentity,
-                    reason: "crop-off diagnostic framing plan prepared"
-                )
-            }
-            let turnReservation = Self.cachedAutoCropFraming(
-                preparedAnalysis: preparedAnalysis,
-                renderTime: autoCropRenderTime,
-                currentTransform: autoTransform,
-                outputSize: autoCropOutputSize,
-                panSmoothSeconds: 0.0,
-                strengths: correctionStrengths,
-                masterStrength: masterStrength,
-                transitionDuration: state.autoCropTransitionDuration,
-                leadTime: state.autoCropLeadTime,
-                holdTime: state.autoCropHoldTime,
-                samplingProfile: autoCropSamplingProfile,
-                renderQualityLevel: state.renderQualityLevel,
-                analysisRevision: renderStoreRevision,
-                cacheIdentity: renderCacheIdentity,
-                onPlaybackPreparationReady: cropOffDiagnosticFramingPrepared
-            )
-            autoCropFraming = Self.cropOffDiagnosticFraming(
-                autoCropFraming: turnReservation
-            )
         } else {
+            // Crop-off is a true diagnostic mode: neither Auto Crop scale nor its
+            // look-ahead center reservation participates in the rendered motion.
+            // TURN and Camera Jitter remain intact and their exposed edges show
+            // their exact render-time X/Y motion.
             autoCropFraming = .identity
         }
         let cropFinishedAt = CFAbsoluteTimeGetCurrent()
@@ -10796,16 +10753,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let renderedAutoCropFraming: AutoCropFraming = previewWarmupDecision.active
             ? .identity
             : autoCropFraming
-        if !state.autoCropEnabled {
-            // Keep the X center path identical to the crop-on render. With crop on,
-            // the shader adds this position before subtracting the stabilization path.
-            // At 1.0x, subtracting the same value from that path is algebraically the
-            // same center motion while deliberately leaving the uncovered edge visible.
-            let matchingPositionOffset = -renderedAutoCropFraming.positionPixels.x
-            renderedAutoTransform.macroPixelOffset.x += matchingPositionOffset
-            renderedAutoTransform.pixelOffset.x += matchingPositionOffset
-            renderedAutoTransform.rawPixelOffset.x += matchingPositionOffset
-        }
         renderedAutoTransform = cameraRigidFinalLimitTransform(
             renderedAutoTransform,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),

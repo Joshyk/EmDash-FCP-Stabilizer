@@ -17343,7 +17343,16 @@ enum AutoStabilizationEstimator {
         var intentValues = values.values
         var maxTiming = AdaptiveXTurnTiming(travelPixels: 0.0, windowSeconds: baseWindowSeconds, active: false)
         let fallbackWindow = fallbackWindowSeconds ?? baseWindowSeconds
-        let baseHalfWindowSeconds = max(0.0, baseWindowSeconds * 0.5)
+        // The dedicated Window defines the evidence that is grouped into one
+        // turn.  Do not discover the turn from the old fixed 2.2 s core and
+        // merely stretch its output afterward: that leaves a broad pan as a
+        // succession of tiny residuals.  Sample the requested window itself so
+        // a 6 s window can own the surrounding six seconds of same-direction
+        // travel, then distribute that owned motion with the S curve below.
+        let ownershipWindowSeconds = panSmoothSeconds.isFinite && panSmoothSeconds > 0.0
+            ? panSmoothSeconds
+            : baseWindowSeconds
+        let baseHalfWindowSeconds = max(0.0, ownershipWindowSeconds * 0.5)
         for index in targetIndices where values.values.indices.contains(index) && frames.indices.contains(index) {
             let centerTime = frames[index].time
             let centeredIndices = indicesWithinTimeRadius(
@@ -17375,7 +17384,7 @@ enum AutoStabilizationEstimator {
             }
             let activeWindow = timing.active ? max(fallbackWindow, timing.windowSeconds) : fallbackWindow
             let activeHalfWindow = max(0.0, activeWindow * 0.5)
-            let timingCenteredIndices = abs(activeWindow - baseWindowSeconds) > 0.001
+            let timingCenteredIndices = abs(activeWindow - ownershipWindowSeconds) > 0.001
                 ? indicesWithinTimeRadius(
                     frames,
                     centerTime: centerTime,

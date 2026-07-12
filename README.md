@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.30` uses schema 51 all-axis Camera Jitter analysis. It stores
+Version `1.1.31` uses schema 51 all-axis Camera Jitter analysis. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
@@ -144,19 +144,17 @@ up to `10.0`; the rotation default is `1.0`. The X band
 uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
 does not fight broad Turn Smoothing during real horizontal turns.
 
-`Turn Smoothing Strength` is the single X-turn smoothing control. It defaults to `12.0`
-and ranges from `0.00...36.00`. `0` disables TURN correction and turn zoom; `12`
-uses the standard `2.8` second monotonic S-curve transition; and `36` extends that
-transition to up to three times the standard duration. Higher values spend more of the
-available X-position and Auto Crop zoom budget to make a detected turn move as one smooth,
-uniform transition. Actual turn correction and zoom demand still require tracking evidence
-and real X-turn travel, so static or low-confidence frames do not get hidden turn correction. Auto Crop uses
-`Zoom-In Time`, `Hold Time`, and `Zoom-Out Time` directly for turn zoom timing;
-when another turn zoom demand is close enough in the future, release is held to
-avoid zoom-out / zoom-in pulsing.
-`Remove Black Edges` does not change the turn's X-position path: both states use the
-same timed plan and center motion. When it is off, the effect remains at `1.0x` and
-shows the uncovered edge; when it is on, Auto Crop zoom hides that same edge.
+`Turn Smoothing Strength` is the single X-turn correction-amplitude control. It defaults
+to `12.0` and ranges from `0.00...36.00`; `0` disables TURN correction and `36`
+requests the maximum confidence-qualified X correction. `Turn Transition Window (s)`
+independently selects the `0.5...8.0` second same-direction pan span that is grouped as
+one turn and distributed with the S curve. A larger Window starts earlier and moves more
+slowly because it owns more of that pan; it is not a second strength slider. Actual
+correction still requires tracking evidence and real X-turn travel.
+With `Remove Black Edges` off, Auto Crop is completely bypassed: scale is exactly `1.0`
+and its look-ahead position reservation is not mixed into TURN. The uncovered edge is
+therefore the direct result of Camera Jitter and TURN only. When on, Auto Crop zoom hides
+that same edge according to `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time`.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 
