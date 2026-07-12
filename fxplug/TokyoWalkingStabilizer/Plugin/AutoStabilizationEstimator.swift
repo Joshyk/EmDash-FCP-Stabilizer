@@ -895,6 +895,9 @@ enum AutoStabilizationEstimator {
     private static let adaptiveXTurnTransitionHighStrengthBlendFloor: Float = 0.78
     private static let adaptiveXTurnTransitionHighStrengthBlendStartPixels: Float = 24.0
     private static let adaptiveXTurnTransitionHighStrengthBlendFullPixels: Float = 96.0
+    private static let adaptiveXTurnTransitionPreRollMaximumBlend: Float = 0.35
+    private static let adaptiveXTurnTransitionPreRollStartPixels: Float = 24.0
+    private static let adaptiveXTurnTransitionPreRollFullPixels: Float = 96.0
     private static let renderTurnGateSmoothingWindowSeconds = 0.90
     private static let renderFarFieldWarpSmoothingWindowSeconds = 0.44
     private static let renderFootstepJitterSmoothingWindowSeconds = 0.18
@@ -11585,8 +11588,22 @@ enum AutoStabilizationEstimator {
                 start: adaptiveXTurnTransitionHighStrengthBlendStartPixels,
                 full: adaptiveXTurnTransitionHighStrengthBlendFullPixels
             )
+        let centerTurnMagnitude = abs(centerTransform.turnDetectedPixelOffset.x)
+        let bridgeTurnMagnitude = abs(bridgeTransform.turnDetectedPixelOffset.x)
+        let preRollBlend = turnSmoothingZoomNormalized(turnSmoothingStrength)
+            * adaptiveXTurnTransitionPreRollMaximumBlend
+            * confidenceRamp(
+                max(0.0, bridgeTurnMagnitude - centerTurnMagnitude),
+                start: adaptiveXTurnTransitionPreRollStartPixels,
+                full: adaptiveXTurnTransitionPreRollFullPixels
+            )
+            * (1.0 - confidenceRamp(
+                centerTurnMagnitude,
+                start: adaptiveXTurnTransitionPreRollStartPixels * 0.5,
+                full: adaptiveXTurnTransitionPreRollFullPixels * 0.75
+            ))
         return clamp(
-            max(gatedBlend, max(lowEdgeLargeTurnBlend, highStrengthBlendFloor)),
+            max(gatedBlend, max(lowEdgeLargeTurnBlend, max(highStrengthBlendFloor, preRollBlend))),
             min: renderTurnTransitionBridgeMinimumBlend,
             max: renderTurnTransitionBridgeMaximumBlend
         )

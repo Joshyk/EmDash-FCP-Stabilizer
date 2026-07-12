@@ -842,6 +842,9 @@ private let adaptiveXTurnTransitionZoomConfidenceFull: Float = 0.35
 private let adaptiveXTurnTransitionHighStrengthBlendFloor: Float = 0.78
 private let adaptiveXTurnTransitionHighStrengthBlendStartPixels: Float = 24.0
 private let adaptiveXTurnTransitionHighStrengthBlendFullPixels: Float = 96.0
+private let adaptiveXTurnTransitionPreRollMaximumBlend: Float = 0.35
+private let adaptiveXTurnTransitionPreRollStartPixels: Float = 24.0
+private let adaptiveXTurnTransitionPreRollFullPixels: Float = 96.0
 private let renderTurnGateSmoothingWindowSeconds = 0.90
 private let farFieldWarpTrackingGateStart: Float = 0.24
 private let farFieldWarpTrackingGateFull: Float = 0.52
@@ -1904,6 +1907,8 @@ private func renderTurnBridgeAssessment(
         bridgeTurnConfidence: bridgedConfidence,
         bridgeMacroX: averagedMacro,
         turnSmoothingStrength: options.turnStrength,
+        centerTurnDetected: centerSample.detected,
+        bridgeTurnDetected: supportMagnitude
     ) * turnSmoothingBridgeBlend(options.turnStrength)
     let blendedMacro = centerMacro + ((anchoredMacro - centerMacro) * bridgeBlend)
     let bridgedApplied = abs(blendedMacro)
@@ -1925,7 +1930,9 @@ private func turnTransitionBridgeBlend(
     centerEdgeQuality: Float,
     bridgeTurnConfidence: Float,
     bridgeMacroX: Float,
-    turnSmoothingStrength: Double
+    turnSmoothingStrength: Double,
+    centerTurnDetected: Float,
+    bridgeTurnDetected: Float
 ) -> Float {
     let centerEdgeSupport = turnTransitionBridgeEdgeSupport(edgeQuality: centerEdgeQuality)
     let centerTrackingQualitySupport = turnTransitionBridgeQualitySupport(
@@ -1958,8 +1965,20 @@ private func turnTransitionBridgeBlend(
             start: adaptiveXTurnTransitionHighStrengthBlendStartPixels,
             full: adaptiveXTurnTransitionHighStrengthBlendFullPixels
         )
+    let preRollBlend = turnSmoothingZoomNormalized(turnSmoothingStrength)
+        * adaptiveXTurnTransitionPreRollMaximumBlend
+        * confidenceRamp(
+            max(0.0, abs(bridgeTurnDetected) - abs(centerTurnDetected)),
+            start: adaptiveXTurnTransitionPreRollStartPixels,
+            full: adaptiveXTurnTransitionPreRollFullPixels
+        )
+        * (1.0 - confidenceRamp(
+            abs(centerTurnDetected),
+            start: adaptiveXTurnTransitionPreRollStartPixels * 0.5,
+            full: adaptiveXTurnTransitionPreRollFullPixels * 0.75
+        ))
     return clamp(
-        max(gatedBlend, max(lowEdgeLargeTurnBlend, highStrengthBlendFloor)),
+        max(gatedBlend, max(lowEdgeLargeTurnBlend, max(highStrengthBlendFloor, preRollBlend))),
         min: renderTurnTransitionBridgeMinimumBlend,
         max: renderTurnTransitionBridgeMaximumBlend
     )
