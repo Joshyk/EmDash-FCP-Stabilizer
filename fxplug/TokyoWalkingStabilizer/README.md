@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.24` keeps the all-axis Camera Jitter baseline on schema 51 and applies supported frame-local rigid X/Y/roll without a playback slew ramp or fixed low source-pixel Y cap.
+- Version `1.1.25` keeps the all-axis Camera Jitter baseline on schema 51 and applies supported frame-local rigid X/Y/roll without a playback slew ramp or fixed low source-pixel X/Y cap.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback

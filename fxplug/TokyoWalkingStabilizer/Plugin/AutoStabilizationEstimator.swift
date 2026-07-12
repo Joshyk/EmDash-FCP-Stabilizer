@@ -1028,6 +1028,8 @@ enum AutoStabilizationEstimator {
     private static let lensShakePixelFullPixels: Float = 0.85
     private static let lensShakeRollingGlobalXMaximumCorrection: Float = 1.4
     private static let lensShakeRollingGlobalYMaximumCorrection: Float = 8.0
+    private static let cameraRigidXMaximumOutputFraction: Float = 0.015
+    private static let cameraRigidXMaximumCorrectionCeiling: Float = 48.0
     private static let cameraRigidYMaximumOutputFraction: Float = 0.015
     private static let cameraRigidYMaximumCorrectionCeiling: Float = 48.0
     private static let lensShakeRollingGlobalPixelSupportFull: Float = 0.46
@@ -15967,7 +15969,15 @@ enum AutoStabilizationEstimator {
             result.bandWarpSupport = max(result.bandWarpSupport, result.farFieldRigidSupport)
             let rigidBranchSupport = max(result.farFieldRigidSupport, result.farFieldRigidRollSupport)
             if rigidBranchSupport >= lensShakeMinimumSupport {
+                let outputWidth = Float(max(1, frames[interpolation.lowerIndex].sampleWidth)) * outputScale.x
                 let outputHeight = Float(max(1, frames[interpolation.lowerIndex].sampleHeight)) * outputScale.y
+                let rigidXMaximumCorrection = min(
+                    cameraRigidXMaximumCorrectionCeiling,
+                    max(
+                        lensShakePixelMaximumCorrection,
+                        outputWidth * cameraRigidXMaximumOutputFraction
+                    )
+                )
                 let rigidYMaximumCorrection = min(
                     cameraRigidYMaximumCorrectionCeiling,
                     max(
@@ -15976,7 +15986,7 @@ enum AutoStabilizationEstimator {
                     )
                 )
                 let rigidOffset = vector_float2(
-                    clamp(-rigidResidual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
+                    clamp(-rigidResidual.x, min: -rigidXMaximumCorrection, max: rigidXMaximumCorrection),
                     clamp(-rigidResidual.y, min: -rigidYMaximumCorrection, max: rigidYMaximumCorrection)
                 )
                 let globalXSupport = confidenceRamp(
@@ -15996,8 +16006,8 @@ enum AutoStabilizationEstimator {
                 )
                 let globalXOffset = clamp(
                     rigidOffset.x * globalXSupport,
-                    min: -lensShakePixelMaximumCorrection,
-                    max: lensShakePixelMaximumCorrection
+                    min: -rigidXMaximumCorrection,
+                    max: rigidXMaximumCorrection
                 )
                 let rigidRollCorrection = clamp(
                     -rigidRollResidual * rigidRollSupport,
