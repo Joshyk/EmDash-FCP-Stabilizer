@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 50
+private let cacheSchemaVersion = 51
 private let farFieldMeshRows = 5
 private let farFieldMeshColumns = 9
 private let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
@@ -3892,29 +3892,13 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         rows: farFieldMeshRows,
         columns: farFieldMeshColumns
     )
-    var dominantMeshPathX: [Float] = []
-    var dominantMeshPathY: [Float] = []
-    dominantMeshPathX.reserveCapacity(frames.count)
-    dominantMeshPathY.reserveCapacity(frames.count)
-    for index in frames.indices {
-        let cell = Int(farFieldMeshDominantWindows.cell[index])
-        let flatIndex = (cell * frames.count) + index
-        if cell >= 0,
-           cell < farFieldMeshBinCount,
-           flatFarFieldMeshPathX.indices.contains(flatIndex),
-           flatFarFieldMeshPathY.indices.contains(flatIndex) {
-            dominantMeshPathX.append(flatFarFieldMeshPathX[flatIndex])
-            dominantMeshPathY.append(flatFarFieldMeshPathY[flatIndex])
-        } else {
-            dominantMeshPathX.append((lensBandTopPathX[index] * 0.35) + (lensBandRidgePathX[index] * 0.65))
-            dominantMeshPathY.append((lensBandTopPathY[index] * 0.35) + (lensBandRidgePathY[index] * 0.65))
-        }
-    }
     let farFieldRigidShake = farFieldRigidShakePreparedPaths(
         frameTimes: frames.map(\.time),
         dominantWindowSeconds: farFieldMeshDominantWindows.windowSeconds,
-        dominantMeshX: dominantMeshPathX,
-        dominantMeshY: dominantMeshPathY,
+        dominantMeshPathX: flatFarFieldMeshPathX,
+        dominantMeshPathY: flatFarFieldMeshPathY,
+        dominantMeshCell: farFieldMeshDominantWindows.cell,
+        dominantMeshBinCount: farFieldMeshBinCount,
         dominantMeshSupport: farFieldMeshDominantWindows.support,
         topX: lensBandTopPathX,
         topY: lensBandTopPathY,
@@ -4170,8 +4154,10 @@ private func preparedConfidenceRamp(_ value: Float, start: Float, full: Float) -
 private func farFieldRigidShakePreparedPaths(
     frameTimes: [Double],
     dominantWindowSeconds: [Float],
-    dominantMeshX: [Float],
-    dominantMeshY: [Float],
+    dominantMeshPathX: [Float],
+    dominantMeshPathY: [Float],
+    dominantMeshCell: [Int32],
+    dominantMeshBinCount: Int,
     dominantMeshSupport: [Float],
     topX: [Float],
     topY: [Float],
@@ -4186,7 +4172,7 @@ private func farFieldRigidShakePreparedPaths(
 ) -> FarFieldRigidShakePreparedPaths {
     let frameCount = [
         frameTimes.count, dominantWindowSeconds.count,
-        dominantMeshX.count, dominantMeshY.count, dominantMeshSupport.count,
+        dominantMeshCell.count, dominantMeshSupport.count,
         topX.count, topY.count, ridgeX.count, ridgeY.count, midX.count, midY.count,
         rollDegrees.count,
         topConfidence.count, ridgeConfidence.count, midConfidence.count
@@ -4194,6 +4180,11 @@ private func farFieldRigidShakePreparedPaths(
     guard frameCount > 0 else {
         return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], pathRoll: [], targetX: [], targetY: [], targetRollDegrees: [], support: [], supportX: [], supportY: [], rollSupport: [], shapeConsistency: [], shapeConsistencyX: [], shapeConsistencyY: [], forwardBackwardConsistency: [], forwardBackwardConsistencyX: [], forwardBackwardConsistencyY: [], rollForwardBackwardConsistency: [])
     }
+    let usableDominantMeshBinCount = min(
+        max(0, dominantMeshBinCount),
+        dominantMeshPathX.count / frameCount,
+        dominantMeshPathY.count / frameCount
+    )
 
     var pathX = Array(repeating: Float(0.0), count: frameCount)
     var pathY = Array(repeating: Float(0.0), count: frameCount)
@@ -4222,7 +4213,66 @@ private func farFieldRigidShakePreparedPaths(
 
     }
 
-    func prediction(_ values: [Float], index: Int) -> Float {
+    func regressionPrediction(_ points: [(x: Float, y: Float)]) -> Float? {
+        guard points.count >= 3 else { return nil }
+        let count = Float(points.count)
+        let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
+        let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
+        let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
+        let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
+        let denominator = (count * sumXX) - (sumX * sumX)
+        return abs(denominator) > Float.ulpOfOne
+            ? ((sumY * sumXX) - (sumX * sumXY)) / denominator
+            : sumY / count
+    }
+
+    func quadraticPrediction(_ values: [Float], index: Int) -> Float? {
+        let radius = 0.50
+        let centerTime = frameTimes[index]
+        var s0 = Float(0.0), s1 = Float(0.0), s2 = Float(0.0)
+        var s3 = Float(0.0), s4 = Float(0.0)
+        var t0 = Float(0.0), t1 = Float(0.0), t2 = Float(0.0)
+        var count = 0
+        var sample = index
+        while sample >= 0 {
+            let offset = Float(frameTimes[sample] - centerTime)
+            let distance = abs(Double(offset))
+            if distance > radius { break }
+            let normalized = Float(1.0 - (distance / radius))
+            let weight = normalized * normalized
+            let x2 = offset * offset
+            s0 += weight; s1 += weight * offset; s2 += weight * x2
+            s3 += weight * x2 * offset; s4 += weight * x2 * x2
+            t0 += weight * values[sample]; t1 += weight * offset * values[sample]; t2 += weight * x2 * values[sample]
+            count += 1
+            sample -= 1
+        }
+        sample = index + 1
+        while sample < values.count {
+            let offset = Float(frameTimes[sample] - centerTime)
+            let distance = abs(Double(offset))
+            if distance > radius { break }
+            let normalized = Float(1.0 - (distance / radius))
+            let weight = normalized * normalized
+            let x2 = offset * offset
+            s0 += weight; s1 += weight * offset; s2 += weight * x2
+            s3 += weight * x2 * offset; s4 += weight * x2 * x2
+            t0 += weight * values[sample]; t1 += weight * offset * values[sample]; t2 += weight * x2 * values[sample]
+            count += 1
+            sample += 1
+        }
+        guard count >= 5 else { return nil }
+        let determinant = s0 * ((s2 * s4) - (s3 * s3))
+            - s1 * ((s1 * s4) - (s2 * s3))
+            + s2 * ((s1 * s3) - (s2 * s2))
+        guard abs(determinant) > Float.ulpOfOne else { return nil }
+        let interceptDeterminant = t0 * ((s2 * s4) - (s3 * s3))
+            - s1 * ((t1 * s4) - (s3 * t2))
+            + s2 * ((t1 * s3) - (s2 * t2))
+        return interceptDeterminant / determinant
+    }
+
+    func prediction(_ values: [Float], index: Int) -> Float? {
         let window = min(1.0, max(0.05, Double(dominantWindowSeconds[index])))
         let inner = max(0.13, window * 0.56)
         let outer = min(1.0, max(0.44, window * 3.0))
@@ -4244,16 +4294,151 @@ private func farFieldRigidShakePreparedPaths(
                 if distance > inner { points.append((Float(offset), values[sample])) }
             }
         }
-        guard points.count >= 3 else { return values[index] }
-        let count = Float(points.count)
-        let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
-        let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
-        let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
-        let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
-        let denominator = (count * sumXX) - (sumX * sumX)
-        return abs(denominator) > Float.ulpOfOne
-            ? ((sumY * sumXX) - (sumX * sumXY)) / denominator
-            : sumY / count
+        return regressionPrediction(points)
+    }
+
+    func dominantPrediction(_ values: [Float], cell: Int, index: Int) -> Float? {
+        guard cell >= 0, cell < usableDominantMeshBinCount else { return nil }
+        let base = cell * frameCount
+        let window = min(1.0, max(0.05, Double(dominantWindowSeconds[index])))
+        let inner = max(0.13, window * 0.56)
+        let outer = min(1.0, max(0.44, window * 3.0))
+        let centerTime = frameTimes[index]
+        var points: [(x: Float, y: Float)] = []
+        if index > 0 {
+            for sample in stride(from: index - 1, through: 0, by: -1) {
+                let offset = frameTimes[sample] - centerTime
+                let distance = abs(offset)
+                if distance > outer { break }
+                if distance > inner { points.append((Float(offset), values[base + sample])) }
+            }
+        }
+        if index + 1 < frameCount {
+            for sample in (index + 1)..<frameCount {
+                let offset = frameTimes[sample] - centerTime
+                let distance = abs(offset)
+                if distance > outer { break }
+                if distance > inner { points.append((Float(offset), values[base + sample])) }
+            }
+        }
+        return regressionPrediction(points)
+    }
+
+    func dominantQuadraticPrediction(_ values: [Float], cell: Int, index: Int) -> Float? {
+        guard cell >= 0, cell < usableDominantMeshBinCount else { return nil }
+        let base = cell * frameCount
+        let radius = 0.50
+        let centerTime = frameTimes[index]
+        var s0 = Float(0.0), s1 = Float(0.0), s2 = Float(0.0)
+        var s3 = Float(0.0), s4 = Float(0.0)
+        var t0 = Float(0.0), t1 = Float(0.0), t2 = Float(0.0)
+        var count = 0
+        var sample = index
+        while sample >= 0 {
+            let offset = Float(frameTimes[sample] - centerTime)
+            let distance = abs(Double(offset))
+            if distance > radius { break }
+            let normalized = Float(1.0 - (distance / radius))
+            let weight = normalized * normalized
+            let x2 = offset * offset
+            let value = values[base + sample]
+            s0 += weight; s1 += weight * offset; s2 += weight * x2
+            s3 += weight * x2 * offset; s4 += weight * x2 * x2
+            t0 += weight * value; t1 += weight * offset * value; t2 += weight * x2 * value
+            count += 1
+            sample -= 1
+        }
+        sample = index + 1
+        while sample < frameCount {
+            let offset = Float(frameTimes[sample] - centerTime)
+            let distance = abs(Double(offset))
+            if distance > radius { break }
+            let normalized = Float(1.0 - (distance / radius))
+            let weight = normalized * normalized
+            let x2 = offset * offset
+            let value = values[base + sample]
+            s0 += weight; s1 += weight * offset; s2 += weight * x2
+            s3 += weight * x2 * offset; s4 += weight * x2 * x2
+            t0 += weight * value; t1 += weight * offset * value; t2 += weight * x2 * value
+            count += 1
+            sample += 1
+        }
+        guard count >= 5 else { return nil }
+        let determinant = s0 * ((s2 * s4) - (s3 * s3))
+            - s1 * ((s1 * s4) - (s2 * s3))
+            + s2 * ((s1 * s3) - (s2 * s2))
+        guard abs(determinant) > Float.ulpOfOne else { return nil }
+        let interceptDeterminant = t0 * ((s2 * s4) - (s3 * s3))
+            - s1 * ((t1 * s4) - (s3 * t2))
+            + s2 * ((t1 * s3) - (s2 * t2))
+        return interceptDeterminant / determinant
+    }
+
+    func residualAgreement(
+        _ first: Float?,
+        _ second: Float?,
+        absoluteStart: Float,
+        absoluteFull: Float
+    ) -> Float {
+        guard let first, let second, first.isFinite, second.isFinite else { return 0.0 }
+        let firstMagnitude = abs(first)
+        let secondMagnitude = abs(second)
+        if first * second < 0.0, min(firstMagnitude, secondMagnitude) > absoluteStart {
+            return 0.0
+        }
+        let difference = abs(first - second)
+        let absoluteAgreement = 1.0 - preparedConfidenceRamp(difference, start: absoluteStart, full: absoluteFull)
+        let relativeError = difference / max(max(firstMagnitude, secondMagnitude), absoluteFull * 0.5)
+        let relativeAgreement = 1.0 - preparedConfidenceRamp(relativeError, start: 0.18, full: 0.72)
+        return clamp(max(absoluteAgreement, relativeAgreement), 0.0, 1.0)
+    }
+
+    func temporalNeighborAgreement(
+        _ values: [Float],
+        index: Int,
+        absoluteStart: Float,
+        absoluteFull: Float,
+        magnitudeStart: Float,
+        magnitudeFull: Float
+    ) -> Float {
+        let center = values[index]
+        guard center.isFinite else { return 0.0 }
+        var best = Float(0.0)
+        for direction in [-1, 1] {
+            var sample = index + direction
+            while values.indices.contains(sample) {
+                let distance = abs(frameTimes[sample] - frameTimes[index])
+                if distance > 0.060 { break }
+                let neighbor = values[sample]
+                if center * neighbor > 0.0 {
+                    let magnitudeGate = preparedConfidenceRamp(
+                        min(abs(center), abs(neighbor)),
+                        start: magnitudeStart,
+                        full: magnitudeFull
+                    )
+                    let agreement = residualAgreement(
+                        center,
+                        neighbor,
+                        absoluteStart: absoluteStart,
+                        absoluteFull: absoluteFull
+                    )
+                    best = max(best, magnitudeGate * (0.65 + (agreement * 0.35)))
+                }
+                sample += direction
+            }
+        }
+        return clamp(best, 0.0, 1.0)
+    }
+
+    func spatialAgreement(_ first: Float, _ second: Float, absoluteStart: Float, absoluteFull: Float) -> Float {
+        let agreement = residualAgreement(first, second, absoluteStart: absoluteStart, absoluteFull: absoluteFull)
+        guard first * second > 0.0 else { return agreement }
+        let sameDirectionFloor = preparedConfidenceRamp(
+            min(abs(first), abs(second)),
+            start: 0.12,
+            full: 0.90
+        ) * 0.78
+        return clamp(max(agreement, sameDirectionFloor), 0.0, 1.0)
     }
 
     var topTargetX = targetX
@@ -4263,15 +4448,22 @@ private func farFieldRigidShakePreparedPaths(
     var dominantTargetX = targetX
     var dominantTargetY = targetY
     for index in 0..<frameCount {
-        targetX[index] = pathX[index] - prediction(pathX, index: index)
-        targetY[index] = pathY[index] - prediction(pathY, index: index)
-        targetRollDegrees[index] = pathRoll[index] - prediction(pathRoll, index: index)
-        topTargetX[index] = topX[index] - prediction(topX, index: index)
-        topTargetY[index] = topY[index] - prediction(topY, index: index)
-        ridgeTargetX[index] = ridgeX[index] - prediction(ridgeX, index: index)
-        ridgeTargetY[index] = ridgeY[index] - prediction(ridgeY, index: index)
-        dominantTargetX[index] = dominantMeshX[index] - prediction(dominantMeshX, index: index)
-        dominantTargetY[index] = dominantMeshY[index] - prediction(dominantMeshY, index: index)
+        targetX[index] = pathX[index] - (quadraticPrediction(pathX, index: index) ?? pathX[index])
+        targetY[index] = pathY[index] - (prediction(pathY, index: index) ?? pathY[index])
+        targetRollDegrees[index] = pathRoll[index] - (prediction(pathRoll, index: index) ?? pathRoll[index])
+        topTargetX[index] = topX[index] - (quadraticPrediction(topX, index: index) ?? topX[index])
+        topTargetY[index] = topY[index] - (prediction(topY, index: index) ?? topY[index])
+        ridgeTargetX[index] = ridgeX[index] - (quadraticPrediction(ridgeX, index: index) ?? ridgeX[index])
+        ridgeTargetY[index] = ridgeY[index] - (prediction(ridgeY, index: index) ?? ridgeY[index])
+        let cell = Int(dominantMeshCell[index])
+        if cell >= 0, cell < usableDominantMeshBinCount {
+            let flatIndex = (cell * frameCount) + index
+            dominantTargetX[index] = dominantMeshPathX[flatIndex] - (dominantQuadraticPrediction(dominantMeshPathX, cell: cell, index: index) ?? dominantMeshPathX[flatIndex])
+            dominantTargetY[index] = dominantMeshPathY[flatIndex] - (dominantPrediction(dominantMeshPathY, cell: cell, index: index) ?? dominantMeshPathY[flatIndex])
+        } else {
+            dominantTargetX[index] = targetX[index]
+            dominantTargetY[index] = targetY[index]
+        }
     }
 
     let radius = farFieldRigidShakeTwoWayRadiusFrames
@@ -4285,28 +4477,17 @@ private func farFieldRigidShakePreparedPaths(
         let backwardX = targetX[index]
         let backwardY = targetY[index]
         let rollResidualMagnitude = abs(targetRollDegrees[index])
-        let topRidgeShapeX = clamp(
-            1.0 - preparedConfidenceRamp(abs(topTargetX[index] - ridgeTargetX[index]), start: farFieldRigidShakeShapeStartPixels, full: farFieldRigidShakeShapeFullPixels),
-            0.0,
-            1.0
-        )
-        let topRidgeShapeY = clamp(
-            1.0 - preparedConfidenceRamp(abs(topTargetY[index] - ridgeTargetY[index]), start: farFieldRigidShakeShapeStartPixels, full: farFieldRigidShakeShapeFullPixels),
-            0.0,
-            1.0
-        )
+        let topRidgeShapeX = spatialAgreement(topTargetX[index], ridgeTargetX[index], absoluteStart: 0.35, absoluteFull: 2.60)
+        let topRidgeShapeY = spatialAgreement(topTargetY[index], ridgeTargetY[index], absoluteStart: 0.35, absoluteFull: 2.60)
         let dominantAuthority = preparedConfidenceRamp(dominantMeshSupport[index], start: 0.18, full: 0.68)
-        let dominantAgreementX = 1.0 - preparedConfidenceRamp(abs(targetX[index] - dominantTargetX[index]), start: farFieldRigidShakeShapeStartPixels * 1.5, full: farFieldRigidShakeShapeFullPixels * 2.0)
-        let dominantAgreementY = 1.0 - preparedConfidenceRamp(abs(targetY[index] - dominantTargetY[index]), start: farFieldRigidShakeShapeStartPixels * 1.5, full: farFieldRigidShakeShapeFullPixels * 2.0)
+        let dominantAgreementX = spatialAgreement(targetX[index], dominantTargetX[index], absoluteStart: 0.45, absoluteFull: 3.20)
+        let dominantAgreementY = spatialAgreement(targetY[index], dominantTargetY[index], absoluteStart: 0.45, absoluteFull: 3.20)
         shapeConsistencyX[index] = max(topRidgeShapeX, dominantAgreementX * dominantAuthority * 0.85)
         shapeConsistencyY[index] = max(topRidgeShapeY, dominantAgreementY * dominantAuthority * 0.85)
         shapeConsistency[index] = max(shapeConsistencyX[index], shapeConsistencyY[index])
-        // Schema 50 treats two-way evidence as agreement between independently
-        // tracked far-field regions, not sign agreement across time. A real
-        // short-period reversal is therefore retained.
-        let twoWayX = shapeConsistencyX[index]
-        let twoWayY = shapeConsistencyY[index]
-        let rollTwoWay = Float(1.0)
+        let twoWayX = temporalNeighborAgreement(targetX, index: index, absoluteStart: 0.45, absoluteFull: 3.20, magnitudeStart: 0.12, magnitudeFull: 0.90)
+        let twoWayY = temporalNeighborAgreement(targetY, index: index, absoluteStart: 0.45, absoluteFull: 3.20, magnitudeStart: 0.12, magnitudeFull: 0.90)
+        let rollTwoWay = temporalNeighborAgreement(targetRollDegrees, index: index, absoluteStart: 0.006, absoluteFull: 0.08, magnitudeStart: 0.002, magnitudeFull: 0.015)
         let confidence = min(topConfidence[index], ridgeConfidence[index])
         let confidenceGate = preparedConfidenceRamp(confidence, start: 0.08, full: 0.36)
         forwardBackwardConsistencyX[index] = clamp(twoWayX, 0.0, 1.0)

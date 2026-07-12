@@ -2470,8 +2470,10 @@ enum AutoStabilizationEstimator {
     static func farFieldRigidShakePreparedPaths(
         frameTimes: [Double],
         dominantWindowSeconds: [Float],
-        dominantMeshX: [Float],
-        dominantMeshY: [Float],
+        dominantMeshPathX: [Float],
+        dominantMeshPathY: [Float],
+        dominantMeshCell: [Int32],
+        dominantMeshBinCount: Int,
         dominantMeshSupport: [Float],
         topX: [Float],
         topY: [Float],
@@ -2486,7 +2488,7 @@ enum AutoStabilizationEstimator {
     ) -> FarFieldRigidShakePreparedPaths {
         let frameCount = [
             frameTimes.count, dominantWindowSeconds.count,
-            dominantMeshX.count, dominantMeshY.count, dominantMeshSupport.count,
+            dominantMeshCell.count, dominantMeshSupport.count,
             topX.count, topY.count, ridgeX.count, ridgeY.count, midX.count, midY.count,
             rollDegrees.count,
             topConfidence.count, ridgeConfidence.count, midConfidence.count
@@ -2494,6 +2496,11 @@ enum AutoStabilizationEstimator {
         guard frameCount > 0 else {
             return FarFieldRigidShakePreparedPaths(pathX: [], pathY: [], pathRoll: [], targetX: [], targetY: [], targetRollDegrees: [], support: [], supportX: [], supportY: [], rollSupport: [], shapeConsistency: [], shapeConsistencyX: [], shapeConsistencyY: [], forwardBackwardConsistency: [], forwardBackwardConsistencyX: [], forwardBackwardConsistencyY: [], rollForwardBackwardConsistency: [])
         }
+        let usableDominantMeshBinCount = min(
+            max(0, dominantMeshBinCount),
+            dominantMeshPathX.count / frameCount,
+            dominantMeshPathY.count / frameCount
+        )
 
         var pathX = Array(repeating: Float(0.0), count: frameCount)
         var pathY = Array(repeating: Float(0.0), count: frameCount)
@@ -2521,7 +2528,76 @@ enum AutoStabilizationEstimator {
             pathRoll[index] = rollDegrees[index]
         }
 
-        func prediction(_ values: [Float], index: Int) -> Float {
+        func regressionPrediction(_ points: [(x: Float, y: Float)]) -> Float? {
+            guard points.count >= 3 else { return nil }
+            let count = Float(points.count)
+            let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
+            let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
+            let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
+            let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
+            let denominator = (count * sumXX) - (sumX * sumX)
+            return abs(denominator) > Float.ulpOfOne
+                ? ((sumY * sumXX) - (sumX * sumXY)) / denominator
+                : sumY / count
+        }
+
+        func quadraticPrediction(_ values: [Float], index: Int) -> Float? {
+            let radius = 0.50
+            let centerTime = frameTimes[index]
+            var s0 = Float(0.0), s1 = Float(0.0), s2 = Float(0.0)
+            var s3 = Float(0.0), s4 = Float(0.0)
+            var t0 = Float(0.0), t1 = Float(0.0), t2 = Float(0.0)
+            var count = 0
+            var sample = index
+            while sample >= 0 {
+                let offset = Float(frameTimes[sample] - centerTime)
+                let distance = abs(Double(offset))
+                if distance > radius { break }
+                let normalized = Float(1.0 - (distance / radius))
+                let weight = normalized * normalized
+                let x2 = offset * offset
+                s0 += weight
+                s1 += weight * offset
+                s2 += weight * x2
+                s3 += weight * x2 * offset
+                s4 += weight * x2 * x2
+                t0 += weight * values[sample]
+                t1 += weight * offset * values[sample]
+                t2 += weight * x2 * values[sample]
+                count += 1
+                sample -= 1
+            }
+            sample = index + 1
+            while sample < values.count {
+                let offset = Float(frameTimes[sample] - centerTime)
+                let distance = abs(Double(offset))
+                if distance > radius { break }
+                let normalized = Float(1.0 - (distance / radius))
+                let weight = normalized * normalized
+                let x2 = offset * offset
+                s0 += weight
+                s1 += weight * offset
+                s2 += weight * x2
+                s3 += weight * x2 * offset
+                s4 += weight * x2 * x2
+                t0 += weight * values[sample]
+                t1 += weight * offset * values[sample]
+                t2 += weight * x2 * values[sample]
+                count += 1
+                sample += 1
+            }
+            guard count >= 5 else { return nil }
+            let determinant = s0 * ((s2 * s4) - (s3 * s3))
+                - s1 * ((s1 * s4) - (s2 * s3))
+                + s2 * ((s1 * s3) - (s2 * s2))
+            guard abs(determinant) > Float.ulpOfOne else { return nil }
+            let interceptDeterminant = t0 * ((s2 * s4) - (s3 * s3))
+                - s1 * ((t1 * s4) - (s3 * t2))
+                + s2 * ((t1 * s3) - (s2 * t2))
+            return interceptDeterminant / determinant
+        }
+
+        func prediction(_ values: [Float], index: Int) -> Float? {
             let window = min(1.0, max(0.05, Double(dominantWindowSeconds[index])))
             let inner = max(0.13, window * 0.56)
             let outer = min(1.0, max(0.44, window * 3.0))
@@ -2543,16 +2619,155 @@ enum AutoStabilizationEstimator {
                     if distance > inner { points.append((Float(offset), values[sample])) }
                 }
             }
-            guard points.count >= 3 else { return values[index] }
-            let count = Float(points.count)
-            let sumX = points.reduce(Float(0.0)) { $0 + $1.x }
-            let sumY = points.reduce(Float(0.0)) { $0 + $1.y }
-            let sumXX = points.reduce(Float(0.0)) { $0 + ($1.x * $1.x) }
-            let sumXY = points.reduce(Float(0.0)) { $0 + ($1.x * $1.y) }
-            let denominator = (count * sumXX) - (sumX * sumX)
-            return abs(denominator) > Float.ulpOfOne
-                ? ((sumY * sumXX) - (sumX * sumXY)) / denominator
-                : sumY / count
+            return regressionPrediction(points)
+        }
+
+        func dominantPrediction(_ values: [Float], cell: Int, index: Int) -> Float? {
+            guard cell >= 0, cell < usableDominantMeshBinCount else { return nil }
+            let base = cell * frameCount
+            let window = min(1.0, max(0.05, Double(dominantWindowSeconds[index])))
+            let inner = max(0.13, window * 0.56)
+            let outer = min(1.0, max(0.44, window * 3.0))
+            let centerTime = frameTimes[index]
+            var points: [(x: Float, y: Float)] = []
+            if index > 0 {
+                for sample in stride(from: index - 1, through: 0, by: -1) {
+                    let offset = frameTimes[sample] - centerTime
+                    let distance = abs(offset)
+                    if distance > outer { break }
+                    if distance > inner { points.append((Float(offset), values[base + sample])) }
+                }
+            }
+            if index + 1 < frameCount {
+                for sample in (index + 1)..<frameCount {
+                    let offset = frameTimes[sample] - centerTime
+                    let distance = abs(offset)
+                    if distance > outer { break }
+                    if distance > inner { points.append((Float(offset), values[base + sample])) }
+                }
+            }
+            return regressionPrediction(points)
+        }
+
+        func dominantQuadraticPrediction(_ values: [Float], cell: Int, index: Int) -> Float? {
+            guard cell >= 0, cell < usableDominantMeshBinCount else { return nil }
+            let base = cell * frameCount
+            let radius = 0.50
+            let centerTime = frameTimes[index]
+            var s0 = Float(0.0), s1 = Float(0.0), s2 = Float(0.0)
+            var s3 = Float(0.0), s4 = Float(0.0)
+            var t0 = Float(0.0), t1 = Float(0.0), t2 = Float(0.0)
+            var count = 0
+            var sample = index
+            while sample >= 0 {
+                let offset = Float(frameTimes[sample] - centerTime)
+                let distance = abs(Double(offset))
+                if distance > radius { break }
+                let normalized = Float(1.0 - (distance / radius))
+                let weight = normalized * normalized
+                let x2 = offset * offset
+                let value = values[base + sample]
+                s0 += weight; s1 += weight * offset; s2 += weight * x2
+                s3 += weight * x2 * offset; s4 += weight * x2 * x2
+                t0 += weight * value; t1 += weight * offset * value; t2 += weight * x2 * value
+                count += 1
+                sample -= 1
+            }
+            sample = index + 1
+            while sample < frameCount {
+                let offset = Float(frameTimes[sample] - centerTime)
+                let distance = abs(Double(offset))
+                if distance > radius { break }
+                let normalized = Float(1.0 - (distance / radius))
+                let weight = normalized * normalized
+                let x2 = offset * offset
+                let value = values[base + sample]
+                s0 += weight; s1 += weight * offset; s2 += weight * x2
+                s3 += weight * x2 * offset; s4 += weight * x2 * x2
+                t0 += weight * value; t1 += weight * offset * value; t2 += weight * x2 * value
+                count += 1
+                sample += 1
+            }
+            guard count >= 5 else { return nil }
+            let determinant = s0 * ((s2 * s4) - (s3 * s3))
+                - s1 * ((s1 * s4) - (s2 * s3))
+                + s2 * ((s1 * s3) - (s2 * s2))
+            guard abs(determinant) > Float.ulpOfOne else { return nil }
+            let interceptDeterminant = t0 * ((s2 * s4) - (s3 * s3))
+                - s1 * ((t1 * s4) - (s3 * t2))
+                + s2 * ((t1 * s3) - (s2 * t2))
+            return interceptDeterminant / determinant
+        }
+
+        func residualAgreement(
+            _ first: Float?,
+            _ second: Float?,
+            absoluteStart: Float,
+            absoluteFull: Float
+        ) -> Float {
+            guard let first, let second, first.isFinite, second.isFinite else { return 0.0 }
+            let firstMagnitude = abs(first)
+            let secondMagnitude = abs(second)
+            if first * second < 0.0, min(firstMagnitude, secondMagnitude) > absoluteStart {
+                return 0.0
+            }
+            let difference = abs(first - second)
+            let absoluteAgreement = 1.0 - confidenceRamp(
+                difference,
+                start: absoluteStart,
+                full: absoluteFull
+            )
+            let relativeError = difference / max(max(firstMagnitude, secondMagnitude), absoluteFull * 0.5)
+            let relativeAgreement = 1.0 - confidenceRamp(relativeError, start: 0.18, full: 0.72)
+            return clamp(max(absoluteAgreement, relativeAgreement), min: 0.0, max: 1.0)
+        }
+
+        func temporalNeighborAgreement(
+            _ values: [Float],
+            index: Int,
+            absoluteStart: Float,
+            absoluteFull: Float,
+            magnitudeStart: Float,
+            magnitudeFull: Float
+        ) -> Float {
+            let center = values[index]
+            guard center.isFinite else { return 0.0 }
+            var best = Float(0.0)
+            for direction in [-1, 1] {
+                var sample = index + direction
+                while values.indices.contains(sample) {
+                    let distance = abs(frameTimes[sample] - frameTimes[index])
+                    if distance > 0.060 { break }
+                    let neighbor = values[sample]
+                    if center * neighbor > 0.0 {
+                        let magnitudeGate = confidenceRamp(
+                            min(abs(center), abs(neighbor)),
+                            start: magnitudeStart,
+                            full: magnitudeFull
+                        )
+                        let agreement = residualAgreement(
+                            center,
+                            neighbor,
+                            absoluteStart: absoluteStart,
+                            absoluteFull: absoluteFull
+                        )
+                        best = max(best, magnitudeGate * (0.65 + (agreement * 0.35)))
+                    }
+                    sample += direction
+                }
+            }
+            return clamp(best, min: 0.0, max: 1.0)
+        }
+
+        func spatialAgreement(_ first: Float, _ second: Float, absoluteStart: Float, absoluteFull: Float) -> Float {
+            let agreement = residualAgreement(first, second, absoluteStart: absoluteStart, absoluteFull: absoluteFull)
+            guard first * second > 0.0 else { return agreement }
+            let sameDirectionFloor = confidenceRamp(
+                min(abs(first), abs(second)),
+                start: 0.12,
+                full: 0.90
+            ) * 0.78
+            return clamp(max(agreement, sameDirectionFloor), min: 0.0, max: 1.0)
         }
 
         var topTargetX = targetX
@@ -2562,15 +2777,22 @@ enum AutoStabilizationEstimator {
         var dominantTargetX = targetX
         var dominantTargetY = targetY
         for index in 0..<frameCount {
-            targetX[index] = pathX[index] - prediction(pathX, index: index)
-            targetY[index] = pathY[index] - prediction(pathY, index: index)
-            targetRollDegrees[index] = pathRoll[index] - prediction(pathRoll, index: index)
-            topTargetX[index] = topX[index] - prediction(topX, index: index)
-            topTargetY[index] = topY[index] - prediction(topY, index: index)
-            ridgeTargetX[index] = ridgeX[index] - prediction(ridgeX, index: index)
-            ridgeTargetY[index] = ridgeY[index] - prediction(ridgeY, index: index)
-            dominantTargetX[index] = dominantMeshX[index] - prediction(dominantMeshX, index: index)
-            dominantTargetY[index] = dominantMeshY[index] - prediction(dominantMeshY, index: index)
+            targetX[index] = pathX[index] - (quadraticPrediction(pathX, index: index) ?? pathX[index])
+            targetY[index] = pathY[index] - (prediction(pathY, index: index) ?? pathY[index])
+            targetRollDegrees[index] = pathRoll[index] - (prediction(pathRoll, index: index) ?? pathRoll[index])
+            topTargetX[index] = topX[index] - (quadraticPrediction(topX, index: index) ?? topX[index])
+            topTargetY[index] = topY[index] - (prediction(topY, index: index) ?? topY[index])
+            ridgeTargetX[index] = ridgeX[index] - (quadraticPrediction(ridgeX, index: index) ?? ridgeX[index])
+            ridgeTargetY[index] = ridgeY[index] - (prediction(ridgeY, index: index) ?? ridgeY[index])
+            let cell = Int(dominantMeshCell[index])
+            if cell >= 0, cell < usableDominantMeshBinCount {
+                let flatIndex = (cell * frameCount) + index
+                dominantTargetX[index] = dominantMeshPathX[flatIndex] - (dominantQuadraticPrediction(dominantMeshPathX, cell: cell, index: index) ?? dominantMeshPathX[flatIndex])
+                dominantTargetY[index] = dominantMeshPathY[flatIndex] - (dominantPrediction(dominantMeshPathY, cell: cell, index: index) ?? dominantMeshPathY[flatIndex])
+            } else {
+                dominantTargetX[index] = targetX[index]
+                dominantTargetY[index] = targetY[index]
+            }
         }
 
         let radius = farFieldRigidShakeTwoWayRadiusFrames
@@ -2602,27 +2824,17 @@ enum AutoStabilizationEstimator {
             let backwardX = targetX[index]
             let backwardY = targetY[index]
             let rollResidualMagnitude = abs(targetRollDegrees[index])
-            let shapeX = 1.0 - confidenceRamp(
-                abs(topTargetX[index] - ridgeTargetX[index]),
-                start: farFieldRigidShakeShapeStartPixels,
-                full: farFieldRigidShakeShapeFullPixels
-            )
-            let shapeY = 1.0 - confidenceRamp(
-                abs(topTargetY[index] - ridgeTargetY[index]),
-                start: farFieldRigidShakeShapeStartPixels,
-                full: farFieldRigidShakeShapeFullPixels
-            )
-            let topRidgeShapeX = clamp(shapeX, min: 0.0, max: 1.0)
-            let topRidgeShapeY = clamp(shapeY, min: 0.0, max: 1.0)
+            let topRidgeShapeX = spatialAgreement(topTargetX[index], ridgeTargetX[index], absoluteStart: 0.35, absoluteFull: 2.60)
+            let topRidgeShapeY = spatialAgreement(topTargetY[index], ridgeTargetY[index], absoluteStart: 0.35, absoluteFull: 2.60)
             let dominantAuthority = confidenceRamp(dominantMeshSupport[index], start: 0.18, full: 0.68)
-            let dominantAgreementX = 1.0 - confidenceRamp(abs(targetX[index] - dominantTargetX[index]), start: farFieldRigidShakeShapeStartPixels * 1.5, full: farFieldRigidShakeShapeFullPixels * 2.0)
-            let dominantAgreementY = 1.0 - confidenceRamp(abs(targetY[index] - dominantTargetY[index]), start: farFieldRigidShakeShapeStartPixels * 1.5, full: farFieldRigidShakeShapeFullPixels * 2.0)
+            let dominantAgreementX = spatialAgreement(targetX[index], dominantTargetX[index], absoluteStart: 0.45, absoluteFull: 3.20)
+            let dominantAgreementY = spatialAgreement(targetY[index], dominantTargetY[index], absoluteStart: 0.45, absoluteFull: 3.20)
             shapeConsistencyX[index] = max(topRidgeShapeX, dominantAgreementX * dominantAuthority * 0.85)
             shapeConsistencyY[index] = max(topRidgeShapeY, dominantAgreementY * dominantAuthority * 0.85)
             shapeConsistency[index] = max(shapeConsistencyX[index], shapeConsistencyY[index])
-            let twoWayX = shapeConsistencyX[index]
-            let twoWayY = shapeConsistencyY[index]
-            let rollTwoWay = Float(1.0)
+            let twoWayX = temporalNeighborAgreement(targetX, index: index, absoluteStart: 0.45, absoluteFull: 3.20, magnitudeStart: 0.12, magnitudeFull: 0.90)
+            let twoWayY = temporalNeighborAgreement(targetY, index: index, absoluteStart: 0.45, absoluteFull: 3.20, magnitudeStart: 0.12, magnitudeFull: 0.90)
+            let rollTwoWay = temporalNeighborAgreement(targetRollDegrees, index: index, absoluteStart: 0.006, absoluteFull: 0.08, magnitudeStart: 0.002, magnitudeFull: 0.015)
             let confidence = min(topConfidence[index], ridgeConfidence[index])
             let confidenceGate = confidenceRamp(confidence, start: 0.08, full: 0.36)
             let evidenceX = confidenceRamp(
@@ -12291,29 +12503,13 @@ enum AutoStabilizationEstimator {
             rows: farFieldMeshRows,
             columns: farFieldMeshColumns
         )
-        var dominantMeshPathX: [Float] = []
-        var dominantMeshPathY: [Float] = []
-        dominantMeshPathX.reserveCapacity(sortedFrames.count)
-        dominantMeshPathY.reserveCapacity(sortedFrames.count)
-        for index in sortedFrames.indices {
-            let cell = Int(farFieldMeshDominantWindows.cell[index])
-            let flatIndex = (cell * sortedFrames.count) + index
-            if cell >= 0,
-               cell < farFieldMeshBinCount,
-               rawFarFieldMeshPathX.indices.contains(flatIndex),
-               rawFarFieldMeshPathY.indices.contains(flatIndex) {
-                dominantMeshPathX.append(rawFarFieldMeshPathX[flatIndex])
-                dominantMeshPathY.append(rawFarFieldMeshPathY[flatIndex])
-            } else {
-                dominantMeshPathX.append((rawLensBandTopPathX[index] * 0.35) + (rawLensBandRidgePathX[index] * 0.65))
-                dominantMeshPathY.append((rawLensBandTopPathY[index] * 0.35) + (rawLensBandRidgePathY[index] * 0.65))
-            }
-        }
         let farFieldRigidShake = farFieldRigidShakePreparedPaths(
             frameTimes: sortedFrames.map(\.time),
             dominantWindowSeconds: farFieldMeshDominantWindows.windowSeconds,
-            dominantMeshX: dominantMeshPathX,
-            dominantMeshY: dominantMeshPathY,
+            dominantMeshPathX: rawFarFieldMeshPathX,
+            dominantMeshPathY: rawFarFieldMeshPathY,
+            dominantMeshCell: farFieldMeshDominantWindows.cell,
+            dominantMeshBinCount: farFieldMeshBinCount,
             dominantMeshSupport: farFieldMeshDominantWindows.support,
             topX: rawLensBandTopPathX,
             topY: rawLensBandTopPathY,
@@ -15414,8 +15610,6 @@ enum AutoStabilizationEstimator {
             let forwardBackwardConsistencyX = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistencyX, using: interpolation)
             let forwardBackwardConsistencyY = interpolatedValue(analysis.farFieldRigidShakeForwardBackwardConsistencyY, using: interpolation)
             let rollForwardBackwardConsistency = interpolatedValue(analysis.farFieldRigidShakeRollForwardBackwardConsistency, using: interpolation)
-            let deltaCoherenceSupport = Float(0.0)
-            let deltaCoherenceAuthority = Float(0.0)
             let effectivePreparedRigidSupport = preparedRigidSupport
             let effectivePreparedRigidSupportX = preparedRigidSupportX
             let effectivePreparedRigidSupportY = preparedRigidSupportY
@@ -15675,16 +15869,6 @@ enum AutoStabilizationEstimator {
                     result.bandModelMask |= 2048
                 }
             }
-	            let coherentXShapeAuthority = confidenceRamp(
-	                effectiveShapeConsistencyX,
-	                start: farFieldCoherentSlabXShapeStart,
-	                full: farFieldCoherentSlabXShapeFull
-	            )
-	            let coherentXTwoWayAuthority = confidenceRamp(
-	                effectiveForwardBackwardConsistencyX,
-	                start: farFieldCoherentSlabXTwoWayStart,
-	                full: farFieldCoherentSlabXTwoWayFull
-	            )
             let coherentXMeshVeto = confidenceRamp(
                 meshRigidMaxBinDelta,
                 start: farFieldCoherentSlabXMeshDeltaStart,
@@ -15700,11 +15884,13 @@ enum AutoStabilizationEstimator {
 	                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.08, full: 0.42)
 	                * (1.0 - (coherentXMeshVeto * 0.72))
 	                * (1.0 - (coherentXQuiverVeto * 0.78))
+            let frameLocalPreparedAuthorityX = confidenceRamp(
+                effectivePreparedRigidSupportX,
+                start: 0.12,
+                full: 0.62
+            )
             let coherentSlabXAuthority = clamp(
-                max(
-                    coherentXShapeAuthority * coherentXTwoWayAuthority * (1.0 - (max(coherentXMeshVeto, coherentXQuiverVeto) * 0.92)),
-                    lowFrequencyXAuthority
-                ),
+                max(frameLocalPreparedAuthorityX, lowFrequencyXAuthority),
                 min: 0.0,
                 max: 1.0
             )
@@ -15714,16 +15900,6 @@ enum AutoStabilizationEstimator {
                     result.bandModelMask |= 8192
                 }
             }
-	            let coherentYShapeAuthority = confidenceRamp(
-	                effectiveShapeConsistencyY,
-	                start: farFieldCoherentSlabYShapeStart,
-	                full: farFieldCoherentSlabYShapeFull
-	            )
-	            let coherentYTwoWayAuthority = confidenceRamp(
-	                effectiveForwardBackwardConsistencyY,
-	                start: farFieldCoherentSlabYTwoWayStart,
-	                full: farFieldCoherentSlabYTwoWayFull
-	            )
             let coherentYMeshVeto = confidenceRamp(
                 meshRigidMaxBinDelta,
                 start: farFieldCoherentSlabYMeshDeltaStart,
@@ -15732,8 +15908,13 @@ enum AutoStabilizationEstimator {
 	            let lowFrequencyYAuthority = lowFrequencyRigidPriority
 	                * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.08, full: 0.42)
 	                * (1.0 - (coherentYMeshVeto * 0.55))
+            let frameLocalPreparedAuthorityY = confidenceRamp(
+                effectivePreparedRigidSupportY,
+                start: 0.12,
+                full: 0.62
+            )
             let coherentSlabYAuthority = clamp(
-                max(coherentYShapeAuthority * coherentYTwoWayAuthority, lowFrequencyYAuthority),
+                max(frameLocalPreparedAuthorityY, lowFrequencyYAuthority),
                 min: 0.0,
                 max: 1.0
             )
@@ -15743,32 +15924,20 @@ enum AutoStabilizationEstimator {
                     result.bandModelMask |= 4096
                 }
             }
-            let frameLocalAuthorityX = confidenceRamp(effectivePreparedRigidSupportX, start: 0.42, full: 0.78)
-                * confidenceRamp(effectiveShapeConsistencyX, start: 0.54, full: 0.88)
-                * confidenceRamp(effectiveForwardBackwardConsistencyX, start: 0.48, full: 0.84)
-            let frameLocalAuthorityY = confidenceRamp(effectivePreparedRigidSupportY, start: 0.42, full: 0.78)
-                * confidenceRamp(effectiveShapeConsistencyY, start: 0.54, full: 0.88)
-                * confidenceRamp(effectiveForwardBackwardConsistencyY, start: 0.48, full: 0.84)
             let frameLocalRollAuthority = confidenceRamp(effectivePreparedRigidRollSupport, start: 0.42, full: 0.78)
                 * confidenceRamp(rollForwardBackwardConsistency, start: 0.48, full: 0.84)
-            rigidResidual.x += (rawRigidResidual.x - rigidResidual.x) * frameLocalAuthorityX
-            rigidResidual.y += (rawRigidResidual.y - rigidResidual.y) * frameLocalAuthorityY
             rigidRollResidual += (rawRigidRollResidual - rigidRollResidual) * frameLocalRollAuthority
             let lowFrequencyRigidSupport = lowFrequencyRigidPriority
                 * confidenceRamp(simd_length(rigidResidual), start: 0.05, full: 0.48)
 	            let rigidSupportX = max(
 	                confidenceRamp(abs(rigidResidual.x), start: 0.08, full: 0.70)
-	                    * confidenceRamp(effectivePreparedRigidSupportX, start: 0.08, full: 0.36)
-	                    * confidenceRamp(effectiveShapeConsistencyX, start: 0.44, full: 0.82)
-	                    * confidenceRamp(effectiveForwardBackwardConsistencyX, start: 0.36, full: 0.78)
+	                    * confidenceRamp(effectivePreparedRigidSupportX, start: 0.08, full: 0.56)
 	                    * qualitySupport,
                     meshRigidSupport * confidenceRamp(abs(rigidResidual.x), start: 0.08, full: 0.70)
 	            )
 	            let rigidSupportY = max(
 	                confidenceRamp(abs(rigidResidual.y), start: 0.08, full: 0.70)
-	                    * confidenceRamp(effectivePreparedRigidSupportY, start: 0.08, full: 0.36)
-	                    * confidenceRamp(effectiveShapeConsistencyY, start: 0.44, full: 0.82)
-	                    * confidenceRamp(effectiveForwardBackwardConsistencyY, start: 0.36, full: 0.78)
+	                    * confidenceRamp(effectivePreparedRigidSupportY, start: 0.08, full: 0.56)
 	                    * qualitySupport,
                     max(
                         meshRigidSupport * confidenceRamp(abs(rigidResidual.y), start: 0.08, full: 0.70),

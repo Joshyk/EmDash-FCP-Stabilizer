@@ -278,8 +278,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 50
-    private static let supportedCacheSchemaVersions: Set<Int> = [50]
+    private static let cacheSchemaVersion = 51
+    private static let supportedCacheSchemaVersions: Set<Int> = [51]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -3076,7 +3076,7 @@ final class StabilizerHostAnalysisStore {
             throw NSError(
                 domain: "com.justadev.TokyoWalkingStabilizer",
                 code: Int(kFxError_AnalysisError),
-                userInfo: [NSLocalizedDescriptionKey: "schema 50 cache is missing validated original-media provenance"]
+                userInfo: [NSLocalizedDescriptionKey: "schema 51 cache is missing validated original-media provenance"]
             )
         }
         if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frames.count) {

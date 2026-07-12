@@ -281,7 +281,7 @@ private struct Analysis {
               sourceHeight > 0,
               let sourceFileName = cache.sourceFileName,
               !sourceFileName.isEmpty else {
-            throw FeedbackError(description: "schema 50 cache is missing validated original-media provenance")
+            throw FeedbackError(description: "schema 51 cache is missing validated original-media provenance")
         }
         let frames = try cache.frames.map { persisted -> AnalysisFrame in
             guard let fingerprint = persisted.fingerprint, !fingerprint.isEmpty else {
@@ -914,7 +914,7 @@ private let expectedFarFieldMeshBinCount = expectedFarFieldMeshRows * expectedFa
 private let maximumFarFieldWarpStrength: Float = 12.0
 private let farFieldWarpSubunitResponseLift: Float = 2.0
 private let farFieldWarpSubunitResponseMax: Float = 1.0
-private let supportedCacheSchemaVersions: Set<Int> = [50]
+private let supportedCacheSchemaVersions: Set<Int> = [51]
 private let supportedCacheSchemaDescription = supportedCacheSchemaVersions.sorted().map(String.init).joined(separator: ", ")
 private func analysisQualityModel(for cache: PersistedHostAnalysisCache) -> AnalysisQualityModel {
     _ = cache
@@ -4268,16 +4268,6 @@ private func sourceSpaceLensShakeBand(
             rigidResidualX *= 1.0 - parallaxWarpDamping
             rigidResidualY *= 1.0 - parallaxWarpDamping
         }
-        let coherentXShapeAuthority = confidenceRamp(
-            effectiveShapeConsistencyX,
-            start: farFieldCoherentSlabXShapeStart,
-            full: farFieldCoherentSlabXShapeFull
-        )
-        let coherentXTwoWayAuthority = confidenceRamp(
-            effectiveForwardBackwardConsistencyX,
-            start: farFieldCoherentSlabXTwoWayStart,
-            full: farFieldCoherentSlabXTwoWayFull
-        )
         let coherentXMeshVeto = confidenceRamp(
             meshMaxBinDelta,
             start: farFieldCoherentSlabXMeshDeltaStart,
@@ -4293,27 +4283,19 @@ private func sourceSpaceLensShakeBand(
             * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.08, full: 0.42)
             * (1.0 - (coherentXMeshVeto * 0.72))
             * (1.0 - (coherentXQuiverVeto * 0.78))
+        let frameLocalPreparedAuthorityX = confidenceRamp(
+            effectivePreparedRigidSupportX,
+            start: 0.12,
+            full: 0.62
+        )
         let coherentSlabXAuthority = clamp(
-            max(
-                coherentXShapeAuthority * coherentXTwoWayAuthority * (1.0 - (max(coherentXMeshVeto, coherentXQuiverVeto) * 0.92)),
-                lowFrequencyXAuthority
-            ),
+            max(frameLocalPreparedAuthorityX, lowFrequencyXAuthority),
             min: 0.0,
             max: 1.0
         )
         if coherentSlabXAuthority < 0.995 {
             rigidResidualX *= coherentSlabXAuthority
         }
-        let coherentYShapeAuthority = confidenceRamp(
-            effectiveShapeConsistencyY,
-            start: farFieldCoherentSlabYShapeStart,
-            full: farFieldCoherentSlabYShapeFull
-        )
-        let coherentYTwoWayAuthority = confidenceRamp(
-            effectiveForwardBackwardConsistencyY,
-            start: farFieldCoherentSlabYTwoWayStart,
-            full: farFieldCoherentSlabYTwoWayFull
-        )
         let coherentYMeshVeto = confidenceRamp(
             meshMaxBinDelta,
             start: farFieldCoherentSlabYMeshDeltaStart,
@@ -4322,41 +4304,34 @@ private func sourceSpaceLensShakeBand(
         let lowFrequencyYAuthority = lowFrequencyRigidPriority
             * confidenceRamp(effectiveForwardBackwardConsistency, start: 0.08, full: 0.42)
             * (1.0 - (coherentYMeshVeto * 0.55))
+        let frameLocalPreparedAuthorityY = confidenceRamp(
+            effectivePreparedRigidSupportY,
+            start: 0.12,
+            full: 0.62
+        )
         let coherentSlabYAuthority = clamp(
-            max(coherentYShapeAuthority * coherentYTwoWayAuthority, lowFrequencyYAuthority),
+            max(frameLocalPreparedAuthorityY, lowFrequencyYAuthority),
             min: 0.0,
             max: 1.0
         )
         if coherentSlabYAuthority < 0.995 {
             rigidResidualY *= coherentSlabYAuthority
         }
-        let frameLocalAuthorityX = confidenceRamp(effectivePreparedRigidSupportX, start: 0.42, full: 0.78)
-            * confidenceRamp(effectiveShapeConsistencyX, start: 0.54, full: 0.88)
-            * confidenceRamp(effectiveForwardBackwardConsistencyX, start: 0.48, full: 0.84)
-        let frameLocalAuthorityY = confidenceRamp(effectivePreparedRigidSupportY, start: 0.42, full: 0.78)
-            * confidenceRamp(effectiveShapeConsistencyY, start: 0.54, full: 0.88)
-            * confidenceRamp(effectiveForwardBackwardConsistencyY, start: 0.48, full: 0.84)
         let frameLocalRollAuthority = confidenceRamp(effectivePreparedRigidRollSupport, start: 0.42, full: 0.78)
             * confidenceRamp(rollForwardBackwardConsistency, start: 0.48, full: 0.84)
-        rigidResidualX += (rawRigidResidualX - rigidResidualX) * frameLocalAuthorityX
-        rigidResidualY += (rawRigidResidualY - rigidResidualY) * frameLocalAuthorityY
         rigidRollResidual += (rawRigidRollResidual - rigidRollResidual) * frameLocalRollAuthority
         let rigidMagnitude = hypotf(rigidResidualX, rigidResidualY)
         let lowFrequencyRigidSupport = lowFrequencyRigidPriority
             * confidenceRamp(rigidMagnitude, start: 0.05, full: 0.48)
         let rigidSupportX = max(
             confidenceRamp(abs(rigidResidualX), start: 0.08, full: 0.70)
-                * confidenceRamp(effectivePreparedRigidSupportX, start: 0.08, full: 0.36)
-                * confidenceRamp(effectiveShapeConsistencyX, start: 0.44, full: 0.82)
-                * confidenceRamp(effectiveForwardBackwardConsistencyX, start: 0.36, full: 0.78)
+                * confidenceRamp(effectivePreparedRigidSupportX, start: 0.08, full: 0.56)
                 * qualitySupport,
             meshSupport * confidenceRamp(abs(rigidResidualX), start: 0.08, full: 0.70)
         )
         let rigidSupportY = max(
             confidenceRamp(abs(rigidResidualY), start: 0.08, full: 0.70)
-                * confidenceRamp(effectivePreparedRigidSupportY, start: 0.08, full: 0.36)
-                * confidenceRamp(effectiveShapeConsistencyY, start: 0.44, full: 0.82)
-                * confidenceRamp(effectiveForwardBackwardConsistencyY, start: 0.36, full: 0.78)
+                * confidenceRamp(effectivePreparedRigidSupportY, start: 0.08, full: 0.56)
                 * qualitySupport,
             max(
                 meshSupport * confidenceRamp(abs(rigidResidualY), start: 0.08, full: 0.70),
