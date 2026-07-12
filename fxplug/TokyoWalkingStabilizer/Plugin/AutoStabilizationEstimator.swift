@@ -4143,10 +4143,7 @@ enum AutoStabilizationEstimator {
         let macroPixelOffset = vector_float2(
             softLimit(
                 -panBandX * xScale * positionGain * panCorrectionStrengthX,
-                limit: turnSmoothingXOffsetLimit(
-                    outputPixels: outputSize.x,
-                    turnSmoothingStrength: strengths.turnSmoothingZoom
-                )
+                limit: turnSmoothingOffsetLimit()
             ),
             0.0
         )
@@ -7833,10 +7830,7 @@ enum AutoStabilizationEstimator {
             let macroPixelOffset = vector_float2(
                 softLimit(
                     -panBandX * xScale * positionGain * panCorrectionStrengthX,
-                    limit: turnSmoothingXOffsetLimit(
-                        outputPixels: outputSize.x,
-                        turnSmoothingStrength: strengths.turnSmoothingZoom
-                    )
+                    limit: turnSmoothingOffsetLimit()
                 ),
                 0.0
             )
@@ -9718,10 +9712,7 @@ enum AutoStabilizationEstimator {
         let cameraJitterMacroCompensationRotation = -panBandRoll * rotationGain * cameraJitterMacroRollCorrectionStrength
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
-            limit: turnSmoothingXOffsetLimit(
-                outputPixels: outputSize.x,
-                turnSmoothingStrength: strengths.turnSmoothingZoom
-            )
+            limit: turnSmoothingOffsetLimit()
         )
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
@@ -10737,10 +10728,7 @@ enum AutoStabilizationEstimator {
         let detectedTurnPixelOffset = vector_float2(-panBandX * xScale, 0.0)
         let macroCompensationX = softLimit(
             rawMacroCompensationX,
-            limit: turnSmoothingXOffsetLimit(
-                outputPixels: outputSize.x,
-                turnSmoothingStrength: strengths.turnSmoothingZoom
-            )
+            limit: turnSmoothingOffsetLimit()
         )
         let unscaledRawMicroCompensationX = -footstepImpulseX * xScale * microXCorrectionStrength
         let lowEvidenceMicroXScale = lowEvidenceLargeFootstepXScale(
@@ -14626,16 +14614,6 @@ enum AutoStabilizationEstimator {
 
     private static func turnSmoothingOffsetLimit() -> Float {
         return Float.infinity
-    }
-
-    private static func turnSmoothingXOffsetLimit(
-        outputPixels: Float,
-        turnSmoothingStrength: Double
-    ) -> Float {
-        guard outputPixels.isFinite, outputPixels > 0.0 else {
-            return 0.0
-        }
-        return outputPixels * 0.5 * turnSmoothingZoomNormalized(turnSmoothingStrength)
     }
 
     private static func turnSmoothingRotationLimit() -> Float {
