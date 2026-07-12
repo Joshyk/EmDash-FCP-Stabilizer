@@ -17264,9 +17264,26 @@ enum AutoStabilizationEstimator {
             indices: indices,
             centerTime: centerTime,
             windowSeconds: activeWindow
+           ),
+           let causalValue = causalTurnWindowValue(
+            values,
+            frames: frames,
+            centerTime: centerTime,
+            windowSeconds: activeWindow
            )
         {
-            return sCurveValue
+            // A symmetric fit cannot move a constant-speed pan: its center is
+            // the original position, regardless of Window length.  TURN must
+            // instead own the preceding Window as one pan event.  The causal
+            // value supplies that delayed, low-frequency path; its difference
+            // from the current path is the X travel that Strength applies.
+            // Camera Jitter remains downstream and keeps the fine residual.
+            let travelBlend = confidenceRamp(
+                timing.travelPixels,
+                start: 12.0,
+                full: 96.0
+            )
+            return sCurveValue + ((causalValue - sCurveValue) * travelBlend)
         }
         return timeWeightedLinearPrediction(
             values,
@@ -17289,6 +17306,42 @@ enum AutoStabilizationEstimator {
                 centerTime: centerTime,
                 windowSeconds: fallbackWindow
             )
+    }
+
+    private static func causalTurnWindowValue(
+        _ values: EstimatedPath,
+        frames: [StabilizerAnalysisFrame],
+        centerTime: Double,
+        windowSeconds: Double
+    ) -> Float? {
+        guard centerTime.isFinite,
+              windowSeconds.isFinite,
+              windowSeconds > 0.0
+        else {
+            return nil
+        }
+        let firstTime = centerTime - windowSeconds
+        let lowerIndex = lowerBoundFrameIndex(
+            frames,
+            time: firstTime - timeWindowSelectionEpsilon
+        )
+        let upperIndex = upperBoundFrameIndex(
+            frames,
+            time: centerTime + timeWindowSelectionEpsilon
+        )
+        let historyIndices = lowerIndex < upperIndex ? Array(lowerIndex..<upperIndex) : []
+        guard historyIndices.count >= 2 else {
+            return nil
+        }
+        // A recent-biased history average makes the entry and exit of the pan
+        // continuous while retaining a visible, Window-proportional X offset.
+        return timeWeightedAverage(
+            values,
+            frames: frames,
+            indices: historyIndices,
+            centerTime: centerTime,
+            windowSeconds: windowSeconds
+        )
     }
 
     private static func turnIntentPath(

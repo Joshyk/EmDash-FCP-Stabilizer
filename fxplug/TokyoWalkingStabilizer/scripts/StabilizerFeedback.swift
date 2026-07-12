@@ -1538,7 +1538,7 @@ private func adaptiveXTurnSmoothValue(
         ? activeIndices(frames, centerTime: centerTime, windowSeconds: activeWindow)
         : indices
     let effectiveIndices = timingIndices.isEmpty ? indices : timingIndices
-    return timeWeightedMonotonicSCurveValue(
+    let sCurveValue = timeWeightedMonotonicSCurveValue(
         values,
         frames: frames,
         indices: effectiveIndices,
@@ -1550,6 +1550,52 @@ private func adaptiveXTurnSmoothValue(
         indices: effectiveIndices,
         centerTime: centerTime,
         windowSeconds: activeWindow
+    )
+    guard timing.active,
+          let causalValue = causalTurnWindowValue(
+            values,
+            frames: frames,
+            centerTime: centerTime,
+            windowSeconds: activeWindow
+          )
+    else {
+        return sCurveValue
+    }
+    let travelBlend = confidenceRamp(
+        travelPixels,
+        start: 12.0,
+        full: 96.0
+    )
+    return sCurveValue + ((causalValue - sCurveValue) * travelBlend)
+}
+
+private func causalTurnWindowValue(
+    _ values: [Float],
+    frames: [AnalysisFrame],
+    centerTime: Double,
+    windowSeconds: Double
+) -> Float? {
+    guard centerTime.isFinite,
+          windowSeconds.isFinite,
+          windowSeconds > 0.0
+    else {
+        return nil
+    }
+    let firstTime = centerTime - windowSeconds
+    let historyIndices = frames.indices.filter { index in
+        let time = frames[index].time
+        return time >= firstTime - timeWindowSelectionEpsilon
+            && time <= centerTime + timeWindowSelectionEpsilon
+    }
+    guard historyIndices.count >= 2 else {
+        return nil
+    }
+    return timeWeightedAverage(
+        values,
+        frames: frames,
+        indices: historyIndices,
+        centerTime: centerTime,
+        windowSeconds: windowSeconds
     )
 }
 

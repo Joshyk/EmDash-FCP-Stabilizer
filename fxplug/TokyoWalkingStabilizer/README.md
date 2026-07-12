@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.31` keeps the schema 51 Camera Jitter cache, makes Turn Transition Window own the pan grouping evidence, and makes Crop-off a true 1.0x/no-reservation diagnostic mode.
+- Version `1.1.32` keeps schema 51 and makes Turn Window use a causal pan-history path, so a long continuous pan has visible Turn X authority at high strength.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
