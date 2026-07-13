@@ -4115,7 +4115,11 @@ enum AutoStabilizationEstimator {
         let playbackMicroConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let playbackStrideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
 
-        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
+        let panCorrectionStrengthX = turnPanCorrectionAuthority(
+            strength: strengths.turnSmoothingZoom,
+            bandPixels: panBandX * xScale,
+            confidence: turnTrackingConfidence
+        )
         let cameraJitterMacroYConfidence = turnSmoothingConfidence(
             bandValue: panBandY,
             trackingConfidence: turnTrackingConfidence
@@ -7899,7 +7903,11 @@ enum AutoStabilizationEstimator {
             let strideRollConfidence = max(rawStrideRollConfidence * strideRollTurnGate, strideRollFarFieldConfidenceFloor)
             let playbackMicroConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
             let playbackStrideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-            let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnTrackingConfidence)
+            let panCorrectionStrengthX = turnPanCorrectionAuthority(
+                strength: strengths.turnSmoothingZoom,
+                bandPixels: panBandX * xScale,
+                confidence: turnTrackingConfidence
+            )
             let cameraJitterMacroYConfidence = turnSmoothingConfidence(
                 bandValue: panBandY,
                 trackingConfidence: turnTrackingConfidence
@@ -9788,7 +9796,11 @@ enum AutoStabilizationEstimator {
         let strideRollConfidence = max(rawStrideRollConfidence * strideRollTurnGate, strideRollFarFieldConfidenceFloor)
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceX)
+        let panCorrectionStrengthX = turnPanCorrectionAuthority(
+            strength: strengths.turnSmoothingZoom,
+            bandPixels: panBandX * xScale,
+            confidence: turnCorrectionConfidenceX
+        )
         let cameraJitterMacroYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(
             strengths.cameraJitterY,
             confidence: turnBandConfidenceY,
@@ -10803,7 +10815,11 @@ enum AutoStabilizationEstimator {
         let strideRollConfidence = max(rawStrideRollConfidence * strideRollTurnGate, strideRollFarFieldConfidenceFloor)
         let jitterConfidence = (footstepXConfidence + footstepYConfidence + footstepRollConfidence) / 3.0
         let strideConfidence = (strideXConfidence + strideYConfidence + strideRollConfidence) / 3.0
-        let panCorrectionStrengthX = confidenceCompensatedCorrectionFactor(strengths.turnSmoothingZoom, confidence: turnCorrectionConfidenceX)
+        let panCorrectionStrengthX = turnPanCorrectionAuthority(
+            strength: strengths.turnSmoothingZoom,
+            bandPixels: panBandX * xScale,
+            confidence: turnCorrectionConfidenceX
+        )
         let cameraJitterMacroYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(
             strengths.cameraJitterY,
             confidence: turnBandConfidenceY,
@@ -17844,6 +17860,27 @@ enum AutoStabilizationEstimator {
             * confidenceResponse
             * (1.0 - (confidenceResponse * 0.25))
         return max(0.0, directRemoval + confidenceBoost)
+    }
+
+    private static func turnPanCorrectionAuthority(
+        strength: Double,
+        bandPixels: Float,
+        confidence: Float
+    ) -> Float {
+        let confidenceAuthority = confidenceCompensatedCorrectionFactor(
+            strength,
+            confidence: confidence
+        )
+        let requestedAuthority = turnSmoothingZoomNormalized(strength)
+        let panEvidence = confidenceRamp(
+            abs(bandPixels),
+            start: 6.0,
+            full: 48.0
+        )
+        // Continuous-panning TURN is owned by its measured X travel.  Tracking
+        // confidence still helps, but must not erase an otherwise coherent 90°
+        // pan after the causal path has supplied a large, stable separation.
+        return max(confidenceAuthority, requestedAuthority * panEvidence)
     }
 
     private static func walkingConfidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float, maxStrength: Float = 4.0) -> Float {

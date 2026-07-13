@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.34` applies the full causal Turn path to prepared playback as well as per-frame rendering, so continuous pans use their configured Turn Window authority.
+- Version `1.1.35` keeps continuous-pan Turn authority even when the older turn-confidence gate is weak, using coherent X-pan magnitude as direct TURN evidence.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback

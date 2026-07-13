@@ -1707,7 +1707,11 @@ private func turnCorrectionSample(for context: AssessmentContext, index: Int, op
     )
     let rawTurnQ = turnConfidence(bandValue: turnBandX, trackingConfidence: turnTracking) * turnOwnershipX
     let turnQ = turnCorrectionConfidence(confidence: rawTurnQ, turnOwnership: turnOwnershipX)
-    let correction = correctionFactor(turnSmoothingZoom: options.turnStrength, confidence: turnQ)
+    let correction = turnPanCorrectionAuthority(
+        turnSmoothingZoom: options.turnStrength,
+        bandPixels: turnBandX * xScale,
+        confidence: turnQ
+    )
     let detected = abs(turnBandX * xScale)
     let macroPixelOffsetX = -(turnBandX * xScale) * correction
     return TurnCorrectionSample(
@@ -4920,6 +4924,20 @@ private func correctionFactor(turnSmoothingZoom: Double, confidence: Float) -> F
     let direct = min(requested, 1.0) * response
     let boost = max(0.0, requested - 1.0) * 0.55 * response * (1.0 - (response * 0.25))
     return max(0.0, direct + boost)
+}
+
+private func turnPanCorrectionAuthority(
+    turnSmoothingZoom: Double,
+    bandPixels: Float,
+    confidence: Float
+) -> Float {
+    let confidenceAuthority = correctionFactor(
+        turnSmoothingZoom: turnSmoothingZoom,
+        confidence: confidence
+    )
+    let requestedAuthority = turnSmoothingZoomNormalized(turnSmoothingZoom)
+    let panEvidence = confidenceRamp(abs(bandPixels), start: 6.0, full: 48.0)
+    return max(confidenceAuthority, requestedAuthority * panEvidence)
 }
 
 private func walkingCorrectionFactor(_ strength: Double, confidence: Float, maxStrength: Float = 4.0) -> Float {
