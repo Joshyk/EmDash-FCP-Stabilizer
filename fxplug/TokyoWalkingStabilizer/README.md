@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.42` maps Turn Smoothing Strength linearly in viewport space: 12 equals the former 36 result and 36 applies three times that zoom and X movement. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
+- Version `1.2.0` maps Turn Smoothing Strength linearly in viewport space: 12 equals the former 36 result and 36 applies three times that zoom and X movement. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
