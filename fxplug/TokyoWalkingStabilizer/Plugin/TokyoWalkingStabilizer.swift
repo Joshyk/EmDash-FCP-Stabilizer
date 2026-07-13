@@ -54,17 +54,17 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.36"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_000.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 36.0, 1_000.0)
+private let tokyoWalkingStabilizerVersion = "1.1.37"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_001.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 37.0, 1_001.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_435_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_436_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
 private let stabilizerDefaultFarFieldWarpStrength = 1.0
 private let stabilizerDefaultTurnSmoothingZoom = 12.0
-private let stabilizerDefaultTurnTransitionWindow = 2.8
+private let stabilizerDefaultTurnTransitionWindow = 5.0
 private let stabilizerMaximumTurnSmoothingZoom = 36.0
 private let stabilizerMaximumTurnSmoothingZoomScale: Float = 1.5
 private let stabilizerMaximumFarFieldWarpStrength = 12.0
@@ -5636,7 +5636,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sampleSteps: samplingProfile.scaleSearchSampleSteps,
             iterations: samplingProfile.scaleSearchIterations
         )
-        let turnStrength = turnSmoothingZoomNormalized(strengths.turnSmoothingZoom)
+        // Make the existing 0...36 control more decisive without changing its
+        // endpoints: 0 remains no Turn crop and 36 remains full overflow use.
+        let turnStrength = min(1.0, turnSmoothingZoomNormalized(strengths.turnSmoothingZoom) * 1.5)
         let turnOverflowScale = max(0.0, fullCropScale - cameraCropScale)
         let turnViewportDelta = fullPositionPixels - cameraPositionPixels
         let positionPixels = cameraPositionPixels + (turnViewportDelta * turnStrength)

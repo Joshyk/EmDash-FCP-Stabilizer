@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.36` renders TURN only through Remove Black Edges framing: viewport overflow above Camera Jitter crop is strength-scaled into Turn zoom and position.
+- Version `1.1.37` makes viewport Turn framing 1.5x more responsive and defaults Turn Transition Window to 5 seconds.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
@@ -258,7 +258,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   High values increase the X-pan bridge floor and release center anchoring earlier; Camera
   Jitter continues to own short-period X during the pan.
 - `Turn Transition Window (s)`: controls only the X-pan pre-roll and transition duration
-  (`0.5...8.0` seconds; default `2.8`); it is independent from correction amplitude.
+  (`0.5...8.0` seconds; default `5.0`); it is independent from correction amplitude.
   It defaults to `12.0` and ranges from `0.00...36.00`. `0` disables turn correction and
   turn zoom; `12` uses the standard `2.8` second monotonic S-curve transition; and `36`
   can extend the transition to three times the standard duration while spending the maximum
