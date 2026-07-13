@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.32"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 996.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 32.0, 996.0)
+private let tokyoWalkingStabilizerVersion = "1.1.33"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 997.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 33.0, 997.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_431_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_432_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -2261,6 +2261,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             Float(stabilizerMaximumTurnSmoothingZoom)
         )
         return boundedValue / max(Float(stabilizerMaximumTurnSmoothingZoom), Float.ulpOfOne)
+    }
+
+    private static func cropOffDiagnosticFraming(
+        autoCropFraming: AutoCropFraming
+    ) -> AutoCropFraming {
+        AutoCropFraming(
+            scale: 1.0,
+            positionPixels: autoCropFraming.positionPixels,
+            telemetry: autoCropFraming.telemetry,
+            cropOffEdgeGuardScale: 1.0,
+            cropOffEdgeGuardDemandX: 0.0,
+            cropOffEdgeGuardActive: 0.0
+        )
     }
 
     private static func turnSmoothingZoomCapScale(_ value: Double) -> Float {
@@ -10723,11 +10736,27 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 onPlaybackPreparationReady: autoCropPlaybackPlanPrepared
             )
             autoCropFraming = rawAutoCropFraming
+        } else if renderUsesPreparedAnalysis,
+                  let preparedAnalysis = activePreparedAnalysis {
+            let autoCropRenderTime = activeAnalysisRenderTime ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
+            let turnReservation = Self.cachedAutoCropFraming(
+                preparedAnalysis: preparedAnalysis,
+                renderTime: autoCropRenderTime,
+                currentTransform: autoTransform,
+                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                panSmoothSeconds: 0.0,
+                strengths: correctionStrengths,
+                masterStrength: masterStrength,
+                transitionDuration: state.autoCropTransitionDuration,
+                leadTime: state.autoCropLeadTime,
+                holdTime: state.autoCropHoldTime,
+                samplingProfile: autoCropSamplingProfile,
+                renderQualityLevel: state.renderQualityLevel,
+                analysisRevision: renderStoreRevision,
+                cacheIdentity: renderCacheIdentity
+            )
+            autoCropFraming = Self.cropOffDiagnosticFraming(autoCropFraming: turnReservation)
         } else {
-            // Crop-off is a true diagnostic mode: neither Auto Crop scale nor its
-            // look-ahead center reservation participates in the rendered motion.
-            // TURN and Camera Jitter remain intact and their exposed edges show
-            // their exact render-time X/Y motion.
             autoCropFraming = .identity
         }
         let cropFinishedAt = CFAbsoluteTimeGetCurrent()
@@ -10753,6 +10782,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let renderedAutoCropFraming: AutoCropFraming = previewWarmupDecision.active
             ? .identity
             : autoCropFraming
+        if !state.autoCropEnabled {
+            // Crop-off exposes the exact crop-on center path at 1.0x.  Only
+            // outside pixels differ, so it remains a display/debug toggle.
+            let matchingPositionOffset = -renderedAutoCropFraming.positionPixels.x
+            renderedAutoTransform.macroPixelOffset.x += matchingPositionOffset
+            renderedAutoTransform.pixelOffset.x += matchingPositionOffset
+            renderedAutoTransform.rawPixelOffset.x += matchingPositionOffset
+        }
         renderedAutoTransform = cameraRigidFinalLimitTransform(
             renderedAutoTransform,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),

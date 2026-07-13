@@ -5677,9 +5677,14 @@ enum AutoStabilizationEstimator {
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
+        let turnOwnedXTransforms = playbackTrajectoryTurnOwnedXTransforms(
+            frames: frames,
+            transforms: postShockLimitedTransforms,
+            strengths: strengths
+        )
         let componentDiagnostics = playbackTrajectoryComponentDiagnostics(
             frames: frames,
-            transforms: postShockLimitedTransforms
+            transforms: turnOwnedXTransforms
         )
         os_log(
             "Playback trajectory component steps | frames %d final %.3f f%d t%.3f macro %.3f micro %.3f stride %.3f turn %.3f warp %.5f rot %.4f",
@@ -5713,9 +5718,101 @@ enum AutoStabilizationEstimator {
         )
         return PlaybackTransformTrajectory(
             times: frames.map(\.time),
-            transforms: postShockLimitedTransforms,
+            transforms: turnOwnedXTransforms,
             outputSize: outputSize
         )
+    }
+
+    private static func playbackTrajectoryTurnOwnedXTransforms(
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform],
+        strengths: StabilizerCorrectionStrengths
+    ) -> [StabilizerAutoTransform] {
+        guard frames.count == transforms.count,
+              transforms.count >= 3,
+              turnSmoothingZoomNormalized(strengths.turnSmoothingZoom) > Float.ulpOfOne
+        else {
+            return transforms
+        }
+
+        let windowSeconds = max(0.5, strengths.turnTransitionWindowSeconds)
+        let halfWindow = windowSeconds * 0.5
+        let preRollSeconds = min(windowSeconds * 0.30, 2.4)
+        let strength = turnSmoothingZoomNormalized(strengths.turnSmoothingZoom)
+        let jitterX = transforms.map { transform in
+            transform.microPixelOffset.x
+                + transform.strideWobblePixelOffset.x
+                + transform.trajectoryMicroJitterPixelOffset.x
+                + transform.trajectoryContinuityPixelOffset.x
+                + transform.cameraRigidPixelOffset.x
+        }
+        var result = transforms
+
+        for index in transforms.indices {
+            let time = frames[index].time
+            let lower = lowerBoundFrameIndex(frames, time: time - halfWindow)
+            let upper = upperBoundFrameIndex(frames, time: time + halfWindow)
+            guard lower < upper else {
+                continue
+            }
+
+            // Camera Jitter X owns only the frame-local residual.  Removing the
+            // Window mean prevents its UI strength from translating the same
+            // low-frequency pan already owned by TURN.
+            let localJitter = Array(jitterX[lower..<upper])
+            let localMean = localJitter.reduce(Float(0.0), +) / Float(max(1, localJitter.count))
+            let rawJitter = jitterX[index]
+            var residualJitter = rawJitter - localMean
+
+            // A stronger Camera Jitter X must not reverse a visible TURN edge.
+            // Preserve the short residual but bound it below the active TURN
+            // macro so Camera Jitter cannot become a second pan owner.
+            let macroX = result[index].macroPixelOffset.x
+            let turnActive = abs(result[index].turnDetectedPixelOffset.x) >= turnMacroOwnershipBandStartPixels
+            if turnActive {
+                let residualLimit = max(2.0, abs(macroX) * 0.35)
+                residualJitter = min(max(residualJitter, -residualLimit), residualLimit)
+            }
+            result[index].trajectoryContinuityPixelOffset.x += residualJitter - rawJitter
+
+            // Before a curve builds, borrow up to 30% of its known TURN macro
+            // in the opposite direction.  The forward peak's existing macro
+            // sign is the sole authority, avoiding coordinate-sign guesses.
+            let futureUpper = upperBoundFrameIndex(frames, time: time + preRollSeconds)
+            guard index + 1 < futureUpper else {
+                continue
+            }
+            var futureIndex = index
+            var futureMagnitude = abs(result[index].turnDetectedPixelOffset.x)
+            for candidate in (index + 1)..<futureUpper {
+                let candidateMagnitude = abs(result[candidate].turnDetectedPixelOffset.x)
+                if candidateMagnitude > futureMagnitude {
+                    futureMagnitude = candidateMagnitude
+                    futureIndex = candidate
+                }
+            }
+            let currentMagnitude = abs(result[index].turnDetectedPixelOffset.x)
+            guard futureMagnitude > currentMagnitude + turnMacroOwnershipBandStartPixels else {
+                continue
+            }
+            let futureMacro = result[futureIndex].macroPixelOffset.x
+            guard abs(futureMacro) > Float.ulpOfOne else {
+                continue
+            }
+            let build = confidenceRamp(
+                futureMagnitude - currentMagnitude,
+                start: turnMacroOwnershipBandStartPixels,
+                full: turnMacroOwnershipBandFullPixels
+            )
+            let preRoll = -futureMacro * 0.30 * strength * build
+            result[index].macroPixelOffset.x += preRoll
+        }
+
+        for index in result.indices {
+            result[index].pixelOffset = playbackTrajectoryComposedPixelOffset(result[index])
+            result[index].rawPixelOffset = result[index].pixelOffset
+        }
+        return result
     }
 
     private static func playbackTrajectoryShortShockDespikedPath(

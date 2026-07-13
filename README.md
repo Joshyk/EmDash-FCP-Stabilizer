@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.1.32` uses schema 51 all-axis Camera Jitter analysis. It stores
+Version `1.1.33` uses schema 51 all-axis Camera Jitter analysis. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
@@ -148,8 +148,10 @@ does not fight broad Turn Smoothing during real horizontal turns.
 to `12.0` and ranges from `0.00...36.00`; `0` disables TURN correction and `36`
 requests the maximum confidence-qualified X correction. `Turn Transition Window (s)`
 independently selects the `0.5...8.0` second same-direction pan span that is grouped as
-one turn and distributed through a causal, recent-history S curve. A larger Window starts
-earlier, retains more prior pan travel, and moves more slowly; it is not a second strength slider. Actual
+one turn and distributed through a causal, recent-history S curve. A larger Window retains
+more prior pan travel and moves more slowly; a curve may pre-roll by up to 30% of its known
+Turn X travel. Camera Jitter X is made mean-free within that Window so it cannot become a
+second low-frequency pan owner. Actual
 correction still requires tracking evidence and real X-turn travel.
 With `Remove Black Edges` off, Auto Crop is completely bypassed: scale is exactly `1.0`
 and its look-ahead position reservation is not mixed into TURN. The uncovered edge is
