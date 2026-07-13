@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.40"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_004.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 40.0, 1_004.0)
+private let tokyoWalkingStabilizerVersion = "1.1.41"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_005.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 41.0, 1_005.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_439_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_440_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -68,9 +68,9 @@ private let stabilizerDefaultTurnTransitionWindow = 5.0
 private let stabilizerMaximumTurnSmoothingZoom = 36.0
 private let stabilizerMaximumTurnSmoothingZoomScale: Float = 1.5
 private let stabilizerMaximumFarFieldWarpStrength = 12.0
-private let stabilizerDefaultAutoCropTransitionDuration = 10.0
+private let stabilizerDefaultAutoCropTransitionDuration = 6.0
 private let stabilizerMaximumAutoCropTransitionDuration = 30.0
-private let stabilizerDefaultAutoCropLeadTime = 10.0
+private let stabilizerDefaultAutoCropLeadTime = 6.0
 private let stabilizerMaximumAutoCropLeadTime = 120.0
 private let stabilizerDefaultAutoCropHoldTime = 2.0
 private let stabilizerMaximumAutoCropHoldTime = 30.0
@@ -5468,12 +5468,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             guard duration > 1e-9 else {
                 continue
             }
+            let direction: Float = transforms[firstActive].turnDetectedPixelOffset.x >= 0.0 ? 1.0 : -1.0
             let startMacroX = transforms[startIndex].macroPixelOffset.x
-            let endMacroX = transforms[endIndex].macroPixelOffset.x
-            let cumulativeX = endMacroX - startMacroX
-            guard abs(cumulativeX) >= activityThreshold else {
+            var cumulativeMagnitude = Float(0.0)
+            if startIndex < endIndex {
+                for index in (startIndex + 1)...endIndex {
+                    let localDelta = transforms[index].macroPixelOffset.x
+                        - transforms[index - 1].macroPixelOffset.x
+                    // Accumulate only motion in the group's direction. A later
+                    // relaxation toward neutral must not erase earlier turns,
+                    // so increasing Window can only preserve or add authority.
+                    cumulativeMagnitude += max(0.0, localDelta * direction)
+                }
+            }
+            let cumulativeX = cumulativeMagnitude * direction
+            guard cumulativeMagnitude >= activityThreshold else {
                 continue
             }
+            let endMacroX = startMacroX + cumulativeX
             loggedGroupID += 1
             for index in startIndex...endIndex {
                 let linear = Float((sampleSeconds[index] - startSeconds) / duration)
@@ -5490,7 +5502,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 loggedGroupID,
-                cumulativeX >= 0.0 ? "right" : "left",
+                direction >= 0.0 ? "right" : "left",
                 startSeconds,
                 endSeconds,
                 duration,

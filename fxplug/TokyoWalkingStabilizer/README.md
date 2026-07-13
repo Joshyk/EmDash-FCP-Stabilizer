@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.40` concatenates same-direction Turn activity inside Turn Transition Window into one cumulative S-curve viewport move and derives pre-turn zoom from that combined path. Turn Transition Window defaults to 5 seconds.
+- Version `1.1.41` accumulates same-direction frame-local Turn movement without subtracting later relaxation, so increasing Turn Transition Window cannot reduce Turn zoom. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
@@ -313,10 +313,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   frames avoid outside-source pixels. Turn it off to bypass Auto Crop crop-safe
   framing while checking playback cost; `Edge Display Mode`
   then decides whether outside-source pixels are stretched or black.
-- `Auto Crop Zoom-In Time`: default `10` seconds, range `0...120` seconds. This
+- `Auto Crop Zoom-In Time`: default `6` seconds, range `0...120` seconds. This
   parameter is retained for compatibility and now acts as the exact lead time
   into an internal Auto Crop zoom keypoint.
-- `Auto Crop Zoom-Out Time`: default `10` seconds, range `0...30` seconds. This
+- `Auto Crop Zoom-Out Time`: default `6` seconds, range `0...30` seconds. This
   parameter is retained for compatibility and now defines the exact release
   length after an Auto Crop zoom keypoint.
 - `Auto Crop Hold Time`: default `2` seconds, range `0...30` seconds. This
