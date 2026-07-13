@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.37"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_001.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 37.0, 1_001.0)
+private let tokyoWalkingStabilizerVersion = "1.1.38"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_002.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 38.0, 1_002.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_436_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_437_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -2265,6 +2265,27 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             Float(stabilizerMaximumTurnSmoothingZoom)
         )
         return boundedValue / max(Float(stabilizerMaximumTurnSmoothingZoom), Float.ulpOfOne)
+    }
+
+    private static func turnViewportAuthority(_ value: Double) -> Float {
+        // Keep zero exact so Turn cannot leak into the Camera Jitter-only crop.
+        // Reach full measured viewport overflow before the end of the control
+        // while preserving the 0...36 Inspector contract.
+        min(1.0, turnSmoothingZoomNormalized(value) * 1.5)
+    }
+
+    private static func turnViewportPlanningTransform(
+        _ transform: StabilizerAutoTransform,
+        turnSmoothingStrength: Double
+    ) -> StabilizerAutoTransform {
+        var plannedTransform = transform
+        let fullTurnMacroX = transform.macroPixelOffset.x
+        let plannedTurnMacroX = fullTurnMacroX * turnViewportAuthority(turnSmoothingStrength)
+        let turnDeltaX = plannedTurnMacroX - fullTurnMacroX
+        plannedTransform.macroPixelOffset.x += turnDeltaX
+        plannedTransform.pixelOffset.x += turnDeltaX
+        plannedTransform.rawPixelOffset.x += turnDeltaX
+        return plannedTransform
     }
 
     private static func cropOffDiagnosticFraming(
@@ -5636,16 +5657,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sampleSteps: samplingProfile.scaleSearchSampleSteps,
             iterations: samplingProfile.scaleSearchIterations
         )
-        // Make the existing 0...36 control more decisive without changing its
-        // endpoints: 0 remains no Turn crop and 36 remains full overflow use.
-        let turnStrength = min(1.0, turnSmoothingZoomNormalized(strengths.turnSmoothingZoom) * 1.5)
+        let turnStrength = turnViewportAuthority(strengths.turnSmoothingZoom)
         let turnOverflowScale = max(0.0, fullCropScale - cameraCropScale)
         let turnViewportDelta = fullPositionPixels - cameraPositionPixels
         let positionPixels = cameraPositionPixels + (turnViewportDelta * turnStrength)
         let scale = cameraCropScale + (turnOverflowScale * turnStrength)
-        let overflowPixels = turnOverflowScale * outputSize.x * 0.5
-        let turnOverflowLeftPixels = turnViewportDelta.x < 0.0 ? overflowPixels : 0.0
-        let turnOverflowRightPixels = turnViewportDelta.x > 0.0 ? overflowPixels : 0.0
         return AutoCropZoomDemandSample(
             seconds: seconds,
             scale: scale,
@@ -5653,7 +5669,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             neutralScale: cameraCropScale,
             neutralPositionPixels: cameraPositionPixels,
             turnZoomScale: max(1.0, 1.0 + (turnOverflowScale * turnStrength)),
-            transform: transform
+            // Coverage repair must use the same Strength-scaled Turn path.
+            // Supplying the full transform here made Strength 0 and 12 converge
+            // to the same full-Turn coverage floor.
+            transform: turnViewportPlanningTransform(
+                transform,
+                turnSmoothingStrength: strengths.turnSmoothingZoom
+            )
         )
     }
 
@@ -10727,6 +10749,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let autoCropRenderTime = activeAnalysisRenderTime ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             let autoCropOutputSize = vector_float2(Float(outputWidth), Float(outputHeight))
             let playbackPreparationCacheIdentity = renderCacheIdentity
+            let autoCropPlanningTransform = Self.turnViewportPlanningTransform(
+                autoTransform,
+                turnSmoothingStrength: correctionStrengths.turnSmoothingZoom
+            )
             let autoCropPlaybackPlanPrepared: () -> Void = { [weak self] in
                 guard let self else {
                     return
@@ -10739,7 +10765,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let rawAutoCropFraming = Self.cachedAutoCropFraming(
                 preparedAnalysis: preparedAnalysis,
                 renderTime: autoCropRenderTime,
-                currentTransform: autoTransform,
+                currentTransform: autoCropPlanningTransform,
                 outputSize: autoCropOutputSize,
                 panSmoothSeconds: 0.0,
                 strengths: correctionStrengths,
