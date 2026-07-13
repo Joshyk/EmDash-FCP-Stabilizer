@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.1.38` keeps Auto Crop coverage repair on the same Strength-scaled Turn viewport path, so Strength 0 retains only Camera Jitter crop while higher values add proportional Turn framing. Turn Transition Window defaults to 5 seconds.
+- Version `1.1.39` measures Turn overflow against the Camera-only viewport before position tracking can cancel it, so Strength adds proportional pre-turn zoom and framing. Turn Transition Window defaults to 5 seconds.
   Schema 51 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback

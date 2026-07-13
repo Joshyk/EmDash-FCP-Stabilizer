@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.38"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_002.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 38.0, 1_002.0)
+private let tokyoWalkingStabilizerVersion = "1.1.39"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_003.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 39.0, 1_003.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_437_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_438_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -5653,7 +5653,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         let fullCropScale = requiredAutoCropScale(
             context: context,
-            cropPositionPixels: fullPositionPixels,
+            // Measure Turn overflow against the Camera-only viewport. Measuring
+            // after following the full Turn position cancels the left/right
+            // overflow and makes every Turn Strength produce the same zoom.
+            cropPositionPixels: cameraPositionPixels,
             sampleSteps: samplingProfile.scaleSearchSampleSteps,
             iterations: samplingProfile.scaleSearchIterations
         )
