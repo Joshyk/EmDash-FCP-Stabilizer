@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.41"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_005.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 41.0, 1_005.0)
+private let tokyoWalkingStabilizerVersion = "1.1.42"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_006.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 42.0, 1_006.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_440_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_441_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -2268,10 +2268,29 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func turnViewportAuthority(_ value: Double) -> Float {
-        // Keep zero exact so Turn cannot leak into the Camera Jitter-only crop.
-        // Reach full measured viewport overflow before the end of the control
-        // while preserving the 0...36 Inspector contract.
-        min(1.0, turnSmoothingZoomNormalized(value) * 1.5)
+        let boundedValue = min(max(Float(value.isFinite ? value : 0.0), 0.0), 36.0)
+        // New contract: 12 equals the former full (36) viewport authority and
+        // 36 applies three times that zoom and X movement.
+        return boundedValue / 12.0
+    }
+
+    private static func fullTurnAnalysisStrengths(
+        _ strengths: StabilizerCorrectionStrengths
+    ) -> StabilizerCorrectionStrengths {
+        guard turnViewportAuthority(strengths.turnSmoothingZoom) > Float.ulpOfOne else {
+            return strengths
+        }
+        // Generate one stable full-authority Turn path, then apply the UI value
+        // exactly once in viewport space. This avoids estimator x viewport
+        // double scaling and makes 12 match the former 36 result.
+        return StabilizerCorrectionStrengths(
+            cameraJitterX: strengths.cameraJitterX,
+            cameraJitterY: strengths.cameraJitterY,
+            cameraJitterRotation: strengths.cameraJitterRotation,
+            farFieldWarp: strengths.farFieldWarp,
+            turnSmoothingZoom: 36.0,
+            turnTransitionWindowSeconds: strengths.turnTransitionWindowSeconds
+        )
     }
 
     private static func turnViewportPlanningTransform(
@@ -5352,6 +5371,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> [AutoCropZoomDemandSample] {
+        let turnAnalysisStrengths = fullTurnAnalysisStrengths(strengths)
         let rawTransforms: [StabilizerAutoTransform]
         if samplingProfile == .playback {
             rawTransforms = AutoStabilizationEstimator.playbackEstimates(
@@ -5359,7 +5379,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 sampleSeconds: sampleSeconds,
                 outputSize: outputSize,
                 panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths
+                strengths: turnAnalysisStrengths
             )
         } else {
             rawTransforms = sampleSeconds.map { seconds in
@@ -5368,7 +5388,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     seconds: seconds,
                     outputSize: outputSize,
                     panSmoothSeconds: panSmoothSeconds,
-                    strengths: strengths,
+                    strengths: turnAnalysisStrengths,
                     samplingProfile: samplingProfile,
                     analysisRevision: analysisRevision,
                     cacheIdentity: cacheIdentity
