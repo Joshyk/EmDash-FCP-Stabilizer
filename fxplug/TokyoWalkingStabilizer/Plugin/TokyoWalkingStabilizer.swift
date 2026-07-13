@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.39"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_003.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 39.0, 1_003.0)
+private let tokyoWalkingStabilizerVersion = "1.1.40"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_004.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 40.0, 1_004.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_438_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_439_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -5317,41 +5317,26 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         cacheIdentity: String?
     ) -> [AutoCropZoomDemandSample] {
         let step = max(stepSeconds, stabilizerAutoCropDemandMinimumStepSeconds)
-        var samples: [AutoCropZoomDemandSample] = []
+        var sampleSeconds: [Double] = []
         var seconds = startSeconds
         while seconds <= endSeconds + 1e-9 {
-            if let sample = autoCropZoomDemandSample(
-                preparedAnalysis: preparedAnalysis,
-                seconds: seconds,
-                outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
-                masterStrength: masterStrength,
-                samplingProfile: samplingProfile,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
-            ) {
-                samples.append(sample)
-            }
+            sampleSeconds.append(seconds)
             seconds += step
         }
-        if abs((samples.last?.seconds ?? startSeconds) - endSeconds) > 1e-6,
-           let lastSample = autoCropZoomDemandSample(
-               preparedAnalysis: preparedAnalysis,
-               seconds: endSeconds,
-               outputSize: outputSize,
-               panSmoothSeconds: panSmoothSeconds,
-               strengths: strengths,
-               masterStrength: masterStrength,
-               samplingProfile: samplingProfile,
-               analysisRevision: analysisRevision,
-               cacheIdentity: cacheIdentity
-           ) {
-            samples.append(lastSample)
+        if abs((sampleSeconds.last ?? startSeconds) - endSeconds) > 1e-6 {
+            sampleSeconds.append(endSeconds)
         }
-        return autoCropDemandSamplesWithForwardTurnZoomLookahead(
-            samples,
-            lookaheadSeconds: turnZoomLookaheadSeconds
+        return autoCropZoomDemandSamples(
+            preparedAnalysis: preparedAnalysis,
+            sampleSeconds: sampleSeconds,
+            outputSize: outputSize,
+            panSmoothSeconds: panSmoothSeconds,
+            turnZoomLookaheadSeconds: turnZoomLookaheadSeconds,
+            strengths: strengths,
+            masterStrength: masterStrength,
+            samplingProfile: samplingProfile,
+            analysisRevision: analysisRevision,
+            cacheIdentity: cacheIdentity
         )
     }
 
@@ -5367,47 +5352,47 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisRevision: UInt64,
         cacheIdentity: String?
     ) -> [AutoCropZoomDemandSample] {
-        var samples: [AutoCropZoomDemandSample] = []
-        samples.reserveCapacity(sampleSeconds.count)
+        let rawTransforms: [StabilizerAutoTransform]
         if samplingProfile == .playback {
-            let transforms = AutoStabilizationEstimator.playbackEstimates(
+            rawTransforms = AutoStabilizationEstimator.playbackEstimates(
                 preparedAnalysis: preparedAnalysis,
                 sampleSeconds: sampleSeconds,
                 outputSize: outputSize,
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths
             )
-            guard transforms.count == sampleSeconds.count else {
-                return samples
-            }
-            for (seconds, transform) in zip(sampleSeconds, transforms) {
-                if let sample = autoCropZoomDemandSample(
+        } else {
+            rawTransforms = sampleSeconds.map { seconds in
+                autoCropTimelineTransform(
+                    preparedAnalysis: preparedAnalysis,
                     seconds: seconds,
-                    transform: transform,
                     outputSize: outputSize,
-                    masterStrength: masterStrength,
+                    panSmoothSeconds: panSmoothSeconds,
                     strengths: strengths,
-                    samplingProfile: samplingProfile
-                ) {
-                    samples.append(sample)
-                }
+                    samplingProfile: samplingProfile,
+                    analysisRevision: analysisRevision,
+                    cacheIdentity: cacheIdentity
+                )
             }
-            return autoCropDemandSamplesWithForwardTurnZoomLookahead(
-                samples,
-                lookaheadSeconds: turnZoomLookaheadSeconds
-            )
         }
-        for seconds in sampleSeconds {
+        guard rawTransforms.count == sampleSeconds.count else {
+            return []
+        }
+        let transforms = autoCropConcatenatedTurnTransforms(
+            sampleSeconds: sampleSeconds,
+            transforms: rawTransforms,
+            windowSeconds: strengths.turnTransitionWindowSeconds
+        )
+        var samples: [AutoCropZoomDemandSample] = []
+        samples.reserveCapacity(sampleSeconds.count)
+        for (seconds, transform) in zip(sampleSeconds, transforms) {
             if let sample = autoCropZoomDemandSample(
-                preparedAnalysis: preparedAnalysis,
                 seconds: seconds,
+                transform: transform,
                 outputSize: outputSize,
-                panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths,
                 masterStrength: masterStrength,
+                strengths: strengths,
                 samplingProfile: samplingProfile,
-                analysisRevision: analysisRevision,
-                cacheIdentity: cacheIdentity
             ) {
                 samples.append(sample)
             }
@@ -5416,6 +5401,106 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             samples,
             lookaheadSeconds: turnZoomLookaheadSeconds
         )
+    }
+
+    private static func autoCropConcatenatedTurnTransforms(
+        sampleSeconds: [Double],
+        transforms: [StabilizerAutoTransform],
+        windowSeconds: Double
+    ) -> [StabilizerAutoTransform] {
+        guard sampleSeconds.count == transforms.count,
+              transforms.count >= 3,
+              windowSeconds.isFinite,
+              windowSeconds > 0.0
+        else {
+            return transforms
+        }
+        let activityThreshold = Float(0.5)
+        let maximumSpan = max(0.5, windowSeconds)
+        let activeIndices = transforms.indices.filter {
+            abs(transforms[$0].turnDetectedPixelOffset.x) >= activityThreshold
+        }
+        guard activeIndices.count >= 2 else {
+            return transforms
+        }
+
+        var groups: [[Int]] = []
+        var currentGroup: [Int] = []
+        var currentSign = Float(0.0)
+        var groupStartSeconds = Double(0.0)
+        for index in activeIndices {
+            let value = transforms[index].turnDetectedPixelOffset.x
+            let sign: Float = value >= 0.0 ? 1.0 : -1.0
+            if currentGroup.isEmpty {
+                currentGroup = [index]
+                currentSign = sign
+                groupStartSeconds = sampleSeconds[index]
+                continue
+            }
+            let withinWindow = sampleSeconds[index] - groupStartSeconds <= maximumSpan + 1e-9
+            if sign == currentSign, withinWindow {
+                currentGroup.append(index)
+            } else {
+                groups.append(currentGroup)
+                currentGroup = [index]
+                currentSign = sign
+                groupStartSeconds = sampleSeconds[index]
+            }
+        }
+        if !currentGroup.isEmpty {
+            groups.append(currentGroup)
+        }
+
+        var result = transforms
+        var loggedGroupID = 0
+        for group in groups where group.count >= 2 {
+            guard let firstActive = group.first,
+                  let lastActive = group.last,
+                  lastActive > firstActive
+            else {
+                continue
+            }
+            let startIndex = max(transforms.startIndex, firstActive - 1)
+            let endIndex = min(transforms.index(before: transforms.endIndex), lastActive + 1)
+            let startSeconds = sampleSeconds[startIndex]
+            let endSeconds = sampleSeconds[endIndex]
+            let duration = endSeconds - startSeconds
+            guard duration > 1e-9 else {
+                continue
+            }
+            let startMacroX = transforms[startIndex].macroPixelOffset.x
+            let endMacroX = transforms[endIndex].macroPixelOffset.x
+            let cumulativeX = endMacroX - startMacroX
+            guard abs(cumulativeX) >= activityThreshold else {
+                continue
+            }
+            loggedGroupID += 1
+            for index in startIndex...endIndex {
+                let linear = Float((sampleSeconds[index] - startSeconds) / duration)
+                let t = min(max(linear, 0.0), 1.0)
+                let eased = t * t * (3.0 - (2.0 * t))
+                let concatenatedMacroX = startMacroX + (cumulativeX * eased)
+                let deltaX = concatenatedMacroX - result[index].macroPixelOffset.x
+                result[index].macroPixelOffset.x += deltaX
+                result[index].pixelOffset.x += deltaX
+                result[index].rawPixelOffset.x += deltaX
+            }
+            os_log(
+                "Turn viewport group | id %d direction %{public}s start %.3f end %.3f duration %.3f samples %d cumulativeX %.3f rawStart %.3f rawEnd %.3f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                loggedGroupID,
+                cumulativeX >= 0.0 ? "right" : "left",
+                startSeconds,
+                endSeconds,
+                duration,
+                group.count,
+                cumulativeX,
+                startMacroX,
+                endMacroX
+            )
+        }
+        return result
     }
 
     private static func autoCropDemandSamplesWithForwardTurnZoomLookahead(
