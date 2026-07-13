@@ -17551,7 +17551,7 @@ enum AutoStabilizationEstimator {
                 validCount: frames.count
             )
             let effectiveIndices = timingIndices.isEmpty ? timingSourceIndices : timingIndices
-            intentValues[index] = timeWeightedMonotonicSCurveValue(
+            let sCurveValue = timeWeightedMonotonicSCurveValue(
                 values,
                 frames: frames,
                 indices: effectiveIndices,
@@ -17564,6 +17564,25 @@ enum AutoStabilizationEstimator {
                 centerTime: centerTime,
                 windowSeconds: activeWindow
             )
+            if timing.active,
+               let causalValue = causalTurnWindowValue(
+                values,
+                frames: frames,
+                centerTime: centerTime,
+                windowSeconds: activeWindow
+               ) {
+                // Prepared playback uses this path, not the per-frame helper.
+                // Keep it identical to adaptiveXTurnSmoothValue so continuous
+                // pans receive the same Window-proportional TURN authority.
+                let travelBlend = confidenceRamp(
+                    timing.travelPixels,
+                    start: 12.0,
+                    full: 96.0
+                )
+                intentValues[index] = sCurveValue + ((causalValue - sCurveValue) * travelBlend)
+            } else {
+                intentValues[index] = sCurveValue
+            }
         }
         return (EstimatedPath(values: intentValues), maxTiming)
     }
