@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.1.35"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 999.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 35.0, 999.0)
+private let tokyoWalkingStabilizerVersion = "1.1.36"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_000.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 1.1, 36.0, 1_000.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_434_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_435_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -272,6 +272,10 @@ private struct AutoCropZoomDemandSample {
     let neutralPositionPixels: vector_float2
     let turnZoomScale: Float
     let transform: StabilizerAutoTransform
+    let cameraCropScale: Float = 1.0
+    let turnOverflowLeftPixels: Float = 0.0
+    let turnOverflowRightPixels: Float = 0.0
+    let turnViewportPositionX: Float = 0.0
 }
 
 private struct AutoCropZoomKeypoint {
@@ -5600,41 +5604,53 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputSize: outputSize,
             masterStrength: masterStrength
         )
-        let positionPixels = blackSafeAutoCropPosition(
+        var cameraOnlyTransform = transform
+        let turnMacroX = cameraOnlyTransform.macroPixelOffset.x
+        cameraOnlyTransform.macroPixelOffset.x = 0.0
+        cameraOnlyTransform.pixelOffset.x -= turnMacroX
+        cameraOnlyTransform.rawPixelOffset.x -= turnMacroX
+        let cameraOnlyContext = AutoCropTransformContext(
+            transform: cameraOnlyTransform,
+            outputSize: outputSize,
+            masterStrength: masterStrength
+        )
+        let cameraPositionPixels = blackSafeAutoCropPosition(
+            preferredPositionPixels: vector_float2(0.0, 0.0),
+            context: cameraOnlyContext,
+            samplingProfile: samplingProfile
+        )
+        let cameraCropScale = requiredAutoCropScale(
+            context: cameraOnlyContext,
+            cropPositionPixels: cameraPositionPixels,
+            sampleSteps: samplingProfile.scaleSearchSampleSteps,
+            iterations: samplingProfile.scaleSearchIterations
+        )
+        let fullPositionPixels = blackSafeAutoCropPosition(
             preferredPositionPixels: transform.macroPixelOffset * masterStrength,
             context: context,
             samplingProfile: samplingProfile
         )
-        let scale = requiredAutoCropScale(
+        let fullCropScale = requiredAutoCropScale(
             context: context,
-            cropPositionPixels: positionPixels,
+            cropPositionPixels: fullPositionPixels,
             sampleSteps: samplingProfile.scaleSearchSampleSteps,
             iterations: samplingProfile.scaleSearchIterations
         )
-        let turnZoomScale = autoCropTurnSmoothingZoomScale(
-            transform: transform,
-            outputSize: outputSize,
-            masterStrength: masterStrength,
-            strengths: strengths
-        )
-        let neutralPositionPixels = blackSafeAutoCropPosition(
-            preferredPositionPixels: vector_float2(0.0, 0.0),
-            context: context,
-            samplingProfile: samplingProfile
-        )
-        let neutralScale = requiredAutoCropScale(
-            context: context,
-            cropPositionPixels: neutralPositionPixels,
-            sampleSteps: samplingProfile.scaleSearchSampleSteps,
-            iterations: samplingProfile.scaleSearchIterations
-        )
+        let turnStrength = turnSmoothingZoomNormalized(strengths.turnSmoothingZoom)
+        let turnOverflowScale = max(0.0, fullCropScale - cameraCropScale)
+        let turnViewportDelta = fullPositionPixels - cameraPositionPixels
+        let positionPixels = cameraPositionPixels + (turnViewportDelta * turnStrength)
+        let scale = cameraCropScale + (turnOverflowScale * turnStrength)
+        let overflowPixels = turnOverflowScale * outputSize.x * 0.5
+        let turnOverflowLeftPixels = turnViewportDelta.x < 0.0 ? overflowPixels : 0.0
+        let turnOverflowRightPixels = turnViewportDelta.x > 0.0 ? overflowPixels : 0.0
         return AutoCropZoomDemandSample(
             seconds: seconds,
-            scale: max(scale, turnZoomScale),
+            scale: scale,
             positionPixels: positionPixels,
-            neutralScale: neutralScale,
-            neutralPositionPixels: neutralPositionPixels,
-            turnZoomScale: turnZoomScale,
+            neutralScale: cameraCropScale,
+            neutralPositionPixels: cameraPositionPixels,
+            turnZoomScale: max(1.0, 1.0 + (turnOverflowScale * turnStrength)),
             transform: transform
         )
     }
@@ -10736,26 +10752,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 onPlaybackPreparationReady: autoCropPlaybackPlanPrepared
             )
             autoCropFraming = rawAutoCropFraming
-        } else if renderUsesPreparedAnalysis,
-                  let preparedAnalysis = activePreparedAnalysis {
-            let autoCropRenderTime = activeAnalysisRenderTime ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
-            let turnReservation = Self.cachedAutoCropFraming(
-                preparedAnalysis: preparedAnalysis,
-                renderTime: autoCropRenderTime,
-                currentTransform: autoTransform,
-                outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-                panSmoothSeconds: 0.0,
-                strengths: correctionStrengths,
-                masterStrength: masterStrength,
-                transitionDuration: state.autoCropTransitionDuration,
-                leadTime: state.autoCropLeadTime,
-                holdTime: state.autoCropHoldTime,
-                samplingProfile: autoCropSamplingProfile,
-                renderQualityLevel: state.renderQualityLevel,
-                analysisRevision: renderStoreRevision,
-                cacheIdentity: renderCacheIdentity
-            )
-            autoCropFraming = Self.cropOffDiagnosticFraming(autoCropFraming: turnReservation)
         } else {
             autoCropFraming = .identity
         }
@@ -10782,14 +10778,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let renderedAutoCropFraming: AutoCropFraming = previewWarmupDecision.active
             ? .identity
             : autoCropFraming
-        if !state.autoCropEnabled {
-            // Crop-off exposes the exact crop-on center path at 1.0x.  Only
-            // outside pixels differ, so it remains a display/debug toggle.
-            let matchingPositionOffset = -renderedAutoCropFraming.positionPixels.x
-            renderedAutoTransform.macroPixelOffset.x += matchingPositionOffset
-            renderedAutoTransform.pixelOffset.x += matchingPositionOffset
-            renderedAutoTransform.rawPixelOffset.x += matchingPositionOffset
-        }
+        // TURN owns only the Auto Crop viewport.  It never directly translates
+        // the source texture: Crop off therefore hides TURN completely, while
+        // Crop on renders its strength-scaled viewport position and zoom.
+        let turnMacroX = renderedAutoTransform.macroPixelOffset.x
+        renderedAutoTransform.macroPixelOffset.x = 0.0
+        renderedAutoTransform.pixelOffset.x -= turnMacroX
+        renderedAutoTransform.rawPixelOffset.x -= turnMacroX
         renderedAutoTransform = cameraRigidFinalLimitTransform(
             renderedAutoTransform,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
