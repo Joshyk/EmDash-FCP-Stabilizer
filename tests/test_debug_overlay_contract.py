@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import plistlib
 import re
 
 
@@ -9,6 +10,11 @@ METAL = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizerTrans
 SWIFT = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizer.swift"
 ESTIMATOR = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/AutoStabilizationEstimator.swift"
 E2E = ROOT / "scripts/stabilizer_fcp_screen_capture_e2e.sh"
+VERSION_PLISTS = [
+    ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/Info.plist",
+    ROOT / "fxplug/TokyoWalkingStabilizer/WrapperApp/Info.plist",
+    ROOT / "fxplug/TokyoWalkingStabilizer/WrapperApp/version.plist",
+]
 
 ROWS = [
     "XOffset",
@@ -116,6 +122,13 @@ for row, expected_label in zip(ROWS[:-1], LABELS[:-1]):
 
 if "vector_float4(1.0, 2.0, 2.0, 1_009.0)" not in swift:
     fail("Swift runtime version components do not encode version 1.2.2")
+for plist_path in VERSION_PLISTS:
+    with plist_path.open("rb") as handle:
+        version_info = plistlib.load(handle)
+    if version_info.get("CFBundleShortVersionString") != "1.2.2":
+        fail(f"bundle version is not 1.2.2: {plist_path}")
+    if version_info.get("CFBundleVersion") != "1009":
+        fail(f"bundle build does not match runtime build 1009: {plist_path}")
 if "patch >= 10 ? debugDigitChar(patch / 10)" not in metal:
     fail("Metal runtime label does not suppress patch-version leading zeroes")
 if "// PROXY" not in metal or "// ORIGINAL" not in metal:
