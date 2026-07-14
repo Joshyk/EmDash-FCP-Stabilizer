@@ -22,6 +22,22 @@ struct AutoCropScalePolicyTests {
         let tinyInactiveDemand = Float(1.0) + (StabilizerAutoCropScalePolicy.coverageActivationDelta * 0.5)
         expect(close(StabilizerAutoCropScalePolicy.keypointScale(forDemandScale: tinyInactiveDemand), 1.0), "sub-threshold numerical noise must not create crop")
 
+        let onePixelBoundaryGuardAt1080p = Float(1080.0 / 1078.0)
+        expect(
+            close(
+                StabilizerAutoCropScalePolicy.keypointScale(forDemandScale: onePixelBoundaryGuardAt1080p),
+                onePixelBoundaryGuardAt1080p
+            ),
+            "one-pixel boundary guard must not receive extra keypoint padding"
+        )
+        expect(
+            close(
+                StabilizerAutoCropScalePolicy.playbackMinimumClippedScale(onePixelBoundaryGuardAt1080p),
+                onePixelBoundaryGuardAt1080p
+            ),
+            "one-pixel boundary guard must not receive adaptive playback padding"
+        )
+
         let requiredScale: Float = 1.012
         let protectedScale = StabilizerAutoCropScalePolicy.keypointScale(forDemandScale: requiredScale)
         expect(protectedScale >= requiredScale - StabilizerAutoCropScalePolicy.coverageToleranceDelta, "active crop must preserve the measured coverage floor")

@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.2.3` is the current review baseline for all-axis Camera Jitter.
+Version `1.2.4` is the current review baseline for all-axis Camera Jitter.
 Use schema 52 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;
@@ -137,8 +137,9 @@ fallbacks.
   coverage repair pass checks the prepared analysis against that curve and adds
   only the keypoints needed to keep the curve above black-edge safety demand, so
   occasional outside-source boxes do not force frame-by-frame zoom calculation.
-  A truly idle transform remains at `1.0x`; there is no fixed base crop. Adaptive
-  safety margin starts only after measured crop demand becomes active.
+  There is no fixed base-crop padding. A truly idle transform retains only the
+  one-pixel boundary guard (about `1.0019x` at 1080p); adaptive safety margin is
+  reserved for larger measured crop demand.
   Low-demand coverage misses are folded back into the smooth keypoint plan so
   subtle black-edge fixes do not become per-frame crop wobble. Low-demand
   keypoints that sit near identity halve their zoom delta and use shorter timing,

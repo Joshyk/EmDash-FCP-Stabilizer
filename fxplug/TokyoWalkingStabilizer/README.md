@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.2.3` maps Turn Smoothing Strength linearly in viewport space: 12 equals the former 36 result and 36 applies three times that zoom and X movement. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
+- Version `1.2.4` maps Turn Smoothing Strength linearly in viewport space: 12 equals the former 36 result and 36 applies three times that zoom and X movement. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
   Schema 52 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
@@ -331,9 +331,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   center inside the planned scale. A coverage repair pass checks the
   prepared analysis against that curve and adds only the keypoints needed to keep
   the curve above black-edge safety demand, so occasional outside-source boxes do
-  not force frame-by-frame zoom calculation. Identity demand remains exactly
-  `1.0x` with no fixed base-crop padding; adaptive safety starts only for measured
-  active demand. Low-demand keypoints that sit near
+  not force frame-by-frame zoom calculation. There is no fixed base-crop padding:
+  an idle transform retains only the one-pixel boundary guard (about `1.0019x` at
+  1080p), without adaptive padding. Low-demand keypoints that sit near
   identity halve their zoom delta and use shorter keypoint timing, so subtle or
   nearly idle sections do not remain as visibly cropped while strong turn peaks
   keep their full planned zoom. When no keypoint is active and the transform

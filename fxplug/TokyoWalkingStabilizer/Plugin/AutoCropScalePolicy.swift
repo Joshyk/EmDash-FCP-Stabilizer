@@ -2,6 +2,7 @@ import Foundation
 
 enum StabilizerAutoCropScalePolicy {
     static let coverageActivationDelta: Float = 0.0005
+    static let unbufferedDemandMaximumDelta: Float = 0.006
     static let subtleZoomMaximumDelta: Float = 0.08
     static let subtleZoomMultiplier: Float = 0.5
     static let coverageToleranceDelta: Float = 0.0005
@@ -14,6 +15,9 @@ enum StabilizerAutoCropScalePolicy {
         let demandDelta = safeDemandScale - Float(1.0)
         guard demandDelta > coverageActivationDelta else {
             return Float(1.0)
+        }
+        guard demandDelta > unbufferedDemandMaximumDelta else {
+            return safeDemandScale
         }
         guard demandDelta <= subtleZoomMaximumDelta else {
             return safeDemandScale
@@ -28,6 +32,9 @@ enum StabilizerAutoCropScalePolicy {
         let demandDelta = max(Float(0.0), safeScale - Float(1.0))
         guard demandDelta > coverageActivationDelta else {
             return Float(1.0)
+        }
+        guard demandDelta > unbufferedDemandMaximumDelta else {
+            return safeScale
         }
         let adaptiveMinimumDelta = min(
             playbackMinimumClipScaleDelta,

@@ -121,14 +121,14 @@ for row, expected_label in zip(ROWS[:-1], LABELS[:-1]):
         )
 
 if "vector_float4(1.0, 2.0, 2.0, 1_009.0)" not in swift:
-    fail("Swift runtime version components do not encode version 1.2.3")
+    fail("Swift runtime version components do not encode version 1.2.4")
 for plist_path in VERSION_PLISTS:
     with plist_path.open("rb") as handle:
         version_info = plistlib.load(handle)
-    if version_info.get("CFBundleShortVersionString") != "1.2.3":
-        fail(f"bundle version is not 1.2.3: {plist_path}")
-    if version_info.get("CFBundleVersion") != "1010":
-        fail(f"bundle build does not match runtime build 1010: {plist_path}")
+    if version_info.get("CFBundleShortVersionString") != "1.2.4":
+        fail(f"bundle version is not 1.2.4: {plist_path}")
+    if version_info.get("CFBundleVersion") != "1011":
+        fail(f"bundle build does not match runtime build 1011: {plist_path}")
 if "patch >= 10 ? debugDigitChar(patch / 10)" not in metal:
     fail("Metal runtime label does not suppress patch-version leading zeroes")
 if "// PROXY" not in metal or "// ORIGINAL" not in metal:
