@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.2.2` uses schema 52 all-axis Camera Jitter analysis. It stores
+Version `1.2.3` uses schema 52 all-axis Camera Jitter analysis. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
@@ -201,6 +201,10 @@ back into the smooth keypoint plan so subtle black-edge fixes do not become
 per-frame crop wobble. Low-demand keypoints that sit near identity halve their
 zoom delta and use shorter keypoint timing, so subtle or nearly idle sections do
 not remain as visibly cropped while strong turn peaks keep their full planned zoom.
+Identity demand stays at exactly `1.0x`: Auto Crop does not add fixed base-crop
+padding. Once measured transform demand exceeds the numerical-noise threshold,
+the playback plan retains its adaptive safety margin and the coverage repair pass
+remains authoritative for black-edge protection.
 After coverage repair, micro zoom keypoints at demand scale `<= 1.03` are merged
 when their windows touch and their crop centers stay close, then coverage is
 checked again before the merged plan is accepted. The Host Analysis status shown

@@ -54,7 +54,7 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.2.2"
+private let tokyoWalkingStabilizerVersion = "1.2.3"
 private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_009.0
 private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 2.0, 2.0, 1_009.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
@@ -74,9 +74,8 @@ private let stabilizerDefaultAutoCropLeadTime = 6.0
 private let stabilizerMaximumAutoCropLeadTime = 120.0
 private let stabilizerDefaultAutoCropHoldTime = 2.0
 private let stabilizerMaximumAutoCropHoldTime = 30.0
-private let stabilizerAutoCropActiveScalePadding: Float = 0.012
 private let stabilizerAutoCropKeypointScaleThresholdDelta: Float = 0.006
-private let stabilizerAutoCropKeypointCoverageThresholdDelta: Float = 0.0005
+private let stabilizerAutoCropKeypointCoverageThresholdDelta = StabilizerAutoCropScalePolicy.coverageActivationDelta
 private let stabilizerAutoCropMicroMergeScaleThreshold: Float = 1.03
 private let stabilizerAutoCropMicroMergeTouchGapSeconds = 0.25
 private let stabilizerAutoCropMicroMergeMinimumPositionTolerance: Float = 8.0
@@ -85,11 +84,9 @@ private let stabilizerAutoCropKeypointRefineRadiusSeconds = 2.0
 private let stabilizerAutoCropKeypointRefineStepSeconds = 0.25
 private let stabilizerAutoCropKeypointMaximumCount = 64
 private let stabilizerAutoCropKeypointLogLimit = 6
-private let stabilizerAutoCropKeypointCoverageToleranceDelta: Float = 0.0005
+private let stabilizerAutoCropKeypointCoverageToleranceDelta = StabilizerAutoCropScalePolicy.coverageToleranceDelta
 private let stabilizerAutoCropKeypointDuplicateSeconds = 0.125
 private let stabilizerAutoCropKeypointCoveragePassLimit = 64
-private let stabilizerAutoCropSubtleZoomMaximumDelta: Float = 0.08
-private let stabilizerAutoCropSubtleZoomMultiplier: Float = 0.5
 private let stabilizerCropOffEdgeGuardMaximumScaleDelta: Float = 0.012
 private let stabilizerCropOffEdgeGuardBaseScaleDelta: Float = 0.006
 private let stabilizerCropOffEdgeGuardLargeDemandPixels: Float = 20.0
@@ -101,9 +98,7 @@ private let stabilizerAutoCropIdleSampleStepSeconds = 0.25
 private let stabilizerAutoCropDemandMinimumStepSeconds = 1.0 / 60.0
 private let stabilizerAutoCropPlaybackScalePlanStepSeconds = 1.0 / 60.0
 private let stabilizerAutoCropPlaybackScaleQuantization: Float = 0.0001
-private let stabilizerAutoCropPlaybackMinimumClipScaleDelta: Float = 0.018
-private let stabilizerAutoCropPlaybackAdaptiveClipPaddingDelta: Float = 0.004
-private let stabilizerAutoCropPlaybackAdaptiveClipMultiplier: Float = 1.5
+private let stabilizerAutoCropPlaybackMinimumClipScaleDelta = StabilizerAutoCropScalePolicy.playbackMinimumClipScaleDelta
 private let stabilizerAutoCropPlaybackEnvelopeRadiusSeconds = 1.25
 private let stabilizerAutoCropPlaybackPositionEnvelopeRadiusSeconds = 1.25
 private let stabilizerAutoCropPlaybackPositionRateLimitFractionPerSecond: Float = 0.0
@@ -3838,20 +3833,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func autoCropPlaybackMinimumClippedScale(_ scale: Float) -> Float {
-        let safeScale = max(Float(1.0), scale.isFinite ? scale : Float(1.0))
-        let demandDelta = max(Float(0.0), safeScale - Float(1.0))
-        guard demandDelta > stabilizerAutoCropKeypointCoverageThresholdDelta else {
-            return safeScale
-        }
-        let adaptiveMinimumDelta = min(
-            stabilizerAutoCropPlaybackMinimumClipScaleDelta,
-            max(
-                demandDelta + stabilizerAutoCropPlaybackAdaptiveClipPaddingDelta,
-                demandDelta * stabilizerAutoCropPlaybackAdaptiveClipMultiplier
-            )
-        )
-        let minimumClipScale = Float(1.0) + adaptiveMinimumDelta
-        return max(minimumClipScale, safeScale)
+        StabilizerAutoCropScalePolicy.playbackMinimumClippedScale(scale)
     }
 
     private static func autoCropPlaybackScalePlanSampleSeconds(
@@ -5538,15 +5520,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     }
 
     private static func autoCropZoomKeypointScale(forDemandScale demandScale: Float) -> Float {
-        let safeDemandScale = max(Float(1.0), demandScale.isFinite ? demandScale : Float(1.0))
-        let paddedScale = safeDemandScale + stabilizerAutoCropActiveScalePadding
-        let paddedDelta = max(Float(0.0), paddedScale - Float(1.0))
-        guard paddedDelta <= stabilizerAutoCropSubtleZoomMaximumDelta else {
-            return paddedScale
-        }
-        let attenuatedScale = Float(1.0) + (paddedDelta * stabilizerAutoCropSubtleZoomMultiplier)
-        let safetyFloor = max(Float(1.0), safeDemandScale - stabilizerAutoCropKeypointCoverageToleranceDelta)
-        return max(attenuatedScale, safetyFloor)
+        StabilizerAutoCropScalePolicy.keypointScale(forDemandScale: demandScale)
     }
 
     private static func autoCropZoomDemandSamples(
