@@ -3431,6 +3431,35 @@ enum AutoStabilizationEstimator {
         return sampleSeconds.map { trajectory.transform(at: $0, outputSize: outputSize) }
     }
 
+    static func playbackEstimatesIfReady(
+        preparedAnalysis analysis: StabilizerPreparedAnalysis,
+        sampleSeconds: [Double],
+        outputSize: vector_float2,
+        panSmoothSeconds: Double,
+        strengths: StabilizerCorrectionStrengths = .defaultStrengths,
+        shouldCancel: () -> Bool = { false }
+    ) -> [StabilizerAutoTransform]? {
+        guard !sampleSeconds.isEmpty else {
+            return []
+        }
+        guard let trajectory = cachedPlaybackTrajectory(
+            for: analysis,
+            panSmoothSeconds: panSmoothSeconds,
+            strengths: strengths
+        ) else {
+            return nil
+        }
+        var transforms: [StabilizerAutoTransform] = []
+        transforms.reserveCapacity(sampleSeconds.count)
+        for (index, seconds) in sampleSeconds.enumerated() {
+            if index.isMultiple(of: 128), shouldCancel() {
+                return nil
+            }
+            transforms.append(trajectory.transform(at: seconds, outputSize: outputSize))
+        }
+        return shouldCancel() ? nil : transforms
+    }
+
     static func playbackPreparedPathLookupEstimate(
         preparedAnalysis analysis: StabilizerPreparedAnalysis,
         renderSeconds: Double,
@@ -5550,6 +5579,16 @@ enum AutoStabilizationEstimator {
                     log: stabilizerHostAnalysisLog,
                     type: .default,
                     analysis.frames.count,
+                    (CFAbsoluteTimeGetCurrent() - preparationStartedAt) * 1000.0,
+                    cancellationSupersededCount
+                )
+            } else {
+                os_log(
+                    "Playback trajectory final key prepared | frames %d turn %.2f elapsed %.3fms superseded %llu",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    analysis.frames.count,
+                    strengths.turnSmoothingZoom,
                     (CFAbsoluteTimeGetCurrent() - preparationStartedAt) * 1000.0,
                     cancellationSupersededCount
                 )
