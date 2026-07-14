@@ -174,16 +174,17 @@ fallbacks.
 - Older saved timeline instances can keep stale saved Inspector strings, so check the compact
   runtime/source row in `Debug Overlay` when confirming the active render runtime.
 - `Debug Overlay`: a fixed 21-row top-left diagnostic contract, ordered as
-  `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
-  `LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T CONF`, `S CONF`, `F CONF`,
-  `W CONF`, `L CONF`, then the compact runtime/source row. `R###` means the current FxPlug runtime is rendering
-  original/optimized frames, while `P###` means proxy playback is using the same
-  saved-analysis correction path; the digits are derived from the active FxPlug version.
+  `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `STRIDE WOBBLE`, `FOOTSTEP JITTER`, `FAR WARP`,
+  `LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
+  `TURN CONFIDENCE`, `STRIDE CONFIDENCE`, `FOOTSTEP CONFIDENCE`, `WARP CONFIDENCE`,
+  `LENS CONFIDENCE`, then the runtime/source row. `ORIGINAL <version>` means the current FxPlug runtime is rendering
+  original/optimized frames, while `PROXY <version>` means proxy playback is using the same
+  saved-analysis correction path; the version is derived from the active FxPlug runtime.
   The overlay scales from the current render output so the top-left panel occupies roughly
   half of the viewer height in original, optimized, and proxy playback.
   Activity rows use final values actually applied to Metal. `CROP` and `TURN` are zero when
-  Remove Black Edges is off. `LENS` includes only rendered band/ridge/local offsets and `L CONF`
-  reports their effective support. `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` are quality bars:
+  Remove Black Edges is off. `LENS` includes only rendered band/ridge/local offsets and `LENS CONFIDENCE`
+  reports their effective support. `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` are quality bars:
   higher is better. Confidence rows stay visible as analysis evidence even when Master Strength
   is zero. Unavailable residual or search-radius evidence is zero and logged as unavailable.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When
@@ -234,7 +235,7 @@ paths and prints `CAM`, `WARP`, and `TURN` in render-stage order,
 while the summary line names the highest remaining stage. `CAM` combines prepared
 frame-local, medium, and trajectory-continuity camera corrections before reporting its
 single authority value. It prints strict tracking and walking-band tracking separately,
-the raw impulse or band values. `WARP` `q` matches the applied `W CONF` confidence shown by
+the raw impulse or band values. `WARP` `q` matches the applied `WARP CONFIDENCE` shown by
 Debug Overlay. With `--time`, the report picks the highest-score frame inside
 the requested `--window` and prints both the requested note time and selected
 clip time. The report also prints residual quality, blur quality, block coverage,

@@ -213,16 +213,16 @@ returns to identity so idle shots settle near zero crop zoom.
 
 `Debug Overlay` shows labeled top-left diagnostics for the active correction
 bands and tracking state. It also includes a compact runtime/source row for the
-active render runtime and current source mode: `R###` means the current FxPlug
-runtime is rendering original/optimized frames, and `P###` means proxy playback
-is using the saved analysis path. The digits are derived from the active FxPlug
-version. It does not control black outside-source pixels; `Edge Display Mode`
+active render runtime and current source mode: `ORIGINAL <version>` means the current FxPlug
+runtime is rendering original/optimized frames, and `PROXY <version>` means proxy playback
+is using the saved analysis path. The version is derived from the active FxPlug runtime.
+It does not control black outside-source pixels; `Edge Display Mode`
 controls that separately.
 The overlay scales from the current render output so the top-left panel occupies
 roughly half of the viewer height in original, optimized, and proxy playback.
 Its correction rows are ordered from final rigid/crop motion through lower-frequency walking
-bands to higher-frequency and spatial correction. `X OFFSET`, `Y OFFSET`, `ROLL`, `SWOB`,
-`FJIT`, `FAR WARP`, `LENS`, and `SMOOTH` use final values that are actually handed to Metal,
+bands to higher-frequency and spatial correction. `X OFFSET`, `Y OFFSET`, `ROLL`, `STRIDE WOBBLE`,
+`FOOTSTEP JITTER`, `FAR WARP`, `LENS`, and `SMOOTHING` use final values that are actually handed to Metal,
 after their applicable limits and Master Strength.
 `Mesh Overlay` is separate from `Debug Overlay`: it can show the far-field mesh,
 lens-local mesh, band guides, or all meshes without drawing the top-left bars.
@@ -416,11 +416,12 @@ validated candidates on demand.
 ## Diagnostics
 
 `Debug Overlay` has one fixed 21-row contract:
-`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
-`LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T CONF`, `S CONF`, `F CONF`,
-`W CONF`, `L CONF`, then the compact `R###`/`P###` runtime/source row. All confidence and
-quality bars are grouped immediately above the version row. Labels use raw English
-control/diagnostic abbreviations; do not translate them in the preview.
+`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `STRIDE WOBBLE`, `FOOTSTEP JITTER`, `FAR WARP`,
+`LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
+`TURN CONFIDENCE`, `STRIDE CONFIDENCE`, `FOOTSTEP CONFIDENCE`, `WARP CONFIDENCE`,
+`LENS CONFIDENCE`, then the readable `ORIGINAL <version>`/`PROXY <version>` runtime/source row. All confidence and
+quality bars are grouped immediately above the version row. Labels use readable English
+diagnostic names and are not translated in the preview.
 
 The overlay bars are normalized magnitudes or quality signals, not signed directions:
 
@@ -431,26 +432,26 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `CROP`: Auto Crop scale actually sent to the renderer; zero when Remove Black Edges is off.
 - `TURN`: Auto Crop viewport-position activity actually sent to the renderer; zero when
   Remove Black Edges is off.
-- `SWOB`: Stride Wobble correction activity from the fixed internal stride-wobble window.
-- `FJIT`: short-period activity combining micro, trajectory continuity, and final-limited
+- `STRIDE WOBBLE`: correction activity from the fixed internal stride-wobble window.
+- `FOOTSTEP JITTER`: short-period activity combining micro, trajectory continuity, and final-limited
   Camera Rigid X/Y/roll correction.
 - `FAR WARP`: final shear plus combined perspective/yaw-pitch values sent to Metal.
 - `LENS`: only applied band/ridge/local offsets that Metal renders, weighted by effective support.
-- `SMOOTH`: Master-Strength-adjusted render-time temporal smoothing delta.
-- `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
-- `WLK`: count-aware walking-band tracking quality used by FJIT and SWOB.
-- `SHRP`: frame sharpness/clarity quality; higher means less blur.
-- `RES`: residual quality; higher means lower block-matching residual/error.
-- `HIT`: search-radius headroom quality; higher means fewer searches hit the radius edge.
-- `T CONF`: effective Turn Smoothing confidence.
-- `S CONF`: Stride Wobble confidence.
-- `F CONF`: combined micro and actually applied Camera Rigid X/Y/roll support.
-- `W CONF`: effective Far-field Warp confidence after tracking and search-radius safety gates.
-- `L CONF`: effective support for the rendered band/ridge/local lens warp.
+- `SMOOTHING`: Master-Strength-adjusted render-time temporal smoothing delta.
+- `TRACKING`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
+- `WALKING`: count-aware walking-band tracking quality used by Footstep Jitter and Stride Wobble.
+- `SHARPNESS`: frame sharpness/clarity quality; higher means less blur.
+- `RESIDUAL`: residual quality; higher means lower block-matching residual/error.
+- `SEARCH HEADROOM`: search-radius headroom quality; higher means fewer searches hit the radius edge.
+- `TURN CONFIDENCE`: effective Turn Smoothing confidence.
+- `STRIDE CONFIDENCE`: Stride Wobble confidence.
+- `FOOTSTEP CONFIDENCE`: combined micro and actually applied Camera Rigid X/Y/roll support.
+- `WARP CONFIDENCE`: effective Far-field Warp confidence after tracking and search-radius safety gates.
+- `LENS CONFIDENCE`: effective support for the rendered band/ridge/local lens warp.
 
-`TRK`, `WLK`, `SHRP`, `RES`, and `HIT` are aligned as quality signals: high is good,
+`TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` are aligned as quality signals: high is good,
 low is bad. Confidence rows remain analysis evidence even when Master Strength is zero.
-Unavailable `RES` or `HIT` evidence is shown as zero and its unavailable reason is logged;
+Unavailable `RESIDUAL` or `SEARCH HEADROOM` evidence is shown as zero and its unavailable reason is logged;
 the overlay does not invent a fallback value.
 
 `Host Analysis Status` also reports:

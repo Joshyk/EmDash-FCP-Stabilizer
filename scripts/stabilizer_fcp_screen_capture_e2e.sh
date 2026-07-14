@@ -3668,28 +3668,28 @@ labels = [
     "ROLL",
     "CROP",
     "TURN",
-    "SWOB",
-    "FJIT",
+    "STRIDE WOBBLE",
+    "FOOTSTEP JITTER",
     "FAR WARP",
     "LENS",
-    "SMOOTH",
-    "TRK",
-    "WLK",
-    "SHRP",
-    "RES",
-    "HIT",
-    "T CONF",
-    "S CONF",
-    "F CONF",
-    "W CONF",
-    "L CONF",
+    "SMOOTHING",
+    "TRACKING",
+    "WALKING",
+    "SHARPNESS",
+    "RESIDUAL",
+    "SEARCH HEADROOM",
+    "TURN CONFIDENCE",
+    "STRIDE CONFIDENCE",
+    "FOOTSTEP CONFIDENCE",
+    "WARP CONFIDENCE",
+    "LENS CONFIDENCE",
     "RUNTIME",
 ]
 
 row_count = float(len(labels))
 overlay_scale = max(float(h) * 0.5 / (row_count * 13.0), 0.25)
 panel_y = 16.0 * overlay_scale
-label_width = 96.0 * overlay_scale
+label_width = 160.0 * overlay_scale
 label_gap = 2.0 * overlay_scale
 bar_width = 180.0 * overlay_scale
 row_height = 13.0 * overlay_scale

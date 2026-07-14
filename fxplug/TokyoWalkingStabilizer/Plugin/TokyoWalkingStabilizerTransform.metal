@@ -153,37 +153,47 @@ static uint debugDigitChar(uint digit) {
     return 48 + (digit % 10);
 }
 
-static uint debugModeLabelChar(float debugMode, float runtimeBuild, float4 runtimeVersion, uint index) {
+static uint debugLabelCharAt(uint index, uint4 c0_3, uint4 c4_7, uint4 c8_11, uint4 c12_15, uint4 c16_19);
+
+static uint debugModeLabelChar(float debugMode, float4 runtimeVersion, uint index) {
     uint major = uint(clamp(runtimeVersion.x, 0.0, 9.0) + 0.5);
     uint minor = uint(clamp(runtimeVersion.y, 0.0, 9.0) + 0.5);
-    uint patch = uint(clamp(runtimeVersion.z > 0.0 ? runtimeVersion.z : runtimeBuild, 0.0, 999.0) + 0.5);
-    if (index == 0) {
-        return debugMode > 1.5 ? 80 : 82; // P or R
+    uint patch = uint(clamp(runtimeVersion.z, 0.0, 999.0) + 0.5);
+    bool proxy = debugMode > 1.5;
+    uint sourceLength = proxy ? 6 : 9;
+    if (index < sourceLength) {
+        if (proxy) {
+            return debugLabelCharAt(index, uint4(80, 82, 79, 88), uint4(89, 0, 0, 0), uint4(0), uint4(0), uint4(0)); // PROXY
+        }
+        return debugLabelCharAt(index, uint4(79, 82, 73, 71), uint4(73, 78, 65, 76), uint4(0), uint4(0), uint4(0)); // ORIGINAL
     }
-    if (index == 1) { return debugDigitChar(major); }
-    if (index == 2) { return 46; } // .
-    if (index == 3) { return debugDigitChar(minor); }
-    if (index == 4) { return 46; } // .
-    if (index == 5) { return debugDigitChar(patch / 100); }
-    if (index == 6) { return debugDigitChar((patch / 10) % 10); }
-    if (index == 7) { return debugDigitChar(patch); }
+    uint versionIndex = index - sourceLength;
+    if (versionIndex == 0) { return debugDigitChar(major); }
+    if (versionIndex == 1) { return 46; } // .
+    if (versionIndex == 2) { return debugDigitChar(minor); }
+    if (versionIndex == 3) { return 46; } // .
+    if (versionIndex == 4) {
+        return patch >= 100 ? debugDigitChar(patch / 100)
+            : patch >= 10 ? debugDigitChar(patch / 10)
+            : debugDigitChar(patch);
+    }
+    if (versionIndex == 5) {
+        return patch >= 100 ? debugDigitChar((patch / 10) % 10)
+            : patch >= 10 ? debugDigitChar(patch)
+            : 0;
+    }
+    if (versionIndex == 6) { return patch >= 100 ? debugDigitChar(patch) : 0; }
     return 0;
 }
 
-static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uint c4, uint c5, uint c6, uint c7, uint c8, uint c9, uint c10, uint c11) {
-    switch (index) {
-        case 0: return c0;
-        case 1: return c1;
-        case 2: return c2;
-        case 3: return c3;
-        case 4: return c4;
-        case 5: return c5;
-        case 6: return c6;
-        case 7: return c7;
-        case 8: return c8;
-        case 9: return c9;
-        case 10: return c10;
-        case 11: return c11;
+static uint debugLabelCharAt(uint index, uint4 c0_3, uint4 c4_7, uint4 c8_11, uint4 c12_15, uint4 c16_19) {
+    uint component = index % 4;
+    switch (index / 4) {
+        case 0: return c0_3[component];
+        case 1: return c4_7[component];
+        case 2: return c8_11[component];
+        case 3: return c12_15[component];
+        case 4: return c16_19[component];
         default: return 0;
     }
 }
@@ -191,47 +201,47 @@ static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uin
 static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeBuild, float4 runtimeVersion) {
     switch (row) {
         case StabilizerDebugOverlayRowXOffset:
-            return debugLabelCharAt(index, 88, 0, 79, 70, 70, 83, 69, 84, 0, 0, 0, 0); // X OFFSET
+            return debugLabelCharAt(index, uint4(88, 0, 79, 70), uint4(70, 83, 69, 84), uint4(0), uint4(0), uint4(0)); // X OFFSET
         case StabilizerDebugOverlayRowYOffset:
-            return debugLabelCharAt(index, 89, 0, 79, 70, 70, 83, 69, 84, 0, 0, 0, 0); // Y OFFSET
+            return debugLabelCharAt(index, uint4(89, 0, 79, 70), uint4(70, 83, 69, 84), uint4(0), uint4(0), uint4(0)); // Y OFFSET
         case StabilizerDebugOverlayRowRoll:
-            return debugLabelCharAt(index, 82, 79, 76, 76, 0, 0, 0, 0, 0, 0, 0, 0); // ROLL
+            return debugLabelCharAt(index, uint4(82, 79, 76, 76), uint4(0), uint4(0), uint4(0), uint4(0)); // ROLL
         case StabilizerDebugOverlayRowCrop:
-            return debugLabelCharAt(index, 67, 82, 79, 80, 0, 0, 0, 0, 0, 0, 0, 0); // CROP
+            return debugLabelCharAt(index, uint4(67, 82, 79, 80), uint4(0), uint4(0), uint4(0), uint4(0)); // CROP
         case StabilizerDebugOverlayRowTurn:
-            return debugLabelCharAt(index, 84, 85, 82, 78, 0, 0, 0, 0, 0, 0, 0, 0); // TURN
+            return debugLabelCharAt(index, uint4(84, 85, 82, 78), uint4(0), uint4(0), uint4(0), uint4(0)); // TURN
         case StabilizerDebugOverlayRowStrideWobble:
-            return debugLabelCharAt(index, 83, 87, 79, 66, 0, 0, 0, 0, 0, 0, 0, 0); // SWOB
+            return debugLabelCharAt(index, uint4(83, 84, 82, 73), uint4(68, 69, 0, 87), uint4(79, 66, 66, 76), uint4(69, 0, 0, 0), uint4(0)); // STRIDE WOBBLE
         case StabilizerDebugOverlayRowFootstepJitter:
-            return debugLabelCharAt(index, 70, 74, 73, 84, 0, 0, 0, 0, 0, 0, 0, 0); // FJIT
+            return debugLabelCharAt(index, uint4(70, 79, 79, 84), uint4(83, 84, 69, 80), uint4(0, 74, 73, 84), uint4(84, 69, 82, 0), uint4(0)); // FOOTSTEP JITTER
         case StabilizerDebugOverlayRowFarFieldWarp:
-            return debugLabelCharAt(index, 70, 65, 82, 0, 87, 65, 82, 80, 0, 0, 0, 0); // FAR WARP
+            return debugLabelCharAt(index, uint4(70, 65, 82, 0), uint4(87, 65, 82, 80), uint4(0), uint4(0), uint4(0)); // FAR WARP
         case StabilizerDebugOverlayRowLens:
-            return debugLabelCharAt(index, 76, 69, 78, 83, 0, 0, 0, 0, 0, 0, 0, 0); // LENS
+            return debugLabelCharAt(index, uint4(76, 69, 78, 83), uint4(0), uint4(0), uint4(0), uint4(0)); // LENS
         case StabilizerDebugOverlayRowSmoothing:
-            return debugLabelCharAt(index, 83, 77, 79, 79, 84, 72, 0, 0, 0, 0, 0, 0); // SMOOTH
+            return debugLabelCharAt(index, uint4(83, 77, 79, 79), uint4(84, 72, 73, 78), uint4(71, 0, 0, 0), uint4(0), uint4(0)); // SMOOTHING
         case StabilizerDebugOverlayRowTrackingQuality:
-            return debugLabelCharAt(index, 84, 82, 75, 0, 0, 0, 0, 0, 0, 0, 0, 0); // TRK
+            return debugLabelCharAt(index, uint4(84, 82, 65, 67), uint4(75, 73, 78, 71), uint4(0), uint4(0), uint4(0)); // TRACKING
         case StabilizerDebugOverlayRowWalkingQuality:
-            return debugLabelCharAt(index, 87, 76, 75, 0, 0, 0, 0, 0, 0, 0, 0, 0); // WLK
+            return debugLabelCharAt(index, uint4(87, 65, 76, 75), uint4(73, 78, 71, 0), uint4(0), uint4(0), uint4(0)); // WALKING
         case StabilizerDebugOverlayRowSharpnessQuality:
-            return debugLabelCharAt(index, 83, 72, 82, 80, 0, 0, 0, 0, 0, 0, 0, 0); // SHRP
+            return debugLabelCharAt(index, uint4(83, 72, 65, 82), uint4(80, 78, 69, 83), uint4(83, 0, 0, 0), uint4(0), uint4(0)); // SHARPNESS
         case StabilizerDebugOverlayRowResidualQuality:
-            return debugLabelCharAt(index, 82, 69, 83, 0, 0, 0, 0, 0, 0, 0, 0, 0); // RES
+            return debugLabelCharAt(index, uint4(82, 69, 83, 73), uint4(68, 85, 65, 76), uint4(0), uint4(0), uint4(0)); // RESIDUAL
         case StabilizerDebugOverlayRowSearchRadiusHeadroomQuality:
-            return debugLabelCharAt(index, 72, 73, 84, 0, 0, 0, 0, 0, 0, 0, 0, 0); // HIT
+            return debugLabelCharAt(index, uint4(83, 69, 65, 82), uint4(67, 72, 0, 72), uint4(69, 65, 68, 82), uint4(79, 79, 77, 0), uint4(0)); // SEARCH HEADROOM
         case StabilizerDebugOverlayRowTurnConfidence:
-            return debugLabelCharAt(index, 84, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // T CONF
+            return debugLabelCharAt(index, uint4(84, 85, 82, 78), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0), uint4(0)); // TURN CONFIDENCE
         case StabilizerDebugOverlayRowStrideConfidence:
-            return debugLabelCharAt(index, 83, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // S CONF
+            return debugLabelCharAt(index, uint4(83, 84, 82, 73), uint4(68, 69, 0, 67), uint4(79, 78, 70, 73), uint4(68, 69, 78, 67), uint4(69, 0, 0, 0)); // STRIDE CONFIDENCE
         case StabilizerDebugOverlayRowFootstepConfidence:
-            return debugLabelCharAt(index, 70, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // F CONF
+            return debugLabelCharAt(index, uint4(70, 79, 79, 84), uint4(83, 84, 69, 80), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0)); // FOOTSTEP CONFIDENCE
         case StabilizerDebugOverlayRowWarpConfidence:
-            return debugLabelCharAt(index, 87, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // W CONF
+            return debugLabelCharAt(index, uint4(87, 65, 82, 80), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0), uint4(0)); // WARP CONFIDENCE
         case StabilizerDebugOverlayRowLensConfidence:
-            return debugLabelCharAt(index, 76, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // L CONF
+            return debugLabelCharAt(index, uint4(76, 69, 78, 83), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0), uint4(0)); // LENS CONFIDENCE
         case StabilizerDebugOverlayRowRuntime:
-            return debugModeLabelChar(debugMode, runtimeBuild, runtimeVersion, index);
+            return debugModeLabelChar(debugMode, runtimeVersion, index);
         default:
             return 0;
     }
@@ -250,7 +260,7 @@ static bool debugLabelCoverage(float panelX, float rowY, uint row, float overlay
     }
 
     uint index = uint(floor(textX / glyphAdvance));
-    if (index >= 12) {
+    if (index >= 20) {
         return false;
     }
 
@@ -703,7 +713,7 @@ fragment float4 fragmentShader(
     if (transform->debugOverlay > 0.5) {
         float panelX = pixel.x - (16.0 * overlayScale);
         float panelY = pixel.y - (16.0 * overlayScale);
-        float labelWidth = 96.0 * overlayScale;
+        float labelWidth = 160.0 * overlayScale;
         float labelGap = 2.0 * overlayScale;
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;

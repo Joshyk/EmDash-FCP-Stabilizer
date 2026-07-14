@@ -353,11 +353,12 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   strings, so use the compact runtime/source row in `Debug Overlay` to confirm the active
   render runtime.
 - `Debug Overlay`: normally off. When enabled, the fixed 21-row panel shows
-  `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
-  `LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T CONF`, `S CONF`, `F CONF`,
-  `W CONF`, `L CONF`, then compact runtime/source diagnostics. `R###` means
-  the current FxPlug runtime is rendering original/optimized frames, and `P###` means proxy
-  playback is using the same saved-analysis correction path. The digits are derived from the active FxPlug
+  `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `STRIDE WOBBLE`, `FOOTSTEP JITTER`, `FAR WARP`,
+  `LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
+  `TURN CONFIDENCE`, `STRIDE CONFIDENCE`, `FOOTSTEP CONFIDENCE`, `WARP CONFIDENCE`,
+  `LENS CONFIDENCE`, then readable runtime/source diagnostics. `ORIGINAL <version>` means
+  the current FxPlug runtime is rendering original/optimized frames, and `PROXY <version>` means proxy
+  playback is using the same saved-analysis correction path. The version is derived from the active FxPlug
   version. The overlay scales from the current render output so
   the top-left panel occupies roughly half of the viewer height in original, optimized, and
   proxy playback. Activity rows use final values actually sent to Metal; `CROP` and `TURN`
@@ -371,16 +372,16 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   The labels mean:
   `X OFFSET`/`Y OFFSET`/`ROLL` final rigid correction after applicable limits and Master Strength,
   `CROP` applied Auto Crop scale and `TURN` applied viewport position,
-  `SWOB` Stride Wobble and `FJIT` short-period micro/continuity/final Camera Rigid activity,
+  `STRIDE WOBBLE` and `FOOTSTEP JITTER` short-period micro/continuity/final Camera Rigid activity,
   `FAR WARP` final shear and combined perspective/yaw-pitch,
   `LENS` only rendered band/ridge/local offsets weighted by effective support,
   `SMOOTH` Master-Strength-adjusted temporal smoothing delta,
-  `TRK` current frame tracking quality and `WLK` walking-band tracking quality,
-  `SHRP` sharpness quality, `RES` residual quality, and `HIT` search-radius headroom quality,
-  `T CONF`/`S CONF`/`F CONF`/`W CONF`/`L CONF` effective band support grouped above the runtime row.
-  Confidence rows remain evidence when Master Strength is zero. Unavailable `RES`/`HIT`
+  `TRACKING` current frame tracking quality and `WALKING` walking-band tracking quality,
+  `SHARPNESS` sharpness quality, `RESIDUAL` residual quality, and `SEARCH HEADROOM` quality,
+  the five full `... CONFIDENCE` labels show effective band support grouped above the runtime row.
+  Confidence rows remain evidence when Master Strength is zero. Unavailable `RESIDUAL`/`SEARCH HEADROOM`
   values are zero and logged as unavailable instead of using inferred fallback values.
-  `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` all use the same high-is-good direction.
+  `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` all use the same high-is-good direction.
 
 ## Feedback CLI
 
@@ -404,7 +405,7 @@ remaining shake from the prepared motion paths and tracking diagnostics, then
 prints `CAM`, `WARP`, and `TURN` in render-stage order. Pass
 `--turn-strength` when `Turn Smoothing Strength` is not the default `12.0`.
 It uses the same unified Camera Jitter composition as render. `WARP` `q` matches the
-applied `W CONF` confidence shown by Debug Overlay. The report includes strict and walking-band
+applied `WARP CONFIDENCE` shown by Debug Overlay. The report includes strict and walking-band
 tracking confidence, Camera Jitter authority, residual quality, blur quality, block coverage, edge quality, stable WARP tracking support, and WARP
 tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the

@@ -237,15 +237,16 @@ list unless the stored fields are no longer safe to interpret.
 Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
 raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
 visible while tuning walking footage. Debug Overlay must keep the shared 21-row contract:
-`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
-`LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T CONF`, `S CONF`, `F CONF`,
-`W CONF`, `L CONF`, then the runtime/source row. Activity rows must report final values actually
-applied to Metal. `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` should all be quality bars where
+`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `STRIDE WOBBLE`, `FOOTSTEP JITTER`, `FAR WARP`,
+`LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
+`TURN CONFIDENCE`, `STRIDE CONFIDENCE`, `FOOTSTEP CONFIDENCE`, `WARP CONFIDENCE`,
+`LENS CONFIDENCE`, then the runtime/source row. Activity rows must report final values actually
+applied to Metal. `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` should all be quality bars where
 higher means better tracking evidence and lower means weaker evidence. All quality and
 confidence rows must stay grouped immediately above the version row. Debug Overlay should also expose a compact
 active runtime/source row so stale saved Inspector strings do not hide which binary is rendering:
-`R###` means an original/optimized render frame is using that FxPlug runtime version, while
-`P###` means a proxy render frame is using the same saved Host Analysis path.
+`ORIGINAL <version>` means an original/optimized render frame is using that FxPlug runtime version, while
+`PROXY <version>` means a proxy render frame is using the same saved Host Analysis path.
 The overlay panel should scale proportionally to the current render output so Final Cut Pro
 original/proxy playback presents one readable viewer footprint; high-resolution original
 frames must not make the bars tiny, and proxy output must not make them balloon over the
@@ -330,7 +331,7 @@ When an E2E case specifies proxy playback, such as `playbackMode: "Proxy Only"`,
 the test setup must actively set Final Cut Pro's Viewer media playback to that proxy mode
 before recording. Use `Proxy Only`; `Proxy Preferred` is not valid for these E2E cases
 because Final Cut Pro can silently fall back to original/optimized media. Confirm the
-effective render source through FxPlug runtime evidence, such as the Debug Overlay `P###`
+effective render source through FxPlug runtime evidence, such as the Debug Overlay `PROXY <version>`
 row or Host Analysis logs reporting `proxy yes`; a capture that logs `proxy no` or
 otherwise cannot prove proxy playback is not valid evidence for that case and must be rerun
 after fixing the setup.
@@ -574,7 +575,7 @@ warp gates may be curved upward, and the tracking gate should start early enough
 response gradually enough to avoid high-side gate jumps. The warp gate may use short local
 tracking support and short render-time smoothing to avoid single-frame gate flicker, but zero
 local tracking or poor current search-radius evidence must still produce zero warp correction.
-`W CONF` should represent the applied warp confidence after those safety gates. Bump Host
+`WARP CONFIDENCE` should represent the applied warp confidence after those safety gates. Bump Host
 Analysis cache schema when prepared warp path semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug

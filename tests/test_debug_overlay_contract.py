@@ -39,21 +39,21 @@ LABELS = [
     "ROLL",
     "CROP",
     "TURN",
-    "SWOB",
-    "FJIT",
+    "STRIDE WOBBLE",
+    "FOOTSTEP JITTER",
     "FAR WARP",
     "LENS",
-    "SMOOTH",
-    "TRK",
-    "WLK",
-    "SHRP",
-    "RES",
-    "HIT",
-    "T CONF",
-    "S CONF",
-    "F CONF",
-    "W CONF",
-    "L CONF",
+    "SMOOTHING",
+    "TRACKING",
+    "WALKING",
+    "SHARPNESS",
+    "RESIDUAL",
+    "SEARCH HEADROOM",
+    "TURN CONFIDENCE",
+    "STRIDE CONFIDENCE",
+    "FOOTSTEP CONFIDENCE",
+    "WARP CONFIDENCE",
+    "LENS CONFIDENCE",
     "RUNTIME",
 ]
 
@@ -92,6 +92,18 @@ if not label_match:
 label_rows = re.findall(r"case StabilizerDebugOverlayRow(\w+):", label_match.group("body"))
 if label_rows != ROWS:
     fail(f"Metal label order mismatch: {label_rows}")
+for label in LABELS[:-1]:
+    if f"// {label}" not in metal:
+        fail(f"Metal readable label is missing: {label}")
+
+if "vector_float4(1.0, 2.0, 1.0, 1_008.0)" not in swift:
+    fail("Swift runtime version components do not encode version 1.2.1")
+if "patch >= 10 ? debugDigitChar(patch / 10)" not in metal:
+    fail("Metal runtime label does not suppress patch-version leading zeroes")
+if "// PROXY" not in metal or "// ORIGINAL" not in metal:
+    fail("Metal runtime label does not use readable source names")
+if "if (index >= 20)" not in metal or "labelWidth = 160.0 * overlayScale" not in metal:
+    fail("Metal label layout does not support full readable names")
 
 overlay_match = re.search(
     r"if \(transform->debugOverlay > 0\.5\) \{(?P<body>.*?return outputColor;)",
