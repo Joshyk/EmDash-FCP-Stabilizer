@@ -67,6 +67,39 @@ def event_scoped_cache_root(base_root: Path, event_name: str | None) -> Path:
     return base_root / event_label / "Analysis Files" / CACHE_DIR_NAME
 
 
+def frontend_work_directory(base_root: Path, event_name: str | None, asset: dict) -> Path:
+    if not str(event_name or "").strip():
+        raise ValueError(".fcpbundle analysis asset is missing an Event name; refusing an ambiguous frontend work path")
+    asset_label = safe_file_component(str(asset.get("assetId") or asset.get("name") or "asset"))
+    return (
+        base_root
+        / safe_file_component(str(event_name))
+        / CACHE_DIR_NAME
+        / "analysis-work"
+        / asset_label
+    )
+
+
+def checkpoint_identity(asset: dict, sample_scale_percent: float) -> str:
+    media_path = Path(str(asset.get("mediaPath") or "")).expanduser().resolve()
+    stat = media_path.stat() if media_path.is_file() else None
+    payload = {
+        "checkpointSchemaVersion": 1,
+        "cacheSchemaVersion": SCHEMA_VERSION,
+        "assetId": asset.get("assetId"),
+        "eventName": asset.get("eventName"),
+        "mediaPath": str(media_path),
+        "mediaSize": stat.st_size if stat else None,
+        "mediaModifiedNs": stat.st_mtime_ns if stat else None,
+        "durationSeconds": asset.get("durationSeconds"),
+        "frameDurationSeconds": asset.get("frameDurationSeconds"),
+        "sourceStartSeconds": asset.get("sourceStartSeconds"),
+        "sampleScalePercent": sample_scale_percent,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def retained_analysis_bundle_dir_name(bundle_path: Path) -> str:
     name = bundle_path.name
     if name.lower().endswith(".fcpbundle"):
@@ -78,6 +111,7 @@ def assign_asset_cache_roots(
     assets: list[dict],
     requested_cache_root: Path,
     package_path: Path | None,
+    sample_scale_percent: float = 100.0,
 ) -> tuple[Path, list[Path]]:
     bundle_path = fcpbundle_source_path(package_path)
     if bundle_path is None:
@@ -94,8 +128,12 @@ def assign_asset_cache_roots(
     cache_roots: list[Path] = []
     seen: set[str] = set()
     for asset in assets:
-        cache_root = event_scoped_cache_root(analysis_root, asset.get("eventName"))
+        work_directory = frontend_work_directory(analysis_root, asset.get("eventName"), asset)
+        cache_root = work_directory / "cache"
         asset["cacheRoot"] = str(cache_root)
+        asset["workDirectory"] = str(work_directory)
+        asset["checkpointDirectory"] = str(work_directory / "checkpoint")
+        asset["checkpointIdentity"] = checkpoint_identity(asset, sample_scale_percent)
         cache_key = str(cache_root)
         if cache_key not in seen:
             seen.add(cache_key)
@@ -286,7 +324,12 @@ def main(argv: Iterable[str]) -> int:
             raise ValueError("select at least one --asset-id or pass --all")
         info_path, package_path, assets, skipped = selected_assets(args.fcpxml, args.asset_id, args.all)
         root = ET.parse(info_path).getroot()
-        analysis_root, cache_roots = assign_asset_cache_roots(assets, args.cache_root, package_path)
+        analysis_root, cache_roots = assign_asset_cache_roots(
+            assets,
+            args.cache_root,
+            package_path,
+            args.sample_scale_percent,
+        )
         for cache_root in cache_roots:
             cache_root.mkdir(parents=True, exist_ok=True)
         plan = {
@@ -326,6 +369,7 @@ def main(argv: Iterable[str]) -> int:
         payload["packagePath"] = str(package_path) if package_path else None
         payload["cacheRoot"] = str(analysis_root)
         payload["cacheRoots"] = [str(cache_root) for cache_root in cache_roots]
+        payload["workDirectories"] = sorted({asset["workDirectory"] for asset in assets if asset.get("workDirectory")})
         payload["skipped"] = skipped
         return emit(payload)
     except Exception as exc:  # noqa: BLE001

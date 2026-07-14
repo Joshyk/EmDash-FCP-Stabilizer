@@ -9,7 +9,8 @@ The workflow is:
    `Info.fcpxml` files.
 3. Choose an export from the selected file list, then select one or more Event
    media assets.
-4. Use `Imports` for the generated import package and analysis staging cache.
+4. Use `Imports` for the generated import package and frontend-only analysis
+   work area.
    It defaults to `_walking_stabilizer_analysis` next to the selected Final Cut
    Pro source. Direct `.fcpbundle` sources retain artifacts under an escaped
    bundle-label subdirectory, then Event and clip metadata subdirectories. Use
@@ -18,8 +19,9 @@ The workflow is:
 5. Run serial analysis for the full media duration of each selected asset. When
    multiple assets are selected, the native analyzer finishes one asset before
    starting the next.
-6. Write schema-compatible Tokyo Walking Stabilizer persisted cache files to an
-   explicit Imports staging folder.
+6. Write schema-compatible Tokyo Walking Stabilizer persisted cache files to a
+   resumable frontend work area, then install the completed cache into the
+   source Event.
 7. Build an import FCPXMLD containing only the analyzed Event media assets and
    a single review project. The generated Event Browser clips and review
    project timeline clips both carry Tokyo Walking Stabilizer filters with the
@@ -130,14 +132,21 @@ escaped bundle label first, then the Event name, then a clip directory that
 includes the cache schema, sample percentage, frame count, and cache identity.
 The escaped label does not end in `.fcpbundle`, so macOS and Final Cut Pro do
 not treat the retained analysis folder as a library package. The generated
-import packages are compact analyzed-footage-only packages written there, and
-analysis cache files are staged below the matching Event folder:
+import packages are compact analyzed-footage-only backup packages. During
+analysis, each asset has a frontend-only
+`TokyoWalkingStabilizerHostAnalysis/analysis-work/<asset>/` directory containing
+an atomic checkpoint manifest and binary frame/motion chunks. A later run resumes
+only when the checkpoint schema, cache schema, source file identity, and selected
+sample percentage all match. Once the package cache is installed successfully in
+the real source Event, the frontend work directory (including its checkpoint) is
+removed. It is not retained inside the backup package:
 
 ```text
 Exports/
 Exports/SomeLibrary.fcpbundle
-Exports/_walking_stabilizer_analysis/SomeLibrary_fcpbundle/Event-A/P1000304__schema32__sample100__frames63720__bc4218bd/P1000304.fcpxmld/
-Exports/_walking_stabilizer_analysis/SomeLibrary_fcpbundle/Event-A/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
+Exports/_walking_stabilizer_analysis/SomeLibrary_fcpbundle/Event-A/P1000304__schema52__sample100__frames63720__bc4218bd/P1000304.fcpxmld/
+Exports/_walking_stabilizer_analysis/SomeLibrary_fcpbundle/Event-A/P1000304__schema52__sample100__frames63720__bc4218bd/P1000304.analysis-cache/
+SomeLibrary.fcpbundle/Event-A/Analysis Files/TokyoWalkingStabilizerHostAnalysis/
 ```
 
 Per-footage package directories include the source bundle label, Event label,

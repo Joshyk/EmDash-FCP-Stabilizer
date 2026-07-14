@@ -28,6 +28,9 @@ private let sourceLensShakeLocalBinCount = sourceLensShakeLocalBandCount * sourc
 private let cacheFileName = "host-analysis-v2.json"
 private let cacheIndexFileName = "host-analysis-index-v2.json"
 private let cacheStorageDirectoryName = "caches"
+private let analysisCheckpointSchemaVersion = 1
+private let analysisCheckpointManifestFileName = "checkpoint-manifest-v1.json"
+private let analysisCheckpointChunkFrameCount = 30
 private let fingerprintInitialHash: UInt64 = 14_695_981_039_346_656_037
 private let metalBlurChunkCount = 256
 private let fingerprintChunkCount = 1024
@@ -336,6 +339,8 @@ struct AssetPlan: Decodable {
     let sourceStartSeconds: Double
     let width: Int?
     let height: Int?
+    let checkpointDirectory: String?
+    let checkpointIdentity: String?
 }
 
 struct AnalysisResult: Encodable {
@@ -411,7 +416,7 @@ struct AnalysisFrame: Encodable {
     }
 }
 
-struct PairMotion {
+struct PairMotion: Codable {
     let dx: Float
     let dy: Float
     let residual: Float
@@ -527,6 +532,138 @@ struct PairMotion {
         searchRadiusHitCount: 0,
         searchRadiusTotalCount: 0
     )
+}
+
+private struct AnalysisCheckpointFrame: Codable {
+    let time: Double
+    let sampleWidth: Int
+    let sampleHeight: Int
+    let blurAmount: Float
+    let fingerprint: String
+
+    init(_ frame: AnalysisFrame) {
+        time = frame.time
+        sampleWidth = frame.sampleWidth
+        sampleHeight = frame.sampleHeight
+        blurAmount = frame.blurAmount
+        fingerprint = frame.fingerprint
+    }
+
+    var analysisFrame: AnalysisFrame {
+        AnalysisFrame(
+            time: time,
+            pixels: [],
+            sampleWidth: sampleWidth,
+            sampleHeight: sampleHeight,
+            blurAmount: blurAmount,
+            fingerprint: fingerprint
+        )
+    }
+}
+
+private struct AnalysisCheckpointChunk: Codable {
+    let frames: [AnalysisCheckpointFrame]
+    let motions: [PairMotion]
+}
+
+private struct AnalysisCheckpointManifest: Codable {
+    let checkpointSchemaVersion: Int
+    let cacheSchemaVersion: Int
+    let inputIdentity: String
+    let completedFrameCount: Int
+    let chunks: [String]
+}
+
+private final class AnalysisCheckpointStore {
+    private let directoryURL: URL
+    private let identity: String
+    private var chunks: [String] = []
+    private var completedFrameCount = 0
+    private var bufferedFrames: [AnalysisCheckpointFrame] = []
+    private var bufferedMotions: [PairMotion] = []
+
+    init(directory: URL, identity: String) throws {
+        guard !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AnalyzerError("analysis checkpoint identity is empty")
+        }
+        directoryURL = directory.standardizedFileURL
+        self.identity = identity
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    }
+
+    func restore() throws -> (frames: [AnalysisFrame], motions: [PairMotion]) {
+        let manifestURL = directoryURL.appendingPathComponent(analysisCheckpointManifestFileName, isDirectory: false)
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            return ([], [])
+        }
+        let manifest = try JSONDecoder().decode(AnalysisCheckpointManifest.self, from: Data(contentsOf: manifestURL))
+        guard manifest.checkpointSchemaVersion == analysisCheckpointSchemaVersion else {
+            throw AnalyzerError("analysis checkpoint schema \(manifest.checkpointSchemaVersion) is unsupported; expected \(analysisCheckpointSchemaVersion)")
+        }
+        guard manifest.cacheSchemaVersion == cacheSchemaVersion else {
+            throw AnalyzerError("analysis checkpoint cache schema \(manifest.cacheSchemaVersion) does not match \(cacheSchemaVersion)")
+        }
+        guard manifest.inputIdentity == identity else {
+            throw AnalyzerError("analysis checkpoint input identity does not match the selected source/sample settings")
+        }
+        var frames: [AnalysisFrame] = []
+        var motions: [PairMotion] = []
+        for chunkName in manifest.chunks {
+            guard chunkName == URL(fileURLWithPath: chunkName).lastPathComponent,
+                  chunkName.hasPrefix("frames-") else {
+                throw AnalyzerError("analysis checkpoint contains an unsafe chunk name")
+            }
+            let chunkURL = directoryURL.appendingPathComponent(chunkName, isDirectory: false)
+            let chunk = try PropertyListDecoder().decode(AnalysisCheckpointChunk.self, from: Data(contentsOf: chunkURL))
+            guard chunk.frames.count == chunk.motions.count else {
+                throw AnalyzerError("analysis checkpoint chunk \(chunkName) has mismatched frame and motion counts")
+            }
+            frames.append(contentsOf: chunk.frames.map(\.analysisFrame))
+            motions.append(contentsOf: chunk.motions)
+        }
+        guard frames.count == manifest.completedFrameCount,
+              frames.count == motions.count else {
+            throw AnalyzerError("analysis checkpoint manifest frame count does not match its chunks")
+        }
+        chunks = manifest.chunks
+        completedFrameCount = frames.count
+        return (frames, motions)
+    }
+
+    func append(frame: AnalysisFrame, motion: PairMotion) throws {
+        bufferedFrames.append(AnalysisCheckpointFrame(frame))
+        bufferedMotions.append(motion)
+        if bufferedFrames.count >= analysisCheckpointChunkFrameCount {
+            try flush()
+        }
+    }
+
+    func flush() throws {
+        guard !bufferedFrames.isEmpty else { return }
+        guard bufferedFrames.count == bufferedMotions.count else {
+            throw AnalyzerError("analysis checkpoint buffered frame and motion counts diverged")
+        }
+        let chunkName = String(format: "frames-%06d.plist", chunks.count + 1)
+        let chunkURL = directoryURL.appendingPathComponent(chunkName, isDirectory: false)
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        try encoder.encode(AnalysisCheckpointChunk(frames: bufferedFrames, motions: bufferedMotions)).write(to: chunkURL, options: .atomic)
+        completedFrameCount += bufferedFrames.count
+        chunks.append(chunkName)
+        bufferedFrames.removeAll(keepingCapacity: true)
+        bufferedMotions.removeAll(keepingCapacity: true)
+        let manifest = AnalysisCheckpointManifest(
+            checkpointSchemaVersion: analysisCheckpointSchemaVersion,
+            cacheSchemaVersion: cacheSchemaVersion,
+            inputIdentity: identity,
+            completedFrameCount: completedFrameCount,
+            chunks: chunks
+        )
+        try JSONEncoder().encode(manifest).write(
+            to: directoryURL.appendingPathComponent(analysisCheckpointManifestFileName, isDirectory: false),
+            options: .atomic
+        )
+    }
 }
 
 private struct FrameMetrics {
@@ -4726,7 +4863,9 @@ private func readFrameChunk(
     inFlightLimit: Int,
     expectedOutputFrameCount: Int,
     metalContext: MetalAnalysisContext,
-    decoderMode: DecoderMode
+    decoderMode: DecoderMode,
+    onOutputFrame: ((AnalysisFrame, PairMotion) throws -> Void)? = nil,
+    shouldSkipOutputFrame: ((AnalysisFrame) -> Bool)? = nil
 ) throws -> FrameChunkResult {
     let chunkWallStart = timingNowSeconds()
     var timings = FrameReadTimingAccumulator(readerLaneCount: 1)
@@ -4798,12 +4937,18 @@ private func readFrameChunk(
             blurAmount: frameAnalysis.metrics.blurAmount,
             fingerprint: frameAnalysis.metrics.fingerprint
         )
-        if let motion = frameAnalysis.motion {
-            motions.append(pairMotion(motion, applying: ridgeLineMotion))
+        if shouldSkipOutputFrame?(frame) == true {
+            return
+        }
+        let motion: PairMotion
+        if let rawMotion = frameAnalysis.motion {
+            motion = pairMotion(rawMotion, applying: ridgeLineMotion)
         } else {
-            motions.append(.zero)
+            motion = .zero
         }
         frames.append(frame)
+        motions.append(motion)
+        try onOutputFrame?(frame, motion)
         if let progressReporter {
             progressReporter.completeFrame()
         } else if progressEvery > 0 && frames.count % progressEvery == 0 {
@@ -4997,13 +5142,32 @@ private func readFramesInParallel(
     return ReadFramesResult(prepared: prepared, timings: aggregateTimings)
 }
 
+private func contiguousCheckpointResumeSeconds(frames: [AnalysisFrame], frameDuration: Double) -> Double? {
+    let times = frames.map(\.time).filter { $0.isFinite && $0 >= 0.0 }.sorted()
+    guard let first = times.first else { return nil }
+    let maximumGap = max(frameDuration * 1.75, 0.05)
+    var resumeSeconds = first
+    var previous = first
+    for time in times.dropFirst() {
+        guard time - previous <= maximumGap else { break }
+        resumeSeconds = time
+        previous = time
+    }
+    return resumeSeconds
+}
+
+private func checkpointPresentationTimeKey(_ frame: AnalysisFrame) -> Int64 {
+    Int64((frame.time * 600_000.0).rounded())
+}
+
 private func readFrames(
     asset plan: AssetPlan,
     sampleScalePercent: Double,
     maxFrames: Int?,
     progressEnabled: Bool,
     metalContext: MetalAnalysisContext,
-    allowParallelReaders: Bool
+    allowParallelReaders: Bool,
+    checkpointStore: AnalysisCheckpointStore?
 ) throws -> ReadFramesResult {
     guard plan.mediaKind == "original-media" || plan.mediaKind == "asset-src" else {
         throw AnalyzerError("analysis requires original media; got \(plan.mediaKind ?? "unknown") for \(plan.name)")
@@ -5019,8 +5183,25 @@ private func readFrames(
     let size = sampleSize(sourceWidth: sourceWidth, sourceHeight: sourceHeight, scalePercent: sampleScalePercent)
     let sample = AnalysisSampleSize(width: size.width, height: size.height)
     let sourcePixelCount = sourceWidth * sourceHeight
+    let restored = try checkpointStore?.restore() ?? (frames: [], motions: [])
+    if !restored.frames.isEmpty {
+        progress(progressEnabled, "resuming \(plan.name) from checkpoint frame \(restored.frames.count) of approximately \(estimatedFrameCount(durationSeconds: plan.durationSeconds, frameDurationSeconds: plan.frameDurationSeconds, maxFrames: maxFrames))")
+    }
+    let remainingMaxFrames = maxFrames.map { max(0, $0 - restored.frames.count) }
+    if let remainingMaxFrames, remainingMaxFrames == 0 {
+        guard restored.frames.count >= 3 else {
+            throw AnalyzerError("analysis checkpoint has fewer than 3 frames and the requested maximum is already reached")
+        }
+        let prepareStart = timingNowSeconds()
+        let prepared = try prepare(frames: restored.frames, motions: restored.motions)
+        var timings = FrameReadTimingAccumulator(readerLaneCount: 1)
+        timings.preparedPathSeconds = timingNowSeconds() - prepareStart
+        return ReadFramesResult(prepared: prepared, timings: timings)
+    }
     let readerLaneProbeLimit = analyzerReaderLaneProbeLimit()
-    if allowParallelReaders && shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, readerLaneCount: readerLaneProbeLimit) {
+    if restored.frames.isEmpty,
+       checkpointStore == nil,
+       allowParallelReaders && shouldUseParallelReaders(plan: plan, maxFrames: maxFrames, readerLaneCount: readerLaneProbeLimit) {
         let decoderPlan = try decoderLanePlan(url: url, requestedLimit: readerLaneProbeLimit)
         if decoderPlan.laneCount < readerLaneProbeLimit {
             progress(progressEnabled, "\(decoderPlan.description) accepted \(decoderPlan.laneCount)/\(readerLaneProbeLimit) active processor reader lane(s) for \(plan.name); using the decoder-detected maximum")
@@ -5036,12 +5217,20 @@ private func readFrames(
         )
     }
     let serialDecoderPlan = try decoderLanePlan(url: url, requestedLimit: 1)
+    let frameDuration = plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0
+    let resumeSeconds = contiguousCheckpointResumeSeconds(frames: restored.frames, frameDuration: frameDuration)
+    var remainingCheckpointTimeCounts = restored.frames.reduce(into: [Int64: Int]()) { counts, frame in
+        counts[checkpointPresentationTimeKey(frame), default: 0] += 1
+    }
+    let resumeOutputStart = resumeSeconds.map { $0 + (1.0 / 600_000.0) } ?? 0.0
+    let shouldSeekForResume = (resumeSeconds ?? 0.0) > 0.000_001
+    let resumeReadStart = shouldSeekForResume ? resumeSeconds.map { max(0.0, $0 - max(frameDuration * 2.0, 0.12)) } : nil
     let serialChunk = FrameReadChunk(
         index: 0,
         totalCount: 1,
-        readStartSeconds: nil,
-        readEndSeconds: nil,
-        outputStartSeconds: 0.0,
+        readStartSeconds: resumeReadStart,
+        readEndSeconds: resumeReadStart == nil ? nil : plan.durationSeconds,
+        outputStartSeconds: resumeOutputStart,
         outputEndSeconds: Double.greatestFiniteMagnitude,
         requiresPreviousFrame: false,
         isLast: true
@@ -5052,7 +5241,7 @@ private func readFrames(
         totalFrameCount: estimatedFrameCount(
             durationSeconds: plan.durationSeconds,
             frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
-            maxFrames: maxFrames
+            maxFrames: remainingMaxFrames
         )
     )
     progressReporter.start()
@@ -5062,7 +5251,7 @@ private func readFrames(
     let expectedOutputFrameCount = estimatedFrameCount(
         durationSeconds: plan.durationSeconds,
         frameDurationSeconds: plan.frameDurationSeconds > 0 ? plan.frameDurationSeconds : 1.0 / 30.0,
-        maxFrames: maxFrames
+        maxFrames: remainingMaxFrames
     )
     let result = try readFrameChunk(
         url: url,
@@ -5070,23 +5259,36 @@ private func readFrames(
         sample: sample,
         sourcePixelCount: sourcePixelCount,
         chunk: serialChunk,
-        basePresentationTimeSeconds: nil,
-        maxFrames: maxFrames,
+        basePresentationTimeSeconds: shouldSeekForResume ? try firstPresentationTimeSeconds(url: url) : nil,
+        maxFrames: remainingMaxFrames,
         progressEnabled: progressEnabled,
         progressEvery: 30,
         progressReporter: progressReporter,
         inFlightLimit: inFlightLimit,
         expectedOutputFrameCount: expectedOutputFrameCount,
         metalContext: metalContext,
-        decoderMode: serialDecoderPlan.mode
+        decoderMode: serialDecoderPlan.mode,
+        onOutputFrame: { frame, motion in
+            try checkpointStore?.append(frame: frame, motion: motion)
+        },
+        shouldSkipOutputFrame: { frame in
+            let timeKey = checkpointPresentationTimeKey(frame)
+            let count = remainingCheckpointTimeCounts[timeKey, default: 0]
+            guard count > 0 else { return false }
+            remainingCheckpointTimeCounts[timeKey] = count - 1
+            return true
+        }
     )
     progressReporter.finish()
-    guard result.frames.count >= 3 else {
-        throw AnalyzerError("analysis requires at least 3 frames; got \(result.frames.count)")
+    try checkpointStore?.flush()
+    let frames = restored.frames + result.frames
+    let motions = restored.motions + result.motions
+    guard frames.count >= 3 else {
+        throw AnalyzerError("analysis requires at least 3 frames; got \(frames.count)")
     }
     var timings = result.timings
     let prepareStart = timingNowSeconds()
-    let prepared = try prepare(frames: result.frames, motions: result.motions)
+    let prepared = try prepare(frames: frames, motions: motions)
     timings.preparedPathSeconds = timingNowSeconds() - prepareStart
     return ReadFramesResult(prepared: prepared, timings: timings)
 }
@@ -5660,13 +5862,24 @@ func run() throws {
     for (assetIndex, asset) in plan.assets.enumerated() {
         progress(arguments.progress, "starting asset \(assetIndex + 1)/\(plan.assets.count): \(asset.name)")
         let totalStart = timingNowSeconds()
+        let checkpointStore: AnalysisCheckpointStore?
+        if let checkpointDirectory = asset.checkpointDirectory,
+           let checkpointIdentity = asset.checkpointIdentity {
+            checkpointStore = try AnalysisCheckpointStore(
+                directory: URL(fileURLWithPath: checkpointDirectory, isDirectory: true),
+                identity: checkpointIdentity
+            )
+        } else {
+            checkpointStore = nil
+        }
         let readResult = try readFrames(
             asset: asset,
             sampleScalePercent: plan.sampleScalePercent,
             maxFrames: plan.maxFrames,
             progressEnabled: arguments.progress,
             metalContext: metalContext,
-            allowParallelReaders: true
+            allowParallelReaders: true,
+            checkpointStore: checkpointStore
         )
         let prepared = readResult.prepared
         let buildCacheStart = timingNowSeconds()

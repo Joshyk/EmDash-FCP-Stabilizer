@@ -709,6 +709,31 @@ function buildCacheRootFromAnalysis(analysis) {
   return analysis.cacheRoot;
 }
 
+async function removeCompletedCheckpointWork(analysis, importsDir) {
+  const root = path.resolve(importsDir);
+  const workDirectories = uniqueStrings(analysis && analysis.workDirectories);
+  const removed = [];
+  for (const workDirectory of workDirectories) {
+    const resolved = path.resolve(workDirectory);
+    const relative = path.relative(root, resolved);
+    const expectedSegment = `${path.sep}TokyoWalkingStabilizerHostAnalysis${path.sep}analysis-work${path.sep}`;
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || !resolved.includes(expectedSegment)) {
+      throw new Error(`refusing to remove analysis checkpoint work outside the selected frontend analysis root: ${resolved}`);
+    }
+    await fsp.rm(resolved, { recursive: true, force: false });
+    removed.push(resolved);
+    for (const parent of [path.dirname(resolved), path.dirname(path.dirname(resolved))]) {
+      if (path.relative(root, parent).startsWith("..")) break;
+      try {
+        await fsp.rmdir(parent);
+      } catch (error) {
+        if (error && error.code !== "ENOTEMPTY" && error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+  return removed;
+}
+
 const ANALYSIS_TIMING_STAGE_KEYS = [
   "decoderCopyNextFrameSeconds",
   "metalEncodeSeconds",
@@ -1009,6 +1034,9 @@ async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId
     throw error;
   }
 
+  progress("cleaning-checkpoint", `${sourcePrefix}Removing completed frontend analysis checkpoints.`, progressPatch);
+  const removedCheckpointWorkDirectories = await removeCompletedCheckpointWork(analysis, importsDir);
+
   const source = { sourcePath, sourceName };
   const summary = batchSummary(analysis, build, validations, eventCacheInstallations, source);
   await writeJsonFile(analysisBenchmarkPath, analysisBenchmarkPayload({
@@ -1040,6 +1068,7 @@ async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId
     packages,
     validations,
     eventCacheInstallations,
+    removedCheckpointWorkDirectories,
     summary,
     outputPackage: build.outputPackage,
     outputPackages: packages.map((pkg) => pkg.outputPackage),
@@ -1542,6 +1571,7 @@ module.exports = {
   processFailureDetails,
   processFailureMessage,
   readNativeAnalyzerCacheSchemaVersion,
+  removeCompletedCheckpointWork,
   retainedAnalysisBundleDirName,
   restorePackageInfoForPath,
 };

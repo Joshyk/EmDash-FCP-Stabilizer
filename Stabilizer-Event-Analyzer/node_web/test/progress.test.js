@@ -21,8 +21,29 @@ const {
   processFailureDetails,
   processFailureMessage,
   readNativeAnalyzerCacheSchemaVersion,
+  removeCompletedCheckpointWork,
   restorePackageInfoForPath,
 } = require("../server.js");
+
+test("removeCompletedCheckpointWork removes only completed frontend checkpoint work", async () => {
+  const importsDir = fs.mkdtempSync(path.join(os.tmpdir(), "stabilizer-checkpoint-cleanup-"));
+  const workDirectory = path.join(
+    importsDir,
+    "Library_fcpbundle",
+    "Event-A",
+    "TokyoWalkingStabilizerHostAnalysis",
+    "analysis-work",
+    "r2"
+  );
+  fs.mkdirSync(path.join(workDirectory, "checkpoint"), { recursive: true });
+  fs.writeFileSync(path.join(workDirectory, "checkpoint", "checkpoint-manifest-v1.json"), "{}");
+
+  const removed = await removeCompletedCheckpointWork({ workDirectories: [workDirectory] }, importsDir);
+
+  assert.deepEqual(removed, [workDirectory]);
+  assert.equal(fs.existsSync(workDirectory), false);
+  assert.equal(fs.existsSync(path.dirname(path.dirname(workDirectory))), false);
+});
 
 test("analysisTimingBreakdown reports the measured bottleneck stage", () => {
   const breakdown = analysisTimingBreakdown({

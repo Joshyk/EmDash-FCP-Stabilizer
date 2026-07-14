@@ -299,10 +299,12 @@ print(json.dumps({
   const resolvedTmp = fs.realpathSync(tmp);
   assert.equal(payload.analysisRoot, path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library_fcpbundle"));
   assert.deepEqual(payload.cacheRoots, [
-    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library_fcpbundle", "Event-A", "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
-    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library_fcpbundle", "Event-B", "Analysis Files", "TokyoWalkingStabilizerHostAnalysis"),
+    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library_fcpbundle", "Event-A", "TokyoWalkingStabilizerHostAnalysis", "analysis-work", "r1", "cache"),
+    path.join(resolvedTmp, "_walking_stabilizer_analysis", "Library_fcpbundle", "Event-B", "TokyoWalkingStabilizerHostAnalysis", "analysis-work", "r2", "cache"),
   ]);
   assert.deepEqual(payload.assets.map((asset) => asset.cacheRoot), payload.cacheRoots);
+  assert.equal(payload.assets[0].checkpointDirectory, path.join(path.dirname(payload.cacheRoots[0]), "checkpoint"));
+  assert.match(payload.assets[0].checkpointIdentity, /^[0-9a-f]{64}$/);
 });
 
 test("list_event_assets loads broken original media links as unselectable FCP library assets", { skip: !(hasCommand("ffmpeg") && hasCommand("ffprobe")) }, () => {
