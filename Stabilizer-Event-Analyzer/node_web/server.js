@@ -137,6 +137,7 @@ function publicJob(job) {
     cancellable: job.status === "running" || job.status === "cancelling",
     cacheSchemaVersion: job.cacheSchemaVersion || CACHE_SCHEMA_VERSION,
     progress: job.progress,
+    readyPackages: Array.isArray(job.readyPackages) ? job.readyPackages : [],
     result: job.result,
     error: job.error,
   };
@@ -896,24 +897,65 @@ function normalizeSourceJobs(body = {}) {
   return mergedJobs;
 }
 
+function serialAnalysisWorkItems(sourceJobs) {
+  const workItems = [];
+  const totalSources = sourceJobs.length;
+  for (const [sourceIndex, sourceJob] of sourceJobs.entries()) {
+    const assetIds = sourceJob.analyzeAll === true ? [null] : sourceJob.assetIds;
+    for (const assetId of assetIds) {
+      workItems.push({
+        sourceJob: assetId
+          ? { ...sourceJob, assetIds: [assetId], analyzeAll: false }
+          : sourceJob,
+        sourceIndex,
+        totalSources,
+        assetId,
+      });
+    }
+  }
+  return workItems.map((item, workIndex) => ({
+    ...item,
+    workIndex,
+    totalWorkItems: workItems.length,
+  }));
+}
+
 function sourceResultDir(id, sourceIndex, totalSources) {
   const root = path.join(JOB_DIR, id);
   if (totalSources <= 1) return root;
   return path.join(root, `source-${String(sourceIndex + 1).padStart(2, "0")}`);
 }
 
-async function runSourceAnalyzer(body, sampleScalePercent, progress, forcedJobId, sourceIndex = 0, totalSources = 1) {
+async function runSourceAnalyzer(
+  body,
+  sampleScalePercent,
+  progress,
+  forcedJobId,
+  sourceIndex = 0,
+  totalSources = 1,
+  workIndex = sourceIndex,
+  totalWorkItems = totalSources
+) {
   const id = forcedJobId || jobId();
-  const dir = sourceResultDir(id, sourceIndex, totalSources);
+  const dir = sourceResultDir(id, workIndex, totalWorkItems);
   await fsp.mkdir(dir, { recursive: true });
   const sourcePath = expandPath(body.sourcePath);
   const importsDir = outputDirValue(body.importsDir || body.outputDir, sourcePath);
   const cacheRoot = cacheRootValue(body.cacheRoot || importsDir, sourcePath, importsDir);
   const sourceName = body.sourceName || (body.sourceItem && body.sourceItem.name) || path.basename(sourcePath);
-  const sourcePrefix = totalSources > 1 ? `Source ${sourceIndex + 1}/${totalSources} ${sourceName}: ` : "";
-  const progressPatch = totalSources > 1
-    ? { currentSourceIndex: sourceIndex + 1, totalSources, currentSourcePath: sourcePath, currentSourceName: sourceName }
-    : {};
+  const selectedAssetId = body.analyzeAll === true ? "" : (body.assetIds[0] || "");
+  const sourcePrefix = totalWorkItems > 1
+    ? `Clip ${workIndex + 1}/${totalWorkItems} ${sourceName}${selectedAssetId ? ` [${selectedAssetId}]` : ""}: `
+    : "";
+  const progressPatch = {
+    currentSourceIndex: sourceIndex + 1,
+    totalSources,
+    currentSourcePath: sourcePath,
+    currentSourceName: sourceName,
+    currentAnalysisIndex: workIndex + 1,
+    totalAnalysisItems: totalWorkItems,
+    currentAssetId: selectedAssetId || null,
+  };
 
   progress("analyzing", `${sourcePrefix}Running serial Event media analysis.`, progressPatch);
   assertNotCancelled(id);
@@ -1161,6 +1203,9 @@ function batchSummary(analysis, build, validations, eventCacheInstallations = []
       const eventCacheInstalled = installation ? installation.status === "ok" : false;
       return {
         ...source,
+        footageName: pkg.footageName || pkg.packageFootageLabel || null,
+        footageFileName: pkg.footageFileName || null,
+        packageFootageLabel: pkg.packageFootageLabel || null,
         packagePath: pkg.packageDirectory,
         fcpxmldPath: pkg.outputPackage,
         sampleScalePercent: pkg.sampleScalePercent,
@@ -1242,14 +1287,23 @@ function combineSourceSummaries(sourceResults) {
     analysisTimings.framesPerWallSecond = Number(analysisTimings.frameCount || 0)
       / Math.max(1e-9, Number(analysisTimings.totalWallSeconds || 0));
   }
-  const sourceSuccessCount = sourceResults.filter((result) => result.status === "ok").length;
-  const sourceFailureCount = Math.max(0, sourceResults.length - sourceSuccessCount);
+  const resultsBySource = new Map();
+  sourceResults.forEach((result, index) => {
+    const key = result.sourcePath || result.sourceName || `source-${index}`;
+    const grouped = resultsBySource.get(key) || [];
+    grouped.push(result);
+    resultsBySource.set(key, grouped);
+  });
+  const sourceSuccessCount = Array.from(resultsBySource.values())
+    .filter((results) => results.every((result) => result.status === "ok"))
+    .length;
+  const sourceFailureCount = Math.max(0, resultsBySource.size - sourceSuccessCount);
   const validationPassCount = summaries.reduce((sum, summary) => sum + Number(summary.validationPassCount || 0), 0);
   const validationFailCount = summaries.reduce((sum, summary) => sum + Number(summary.validationFailCount || 0), 0);
   const eventCacheInstallPassCount = summaries.reduce((sum, summary) => sum + Number(summary.eventCacheInstallPassCount || 0), 0);
   const eventCacheInstallFailCount = summaries.reduce((sum, summary) => sum + Number(summary.eventCacheInstallFailCount || 0), 0);
   return {
-    sourceCount: sourceResults.length,
+    sourceCount: resultsBySource.size,
     sourceSuccessCount,
     sourceFailureCount,
     analyzedSuccessCount: summaries.reduce((sum, summary) => sum + Number(summary.analyzedSuccessCount || 0), 0),
@@ -1275,17 +1329,49 @@ function combineSourceSummaries(sourceResults) {
 async function runBatchAnalyzer(body, progress, forcedJobId) {
   const id = forcedJobId || jobId();
   const sourceJobs = normalizeSourceJobs(body);
+  const workItems = serialAnalysisWorkItems(sourceJobs);
   const sampleScalePercent = normalizeSampleScalePercent(body.sampleScalePercent);
   const sourceResults = [];
   const failedSources = [];
-  for (const [index, sourceJob] of sourceJobs.entries()) {
+  const readyPackages = [];
+  for (const workItem of workItems) {
     assertNotCancelled(id);
+    const { sourceJob, sourceIndex, totalSources, workIndex, totalWorkItems } = workItem;
     try {
-      const result = await runSourceAnalyzer(sourceJob, sampleScalePercent, progress, id, index, sourceJobs.length);
+      const result = await runSourceAnalyzer(
+        sourceJob,
+        sampleScalePercent,
+        progress,
+        id,
+        sourceIndex,
+        totalSources,
+        workIndex,
+        totalWorkItems
+      );
       sourceResults.push(result);
+      const completedPackages = Array.isArray(result.summary && result.summary.packages)
+        ? result.summary.packages.filter((pkg) => pkg.importReady === true && pkg.fcpxmldPath)
+        : [];
+      readyPackages.push(...completedPackages);
+      const completedNames = completedPackages
+        .map((pkg) => pkg.footageName || pkg.packageFootageLabel || path.basename(pkg.fcpxmldPath, ".fcpxmld"))
+        .join(", ");
+      progress(
+        "clip-complete",
+        `Clip ${workIndex + 1}/${totalWorkItems} complete${completedNames ? `: ${completedNames}` : "."}`,
+        {
+          currentSourceIndex: sourceIndex + 1,
+          totalSources,
+          currentSourcePath: result.sourcePath,
+          currentSourceName: result.sourceName,
+          currentAnalysisIndex: workIndex + 1,
+          totalAnalysisItems: totalWorkItems,
+          readyPackages: readyPackages.slice(),
+        }
+      );
     } catch (error) {
       if (error instanceof CancelledError) throw error;
-      const failed = failedSourceResult(sourceJob, error, index, sourceJobs.length);
+      const failed = failedSourceResult(sourceJob, error, sourceIndex, totalSources);
       sourceResults.push(failed);
       failedSources.push({
         sourcePath: failed.sourcePath,
@@ -1293,11 +1379,14 @@ async function runBatchAnalyzer(body, progress, forcedJobId) {
         sourceIndex: failed.sourceIndex,
         error: failed.error,
       });
-      progress("source-failed", `Source ${index + 1}/${sourceJobs.length} ${failed.sourceName} failed: ${failed.error}`, {
-        currentSourceIndex: index + 1,
-        totalSources: sourceJobs.length,
+      progress("clip-failed", `Clip ${workIndex + 1}/${totalWorkItems} ${failed.sourceName} failed: ${failed.error}`, {
+        currentSourceIndex: sourceIndex + 1,
+        totalSources,
         currentSourcePath: failed.sourcePath,
         currentSourceName: failed.sourceName,
+        currentAnalysisIndex: workIndex + 1,
+        totalAnalysisItems: totalWorkItems,
+        readyPackages: readyPackages.slice(),
       });
     }
   }
@@ -1359,6 +1448,7 @@ function startRunJob(body) {
     stage: "queued",
     message: "Queued Stabilizer Event analysis.",
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
+    readyPackages: [],
   });
   setImmediate(async () => {
     try {
@@ -1574,4 +1664,5 @@ module.exports = {
   removeCompletedCheckpointWork,
   retainedAnalysisBundleDirName,
   restorePackageInfoForPath,
+  serialAnalysisWorkItems,
 };

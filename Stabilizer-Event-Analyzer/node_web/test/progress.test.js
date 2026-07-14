@@ -23,6 +23,7 @@ const {
   readNativeAnalyzerCacheSchemaVersion,
   removeCompletedCheckpointWork,
   restorePackageInfoForPath,
+  serialAnalysisWorkItems,
 } = require("../server.js");
 
 test("removeCompletedCheckpointWork removes only completed frontend checkpoint work", async () => {
@@ -297,6 +298,46 @@ test("normalizeSourceJobs scopes roots per source and still forces fcpbundle out
   assert.equal(jobs[1].cacheRoot, path.resolve("/tmp/custom-cache"));
 });
 
+test("serialAnalysisWorkItems turns each selected clip into an immediately publishable work item", () => {
+  const sourceJobs = normalizeSourceJobs({
+    sourceJobs: [
+      {
+        sourcePath: "/Volumes/Edit/Project/Library.fcpbundle",
+        assetIds: ["r2", "r7"],
+      },
+      {
+        sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+        importsDir: "/tmp/imports",
+        cacheRoot: "/tmp/cache",
+        assetIds: ["r9"],
+      },
+    ],
+  });
+
+  const workItems = serialAnalysisWorkItems(sourceJobs);
+
+  assert.equal(workItems.length, 3);
+  assert.deepEqual(workItems.map((item) => item.sourceJob.assetIds), [["r2"], ["r7"], ["r9"]]);
+  assert.deepEqual(workItems.map((item) => item.sourceIndex), [0, 0, 1]);
+  assert.deepEqual(workItems.map((item) => item.workIndex), [0, 1, 2]);
+  assert.ok(workItems.every((item) => item.totalWorkItems === 3));
+});
+
+test("serialAnalysisWorkItems preserves analyze-all as one explicit work item", () => {
+  const sourceJobs = normalizeSourceJobs({
+    sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+    importsDir: "/tmp/imports",
+    cacheRoot: "/tmp/cache",
+    analyzeAll: true,
+  });
+
+  const workItems = serialAnalysisWorkItems(sourceJobs);
+
+  assert.equal(workItems.length, 1);
+  assert.equal(workItems[0].sourceJob.analyzeAll, true);
+  assert.deepEqual(workItems[0].sourceJob.assetIds, []);
+});
+
 test("combineSourceSummaries keeps partial batch failures visible", () => {
   const summary = combineSourceSummaries([
     {
@@ -341,6 +382,25 @@ test("combineSourceSummaries keeps partial batch failures visible", () => {
   assert.equal(summary.packageCreatedCount, 1);
   assert.equal(summary.fcpImportReady, false);
   assert.equal(summary.failedClips[0].sourceName, "Event B.fcpxmld");
+});
+
+test("combineSourceSummaries counts multiple clip results from one source once", () => {
+  const summary = combineSourceSummaries([
+    {
+      status: "ok",
+      sourcePath: "/tmp/Event.fcpxmld",
+      summary: { packages: [], failedClips: [] },
+    },
+    {
+      status: "ok",
+      sourcePath: "/tmp/Event.fcpxmld",
+      summary: { packages: [], failedClips: [] },
+    },
+  ]);
+
+  assert.equal(summary.sourceCount, 1);
+  assert.equal(summary.sourceSuccessCount, 1);
+  assert.equal(summary.sourceFailureCount, 0);
 });
 
 test("readNativeAnalyzerCacheSchemaVersion exposes frontend writer schema", () => {

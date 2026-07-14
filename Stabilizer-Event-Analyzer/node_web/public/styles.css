@@ -334,6 +334,18 @@ td:nth-child(5) {
   gap: 8px;
 }
 
+.package-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.package-actions button {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
 .failure-list {
   color: var(--error);
   white-space: pre-wrap;

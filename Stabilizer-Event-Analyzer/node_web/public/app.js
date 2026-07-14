@@ -38,11 +38,10 @@ const el = {
   runButton: document.getElementById("runButton"),
   cancelButton: document.getElementById("cancelButton"),
   statusBox: document.getElementById("statusBox"),
+  readyImports: document.getElementById("readyImports"),
   batchSummary: document.getElementById("batchSummary"),
   resultActions: document.getElementById("resultActions"),
   revealCacheButton: document.getElementById("revealCacheButton"),
-  revealImportButton: document.getElementById("revealImportButton"),
-  openImportButton: document.getElementById("openImportButton"),
   restorePackagePathInput: document.getElementById("restorePackagePathInput"),
   selectRestorePackageButton: document.getElementById("selectRestorePackageButton"),
   loadRestorePackageButton: document.getElementById("loadRestorePackageButton"),
@@ -129,6 +128,66 @@ function jobStatusText(job) {
   return `Writer schema: ${schemaVersion}\n${statusText}`;
 }
 
+function packageImportPath(pkg) {
+  return (pkg && (pkg.fcpxmldPath || pkg.outputPackage || pkg.packagePath)) || "";
+}
+
+function packageDisplayName(pkg) {
+  return (pkg && (pkg.footageName || pkg.packageFootageLabel || pkg.footageFileName || pkg.sourceName)) || "Clip";
+}
+
+function appendPackageList(container, packages) {
+  const list = document.createElement("div");
+  list.className = "package-list";
+  for (const pkg of packages) {
+    const row = document.createElement("div");
+    row.className = "package-item";
+    const sample = pkg.sampleScalePercent ? `${pkg.sampleScalePercent}%` : "?";
+    const pixels = pkg.sampleWidth && pkg.sampleHeight ? `${pkg.sampleWidth}x${pkg.sampleHeight}` : "?";
+    const cacheInstall = pkg.eventCacheInstalled ? "event cache installed" : "event cache pending";
+    const effectStack = pkg.sourceEffectStack || {};
+    const inheritedEffects = Number(effectStack.inheritedFilterCount || 0);
+    const effectStatus = inheritedEffects > 0
+      ? `${inheritedEffects} inherited effect${inheritedEffects === 1 ? "" : "s"}`
+      : (effectStack.unavailableReason || "no inherited effects");
+    const importPath = packageImportPath(pkg);
+    row.innerHTML = "<strong></strong><span></span><code></code><div class=\"package-actions\"></div>";
+    row.querySelector("strong").textContent = `${pkg.importReady ? "Ready" : "Blocked"} | ${packageDisplayName(pkg)}`;
+    row.querySelector("span").textContent = `sample ${sample} (${pixels}) | schema ${pkg.cacheSchemaVersion || "?"} | ${pkg.cacheIdentityShort || "no identity"} | ${cacheInstall} | ${effectStatus}`;
+    row.querySelector("code").textContent = importPath;
+    const actions = row.querySelector(".package-actions");
+    const revealButton = document.createElement("button");
+    revealButton.type = "button";
+    revealButton.textContent = "Reveal Import";
+    revealButton.disabled = !pkg.importReady || !importPath;
+    revealButton.addEventListener("click", () => reveal(importPath).catch((error) => setStatus(error.message, "error")));
+    actions.appendChild(revealButton);
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.textContent = "Open Import";
+    openButton.disabled = !pkg.importReady || !importPath;
+    openButton.addEventListener("click", () => openPath(importPath).catch((error) => setStatus(error.message, "error")));
+    actions.appendChild(openButton);
+    list.appendChild(row);
+  }
+  container.appendChild(list);
+}
+
+function renderReadyImports(packages) {
+  const readyPackages = Array.isArray(packages) ? packages.filter((pkg) => pkg && pkg.importReady === true) : [];
+  el.readyImports.textContent = "";
+  if (!readyPackages.length) {
+    el.readyImports.classList.add("hidden");
+    return;
+  }
+  el.readyImports.classList.remove("hidden");
+  const header = document.createElement("div");
+  header.className = "status-ready";
+  header.textContent = `${readyPackages.length} completed import${readyPackages.length === 1 ? "" : "s"} available now`;
+  el.readyImports.appendChild(header);
+  appendPackageList(el.readyImports, readyPackages);
+}
+
 function renderBatchSummary(result) {
   const summary = result && result.summary;
   el.batchSummary.textContent = "";
@@ -164,26 +223,7 @@ function renderBatchSummary(result) {
 
   const packages = Array.isArray(summary.packages) ? summary.packages : [];
   if (packages.length) {
-    const list = document.createElement("div");
-    list.className = "package-list";
-    for (const pkg of packages) {
-      const row = document.createElement("div");
-      row.className = "package-item";
-      const sample = pkg.sampleScalePercent ? `${pkg.sampleScalePercent}%` : "?";
-      const pixels = pkg.sampleWidth && pkg.sampleHeight ? `${pkg.sampleWidth}x${pkg.sampleHeight}` : "?";
-      const cacheInstall = pkg.eventCacheInstalled ? "event cache installed" : "event cache pending";
-      const effectStack = pkg.sourceEffectStack || {};
-      const inheritedEffects = Number(effectStack.inheritedFilterCount || 0);
-      const effectStatus = inheritedEffects > 0
-        ? `${inheritedEffects} inherited effect${inheritedEffects === 1 ? "" : "s"}`
-        : (effectStack.unavailableReason || "no inherited effects");
-      row.innerHTML = "<strong></strong><span></span><code></code>";
-      row.querySelector("strong").textContent = `${pkg.importReady ? "Ready" : "Blocked"} | ${pkg.sourceName || "Source"}`;
-      row.querySelector("span").textContent = `sample ${sample} (${pixels}) | schema ${pkg.cacheSchemaVersion || "?"} | ${pkg.cacheIdentityShort || "no identity"} | ${cacheInstall} | ${effectStatus}`;
-      row.querySelector("code").textContent = pkg.fcpxmldPath || pkg.packagePath || "";
-      list.appendChild(row);
-    }
-    el.batchSummary.appendChild(list);
+    appendPackageList(el.batchSummary, packages);
   }
 
   const failed = Array.isArray(summary.failedClips) ? summary.failedClips : [];
@@ -250,6 +290,7 @@ function attachRunningJob(job) {
   el.runButton.disabled = true;
   el.cancelButton.disabled = job.status === "cancelling";
   el.cancelButton.classList.remove("hidden");
+  renderReadyImports(job.readyPackages);
   setStatus(jobStatusText(job));
   pollJob();
   return true;
@@ -623,6 +664,7 @@ async function loadAssets() {
   state.selectedClipKeys.clear();
   state.lastResult = null;
   el.resultActions.classList.add("hidden");
+  renderReadyImports([]);
   renderBatchSummary(null);
   renderAssets();
   setStatus(`Loading Event media from ${sources.length} source(s)...`);
@@ -819,6 +861,7 @@ async function runAnalysis() {
   }
   setStatus(`Queueing serial analysis for ${body.sourceJobs.length} source(s)...`);
   el.resultActions.classList.add("hidden");
+  renderReadyImports([]);
   renderBatchSummary(null);
   const payload = await api("/api/run", { method: "POST", body });
   saveLastAnalysisSettings(body);
@@ -834,9 +877,11 @@ async function pollJob() {
   try {
     const payload = await api(`/api/job?id=${encodeURIComponent(state.currentJobId)}`);
     const job = payload.job;
+    renderReadyImports(job.readyPackages);
     setStatus(jobStatusText(job));
     if (job.status === "done") {
       state.lastResult = job.result;
+      renderReadyImports([]);
       renderBatchSummary(job.result);
       const summary = job.result.summary || {};
       const sourceFailures = summary.sourceFailureCount || 0;
@@ -889,14 +934,6 @@ function restoreInstalledCachePath() {
   return state.restoreInstallation && state.restoreInstallation.cacheRoot ? state.restoreInstallation.cacheRoot : "";
 }
 
-function firstImportPath(result) {
-  if (!result) return "";
-  if (result.outputPackage) return result.outputPackage;
-  if (Array.isArray(result.outputPackages) && result.outputPackages[0]) return result.outputPackages[0];
-  const packages = result.summary && Array.isArray(result.summary.packages) ? result.summary.packages : [];
-  return (packages[0] && (packages[0].fcpxmldPath || packages[0].packagePath)) || "";
-}
-
 function firstCachePath(result) {
   if (!result) return "";
   if (result.cacheRoot) return result.cacheRoot;
@@ -940,8 +977,6 @@ el.restorePackagePathInput.addEventListener("input", () => {
 el.runButton.addEventListener("click", () => runAnalysis().catch((error) => setStatus(error.message, "error")));
 el.cancelButton.addEventListener("click", () => cancelJob().catch((error) => setStatus(error.message, "error")));
 el.revealCacheButton.addEventListener("click", () => reveal(firstCachePath(state.lastResult)));
-el.revealImportButton.addEventListener("click", () => reveal(firstImportPath(state.lastResult)));
-el.openImportButton.addEventListener("click", () => openPath(firstImportPath(state.lastResult)));
 el.revealRestorePackageButton.addEventListener("click", () => reveal(state.restorePackage && state.restorePackage.packagePath));
 el.revealInstalledCacheButton.addEventListener("click", () => reveal(restoreInstalledCachePath()));
 el.openRestoreImportButton.addEventListener("click", () => openPath(state.restorePackage && state.restorePackage.fcpxmldPath));

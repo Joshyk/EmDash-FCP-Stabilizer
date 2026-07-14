@@ -124,6 +124,12 @@ clips, Imports folder, sample size, and debug frame limit from the most recent
 analysis run. It does not open the macOS file picker and does not write any
 shared fallback cache.
 
+Selected clips run serially as individual analysis work items. As soon as one
+clip finishes analysis, package validation, and Event cache installation, its
+package row appears with its own `Reveal Import` and `Open Import` actions while
+the remaining clips continue. The completed batch summary keeps those actions
+on every import-ready clip instead of exposing only one batch-level import.
+
 ## Imports
 
 `Imports` defaults to a sibling `_walking_stabilizer_analysis` folder next to the
