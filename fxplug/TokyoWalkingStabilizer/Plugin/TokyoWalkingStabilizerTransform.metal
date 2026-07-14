@@ -221,15 +221,15 @@ static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeB
         case StabilizerDebugOverlayRowSearchRadiusHeadroomQuality:
             return debugLabelCharAt(index, 72, 73, 84, 0, 0, 0, 0, 0, 0, 0, 0, 0); // HIT
         case StabilizerDebugOverlayRowTurnConfidence:
-            return debugLabelCharAt(index, 84, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // T Q
+            return debugLabelCharAt(index, 84, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // T CONF
         case StabilizerDebugOverlayRowStrideConfidence:
-            return debugLabelCharAt(index, 83, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // S Q
+            return debugLabelCharAt(index, 83, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // S CONF
         case StabilizerDebugOverlayRowFootstepConfidence:
-            return debugLabelCharAt(index, 70, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // F Q
+            return debugLabelCharAt(index, 70, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // F CONF
         case StabilizerDebugOverlayRowWarpConfidence:
-            return debugLabelCharAt(index, 87, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // W Q
+            return debugLabelCharAt(index, 87, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // W CONF
         case StabilizerDebugOverlayRowLensConfidence:
-            return debugLabelCharAt(index, 76, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // L Q
+            return debugLabelCharAt(index, 76, 0, 67, 79, 78, 70, 0, 0, 0, 0, 0, 0); // L CONF
         case StabilizerDebugOverlayRowRuntime:
             return debugModeLabelChar(debugMode, runtimeBuild, runtimeVersion, index);
         default:

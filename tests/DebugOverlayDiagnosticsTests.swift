@@ -96,7 +96,7 @@ struct DebugOverlayDiagnosticsTests {
         ))
         expect(close(stride.strideWobble, 1.0), "SWOB must use its own applied correction")
         expect(close(stride.footstepJitter, 0.0), "SWOB must not activate FJIT")
-        expect(close(stride.strideConfidence, 0.45), "S Q must keep analysis confidence")
+        expect(close(stride.strideConfidence, 0.45), "S CONF must keep analysis confidence")
 
         let fine = StabilizerDebugOverlayCalculator.metrics(for: inputs(
             fineJitterPixelOffset: vector_float2(0.0, 4.32),
@@ -104,14 +104,14 @@ struct DebugOverlayDiagnosticsTests {
         ))
         expect(close(fine.footstepJitter, 1.0), "FJIT must use fine correction")
         expect(close(fine.strideWobble, 0.0), "FJIT must not activate SWOB")
-        expect(close(fine.footstepConfidence, 0.62), "F Q must keep effective confidence")
+        expect(close(fine.footstepConfidence, 0.62), "F CONF must keep effective confidence")
 
         let warp = StabilizerDebugOverlayCalculator.metrics(for: inputs(
             warpShear: vector_float2(0.016, 0.0),
             warpConfidence: 0.71
         ))
         expect(close(warp.farFieldWarp, 1.0), "WARP must use applied Metal shear")
-        expect(close(warp.warpConfidence, 0.71), "W Q must keep applied warp confidence")
+        expect(close(warp.warpConfidence, 0.71), "W CONF must keep applied warp confidence")
     }
 
     private static func testFinalStrengthAndCropSemantics() {
@@ -161,7 +161,7 @@ struct DebugOverlayDiagnosticsTests {
             ]
         ))
         expect(close(values.lens, 1.0), "LENS must use the actual supported Metal offset")
-        expect(close(values.lensConfidence, 1.0), "L Q must use effective applied support")
+        expect(close(values.lensConfidence, 1.0), "L CONF must use effective applied support")
         expect(close(StabilizerDebugOverlayCalculator.lensAppliedGain(0.08), 0.0), "lens gain lower edge")
         expect(close(StabilizerDebugOverlayCalculator.rigidLocalWarpEscapeGain(0.42), 0.0), "rigid mode must suppress local warp")
     }

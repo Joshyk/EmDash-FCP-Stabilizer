@@ -354,8 +354,8 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   render runtime.
 - `Debug Overlay`: normally off. When enabled, the fixed 21-row panel shows
   `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
-  `LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T Q`, `S Q`, `F Q`,
-  `W Q`, `L Q`, then compact runtime/source diagnostics. `R###` means
+  `LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T CONF`, `S CONF`, `F CONF`,
+  `W CONF`, `L CONF`, then compact runtime/source diagnostics. `R###` means
   the current FxPlug runtime is rendering original/optimized frames, and `P###` means proxy
   playback is using the same saved-analysis correction path. The digits are derived from the active FxPlug
   version. The overlay scales from the current render output so
@@ -377,7 +377,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   `SMOOTH` Master-Strength-adjusted temporal smoothing delta,
   `TRK` current frame tracking quality and `WLK` walking-band tracking quality,
   `SHRP` sharpness quality, `RES` residual quality, and `HIT` search-radius headroom quality,
-  `T Q`/`S Q`/`F Q`/`W Q`/`L Q` effective band support grouped above the runtime row.
+  `T CONF`/`S CONF`/`F CONF`/`W CONF`/`L CONF` effective band support grouped above the runtime row.
   Confidence rows remain evidence when Master Strength is zero. Unavailable `RES`/`HIT`
   values are zero and logged as unavailable instead of using inferred fallback values.
   `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` all use the same high-is-good direction.
@@ -404,7 +404,7 @@ remaining shake from the prepared motion paths and tracking diagnostics, then
 prints `CAM`, `WARP`, and `TURN` in render-stage order. Pass
 `--turn-strength` when `Turn Smoothing Strength` is not the default `12.0`.
 It uses the same unified Camera Jitter composition as render. `WARP` `q` matches the
-applied `W Q` confidence shown by Debug Overlay. The report includes strict and walking-band
+applied `W CONF` confidence shown by Debug Overlay. The report includes strict and walking-band
 tracking confidence, Camera Jitter authority, residual quality, blur quality, block coverage, edge quality, stable WARP tracking support, and WARP
 tracking/edge gate values so gating causes are visible. It fails visibly on unsupported or
 mismatched cache data instead of repairing it; rerun Host Analysis with the

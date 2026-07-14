@@ -10697,7 +10697,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFraming.telemetry.mergeBypassed ? "bypass" : "ok"
         )
         os_log(
-            "Debug Overlay bars quality | FxPlug %{public}@ | TRK %.3f WLK %.3f SHRP %.3f RES %.3f %{public}@ HIT %.3f %{public}@ T Q %.3f S Q %.3f F Q %.3f W Q %.3f L Q %.3f",
+            "Debug Overlay bars quality | FxPlug %{public}@ | TRK %.3f WLK %.3f SHRP %.3f RES %.3f %{public}@ HIT %.3f %{public}@ T CONF %.3f S CONF %.3f F CONF %.3f W CONF %.3f L CONF %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,

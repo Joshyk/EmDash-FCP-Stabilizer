@@ -238,8 +238,8 @@ Debug/status diagnostics should expose tracking confidence, blur/sharpness, resi
 raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
 visible while tuning walking footage. Debug Overlay must keep the shared 21-row contract:
 `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
-`LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T Q`, `S Q`, `F Q`,
-`W Q`, `L Q`, then the runtime/source row. Activity rows must report final values actually
+`LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T CONF`, `S CONF`, `F CONF`,
+`W CONF`, `L CONF`, then the runtime/source row. Activity rows must report final values actually
 applied to Metal. `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` should all be quality bars where
 higher means better tracking evidence and lower means weaker evidence. All quality and
 confidence rows must stay grouped immediately above the version row. Debug Overlay should also expose a compact
@@ -574,7 +574,7 @@ warp gates may be curved upward, and the tracking gate should start early enough
 response gradually enough to avoid high-side gate jumps. The warp gate may use short local
 tracking support and short render-time smoothing to avoid single-frame gate flicker, but zero
 local tracking or poor current search-radius evidence must still produce zero warp correction.
-`W Q` should represent the applied warp confidence after those safety gates. Bump Host
+`W CONF` should represent the applied warp confidence after those safety gates. Bump Host
 Analysis cache schema when prepared warp path semantics change.
 `Edge Display Mode` should control whether transformed source pixels outside the original
 image stretch edge pixels or draw black. Do not tie black outside-source pixels to `Debug

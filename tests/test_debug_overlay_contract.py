@@ -49,11 +49,11 @@ LABELS = [
     "SHRP",
     "RES",
     "HIT",
-    "T Q",
-    "S Q",
-    "F Q",
-    "W Q",
-    "L Q",
+    "T CONF",
+    "S CONF",
+    "F CONF",
+    "W CONF",
+    "L CONF",
     "RUNTIME",
 ]
 

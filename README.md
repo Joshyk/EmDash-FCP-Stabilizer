@@ -417,8 +417,8 @@ validated candidates on demand.
 
 `Debug Overlay` has one fixed 21-row contract:
 `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
-`LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T Q`, `S Q`, `F Q`,
-`W Q`, `L Q`, then the compact `R###`/`P###` runtime/source row. All confidence and
+`LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T CONF`, `S CONF`, `F CONF`,
+`W CONF`, `L CONF`, then the compact `R###`/`P###` runtime/source row. All confidence and
 quality bars are grouped immediately above the version row. Labels use raw English
 control/diagnostic abbreviations; do not translate them in the preview.
 
@@ -442,11 +442,11 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `SHRP`: frame sharpness/clarity quality; higher means less blur.
 - `RES`: residual quality; higher means lower block-matching residual/error.
 - `HIT`: search-radius headroom quality; higher means fewer searches hit the radius edge.
-- `T Q`: effective Turn Smoothing confidence.
-- `S Q`: Stride Wobble confidence.
-- `F Q`: combined micro and actually applied Camera Rigid X/Y/roll support.
-- `W Q`: effective Far-field Warp confidence after tracking and search-radius safety gates.
-- `L Q`: effective support for the rendered band/ridge/local lens warp.
+- `T CONF`: effective Turn Smoothing confidence.
+- `S CONF`: Stride Wobble confidence.
+- `F CONF`: combined micro and actually applied Camera Rigid X/Y/roll support.
+- `W CONF`: effective Far-field Warp confidence after tracking and search-radius safety gates.
+- `L CONF`: effective support for the rendered band/ridge/local lens warp.
 
 `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` are aligned as quality signals: high is good,
 low is bad. Confidence rows remain analysis evidence even when Master Strength is zero.
