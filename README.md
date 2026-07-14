@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.2.5` uses schema 52 all-axis Camera Jitter analysis. It stores
+Version `1.2.6` uses schema 52 all-axis Camera Jitter analysis. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
@@ -32,6 +32,11 @@ screen-space proportion without a cache migration or reanalysis.
 Schema 52 removes a centered one-second quadratic X baseline before storing the
 Camera Rigid X target, so sustained pan curvature remains Turn-owned without
 suppressing two-to-five-frame X reversals.
+During a TURN event, the final composed Viewer X path is redistributed as one
+quintic S curve. TURN macro travel remains the distance authority, while Camera
+Jitter and continuity X cannot reintroduce pauses or speed steps inside the curve;
+any accumulated endpoint correction is carried into later frames so the path does
+not snap back when TURN activity ends.
 Future tuning should preserve that seconds-based detector, avoid fixed-frame
 shake windows, and keep the rendered correction coherent enough that mountains,
 clouds, and horizons do not locally pulse or swim.

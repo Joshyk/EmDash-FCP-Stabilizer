@@ -9,6 +9,7 @@ struct StabilizerTurnTransitionEvent {
     let startSeconds: Double
     let endSeconds: Double
     let cumulativeX: Float
+    let propagatedEndpointShiftX: Float
     let activeSampleCount: Int
 }
 
@@ -27,11 +28,13 @@ enum StabilizerTurnTransitionPath {
     static func concatenate(
         times: [Double],
         positions: [Float],
+        travelPositions: [Float],
         activity: [Float],
         windowSeconds: Double,
         activityThreshold: Float = 0.5
     ) -> StabilizerTurnTransitionResult {
         guard times.count == positions.count,
+              positions.count == travelPositions.count,
               positions.count == activity.count
         else {
             return rejected(positions, "TURN transition arrays have different lengths")
@@ -52,6 +55,7 @@ enum StabilizerTurnTransitionPath {
         for index in times.indices {
             guard times[index].isFinite,
                   positions[index].isFinite,
+                  travelPositions[index].isFinite,
                   activity[index].isFinite
             else {
                 return rejected(positions, "TURN transition input contains a non-finite sample")
@@ -142,7 +146,7 @@ enum StabilizerTurnTransitionPath {
 
             var cumulativeMagnitude = Float(0.0)
             for index in (startIndex + 1)...endIndex {
-                let directionalDelta = (positions[index] - positions[index - 1]) * group.direction
+                let directionalDelta = (travelPositions[index] - travelPositions[index - 1]) * group.direction
                 cumulativeMagnitude += max(0.0, directionalDelta)
             }
             guard cumulativeMagnitude >= activityThreshold else {
@@ -157,10 +161,17 @@ enum StabilizerTurnTransitionPath {
             }
             let startX = result[startIndex]
             let cumulativeX = cumulativeMagnitude * group.direction
+            let previousEndX = result[endIndex]
             for index in startIndex...endIndex {
                 let normalizedTime = Float((times[index] - startSeconds) / duration)
                 let progress = quinticSmootherStep(normalizedTime)
                 result[index] = startX + (cumulativeX * progress)
+            }
+            let propagatedEndpointShiftX = result[endIndex] - previousEndX
+            if endIndex + 1 < result.endIndex {
+                for index in (endIndex + 1)..<result.endIndex {
+                    result[index] += propagatedEndpointShiftX
+                }
             }
             events.append(
                 StabilizerTurnTransitionEvent(
@@ -172,6 +183,7 @@ enum StabilizerTurnTransitionPath {
                     startSeconds: startSeconds,
                     endSeconds: endSeconds,
                     cumulativeX: cumulativeX,
+                    propagatedEndpointShiftX: propagatedEndpointShiftX,
                     activeSampleCount: group.indices.count
                 )
             )

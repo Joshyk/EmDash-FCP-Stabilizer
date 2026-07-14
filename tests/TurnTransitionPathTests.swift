@@ -33,6 +33,7 @@ struct TurnTransitionPathTests {
         let accumulated = StabilizerTurnTransitionPath.concatenate(
             times: [0.0, 0.7, 1.5, 2.4, 3.1, 4.0, 5.2, 6.4, 7.0],
             positions: [0.0, 10.0, 10.0, 10.0, 30.0, 30.0, 30.0, 40.0, 40.0],
+            travelPositions: [0.0, 10.0, 10.0, 10.0, 30.0, 30.0, 30.0, 40.0, 40.0],
             activity: [0.0, 10.0, 0.0, 0.0, 20.0, 0.0, 0.0, 10.0, 0.0],
             windowSeconds: 6.0
         )
@@ -43,9 +44,38 @@ struct TurnTransitionPathTests {
         expect(close(accumulated.positions.last ?? .nan, 40.0), "accumulated event must preserve its accumulated endpoint")
         expectStrictlyIncreasing(accumulated.positions, range: 0...8, "accumulated pauses must become one continuous curve")
 
+        let propagatedEndpoint = StabilizerTurnTransitionPath.concatenate(
+            times: [0, 1, 2, 3, 4, 5, 6, 7, 8].map(Double.init),
+            positions: [0.0, 10.0, 8.0, 28.0, 26.0, 36.0, 34.0, 34.0, 34.0],
+            travelPositions: [0.0, 10.0, 8.0, 28.0, 26.0, 36.0, 34.0, 34.0, 34.0],
+            activity: [0.0, 10.0, 0.0, 20.0, 0.0, 10.0, 0.0, 0.0, 0.0],
+            windowSeconds: 5.0
+        )
+        expect(propagatedEndpoint.events.count == 1, "same-direction travel with relaxation must remain one event")
+        expect(close(propagatedEndpoint.events.first?.cumulativeX ?? .nan, 40.0), "relaxation must not erase accumulated travel")
+        expect(close(propagatedEndpoint.events.first?.propagatedEndpointShiftX ?? .nan, 6.0), "removed relaxation must propagate past the endpoint")
+        expectStrictlyIncreasing(propagatedEndpoint.positions, range: 0...6, "relaxation must become one continuous event curve")
+        expect(close(propagatedEndpoint.positions[6], 40.0), "event endpoint must contain all same-direction travel")
+        expect(close(propagatedEndpoint.positions[7], 40.0), "first post-event sample must not jump back")
+        expect(close(propagatedEndpoint.positions[8], 40.0), "propagated endpoint must remain stable")
+
+        let composedResidual = StabilizerTurnTransitionPath.concatenate(
+            times: [0, 1, 2, 3, 4, 5, 6, 7, 8].map(Double.init),
+            positions: [2.0, 12.7, 10.1, 30.6, 28.4, 38.8, 36.2, 36.2, 36.2],
+            travelPositions: [0.0, 10.0, 8.0, 28.0, 26.0, 36.0, 34.0, 34.0, 34.0],
+            activity: [0.0, 10.0, 0.0, 20.0, 0.0, 10.0, 0.0, 0.0, 0.0],
+            windowSeconds: 5.0
+        )
+        expect(close(composedResidual.events.first?.cumulativeX ?? .nan, 40.0), "final X residuals must not inflate TURN travel")
+        expect(close(composedResidual.positions[0], 2.0), "final composite X must preserve the rendered start")
+        expect(close(composedResidual.positions[6], 42.0), "final composite X must end at rendered start plus TURN travel")
+        expectStrictlyIncreasing(composedResidual.positions, range: 0...6, "all rendered X bands must collapse into the event S curve")
+        expect(close(composedResidual.positions[7], 42.0), "composite endpoint correction must propagate to the tail")
+
         let variableSpeed = StabilizerTurnTransitionPath.concatenate(
             times: [0.0, 0.4, 1.1, 2.3, 3.0, 4.8],
             positions: [0.0, 2.0, 18.0, 21.0, 55.0, 60.0],
+            travelPositions: [0.0, 2.0, 18.0, 21.0, 55.0, 60.0],
             activity: [0.0, 2.0, 16.0, 3.0, 34.0, 5.0],
             windowSeconds: 5.0
         )
@@ -55,6 +85,7 @@ struct TurnTransitionPathTests {
         let reversed = StabilizerTurnTransitionPath.concatenate(
             times: [0, 1, 2, 3, 4, 5, 6].map(Double.init),
             positions: [0.0, 10.0, 20.0, 20.0, 10.0, 0.0, 0.0],
+            travelPositions: [0.0, 10.0, 20.0, 20.0, 10.0, 0.0, 0.0],
             activity: [0.0, 10.0, 10.0, 0.0, -10.0, -10.0, 0.0],
             windowSeconds: 6.0
         )
@@ -64,6 +95,7 @@ struct TurnTransitionPathTests {
         let outsideWindow = StabilizerTurnTransitionPath.concatenate(
             times: [0, 1, 2, 3, 4, 5, 6, 7, 8].map(Double.init),
             positions: [0.0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 20.0, 20.0],
+            travelPositions: [0.0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 20.0, 20.0],
             activity: [0.0, 5.0, 5.0, 0.0, 0.0, 0.0, 5.0, 5.0, 0.0],
             windowSeconds: 3.0
         )
@@ -73,6 +105,7 @@ struct TurnTransitionPathTests {
         let subthreshold = StabilizerTurnTransitionPath.concatenate(
             times: [0, 1, 2, 3, 4].map(Double.init),
             positions: subthresholdPositions,
+            travelPositions: subthresholdPositions,
             activity: [0.0, 0.1, 0.2, -0.1, 0.0],
             windowSeconds: 4.0
         )
@@ -82,6 +115,7 @@ struct TurnTransitionPathTests {
         let clipEdge = StabilizerTurnTransitionPath.concatenate(
             times: [0.0, 0.35, 1.2, 2.8],
             positions: [0.0, 4.0, 11.0, 15.0],
+            travelPositions: [0.0, 4.0, 11.0, 15.0],
             activity: [4.0, 4.0, 7.0, 4.0],
             windowSeconds: 3.0
         )
@@ -93,11 +127,21 @@ struct TurnTransitionPathTests {
         let rejected = StabilizerTurnTransitionPath.concatenate(
             times: [0.0, 0.0, 1.0],
             positions: [0.0, 1.0, 2.0],
+            travelPositions: [0.0, 1.0, 2.0],
             activity: [0.0, 1.0, 1.0],
             windowSeconds: 2.0
         )
         expect(rejected.rejectionReason != nil, "non-increasing time must fail visibly")
         expect(rejected.positions == [0.0, 1.0, 2.0], "rejected input must not be partially rewritten")
+
+        let mismatchedTravel = StabilizerTurnTransitionPath.concatenate(
+            times: [0.0, 1.0, 2.0],
+            positions: [0.0, 1.0, 2.0],
+            travelPositions: [0.0, 1.0],
+            activity: [0.0, 1.0, 1.0],
+            windowSeconds: 2.0
+        )
+        expect(mismatchedTravel.rejectionReason != nil, "mismatched travel path must fail visibly")
 
         if failures.isEmpty {
             print("TurnTransitionPathTests: PASS")
