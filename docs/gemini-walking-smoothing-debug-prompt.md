@@ -54,7 +54,7 @@ Current implementation to review:
   - During clear TURN-owned motion, WARP confidence remains active. A direct ownership-based turn-shake gate suppresses MIJIT X most strongly and reduces MIJIT Y/roll and MAJIT Y/roll so turn motion is not reintroduced as walking-band vibration.
   - Micro Jitter uses per-frame confidence without a hidden minimum floor before applying X/Y/roll correction, checks local baseline support plus surrounding micro noise, and stays clamped at full detected-impulse removal.
   - Macro Jitter/Turn residual gates use robust window percentiles rather than the single worst residual in the window.
-  - Far-field Warp render gating curves medium-confidence tracking/search-headroom evidence upward while preserving zero correction for zero evidence.
+  - Far-field Warp keeps tracking/search-headroom safety gating, then uses the same unbiased finite-value check and linear `0...1` confidence clamp as TURN, MACRO, and MICRO.
   - Far-field Warp estimates conservative deskew/shear, yaw/pitch proxy, and perspective trim from upper-frame residual blocks after translation and roll are removed.
   - `StabilizerAutoTransform` now carries:
     - final smoothed `pixelOffset` and `rotationDegrees`

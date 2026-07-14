@@ -500,10 +500,10 @@ outer-frame baseline using the multi-block Host Analysis path. Micro Jitter conf
 should be evaluated per render frame from current tracking quality, accepted block coverage,
 blur, local baseline support, surrounding micro noise, and whether the center frame
 departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
-Medium-confidence response may be curved upward for a more useful debug pass. Micro
-Jitter and Macro Jitter may use a more assertive medium-confidence response
-than Turn Smoothing and Far-field Warp, but zero confidence must still produce zero
-correction. Moderate landing impulses should not be buried by an overly high
+After each band's safety evidence is calculated, Turn Smoothing, Micro Jitter, Macro
+Jitter, and Far-field Warp must use the same unbiased finite-value check and linear
+`0...1` confidence clamp. Do not add band-specific floors, rescue lifts, display-only
+maximums, or medium-confidence response curves. Moderate landing impulses should not be buried by an overly high
 surrounding-noise threshold.
 The surrounding-noise floor should be capped below the full impulse response point so repeated
 walking motion does not hide a real center-frame landing impulse.
@@ -519,8 +519,7 @@ X/Y maximums of `10.0`, X/Y defaults of `4.0`, and a Rotation maximum/default of
 Wobble window, compute it from the micro-cleaned baseline, and feed Turn Smoothing from
 the macro-jitter-smoothed path so the same band is not removed twice. Macro Jitter residual gating
 should use robust window evidence instead of the single worst frame in the window, so one
-bad block-match frame does not suppress the whole medium band. Medium MAJIT bands may reach
-full confidence sooner than the broad UI scale, and the default Y strength should remain high
+bad block-match frame does not suppress the whole medium band. The default Y strength should remain high
 enough to remove step follow-through. Macro Jitter
 Rotation Strength should default to `1.0`.
 Micro Jitter and Macro Jitter may use a count-aware walking-band tracking
@@ -569,8 +568,7 @@ its own `0.10`/`1.0` second outer-frame linear warp baseline so accumulated long
 does not become a fixed deskew. Low tracking confidence or poor search-radius headroom should
 gate Far-field Warp off instead of creating wave-like image distortion. Render should use a
 walking-footage tracking gate tuned for 25% Host Analysis samples plus a tiny render-time
-deadband so weak warp deltas do not create swimming or wave-like distortion. Medium-confidence
-warp gates may be curved upward, and the tracking gate should start early enough that moderate
+deadband so weak warp deltas do not create swimming or wave-like distortion. The tracking gate should start early enough that moderate
 25% Host Analysis evidence can still correct distant ridge-line shake while reaching full
 response gradually enough to avoid high-side gate jumps. The warp gate may use short local
 tracking support and short render-time smoothing to avoid single-frame gate flicker, but zero

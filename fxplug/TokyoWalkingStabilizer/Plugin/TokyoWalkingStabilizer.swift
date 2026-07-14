@@ -58,7 +58,7 @@ private let tokyoWalkingStabilizerVersion = "1.2.6"
 private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_013.0
 private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 2.0, 6.0, 1_013.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_445_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_446_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -1954,19 +1954,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         case .fxplugHostAnalysis, .none:
             return max(0.0, min(1.0, 1.0 - (residual * 0.7)))
         }
-    }
-
-    private static func debugOverlayMicroJitterConfidence(
-        _ transform: StabilizerAutoTransform
-    ) -> Float {
-        let rigidApplied = min(1.0, max(0.0, transform.lensFarFieldRigidShakeApplied))
-        let rigidRollApplied = min(1.0, max(0.0, transform.lensFarFieldRigidRollApplied))
-        return max(
-            transform.microConfidence,
-            transform.lensFarFieldRigidShakeSupportX * rigidApplied,
-            transform.lensFarFieldRigidShakeSupportY * rigidApplied,
-            transform.lensFarFieldRigidRollSupport * rigidRollApplied
-        )
     }
 
     private static func debugOverlayUniform(
@@ -10992,7 +10979,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     searchRadiusHeadroomAvailable: searchRadiusHeadroomAvailable,
                     turnConfidence: renderedAutoTransform.turnConfidence,
                     macroConfidence: renderedAutoTransform.macroJitterConfidence,
-                    microJitterConfidence: Self.debugOverlayMicroJitterConfidence(renderedAutoTransform),
+                    microJitterConfidence: renderedAutoTransform.microConfidence,
                     warpConfidence: renderedAutoTransform.warpConfidence
                 )
             )

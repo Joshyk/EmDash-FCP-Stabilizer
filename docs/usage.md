@@ -201,10 +201,13 @@ fallbacks.
 - `Mesh Overlay`: separate from `Debug Overlay`. Select `Far Field Mesh`, `Lens Local Mesh`,
   `Band Guides`, or `All Meshes` when reviewing source-space cells without drawing the
   diagnostic bars. `Off` leaves the preview clean.
-- Strength values above `1.0` still compensate low-confidence Camera Jitter
-  detections. The walking-band control uses a more assertive
-  medium-confidence response than TURN and WARP, but zero confidence still produces zero
-  correction.
+- TURN, MACRO, MICRO, and WARP use the same unbiased finite-value check and linear
+  `0...1` confidence clamp after their band-specific safety evidence gates. Strength
+  values above `1.0` may still request more correction, but no band has a hidden floor,
+  rescue lift, display-only maximum, or separate medium-confidence response curve.
+  Macro can still read lower when its post-Micro residual is smaller, when it has not
+  reached its `0.75` px / `0.16` degree full-response evidence, or when one axis lowers
+  the X/Y/roll mean.
 
 ## Feedback CLI
 

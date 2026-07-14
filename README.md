@@ -123,8 +123,9 @@ clamps at full detected-impulse removal so it does not add inverse shake. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
 region and predicts from outer samples up to `1.0` second away. Confidence is
 based on current tracking evidence, local baseline support, and the center
-frame's impulse relative to surrounding micro noise. Moderate landing impulses now reach
-useful confidence a little sooner, while zero evidence and noisy unsupported frames still
+frame's impulse relative to surrounding micro noise. After those safety signals are
+combined, the same unbiased finite-value check and linear `0...1` clamp used by TURN,
+MAJIT, and WARP is applied. Zero evidence and noisy unsupported frames therefore still
 produce zero correction. The surrounding-noise floor is capped below the full-response point
 so repeated walking motion does not bury a real center-frame landing shock.
 MIJIT and MAJIT use a walking-band tracking gate that slightly eases block coverage only
@@ -142,12 +143,16 @@ strengths. It is measured from the micro-cleaned path, then longer Turn
 Smoothing is measured from the macro-jitter-smoothed path so the same motion is not
 removed twice. It does not use the raw or jerk-limited
 broad path as its band input. Its residual gate uses robust window percentiles
-instead of letting a single bad frame suppress the whole band. Medium macro jitter
-bands reach full confidence earlier than the broad UI scale so real walking
-follow-through is corrected by the macro-jitter stage. X and Y default to `4.0` and run
+instead of letting a single bad frame suppress the whole band. Macro Jitter evidence uses
+the same unbiased finite-value check and linear `0...1` clamp as the other correction
+bands. X and Y default to `4.0` and run
 up to `10.0`; the rotation default is `1.0`. The X band
 uses the same turn ownership gate as Micro Jitter, so medium macro-jitter cleanup
 does not fight broad Turn Smoothing during real horizontal turns.
+Macro confidence can still be lower on a real frame because it measures the smaller
+post-Micro residual, uses `0.75` px / `0.16` degree full-response evidence instead of
+Micro's `0.35` px / `0.08` degree thresholds, and reports the X/Y/roll mean. Those are
+evidence differences, not a Macro-only confidence bias.
 
 `Turn Smoothing Strength` is the single X-turn correction-amplitude control. It defaults
 to `12.0` and ranges from `0.00...36.00`; `0` disables TURN correction and `36`
@@ -457,7 +462,7 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `SEARCH HEADROOM`: search-radius headroom quality; higher means fewer searches hit the radius edge.
 - `TURN CONFIDENCE`: effective Turn Smoothing confidence.
 - `MACRO CONFIDENCE`: Macro Jitter confidence.
-- `MICRO CONFIDENCE`: combined micro and actually applied Camera Rigid X/Y/roll support.
+- `MICRO CONFIDENCE`: Micro Jitter confidence after its safety evidence gates.
 - `WARP CONFIDENCE`: effective Far-field Warp confidence after tracking and search-radius safety gates.
 
 `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` are aligned as quality signals: high is good,
@@ -478,10 +483,10 @@ the overlay does not invent a fallback value.
 - Search-radius edge-hit counts.
 - Current warp shape values.
 
-Values above `1.0` on Micro and Macro controls boost low-confidence
-corrections with a curved confidence response. Those walking-band controls use a
-more assertive medium-confidence response than TURN and WARP, but still have no
-hidden minimum confidence floor: zero confidence produces zero correction.
+TURN, MACRO, MICRO, and WARP all apply the same unbiased finite-value check and
+linear `0...1` clamp after their band-specific safety evidence is calculated. Strength
+values above `1.0` may still request more correction, but no band has a hidden confidence
+floor, rescue lift, display-only maximum, or band-specific response curve.
 
 ## Feedback CLI
 

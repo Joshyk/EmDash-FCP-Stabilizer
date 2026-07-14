@@ -305,6 +305,9 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   analysis continues to render during proxy playback with the same correction and
   confidence logic used for original/optimized media.
 - `Debug Overlay` shows labeled top-left diagnostics while checking runtime behavior.
+  TURN, MACRO, MICRO, and WARP confidence use one unbiased finite-value check and linear
+  `0...1` clamp after their band-specific safety evidence gates. The overlay reports those
+  final values directly, without a display-only maximum or lift.
 - Existing timeline instances from older builds may still contain hidden `Start Host
   Analysis`, `Clear Host Analysis Cache`, `Sample Size`, or `Queue` parameters. New effect
   instances do not publish them. The old Start button only reloads a compatible persisted
