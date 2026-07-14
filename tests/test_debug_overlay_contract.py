@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HEADER = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/StabilizerShaderTypes.h"
 METAL = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizerTransform.metal"
 SWIFT = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizer.swift"
+ESTIMATOR = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/AutoStabilizationEstimator.swift"
 E2E = ROOT / "scripts/stabilizer_fcp_screen_capture_e2e.sh"
 
 ROWS = [
@@ -15,8 +16,8 @@ ROWS = [
     "Roll",
     "Crop",
     "Turn",
-    "StrideWobble",
-    "FootstepJitter",
+    "MacroJitter",
+    "MicroJitter",
     "FarFieldWarp",
     "Lens",
     "Smoothing",
@@ -26,8 +27,8 @@ ROWS = [
     "ResidualQuality",
     "SearchRadiusHeadroomQuality",
     "TurnConfidence",
-    "StrideConfidence",
-    "FootstepConfidence",
+    "MacroConfidence",
+    "MicroConfidence",
     "WarpConfidence",
     "LensConfidence",
     "Runtime",
@@ -39,8 +40,8 @@ LABELS = [
     "ROLL",
     "CROP",
     "TURN",
-    "STRIDE WOBBLE",
-    "FOOTSTEP JITTER",
+    "MACRO JITTER",
+    "MICRO JITTER",
     "FAR WARP",
     "LENS",
     "SMOOTHING",
@@ -50,8 +51,8 @@ LABELS = [
     "RESIDUAL",
     "SEARCH HEADROOM",
     "TURN CONFIDENCE",
-    "STRIDE CONFIDENCE",
-    "FOOTSTEP CONFIDENCE",
+    "MACRO CONFIDENCE",
+    "MICRO CONFIDENCE",
     "WARP CONFIDENCE",
     "LENS CONFIDENCE",
     "RUNTIME",
@@ -65,6 +66,7 @@ def fail(message: str) -> None:
 header = HEADER.read_text()
 metal = METAL.read_text()
 swift = SWIFT.read_text()
+estimator = ESTIMATOR.read_text()
 e2e = E2E.read_text()
 
 count_match = re.search(r"#define\s+STABILIZER_DEBUG_OVERLAY_ROW_COUNT\s+(\d+)", header)
@@ -96,8 +98,28 @@ for label in LABELS[:-1]:
     if f"// {label}" not in metal:
         fail(f"Metal readable label is missing: {label}")
 
-if "vector_float4(1.0, 2.0, 1.0, 1_008.0)" not in swift:
-    fail("Swift runtime version components do not encode version 1.2.1")
+for row, expected_label in zip(ROWS[:-1], LABELS[:-1]):
+    encoded_match = re.search(
+        rf"case StabilizerDebugOverlayRow{row}:\s*"
+        rf"return debugLabelCharAt\(index, (?P<encoded>.*?)\);",
+        label_match.group("body"),
+        re.S,
+    )
+    if not encoded_match:
+        fail(f"Metal encoded label is missing: {row}")
+    code_points = [
+        int(value)
+        for value in re.findall(r"\b\d+\b", encoded_match.group("encoded"))
+    ]
+    decoded_label = "".join(" " if value == 0 else chr(value) for value in code_points).rstrip()
+    if decoded_label != expected_label:
+        fail(
+            f"Metal encoded label mismatch for {row}: "
+            f"expected {expected_label!r}, found {decoded_label!r}"
+        )
+
+if "vector_float4(1.0, 2.0, 2.0, 1_009.0)" not in swift:
+    fail("Swift runtime version components do not encode version 1.2.2")
 if "patch >= 10 ? debugDigitChar(patch / 10)" not in metal:
     fail("Metal runtime label does not suppress patch-version leading zeroes")
 if "// PROXY" not in metal or "// ORIGINAL" not in metal:
@@ -118,6 +140,18 @@ if fill_rows != ROWS:
 
 if "Float(STABILIZER_DEBUG_OVERLAY_ROW_COUNT)" not in swift:
     fail("Swift overlay scaling does not use the shared row count")
+
+prepared_component_contract = [
+    "microPixelOffset: microPixelOffset,",
+    "macroJitterPixelOffset: macroJitterPixelOffset,",
+    "effectiveMacroJitterStrength: vector_float3(",
+    "macroJitterConfidence: playbackMacroJitterConfidence,",
+]
+for contract in prepared_component_contract:
+    if contract not in estimator:
+        fail(f"prepared Micro/Macro separation is missing: {contract}")
+if "max(playbackMicroConfidence, playbackMacroJitterConfidence)" in estimator:
+    fail("prepared Macro confidence is still folded into Micro confidence")
 
 e2e_labels_match = re.search(r"labels = \[(?P<body>.*?)\n\]", e2e, re.S)
 if not e2e_labels_match:

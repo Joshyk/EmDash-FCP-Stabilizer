@@ -18,18 +18,18 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.2.1` uses schema 51 all-axis Camera Jitter analysis. It stores
+Version `1.2.2` uses schema 52 all-axis Camera Jitter analysis. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
-fine X/Y/roll outside the 2.2-second Turn/Stride smoother, and records validated
+fine X/Y/roll outside the 2.2-second Turn/Macro Jitter smoother, and records validated
 original-media provenance. Turn owns only broad X; Camera Jitter owns short
 whole-frame X/Y/roll correction.
 Camera Rigid X/Y limits are explicit Inspector percentages (0...5% of the
 render output); roll is an explicit 0...2 degree limit. These final limits are
 also enforced after Overall Strength, so proxy and original use the same
 screen-space proportion without a cache migration or reanalysis.
-Schema 51 removes a centered one-second quadratic X baseline before storing the
+Schema 52 removes a centered one-second quadratic X baseline before storing the
 Camera Rigid X target, so sustained pan curvature remains Turn-owned without
 suppressing two-to-five-frame X reversals.
 Future tuning should preserve that seconds-based detector, avoid fixed-frame
@@ -110,7 +110,7 @@ effect no longer exposes a `Sample Size` control.
 bypasses prepared motion-path sampling, crop-safety motion, and debug overlay
 output, producing an identity transform.
 
-`Footstep Jitter` strengths are direct removal amounts for frame-local X, Y, and
+`Micro Jitter` strengths are direct removal amounts for frame-local X, Y, and
 roll impulses. X and Y default to `4.0` and run up to `10.0`; rotation defaults
 to `1.0` and runs up to `4.0`. Values above `1.0` can compensate when
 tracking confidence makes the correction too weak. The applied correction still
@@ -118,30 +118,30 @@ clamps at full detected-impulse removal so it does not add inverse shake. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
 region and predicts from outer samples up to `1.0` second away. Confidence is
 based on current tracking evidence, local baseline support, and the center
-frame's impulse relative to surrounding footstep noise. Moderate landing impulses now reach
+frame's impulse relative to surrounding micro noise. Moderate landing impulses now reach
 useful confidence a little sooner, while zero evidence and noisy unsupported frames still
 produce zero correction. The surrounding-noise floor is capped below the full-response point
 so repeated walking motion does not bury a real center-frame landing shock.
-FJIT and SWOB use a walking-band tracking gate that slightly eases block coverage only
+MIJIT and MAJIT use a walking-band tracking gate that slightly eases block coverage only
 when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
 avoid swimming or false turn smoothing. On X, render-time turn ownership reduces
-FJIT/SWOB confidence during monotonic walking turns so broad horizontal motion is
+MIJIT/MAJIT confidence during monotonic walking turns so broad horizontal motion is
 owned by TURN instead of split into many tiny walking corrections. The same gate
-also limits how much Footstep Jitter X is removed before that path feeds Stride
-Wobble, so Stride does not inherit a turn that Footstep already chopped into
+also limits how much Micro Jitter X is removed before that path feeds Macro Jitter
+Wobble, so Macro Jitter does not inherit a turn that Micro already chopped into
 small X corrections.
 
-`Stride Wobble` removes step follow-through shake using a fixed internal
+`Macro Jitter` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
-strengths. It is measured from the footstep-cleaned path, then longer Turn
-Smoothing is measured from the stride-smoothed path so the same motion is not
+strengths. It is measured from the micro-cleaned path, then longer Turn
+Smoothing is measured from the macro-jitter-smoothed path so the same motion is not
 removed twice. It does not use the raw or jerk-limited
 broad path as its band input. Its residual gate uses robust window percentiles
-instead of letting a single bad frame suppress the whole band. Medium stride
+instead of letting a single bad frame suppress the whole band. Medium macro jitter
 bands reach full confidence earlier than the broad UI scale so real walking
-follow-through is corrected by the stride stage. X and Y default to `4.0` and run
+follow-through is corrected by the macro-jitter stage. X and Y default to `4.0` and run
 up to `10.0`; the rotation default is `1.0`. The X band
-uses the same turn ownership gate as Footstep Jitter, so medium stride cleanup
+uses the same turn ownership gate as Micro Jitter, so medium macro-jitter cleanup
 does not fight broad Turn Smoothing during real horizontal turns.
 
 `Turn Smoothing Strength` is the single X-turn correction-amplitude control. It defaults
@@ -221,8 +221,8 @@ controls that separately.
 The overlay scales from the current render output so the top-left panel occupies
 roughly half of the viewer height in original, optimized, and proxy playback.
 Its correction rows are ordered from final rigid/crop motion through lower-frequency walking
-bands to higher-frequency and spatial correction. `X OFFSET`, `Y OFFSET`, `ROLL`, `STRIDE WOBBLE`,
-`FOOTSTEP JITTER`, `FAR WARP`, `LENS`, and `SMOOTHING` use final values that are actually handed to Metal,
+bands to higher-frequency and spatial correction. `X OFFSET`, `Y OFFSET`, `ROLL`, `MACRO JITTER`,
+`MICRO JITTER`, `FAR WARP`, `LENS`, and `SMOOTHING` use final values that are actually handed to Metal,
 after their applicable limits and Master Strength.
 `Mesh Overlay` is separate from `Debug Overlay`: it can show the far-field mesh,
 lens-local mesh, band guides, or all meshes without drawing the top-left bars.
@@ -275,14 +275,14 @@ retry.
 Prepared paths are post-processed with a zero-phase jerk limiter before caching.
 The limiter clamps isolated acceleration spikes in X/Y/roll while preserving
 path endpoints and total analyzed turn amount. Raw X/Y/roll impulse paths are
-stored separately so Footstep Jitter can still correct frame-level shake at
+stored separately so Micro Jitter can still correct frame-level shake at
 render time.
 
 Render-time smoothing samples neighboring render times symmetrically across a
 `1.20` second zero-phase window and blends the automatic transform. At clip
 edges it averages only in-range neighboring samples instead of duplicating the
-first or last analysis frame. It smooths Stride Wobble and Turn Smoothing bands
-without averaging away the current frame's Footstep Jitter
+first or last analysis frame. It smooths Macro Jitter and Turn Smoothing bands
+without averaging away the current frame's Micro Jitter
 impulse. Far-field Warp uses a separate short `0.20` second in-range smoothing
 window so distant ridge-line correction stays responsive without amplifying
 single-frame gate flicker. Render-time frame lookup uses the sorted Host Analysis
@@ -375,7 +375,7 @@ Cache files store prepared paths, frame timing, blur values, search-radius
 edge-hit counts, warp values, confidence metadata, source-space ridge shake
 paths, two-way far-field rigid shake X/Y/roll paths, far-field `5x9` mesh paths,
 fps-derived dominant far-field shake windows up to one second, and fingerprints
-instead of every frame's full luma sample. Schema 51 is the current write and
+instead of every frame's full luma sample. Schema 52 is the current write and
 read format so render can use axis-specific far-field evidence plus coherent global
 X/Y/roll correction while keeping the visible correction low-order enough to avoid
 local mountain/cloud pulsing. Earlier
@@ -416,9 +416,9 @@ validated candidates on demand.
 ## Diagnostics
 
 `Debug Overlay` has one fixed 21-row contract:
-`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `STRIDE WOBBLE`, `FOOTSTEP JITTER`, `FAR WARP`,
+`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `MACRO JITTER`, `MICRO JITTER`, `FAR WARP`,
 `LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
-`TURN CONFIDENCE`, `STRIDE CONFIDENCE`, `FOOTSTEP CONFIDENCE`, `WARP CONFIDENCE`,
+`TURN CONFIDENCE`, `MACRO CONFIDENCE`, `MICRO CONFIDENCE`, `WARP CONFIDENCE`,
 `LENS CONFIDENCE`, then the readable `ORIGINAL <version>`/`PROXY <version>` runtime/source row. All confidence and
 quality bars are grouped immediately above the version row. Labels use readable English
 diagnostic names and are not translated in the preview.
@@ -432,20 +432,20 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `CROP`: Auto Crop scale actually sent to the renderer; zero when Remove Black Edges is off.
 - `TURN`: Auto Crop viewport-position activity actually sent to the renderer; zero when
   Remove Black Edges is off.
-- `STRIDE WOBBLE`: correction activity from the fixed internal stride-wobble window.
-- `FOOTSTEP JITTER`: short-period activity combining micro, trajectory continuity, and final-limited
+- `MACRO JITTER`: correction activity from the fixed internal macro-jitter window.
+- `MICRO JITTER`: short-period activity combining micro, trajectory continuity, and final-limited
   Camera Rigid X/Y/roll correction.
 - `FAR WARP`: final shear plus combined perspective/yaw-pitch values sent to Metal.
 - `LENS`: only applied band/ridge/local offsets that Metal renders, weighted by effective support.
 - `SMOOTHING`: Master-Strength-adjusted render-time temporal smoothing delta.
 - `TRACKING`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
-- `WALKING`: count-aware walking-band tracking quality used by Footstep Jitter and Stride Wobble.
+- `WALKING`: count-aware walking-band tracking quality used by Micro Jitter and Macro Jitter.
 - `SHARPNESS`: frame sharpness/clarity quality; higher means less blur.
 - `RESIDUAL`: residual quality; higher means lower block-matching residual/error.
 - `SEARCH HEADROOM`: search-radius headroom quality; higher means fewer searches hit the radius edge.
 - `TURN CONFIDENCE`: effective Turn Smoothing confidence.
-- `STRIDE CONFIDENCE`: Stride Wobble confidence.
-- `FOOTSTEP CONFIDENCE`: combined micro and actually applied Camera Rigid X/Y/roll support.
+- `MACRO CONFIDENCE`: Macro Jitter confidence.
+- `MICRO CONFIDENCE`: combined micro and actually applied Camera Rigid X/Y/roll support.
 - `WARP CONFIDENCE`: effective Far-field Warp confidence after tracking and search-radius safety gates.
 - `LENS CONFIDENCE`: effective support for the rendered band/ridge/local lens warp.
 
@@ -458,8 +458,8 @@ the overlay does not invent a fallback value.
 
 - The current FxPlug runtime version.
 - `track q` and `walk q`.
-- `footstep q` and effective Footstep Jitter X/Y/R strength.
-- `stride q` and effective Stride Wobble X/Y/R strength.
+- `micro q` and effective Micro Jitter X/Y/R strength.
+- `macro q` and effective Macro Jitter X/Y/R strength.
 - `turn q`.
 - `warp q`.
 - Tracking and motion confidence.
@@ -467,7 +467,7 @@ the overlay does not invent a fallback value.
 - Search-radius edge-hit counts.
 - Current warp shape values.
 
-Values above `1.0` on Footstep and Stride controls boost low-confidence
+Values above `1.0` on Micro and Macro controls boost low-confidence
 corrections with a curved confidence response. Those walking-band controls use a
 more assertive medium-confidence response than TURN and WARP, but still have no
 hidden minimum confidence floor: zero confidence produces zero correction.
@@ -498,14 +498,14 @@ to list the latest bundle cache and range-specific cache files. It reports each 
 `READY`, `INCOMPLETE`, `UNSUPPORTED`, or `UNREADABLE` without repairing or deleting
 anything.
 
-The report prints `FJIT`, `SWOB`, `WARP`, and `TURN` in render-stage order
+The report prints `MIJIT`, `MAJIT`, `WARP`, and `TURN` in render-stage order
 bands using the saved prepared paths, tracking confidence, residuals, blur,
 block coverage, and search-radius edge-hit counts, while the summary line names
-the highest remaining band. The band split mirrors the render path: `FJIT` is
-measured first against the outer-frame baseline, then `SWOB` and `TURN`
-are measured from the footstep-cleaned path. `WARP`
+the highest remaining band. The band split mirrors the render path: `MIJIT` is
+measured first against the outer-frame baseline, then `MAJIT` and `TURN`
+are measured from the micro-cleaned path. `WARP`
 uses the same local baseline/gate inputs that are then short-smoothed in render,
-and the report includes strict tracking, walking-band tracking, FJIT and SWOB
+and the report includes strict tracking, walking-band tracking, MIJIT and MAJIT
 per-axis confidence, residual, blur, block
 coverage, edge quality, stable WARP tracking support, and WARP tracking/edge
 gate values so over- or under-gating is visible. If a cache has mismatched

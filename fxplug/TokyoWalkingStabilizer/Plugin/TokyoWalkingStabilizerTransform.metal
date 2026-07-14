@@ -210,10 +210,10 @@ static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeB
             return debugLabelCharAt(index, uint4(67, 82, 79, 80), uint4(0), uint4(0), uint4(0), uint4(0)); // CROP
         case StabilizerDebugOverlayRowTurn:
             return debugLabelCharAt(index, uint4(84, 85, 82, 78), uint4(0), uint4(0), uint4(0), uint4(0)); // TURN
-        case StabilizerDebugOverlayRowStrideWobble:
-            return debugLabelCharAt(index, uint4(83, 84, 82, 73), uint4(68, 69, 0, 87), uint4(79, 66, 66, 76), uint4(69, 0, 0, 0), uint4(0)); // STRIDE WOBBLE
-        case StabilizerDebugOverlayRowFootstepJitter:
-            return debugLabelCharAt(index, uint4(70, 79, 79, 84), uint4(83, 84, 69, 80), uint4(0, 74, 73, 84), uint4(84, 69, 82, 0), uint4(0)); // FOOTSTEP JITTER
+        case StabilizerDebugOverlayRowMacroJitter:
+            return debugLabelCharAt(index, uint4(77, 65, 67, 82), uint4(79, 0, 74, 73), uint4(84, 84, 69, 82), uint4(0), uint4(0)); // MACRO JITTER
+        case StabilizerDebugOverlayRowMicroJitter:
+            return debugLabelCharAt(index, uint4(77, 73, 67, 82), uint4(79, 0, 74, 73), uint4(84, 84, 69, 82), uint4(0), uint4(0)); // MICRO JITTER
         case StabilizerDebugOverlayRowFarFieldWarp:
             return debugLabelCharAt(index, uint4(70, 65, 82, 0), uint4(87, 65, 82, 80), uint4(0), uint4(0), uint4(0)); // FAR WARP
         case StabilizerDebugOverlayRowLens:
@@ -232,10 +232,10 @@ static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeB
             return debugLabelCharAt(index, uint4(83, 69, 65, 82), uint4(67, 72, 0, 72), uint4(69, 65, 68, 82), uint4(79, 79, 77, 0), uint4(0)); // SEARCH HEADROOM
         case StabilizerDebugOverlayRowTurnConfidence:
             return debugLabelCharAt(index, uint4(84, 85, 82, 78), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0), uint4(0)); // TURN CONFIDENCE
-        case StabilizerDebugOverlayRowStrideConfidence:
-            return debugLabelCharAt(index, uint4(83, 84, 82, 73), uint4(68, 69, 0, 67), uint4(79, 78, 70, 73), uint4(68, 69, 78, 67), uint4(69, 0, 0, 0)); // STRIDE CONFIDENCE
-        case StabilizerDebugOverlayRowFootstepConfidence:
-            return debugLabelCharAt(index, uint4(70, 79, 79, 84), uint4(83, 84, 69, 80), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0)); // FOOTSTEP CONFIDENCE
+        case StabilizerDebugOverlayRowMacroConfidence:
+            return debugLabelCharAt(index, uint4(77, 65, 67, 82), uint4(79, 0, 67, 79), uint4(78, 70, 73, 68), uint4(69, 78, 67, 69), uint4(0)); // MACRO CONFIDENCE
+        case StabilizerDebugOverlayRowMicroConfidence:
+            return debugLabelCharAt(index, uint4(77, 73, 67, 82), uint4(79, 0, 67, 79), uint4(78, 70, 73, 68), uint4(69, 78, 67, 69), uint4(0)); // MICRO CONFIDENCE
         case StabilizerDebugOverlayRowWarpConfidence:
             return debugLabelCharAt(index, uint4(87, 65, 82, 80), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0), uint4(0)); // WARP CONFIDENCE
         case StabilizerDebugOverlayRowLensConfidence:
@@ -730,8 +730,8 @@ fragment float4 fragmentShader(
                 case StabilizerDebugOverlayRowRoll: fill = saturate(transform->debugDiagnostics.roll); break;
                 case StabilizerDebugOverlayRowCrop: fill = saturate(transform->debugDiagnostics.crop); break;
                 case StabilizerDebugOverlayRowTurn: fill = saturate(transform->debugDiagnostics.turn); break;
-                case StabilizerDebugOverlayRowStrideWobble: fill = saturate(transform->debugDiagnostics.strideWobble); break;
-                case StabilizerDebugOverlayRowFootstepJitter: fill = saturate(transform->debugDiagnostics.footstepJitter); break;
+                case StabilizerDebugOverlayRowMacroJitter: fill = saturate(transform->debugDiagnostics.macroJitter); break;
+                case StabilizerDebugOverlayRowMicroJitter: fill = saturate(transform->debugDiagnostics.microJitter); break;
                 case StabilizerDebugOverlayRowFarFieldWarp: fill = saturate(transform->debugDiagnostics.farFieldWarp); break;
                 case StabilizerDebugOverlayRowLens: fill = saturate(transform->debugDiagnostics.lens); break;
                 case StabilizerDebugOverlayRowSmoothing: fill = saturate(transform->debugDiagnostics.smoothing); break;
@@ -741,8 +741,8 @@ fragment float4 fragmentShader(
                 case StabilizerDebugOverlayRowResidualQuality: fill = saturate(transform->debugDiagnostics.residualQuality); break;
                 case StabilizerDebugOverlayRowSearchRadiusHeadroomQuality: fill = saturate(transform->debugDiagnostics.searchRadiusHeadroomQuality); break;
                 case StabilizerDebugOverlayRowTurnConfidence: fill = saturate(transform->debugDiagnostics.turnConfidence); break;
-                case StabilizerDebugOverlayRowStrideConfidence: fill = saturate(transform->debugDiagnostics.strideConfidence); break;
-                case StabilizerDebugOverlayRowFootstepConfidence: fill = saturate(transform->debugDiagnostics.footstepConfidence); break;
+                case StabilizerDebugOverlayRowMacroConfidence: fill = saturate(transform->debugDiagnostics.macroConfidence); break;
+                case StabilizerDebugOverlayRowMicroConfidence: fill = saturate(transform->debugDiagnostics.microConfidence); break;
                 case StabilizerDebugOverlayRowWarpConfidence: fill = saturate(transform->debugDiagnostics.warpConfidence); break;
                 case StabilizerDebugOverlayRowLensConfidence: fill = saturate(transform->debugDiagnostics.lensConfidence); break;
                 case StabilizerDebugOverlayRowRuntime: fill = 1.0; break;

@@ -119,9 +119,9 @@ private struct PersistedHostAnalysisCache: Codable {
     let sourceLensShakeLocalPathX: [Float]?
     let sourceLensShakeLocalPathY: [Float]?
     let sourceLensShakeLocalSupport: [Float]?
-    let footstepPathX: [Float]?
-    let footstepPathY: [Float]?
-    let footstepPathRoll: [Float]?
+    let microJitterPathX: [Float]?
+    let microJitterPathY: [Float]?
+    let microJitterPathRoll: [Float]?
     let pathYaw: [Float]?
     let pathPitch: [Float]?
     let pathShearX: [Float]?
@@ -278,8 +278,8 @@ final class StabilizerHostAnalysisStore {
         let snapshot: CompletedHostAnalysisSnapshot
     }
 
-    private static let cacheSchemaVersion = 51
-    private static let supportedCacheSchemaVersions: Set<Int> = [51]
+    private static let cacheSchemaVersion = 52
+    private static let supportedCacheSchemaVersions: Set<Int> = [52]
     private static let persistentCacheGenerationLock = NSLock()
     private static var persistentCacheGeneration: UInt64 = 0
     private static let projectCacheDirectoryLock = NSLock()
@@ -1903,9 +1903,9 @@ final class StabilizerHostAnalysisStore {
             sourceLensShakeLocalPathX: prepared.sourceLensShakeLocalPathX,
             sourceLensShakeLocalPathY: prepared.sourceLensShakeLocalPathY,
             sourceLensShakeLocalSupport: prepared.sourceLensShakeLocalSupport,
-            footstepPathX: prepared.footstepPathX,
-            footstepPathY: prepared.footstepPathY,
-            footstepPathRoll: prepared.footstepPathRoll,
+            microJitterPathX: prepared.microJitterPathX,
+            microJitterPathY: prepared.microJitterPathY,
+            microJitterPathRoll: prepared.microJitterPathRoll,
             pathYaw: prepared.pathYaw,
             pathPitch: prepared.pathPitch,
             pathShearX: prepared.pathShearX,
@@ -2027,9 +2027,9 @@ final class StabilizerHostAnalysisStore {
                 farFieldPathY: analysis.farFieldPathY,
                 farFieldPathRoll: analysis.farFieldPathRoll,
                 farFieldConfidence: analysis.farFieldConfidence,
-                footstepPathX: analysis.footstepPathX,
-                footstepPathY: analysis.footstepPathY,
-                footstepPathRoll: analysis.footstepPathRoll,
+                microJitterPathX: analysis.microJitterPathX,
+                microJitterPathY: analysis.microJitterPathY,
+                microJitterPathRoll: analysis.microJitterPathRoll,
                 pathYaw: analysis.pathYaw,
                 pathPitch: analysis.pathPitch,
                 pathShearX: analysis.pathShearX,
@@ -3076,7 +3076,7 @@ final class StabilizerHostAnalysisStore {
             throw NSError(
                 domain: "com.justadev.TokyoWalkingStabilizer",
                 code: Int(kFxError_AnalysisError),
-                userInfo: [NSLocalizedDescriptionKey: "schema 51 cache is missing validated original-media provenance"]
+                userInfo: [NSLocalizedDescriptionKey: "schema 52 cache is missing validated original-media provenance"]
             )
         }
         if let coverageReason = persistentFrameCoverageMismatchReason(for: cache, frameCount: frames.count) {
@@ -3132,9 +3132,9 @@ final class StabilizerHostAnalysisStore {
             cache.sourceLensShakeRidgeSupport,
             cache.sourceLensShakeRidgeLinePathY,
             cache.sourceLensShakeRidgeLineSupport,
-            cache.footstepPathX,
-            cache.footstepPathY,
-            cache.footstepPathRoll,
+            cache.microJitterPathX,
+            cache.microJitterPathY,
+            cache.microJitterPathRoll,
             cache.pathYaw,
             cache.pathPitch,
             cache.pathShearX,
@@ -3259,9 +3259,9 @@ final class StabilizerHostAnalysisStore {
            let sourceLensShakeLocalPathX = cache.sourceLensShakeLocalPathX,
            let sourceLensShakeLocalPathY = cache.sourceLensShakeLocalPathY,
            let sourceLensShakeLocalSupport = cache.sourceLensShakeLocalSupport,
-           let footstepPathX = cache.footstepPathX,
-           let footstepPathY = cache.footstepPathY,
-           let footstepPathRoll = cache.footstepPathRoll,
+           let microJitterPathX = cache.microJitterPathX,
+           let microJitterPathY = cache.microJitterPathY,
+           let microJitterPathRoll = cache.microJitterPathRoll,
            let pathYaw = cache.pathYaw,
            let pathPitch = cache.pathPitch,
            let pathShearX = cache.pathShearX,
@@ -3289,9 +3289,9 @@ final class StabilizerHostAnalysisStore {
                 farFieldPathY: persistedFarFieldPathY,
                 farFieldPathRoll: persistedFarFieldPathRoll,
                 farFieldConfidence: persistedFarFieldConfidence,
-                footstepPathX: footstepPathX,
-                footstepPathY: footstepPathY,
-                footstepPathRoll: footstepPathRoll,
+                microJitterPathX: microJitterPathX,
+                microJitterPathY: microJitterPathY,
+                microJitterPathRoll: microJitterPathRoll,
                 pathYaw: pathYaw,
                 pathPitch: pathPitch,
                 pathShearX: pathShearX,
@@ -3413,9 +3413,9 @@ final class StabilizerHostAnalysisStore {
             ("sourceLensShakeRidgeSupport", cache.sourceLensShakeRidgeSupport),
             ("sourceLensShakeRidgeLinePathY", cache.sourceLensShakeRidgeLinePathY),
             ("sourceLensShakeRidgeLineSupport", cache.sourceLensShakeRidgeLineSupport),
-            ("footstepPathX", cache.footstepPathX),
-            ("footstepPathY", cache.footstepPathY),
-            ("footstepPathRoll", cache.footstepPathRoll),
+            ("microJitterPathX", cache.microJitterPathX),
+            ("microJitterPathY", cache.microJitterPathY),
+            ("microJitterPathRoll", cache.microJitterPathRoll),
             ("pathYaw", cache.pathYaw),
             ("pathPitch", cache.pathPitch),
             ("pathShearX", cache.pathShearX),
@@ -3820,9 +3820,9 @@ final class StabilizerHostAnalysisStore {
                 sourceLensShakeLocalPathX: cache.sourceLensShakeLocalPathX,
                 sourceLensShakeLocalPathY: cache.sourceLensShakeLocalPathY,
                 sourceLensShakeLocalSupport: cache.sourceLensShakeLocalSupport,
-                footstepPathX: cache.footstepPathX,
-                footstepPathY: cache.footstepPathY,
-                footstepPathRoll: cache.footstepPathRoll,
+                microJitterPathX: cache.microJitterPathX,
+                microJitterPathY: cache.microJitterPathY,
+                microJitterPathRoll: cache.microJitterPathRoll,
                 pathYaw: cache.pathYaw,
                 pathPitch: cache.pathPitch,
                 pathShearX: cache.pathShearX,

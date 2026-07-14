@@ -35,12 +35,12 @@ PARAM_PREFIX = "9999/10013/10016/3/10036"
 FILTER_NAMES = {EFFECT_NAME, "Tokyo Walking Stabilizer copy"}
 LEGACY_FILTER_NAMES = {"Stabilizer Transform"}
 STABILIZER_VISIBLE_DEFAULT_PARAMS = [
-    ("Footstep Jitter X Strength", 7, "4"),
-    ("Footstep Jitter Y Strength", 18, "4"),
-    ("Footstep Jitter Rotation Strength", 8, "1"),
-    ("Stride Wobble X Strength", 29, "4"),
-    ("Stride Wobble Y Strength", 30, "4"),
-    ("Stride Wobble Rotation Strength", 31, "1"),
+    ("Micro Jitter X Strength", 7, "4"),
+    ("Micro Jitter Y Strength", 18, "4"),
+    ("Micro Jitter Rotation Strength", 8, "1"),
+    ("Macro Jitter X Strength", 29, "4"),
+    ("Macro Jitter Y Strength", 30, "4"),
+    ("Macro Jitter Rotation Strength", 31, "1"),
     ("Overall Strength", 1, "1"),
     ("Far-field Warp Strength", 45, "1"),
     ("Turn Smoothing Strength", 23, "12"),

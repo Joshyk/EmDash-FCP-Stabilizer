@@ -52,8 +52,8 @@ render path.
 
 The primary footage this stabilizer is designed to correct is walking footage captured with
 a camera mounted on a gimbal. The gimbal reduces gross camera shake, but the operator's body
-motion still introduces walking-induced movement, including footstep impulses, vertical bob,
-residual pitch/yaw/roll, stride wobble, and parallax between near ground and distant
+motion still introduces walking-induced movement, including micro impulses, vertical bob,
+residual pitch/yaw/roll, macro jitter, and parallax between near ground and distant
 background. Stabilization design and tests should treat those body-motion artifacts as the
 core problem, not as generic tripod shake or purely optical crop drift.
 
@@ -216,9 +216,9 @@ repair malformed cache data; mismatched frame/path arrays should fail visibly an
 new Event Analyzer run. Its cache inventory mode should list saved cache readiness without
 repairing, deleting, or promoting cache files. Feedback band estimates should mirror the
 render path's order:
-measure Footstep Jitter against the outer-frame baseline first, then compute Stride Wobble
-and Turn diagnostics from the footstep-cleaned path.
-The feedback report should print bands in Debug Overlay/render order (`FJIT`, `SWOB`,
+measure Micro Jitter against the outer-frame baseline first, then compute Macro Jitter
+and Turn diagnostics from the micro-cleaned path.
+The feedback report should print bands in Debug Overlay/render order (`MIJIT`, `MAJIT`,
 `WARP`, `TURN`) and choose the top remaining band separately. Its `--turn-window` option should
 match the Inspector `Turn Detection Window` when that UI value is not the default `6.0`.
 Fine jitter analysis should use Metal block matching across multiple source-frame regions,
@@ -235,11 +235,11 @@ list unless the stored fields are no longer safe to interpret.
 ## Diagnostics
 
 Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
-raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
+raw Micro Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
 visible while tuning walking footage. Debug Overlay must keep the shared 21-row contract:
-`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `STRIDE WOBBLE`, `FOOTSTEP JITTER`, `FAR WARP`,
+`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `MACRO JITTER`, `MICRO JITTER`, `FAR WARP`,
 `LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
-`TURN CONFIDENCE`, `STRIDE CONFIDENCE`, `FOOTSTEP CONFIDENCE`, `WARP CONFIDENCE`,
+`TURN CONFIDENCE`, `MACRO CONFIDENCE`, `MICRO CONFIDENCE`, `WARP CONFIDENCE`,
 `LENS CONFIDENCE`, then the runtime/source row. Activity rows must report final values actually
 applied to Metal. `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` should all be quality bars where
 higher means better tracking evidence and lower means weaker evidence. All quality and
@@ -466,10 +466,10 @@ corrections. Near clip edges, average only in-range neighboring samples instead 
 out-of-range samples to the first or last analysis frame, so end frames are not over-weighted.
 This render-time smoothing must not require rerunning Host Analysis or changing the cache
 schema.
-Render-time smoothing must not average away Footstep Jitter impulses or roll jitter needed
-to stabilize fine distant ridge-line shake. Smooth Turn Smoothing and Stride Wobble
-components independently, then recombine them with the current render frame's Footstep
-Jitter X/Y/roll correction. Footstep Jitter debug/status output should show the raw confidence
+Render-time smoothing must not average away Micro Jitter impulses or roll jitter needed
+to stabilize fine distant ridge-line shake. Smooth Turn Smoothing and Macro Jitter
+components independently, then recombine them with the current render frame's Micro
+Jitter X/Y/roll correction. Micro Jitter debug/status output should show the raw confidence
 and effective correction strength so low-confidence gating is visible. Far-field Warp should
 not use the full broad transform-smoothing window; keep it on a short in-range render-time
 smoothing window so ridge-line correction stays responsive while single-frame gate flicker is
@@ -489,51 +489,51 @@ reversed or silently redefined.
 
 ## Walking Correction Stages
 
-Fine high-frequency shake should be handled by render-time Footstep Jitter strength controls
+Fine high-frequency shake should be handled by render-time Micro Jitter strength controls
 that compare X/Y/rotation against an outer-frame linear prediction using seconds-based
 windows: skip the center `0.10` second shock region and predict from outer samples up to
-`1.0` second away. Footstep Jitter should suppress footstep landing shock as a frame-level
+`1.0` second away. Micro Jitter should suppress micro landing shock as a frame-level
 impulse rather than treating it as periodic smoothing, and it should not require rerunning
-Host Analysis. Do not add or expose a user-facing Footstep Jitter window; fine jitter should
+Host Analysis. Do not add or expose a user-facing Micro Jitter window; fine jitter should
 be corrected from the current render frame's impulse against the fixed seconds-based
-outer-frame baseline using the multi-block Host Analysis path. Footstep Jitter confidence
+outer-frame baseline using the multi-block Host Analysis path. Micro Jitter confidence
 should be evaluated per render frame from current tracking quality, accepted block coverage,
-blur, local baseline support, surrounding footstep noise, and whether the center frame
+blur, local baseline support, surrounding micro noise, and whether the center frame
 departs from its outer-frame baseline; do not force a hidden minimum confidence floor.
-Medium-confidence response may be curved upward for a more useful debug pass. Footstep
-Jitter and Stride Wobble may use a more assertive medium-confidence response
+Medium-confidence response may be curved upward for a more useful debug pass. Micro
+Jitter and Macro Jitter may use a more assertive medium-confidence response
 than Turn Smoothing and Far-field Warp, but zero confidence must still produce zero
 correction. Moderate landing impulses should not be buried by an overly high
 surrounding-noise threshold.
 The surrounding-noise floor should be capped below the full impulse response point so repeated
 walking motion does not hide a real center-frame landing impulse.
-Footstep Jitter strength values should be direct removal amounts with exposed X/Y maximums
+Micro Jitter strength values should be direct removal amounts with exposed X/Y maximums
 of `10.0`, X/Y defaults of `4.0`, and an exposed Rotation maximum/default of `4.0`/`1.0`. Values above `1.0` may compensate when
 frame-local confidence makes correction too weak, but applied correction must clamp at full
 detected-impulse removal during render so high slider values do not add inverse shake.
-Footstep Jitter Rotation Strength should default to `1.0`.
-Medium-period walking shake that is longer than Footstep Jitter should be handled by the
-render-time `Stride Wobble` stage. Keep its time window fixed
+Micro Jitter Rotation Strength should default to `1.0`.
+Medium-period walking shake that is longer than Micro Jitter should be handled by the
+render-time `Macro Jitter` stage. Keep its time window fixed
 inside the implementation at `2.0` seconds, expose only X/Y/Rotation strength controls with
-X/Y maximums of `10.0`, X/Y defaults of `4.0`, and a Rotation maximum/default of `4.0`/`1.0`, do not add a user-facing Stride
-Wobble window, compute it from the footstep-cleaned baseline, and feed Turn Smoothing from
-the stride-smoothed path so the same band is not removed twice. Stride Wobble residual gating
+X/Y maximums of `10.0`, X/Y defaults of `4.0`, and a Rotation maximum/default of `4.0`/`1.0`, do not add a user-facing Macro Jitter
+Wobble window, compute it from the micro-cleaned baseline, and feed Turn Smoothing from
+the macro-jitter-smoothed path so the same band is not removed twice. Macro Jitter residual gating
 should use robust window evidence instead of the single worst frame in the window, so one
-bad block-match frame does not suppress the whole medium band. Medium SWOB bands may reach
+bad block-match frame does not suppress the whole medium band. Medium MAJIT bands may reach
 full confidence sooner than the broad UI scale, and the default Y strength should remain high
-enough to remove step follow-through. Stride Wobble
+enough to remove step follow-through. Macro Jitter
 Rotation Strength should default to `1.0`.
-Footstep Jitter and Stride Wobble may use a count-aware walking-band tracking
+Micro Jitter and Macro Jitter may use a count-aware walking-band tracking
 gate that eases block coverage only when enough motion blocks were accepted. Far-field Warp
 and Turn Smoothing should keep the stricter tracking gate so weak evidence does not create
 swimming warp or false turn smoothing.
-The render path must not compute Stride Wobble from the raw or jerk-limited broad path,
-because that reintroduces Footstep Jitter shock into the medium-period band.
+The render path must not compute Macro Jitter from the raw or jerk-limited broad path,
+because that reintroduces Micro Jitter shock into the medium-period band.
 Prepared Host Analysis motion paths should be post-processed with a zero-phase jerk limiter
 before caching. The limiter should clamp isolated acceleration spikes in X/Y/roll while
 preserving path endpoints so total analyzed turn amount is not lost and real panning is not
-delayed into a sliding path. Keep separate raw X/Y/roll impulse paths for Footstep Jitter so
-the jerk limiter does not erase frame-level shake before render-time footstep correction.
+delayed into a sliding path. Keep separate raw X/Y/roll impulse paths for Micro Jitter so
+the jerk limiter does not erase frame-level shake before render-time micro correction.
 Because this changes prepared path semantics, bump the Host Analysis cache schema when it
 changes, while preserving backward read compatibility for still-valid older schema entries.
 Large segmented walking turns should be controlled by the render-time `Turn Smoothing
@@ -549,13 +549,13 @@ making the turn move as a smoother, more uniform pan. Crop-on playback must spen
 prepared-turn plans; it must not rely on final frame-local scale repairs that create
 zoom/crop pulsing. With Auto Crop disabled, exposed black edges should remain a useful
 diagnostic while the crop-off edge guard stays low-speed and separate from TURN. `Turn Detection Window` must use the Inspector UI value, and its UI
-minimum must be the fixed `2.0` second Stride Wobble window so TURN cannot run shorter than
-SWOB. The turn band should be measured from the stride-smoothed path instead of the raw frame
-path, and Y correction must stay Footstep Jitter first and Stride Wobble second so short
+minimum must be the fixed `2.0` second Macro Jitter window so TURN cannot run shorter than
+MAJIT. The turn band should be measured from the macro-jitter-smoothed path instead of the raw frame
+path, and Y correction must stay Micro Jitter first and Macro Jitter second so short
 landing shock is not reintroduced by turn smoothing. TURN confidence should
 require both tracking evidence and a real X turn band; do not keep a hidden minimum turn
 confidence on low-evidence frames.
-Do not reintroduce a separate post-stride Y-only bounce stage as a render stage,
+Do not reintroduce a separate post-macro Y-only bounce stage as a render stage,
 Inspector control, debug row, feedback band, or cache-derived diagnostic path.
 
 ## Far-Field Warp And Edges

@@ -22,10 +22,10 @@ struct DebugOverlayDiagnosticsTests {
         cropPositionPixels: vector_float2 = .zero,
         finalPixelOffset: vector_float2 = .zero,
         finalRotationDegrees: Float = 0.0,
-        stridePixelOffset: vector_float2 = .zero,
-        strideRotationDegrees: Float = 0.0,
-        fineJitterPixelOffset: vector_float2 = .zero,
-        fineJitterRotationDegrees: Float = 0.0,
+        macroJitterPixelOffset: vector_float2 = .zero,
+        macroJitterRotationDegrees: Float = 0.0,
+        microJitterPixelOffset: vector_float2 = .zero,
+        microJitterRotationDegrees: Float = 0.0,
         warpShear: vector_float2 = .zero,
         warpPerspective: vector_float2 = .zero,
         lensComponents: [StabilizerDebugOverlayLensComponent] = [],
@@ -39,8 +39,8 @@ struct DebugOverlayDiagnosticsTests {
         searchRadiusHeadroomQuality: Float = 0.0,
         searchRadiusHeadroomAvailable: Bool = true,
         turnConfidence: Float = 0.0,
-        strideConfidence: Float = 0.0,
-        fineJitterConfidence: Float = 0.0,
+        macroConfidence: Float = 0.0,
+        microJitterConfidence: Float = 0.0,
         warpConfidence: Float = 0.0
     ) -> StabilizerDebugOverlayInputs {
         StabilizerDebugOverlayInputs(
@@ -51,10 +51,10 @@ struct DebugOverlayDiagnosticsTests {
             cropEnabled: cropEnabled,
             cropScale: cropScale,
             cropPositionPixels: cropPositionPixels,
-            stridePixelOffset: stridePixelOffset,
-            strideRotationDegrees: strideRotationDegrees,
-            fineJitterPixelOffset: fineJitterPixelOffset,
-            fineJitterRotationDegrees: fineJitterRotationDegrees,
+            macroJitterPixelOffset: macroJitterPixelOffset,
+            macroJitterRotationDegrees: macroJitterRotationDegrees,
+            microJitterPixelOffset: microJitterPixelOffset,
+            microJitterRotationDegrees: microJitterRotationDegrees,
             warpShear: warpShear,
             warpPerspective: warpPerspective,
             lensComponents: lensComponents,
@@ -68,8 +68,8 @@ struct DebugOverlayDiagnosticsTests {
             searchRadiusHeadroomQuality: searchRadiusHeadroomQuality,
             searchRadiusHeadroomAvailable: searchRadiusHeadroomAvailable,
             turnConfidence: turnConfidence,
-            strideConfidence: strideConfidence,
-            fineJitterConfidence: fineJitterConfidence,
+            macroConfidence: macroConfidence,
+            microJitterConfidence: microJitterConfidence,
             warpConfidence: warpConfidence
         )
     }
@@ -90,21 +90,21 @@ struct DebugOverlayDiagnosticsTests {
     }
 
     private static func testBandIsolationAndFrequencyRows() {
-        let stride = StabilizerDebugOverlayCalculator.metrics(for: inputs(
-            stridePixelOffset: vector_float2(7.68, 0.0),
-            strideConfidence: 0.45
+        let macro = StabilizerDebugOverlayCalculator.metrics(for: inputs(
+            macroJitterPixelOffset: vector_float2(7.68, 0.0),
+            macroConfidence: 0.45
         ))
-        expect(close(stride.strideWobble, 1.0), "SWOB must use its own applied correction")
-        expect(close(stride.footstepJitter, 0.0), "SWOB must not activate FJIT")
-        expect(close(stride.strideConfidence, 0.45), "S CONF must keep analysis confidence")
+        expect(close(macro.macroJitter, 1.0), "MAJIT must use its own applied correction")
+        expect(close(macro.microJitter, 0.0), "MAJIT must not activate MIJIT")
+        expect(close(macro.macroConfidence, 0.45), "MA CONF must keep analysis confidence")
 
         let fine = StabilizerDebugOverlayCalculator.metrics(for: inputs(
-            fineJitterPixelOffset: vector_float2(0.0, 4.32),
-            fineJitterConfidence: 0.62
+            microJitterPixelOffset: vector_float2(0.0, 4.32),
+            microJitterConfidence: 0.62
         ))
-        expect(close(fine.footstepJitter, 1.0), "FJIT must use fine correction")
-        expect(close(fine.strideWobble, 0.0), "FJIT must not activate SWOB")
-        expect(close(fine.footstepConfidence, 0.62), "F CONF must keep effective confidence")
+        expect(close(fine.microJitter, 1.0), "MIJIT must use fine correction")
+        expect(close(fine.macroJitter, 0.0), "MIJIT must not activate MAJIT")
+        expect(close(fine.microConfidence, 0.62), "MI CONF must keep effective confidence")
 
         let warp = StabilizerDebugOverlayCalculator.metrics(for: inputs(
             warpShear: vector_float2(0.016, 0.0),
@@ -119,16 +119,16 @@ struct DebugOverlayDiagnosticsTests {
             masterStrength: 0.0,
             finalPixelOffset: vector_float2(20.0, 20.0),
             finalRotationDegrees: 1.0,
-            stridePixelOffset: vector_float2(20.0, 20.0),
-            fineJitterPixelOffset: vector_float2(20.0, 20.0),
+            macroJitterPixelOffset: vector_float2(20.0, 20.0),
+            microJitterPixelOffset: vector_float2(20.0, 20.0),
             warpShear: vector_float2(0.1, 0.1),
             lensComponents: [StabilizerDebugOverlayLensComponent(offset: vector_float2(20.0, 20.0), effectiveSupport: 1.0)],
             temporalSmoothingPixelDelta: vector_float2(20.0, 20.0),
             turnConfidence: 0.8
         ))
         expect(close(disabled.xOffset, 0.0), "master zero must disable X activity")
-        expect(close(disabled.strideWobble, 0.0), "master zero must disable SWOB activity")
-        expect(close(disabled.footstepJitter, 0.0), "master zero must disable FJIT activity")
+        expect(close(disabled.macroJitter, 0.0), "master zero must disable MAJIT activity")
+        expect(close(disabled.microJitter, 0.0), "master zero must disable MIJIT activity")
         expect(close(disabled.farFieldWarp, 0.0), "master zero must disable WARP activity")
         expect(close(disabled.lens, 0.0), "master zero must disable LENS activity")
         expect(close(disabled.turnConfidence, 0.8), "confidence must remain visible when strength is zero")
@@ -174,8 +174,8 @@ struct DebugOverlayDiagnosticsTests {
             residualQuality: 0.6,
             searchRadiusHeadroomQuality: 0.5,
             turnConfidence: -1.0,
-            strideConfidence: .nan,
-            fineJitterConfidence: 0.4,
+            macroConfidence: .nan,
+            microJitterConfidence: 0.4,
             warpConfidence: 2.0
         ))
         expect(close(values.trackingQuality, 1.0), "TRK must clamp high")
@@ -184,7 +184,7 @@ struct DebugOverlayDiagnosticsTests {
         expect(close(values.residualQuality, 0.6), "RES must preserve high-is-good value")
         expect(close(values.searchRadiusHeadroomQuality, 0.5), "HIT must preserve high-is-good value")
         expect(close(values.turnConfidence, 0.0), "negative confidence must clamp low")
-        expect(close(values.strideConfidence, 0.0), "nonfinite confidence must fail visibly as zero")
+        expect(close(values.macroConfidence, 0.0), "nonfinite confidence must fail visibly as zero")
         expect(close(values.warpConfidence, 1.0), "confidence must clamp high")
     }
 

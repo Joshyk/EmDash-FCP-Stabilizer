@@ -7,7 +7,7 @@ import Metal
 import VideoToolbox
 
 private let toolSchemaVersion = 1
-private let cacheSchemaVersion = 51
+private let cacheSchemaVersion = 52
 private let farFieldMeshRows = 5
 private let farFieldMeshColumns = 9
 private let farFieldMeshBinCount = farFieldMeshRows * farFieldMeshColumns
@@ -1020,9 +1020,9 @@ struct PreparedAnalysis {
     let farFieldPathY: [Float]
     let farFieldPathRoll: [Float]
     let farFieldConfidence: [Float]
-    let footstepPathX: [Float]
-    let footstepPathY: [Float]
-    let footstepPathRoll: [Float]
+    let microJitterPathX: [Float]
+    let microJitterPathY: [Float]
+    let microJitterPathRoll: [Float]
     let pathYaw: [Float]
     let pathPitch: [Float]
     let pathShearX: [Float]
@@ -1122,9 +1122,9 @@ struct PersistedHostAnalysisCache: Encodable {
     let farFieldPathY: [Float]?
     let farFieldPathRoll: [Float]?
     let farFieldConfidence: [Float]?
-    let footstepPathX: [Float]?
-    let footstepPathY: [Float]?
-    let footstepPathRoll: [Float]?
+    let microJitterPathX: [Float]?
+    let microJitterPathY: [Float]?
+    let microJitterPathRoll: [Float]?
     let pathYaw: [Float]?
     let pathPitch: [Float]?
     let pathShearX: [Float]?
@@ -3941,9 +3941,9 @@ func prepare(frames: [AnalysisFrame], motions: [PairMotion]) throws -> PreparedA
         farFieldPathY: jerkLimitedMotionPath(farFieldPathY, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
         farFieldPathRoll: jerkLimitedMotionPath(farFieldRawRoll, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
         farFieldConfidence: motions.map(\.farFieldConfidence),
-        footstepPathX: pathX,
-        footstepPathY: pathY,
-        footstepPathRoll: rawRoll,
+        microJitterPathX: pathX,
+        microJitterPathY: pathY,
+        microJitterPathRoll: rawRoll,
         pathYaw: jerkLimitedMotionPath(yaw, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
         pathPitch: jerkLimitedMotionPath(pitch, minimumAcceleration: minimumTranslationAccelerationLimit, minimumJerk: minimumTranslationJerkLimit),
         pathShearX: jerkLimitedMotionPath(shearX, minimumAcceleration: minimumRotationAccelerationLimit, minimumJerk: minimumRotationJerkLimit),
@@ -5173,9 +5173,9 @@ func buildCache(asset: AssetPlan, eventName: String?, prepared: PreparedAnalysis
         farFieldPathY: prepared.farFieldPathY,
         farFieldPathRoll: prepared.farFieldPathRoll,
         farFieldConfidence: prepared.farFieldConfidence,
-        footstepPathX: prepared.footstepPathX,
-        footstepPathY: prepared.footstepPathY,
-        footstepPathRoll: prepared.footstepPathRoll,
+        microJitterPathX: prepared.microJitterPathX,
+        microJitterPathY: prepared.microJitterPathY,
+        microJitterPathRoll: prepared.microJitterPathRoll,
         pathYaw: prepared.pathYaw,
         pathPitch: prepared.pathPitch,
         pathShearX: prepared.pathShearX,
@@ -5492,9 +5492,9 @@ private func writeCacheJSON(_ cache: PersistedHostAnalysisCache, to destinationU
         try writeOptionalFloatArrayField("farFieldPathY", cache.farFieldPathY)
         try writeOptionalFloatArrayField("farFieldPathRoll", cache.farFieldPathRoll)
         try writeOptionalFloatArrayField("farFieldConfidence", cache.farFieldConfidence)
-        try writeOptionalFloatArrayField("footstepPathX", cache.footstepPathX)
-        try writeOptionalFloatArrayField("footstepPathY", cache.footstepPathY)
-        try writeOptionalFloatArrayField("footstepPathRoll", cache.footstepPathRoll)
+        try writeOptionalFloatArrayField("microJitterPathX", cache.microJitterPathX)
+        try writeOptionalFloatArrayField("microJitterPathY", cache.microJitterPathY)
+        try writeOptionalFloatArrayField("microJitterPathRoll", cache.microJitterPathRoll)
         try writeOptionalFloatArrayField("pathYaw", cache.pathYaw)
         try writeOptionalFloatArrayField("pathPitch", cache.pathPitch)
         try writeOptionalFloatArrayField("pathShearX", cache.pathShearX)

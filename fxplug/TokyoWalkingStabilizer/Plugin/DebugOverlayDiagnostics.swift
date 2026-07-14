@@ -14,10 +14,10 @@ struct StabilizerDebugOverlayInputs {
     let cropEnabled: Bool
     let cropScale: Float
     let cropPositionPixels: vector_float2
-    let stridePixelOffset: vector_float2
-    let strideRotationDegrees: Float
-    let fineJitterPixelOffset: vector_float2
-    let fineJitterRotationDegrees: Float
+    let macroJitterPixelOffset: vector_float2
+    let macroJitterRotationDegrees: Float
+    let microJitterPixelOffset: vector_float2
+    let microJitterRotationDegrees: Float
     let warpShear: vector_float2
     let warpPerspective: vector_float2
     let lensComponents: [StabilizerDebugOverlayLensComponent]
@@ -31,8 +31,8 @@ struct StabilizerDebugOverlayInputs {
     let searchRadiusHeadroomQuality: Float
     let searchRadiusHeadroomAvailable: Bool
     let turnConfidence: Float
-    let strideConfidence: Float
-    let fineJitterConfidence: Float
+    let macroConfidence: Float
+    let microJitterConfidence: Float
     let warpConfidence: Float
 }
 
@@ -42,8 +42,8 @@ struct StabilizerDebugOverlayMetrics {
     let roll: Float
     let crop: Float
     let turn: Float
-    let strideWobble: Float
-    let footstepJitter: Float
+    let macroJitter: Float
+    let microJitter: Float
     let farFieldWarp: Float
     let lens: Float
     let smoothing: Float
@@ -53,8 +53,8 @@ struct StabilizerDebugOverlayMetrics {
     let residualQuality: Float
     let searchRadiusHeadroomQuality: Float
     let turnConfidence: Float
-    let strideConfidence: Float
-    let footstepConfidence: Float
+    let macroConfidence: Float
+    let microConfidence: Float
     let warpConfidence: Float
     let lensConfidence: Float
     let residualQualityAvailable: Bool
@@ -66,8 +66,8 @@ struct StabilizerDebugOverlayMetrics {
         roll: 0.0,
         crop: 0.0,
         turn: 0.0,
-        strideWobble: 0.0,
-        footstepJitter: 0.0,
+        macroJitter: 0.0,
+        microJitter: 0.0,
         farFieldWarp: 0.0,
         lens: 0.0,
         smoothing: 0.0,
@@ -77,8 +77,8 @@ struct StabilizerDebugOverlayMetrics {
         residualQuality: 0.0,
         searchRadiusHeadroomQuality: 0.0,
         turnConfidence: 0.0,
-        strideConfidence: 0.0,
-        footstepConfidence: 0.0,
+        macroConfidence: 0.0,
+        microConfidence: 0.0,
         warpConfidence: 0.0,
         lensConfidence: 0.0,
         residualQualityAvailable: false,
@@ -154,17 +154,17 @@ enum StabilizerDebugOverlayCalculator {
                 abs(input.cropPositionPixels.y) / turnScaleY
             ))
             : 0.0
-        let strideWobble = correctionActivity(
-            offset: input.stridePixelOffset,
-            rotationDegrees: input.strideRotationDegrees,
+        let macroJitter = correctionActivity(
+            offset: input.macroJitterPixelOffset,
+            rotationDegrees: input.macroJitterRotationDegrees,
             scaleX: fineScaleX,
             scaleY: fineScaleY,
             rotationScale: 0.05,
             strength: masterStrength
         )
-        let footstepJitter = correctionActivity(
-            offset: input.fineJitterPixelOffset,
-            rotationDegrees: input.fineJitterRotationDegrees,
+        let microJitter = correctionActivity(
+            offset: input.microJitterPixelOffset,
+            rotationDegrees: input.microJitterRotationDegrees,
             scaleX: fineScaleX,
             scaleY: fineScaleY,
             rotationScale: 0.05,
@@ -203,8 +203,8 @@ enum StabilizerDebugOverlayCalculator {
             roll: roll,
             crop: crop,
             turn: turn,
-            strideWobble: strideWobble,
-            footstepJitter: footstepJitter,
+            macroJitter: macroJitter,
+            microJitter: microJitter,
             farFieldWarp: farFieldWarp,
             lens: unit(lensActivity),
             smoothing: smoothing,
@@ -214,8 +214,8 @@ enum StabilizerDebugOverlayCalculator {
             residualQuality: input.residualQualityAvailable ? unit(input.residualQuality) : 0.0,
             searchRadiusHeadroomQuality: input.searchRadiusHeadroomAvailable ? unit(input.searchRadiusHeadroomQuality) : 0.0,
             turnConfidence: unit(input.turnConfidence),
-            strideConfidence: unit(input.strideConfidence),
-            footstepConfidence: unit(input.fineJitterConfidence),
+            macroConfidence: unit(input.macroConfidence),
+            microConfidence: unit(input.microJitterConfidence),
             warpConfidence: unit(input.warpConfidence),
             lensConfidence: unit(lensConfidence),
             residualQualityAvailable: input.residualQualityAvailable,

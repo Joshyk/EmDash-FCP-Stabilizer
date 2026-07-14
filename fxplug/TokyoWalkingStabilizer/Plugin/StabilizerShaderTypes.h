@@ -99,8 +99,8 @@ typedef enum StabilizerDebugOverlayRow {
     StabilizerDebugOverlayRowRoll = 2,
     StabilizerDebugOverlayRowCrop = 3,
     StabilizerDebugOverlayRowTurn = 4,
-    StabilizerDebugOverlayRowStrideWobble = 5,
-    StabilizerDebugOverlayRowFootstepJitter = 6,
+    StabilizerDebugOverlayRowMacroJitter = 5,
+    StabilizerDebugOverlayRowMicroJitter = 6,
     StabilizerDebugOverlayRowFarFieldWarp = 7,
     StabilizerDebugOverlayRowLens = 8,
     StabilizerDebugOverlayRowSmoothing = 9,
@@ -110,8 +110,8 @@ typedef enum StabilizerDebugOverlayRow {
     StabilizerDebugOverlayRowResidualQuality = 13,
     StabilizerDebugOverlayRowSearchRadiusHeadroomQuality = 14,
     StabilizerDebugOverlayRowTurnConfidence = 15,
-    StabilizerDebugOverlayRowStrideConfidence = 16,
-    StabilizerDebugOverlayRowFootstepConfidence = 17,
+    StabilizerDebugOverlayRowMacroConfidence = 16,
+    StabilizerDebugOverlayRowMicroConfidence = 17,
     StabilizerDebugOverlayRowWarpConfidence = 18,
     StabilizerDebugOverlayRowLensConfidence = 19,
     StabilizerDebugOverlayRowRuntime = 20
@@ -123,8 +123,8 @@ typedef struct StabilizerDebugOverlayDiagnostics {
     float roll;
     float crop;
     float turn;
-    float strideWobble;
-    float footstepJitter;
+    float macroJitter;
+    float microJitter;
     float farFieldWarp;
     float lens;
     float smoothing;
@@ -134,8 +134,8 @@ typedef struct StabilizerDebugOverlayDiagnostics {
     float residualQuality;
     float searchRadiusHeadroomQuality;
     float turnConfidence;
-    float strideConfidence;
-    float footstepConfidence;
+    float macroConfidence;
+    float microConfidence;
     float warpConfidence;
     float lensConfidence;
 } StabilizerDebugOverlayDiagnostics;

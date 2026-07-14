@@ -945,12 +945,12 @@ if missing_stage_fields:
     )
 
 obsolete_stage_fields = [
-    field for field in ("microX", "microY", "strideX", "strideY", "trajectoryMicroX", "trajectoryMicroY")
+    field for field in ("microX", "microY", "macroX", "macroY", "trajectoryMicroX", "trajectoryMicroY")
     if any(field in row for row in rows)
 ]
 if obsolete_stage_fields:
     raise SystemExit(
-        "Render component diagnostics emitted deprecated FJIT/SWOB fields: "
+        "Render component diagnostics emitted deprecated MIJIT/MAJIT fields: "
         f"{', '.join(obsolete_stage_fields)} log={log_path}"
     )
 
@@ -3668,8 +3668,8 @@ labels = [
     "ROLL",
     "CROP",
     "TURN",
-    "STRIDE WOBBLE",
-    "FOOTSTEP JITTER",
+    "MACRO JITTER",
+    "MICRO JITTER",
     "FAR WARP",
     "LENS",
     "SMOOTHING",
@@ -3679,8 +3679,8 @@ labels = [
     "RESIDUAL",
     "SEARCH HEADROOM",
     "TURN CONFIDENCE",
-    "STRIDE CONFIDENCE",
-    "FOOTSTEP CONFIDENCE",
+    "MACRO CONFIDENCE",
+    "MICRO CONFIDENCE",
     "WARP CONFIDENCE",
     "LENS CONFIDENCE",
     "RUNTIME",
