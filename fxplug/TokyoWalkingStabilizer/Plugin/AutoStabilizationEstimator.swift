@@ -1176,11 +1176,15 @@ enum AutoStabilizationEstimator {
     private static var sharedPlaybackTrajectoryCaches: [PlaybackTrajectoryCacheKey: PlaybackTransformTrajectory] = [:]
     private static var sharedPlaybackTrajectoryCacheOrder: [PlaybackTrajectoryCacheKey] = []
     private static var sharedPlaybackTrajectoryPreparations: Set<PlaybackTrajectoryCacheKey> = []
-    private static var sharedPlaybackTrajectoryPreparationCallbacks: [PlaybackTrajectoryCacheKey: [() -> Void]] = [:]
+    private static var sharedPlaybackTrajectoryPreparationCallbacks: [PlaybackTrajectoryCacheKey: [PlaybackTrajectoryPreparationCallback]] = [:]
+    private static var latestPlaybackTrajectoryKeyByScope: [UUID: PlaybackTrajectoryCacheKey] = [:]
+    private static var supersededPlaybackTrajectoryRequestCount: UInt64 = 0
     private static let playbackTrajectoryPreparationQueue = DispatchQueue(
         label: "com.justadev.TokyoWalkingStabilizer.PlaybackTrajectoryPreparation",
         qos: .userInitiated
     )
+    private static let playbackPreparationParallelMinimumFrameCount = 2_048
+    private static let playbackPreparationMaximumWorkerCount = 4
     private static let playbackTrajectoryPixelRate: Float = 42.0
     private static let playbackTrajectoryMaximumPixelStep: Float = 0.68
     private static let playbackTrajectoryMinimumPixelStep: Float = 0.26
@@ -1503,6 +1507,11 @@ enum AutoStabilizationEstimator {
         let strideWobbleRotation: UInt64
         let farFieldWarp: UInt64
         let turnSmoothingZoom: UInt64
+    }
+
+    private struct PlaybackTrajectoryPreparationCallback {
+        let scope: UUID?
+        let callback: () -> Void
     }
 
     private static func combinePreparedPathHash(_ value: UInt64, into hash: inout UInt64) {
@@ -3129,6 +3138,7 @@ enum AutoStabilizationEstimator {
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths = .defaultStrengths,
         waitForPreparation: Bool = false,
+        preparationScope: UUID? = nil,
         onPrepared: (() -> Void)? = nil
     ) -> StabilizerAutoTransform? {
         let renderSeconds = CMTimeGetSeconds(renderTime)
@@ -3167,6 +3177,7 @@ enum AutoStabilizationEstimator {
             requestedOutputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
+            preparationScope: preparationScope,
             onPrepared: onPrepared
         )
         os_log(
@@ -3267,6 +3278,7 @@ enum AutoStabilizationEstimator {
         requestedOutputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths = .defaultStrengths,
+        preparationScope: UUID? = nil,
         onPrepared: (() -> Void)? = nil
     ) {
         schedulePlaybackTrajectoryPreparation(
@@ -3274,6 +3286,7 @@ enum AutoStabilizationEstimator {
             requestedOutputSize: requestedOutputSize,
             panSmoothSeconds: panSmoothSeconds,
             strengths: strengths,
+            preparationScope: preparationScope,
             onPrepared: onPrepared
         )
     }
@@ -5280,13 +5293,16 @@ enum AutoStabilizationEstimator {
             sharedPlaybackTrajectoryCacheCondition.wait()
         }
 
-        let built = buildAndLogPlaybackTrajectory(
+        guard let built = buildAndLogPlaybackTrajectory(
             analysis: analysis,
             outputSize: trajectoryOutputSize,
             requestedOutputSize: requestedOutputSize,
             panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths
-        )
+            strengths: strengths,
+            shouldCancel: { false }
+        ) else {
+            preconditionFailure("Uncancellable playback trajectory preparation was cancelled")
+        }
 
         sharedPlaybackTrajectoryCacheCondition.lock()
         defer {
@@ -5324,6 +5340,7 @@ enum AutoStabilizationEstimator {
         requestedOutputSize: vector_float2,
         panSmoothSeconds: Double,
         strengths: StabilizerCorrectionStrengths,
+        preparationScope: UUID? = nil,
         onPrepared: (() -> Void)? = nil
     ) {
         let trajectoryOutputSize = playbackTrajectoryOutputSize(for: analysis)
@@ -5335,9 +5352,38 @@ enum AutoStabilizationEstimator {
             return
         }
 
+        var supersededPreviousRequest = false
+        var supersededCountSnapshot: UInt64 = 0
         sharedPlaybackTrajectoryCacheCondition.lock()
+        if let preparationScope {
+            let previousKey = latestPlaybackTrajectoryKeyByScope[preparationScope]
+            if previousKey != key {
+                supersededPreviousRequest = previousKey != nil
+                latestPlaybackTrajectoryKeyByScope[preparationScope] = key
+                for callbackKey in Array(sharedPlaybackTrajectoryPreparationCallbacks.keys) {
+                    sharedPlaybackTrajectoryPreparationCallbacks[callbackKey]?.removeAll {
+                        $0.scope == preparationScope
+                    }
+                    if sharedPlaybackTrajectoryPreparationCallbacks[callbackKey]?.isEmpty == true {
+                        sharedPlaybackTrajectoryPreparationCallbacks.removeValue(forKey: callbackKey)
+                    }
+                }
+                if supersededPreviousRequest {
+                    supersededPlaybackTrajectoryRequestCount &+= 1
+                }
+            }
+        }
+        supersededCountSnapshot = supersededPlaybackTrajectoryRequestCount
         if sharedPlaybackTrajectoryCaches[key] != nil {
             sharedPlaybackTrajectoryCacheCondition.unlock()
+            if supersededPreviousRequest {
+                os_log(
+                    "Playback trajectory request superseded | total %llu",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    supersededCountSnapshot
+                )
+            }
             if let onPrepared {
                 DispatchQueue.main.async(execute: onPrepared)
             }
@@ -5345,38 +5391,89 @@ enum AutoStabilizationEstimator {
         }
         if sharedPlaybackTrajectoryPreparations.contains(key) {
             if let onPrepared {
-                sharedPlaybackTrajectoryPreparationCallbacks[key, default: []].append(onPrepared)
+                sharedPlaybackTrajectoryPreparationCallbacks[key, default: []].append(
+                    PlaybackTrajectoryPreparationCallback(scope: preparationScope, callback: onPrepared)
+                )
             }
             sharedPlaybackTrajectoryCacheCondition.unlock()
             return
         }
         sharedPlaybackTrajectoryPreparations.insert(key)
         if let onPrepared {
-            sharedPlaybackTrajectoryPreparationCallbacks[key, default: []].append(onPrepared)
+            sharedPlaybackTrajectoryPreparationCallbacks[key, default: []].append(
+                PlaybackTrajectoryPreparationCallback(scope: preparationScope, callback: onPrepared)
+            )
         }
         sharedPlaybackTrajectoryCacheCondition.unlock()
 
         playbackTrajectoryPreparationQueue.async {
+            let preparationStartedAt = CFAbsoluteTimeGetCurrent()
+            let shouldCancel: () -> Bool = {
+                guard preparationScope != nil else {
+                    return false
+                }
+                sharedPlaybackTrajectoryCacheCondition.lock()
+                let stillDesired = latestPlaybackTrajectoryKeyByScope.values.contains(key)
+                sharedPlaybackTrajectoryCacheCondition.unlock()
+                return !stillDesired
+            }
             let built = buildAndLogPlaybackTrajectory(
                 analysis: analysis,
                 outputSize: trajectoryOutputSize,
                 requestedOutputSize: requestedOutputSize,
                 panSmoothSeconds: panSmoothSeconds,
-                strengths: strengths
+                strengths: strengths,
+                shouldCancel: shouldCancel
             )
 
-            let callbacks: [() -> Void]
+            let callbacks: [PlaybackTrajectoryPreparationCallback]
+            let cancellationSupersededCount: UInt64
             sharedPlaybackTrajectoryCacheCondition.lock()
             sharedPlaybackTrajectoryPreparations.remove(key)
-            if sharedPlaybackTrajectoryCaches[key] == nil {
+            if let built, sharedPlaybackTrajectoryCaches[key] == nil {
                 storePlaybackTrajectory(built, for: key)
             }
-            callbacks = sharedPlaybackTrajectoryPreparationCallbacks.removeValue(forKey: key) ?? []
+            callbacks = (sharedPlaybackTrajectoryPreparationCallbacks.removeValue(forKey: key) ?? []).filter { entry in
+                guard let scope = entry.scope else {
+                    return built != nil
+                }
+                return built != nil && latestPlaybackTrajectoryKeyByScope[scope] == key
+            }
+            cancellationSupersededCount = supersededPlaybackTrajectoryRequestCount
             sharedPlaybackTrajectoryCacheCondition.broadcast()
             sharedPlaybackTrajectoryCacheCondition.unlock()
-            callbacks.forEach { callback in
-                DispatchQueue.main.async(execute: callback)
+            if built == nil {
+                os_log(
+                    "Playback trajectory preparation cancelled | frames %d elapsed %.3fms superseded %llu",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    analysis.frames.count,
+                    (CFAbsoluteTimeGetCurrent() - preparationStartedAt) * 1000.0,
+                    cancellationSupersededCount
+                )
             }
+            callbacks.forEach { entry in
+                DispatchQueue.main.async(execute: entry.callback)
+            }
+        }
+    }
+
+    static func cancelPlaybackPreparations(for scope: UUID) {
+        sharedPlaybackTrajectoryCacheCondition.lock()
+        let removedKey = latestPlaybackTrajectoryKeyByScope.removeValue(forKey: scope)
+        for key in Array(sharedPlaybackTrajectoryPreparationCallbacks.keys) {
+            sharedPlaybackTrajectoryPreparationCallbacks[key]?.removeAll { $0.scope == scope }
+            if sharedPlaybackTrajectoryPreparationCallbacks[key]?.isEmpty == true {
+                sharedPlaybackTrajectoryPreparationCallbacks.removeValue(forKey: key)
+            }
+        }
+        sharedPlaybackTrajectoryCacheCondition.unlock()
+        if removedKey != nil {
+            os_log(
+                "Playback trajectory preparation scope released",
+                log: stabilizerHostAnalysisLog,
+                type: .default
+            )
         }
     }
 
@@ -5385,15 +5482,19 @@ enum AutoStabilizationEstimator {
         outputSize: vector_float2,
         requestedOutputSize: vector_float2,
         panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths
-    ) -> PlaybackTransformTrajectory {
+        strengths: StabilizerCorrectionStrengths,
+        shouldCancel: @escaping () -> Bool
+    ) -> PlaybackTransformTrajectory? {
         let buildStartedAt = CFAbsoluteTimeGetCurrent()
-        let built = buildPlaybackTrajectory(
+        guard let built = buildPlaybackTrajectory(
             analysis: analysis,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths
-        )
+            strengths: strengths,
+            shouldCancel: shouldCancel
+        ) else {
+            return nil
+        }
         let buildMilliseconds = (CFAbsoluteTimeGetCurrent() - buildStartedAt) * 1000.0
         os_log(
             "Playback trajectory prepared | frames %d canonical %.0fx%.0f requested %.0fx%.0f pan %.3f elapsed %.3fms",
@@ -5558,12 +5659,78 @@ enum AutoStabilizationEstimator {
         return scaled
     }
 
+    private static func parallelPreparationMap<Element>(
+        count: Int,
+        shouldCancel: @escaping () -> Bool,
+        transform: @escaping (Int) -> Element
+    ) -> [Element]? {
+        guard count > 0 else {
+            return []
+        }
+        guard !shouldCancel() else {
+            return nil
+        }
+
+        let availableWorkers = max(1, ProcessInfo.processInfo.activeProcessorCount - 2)
+        let workerCount = min(playbackPreparationMaximumWorkerCount, availableWorkers, count)
+        guard count >= playbackPreparationParallelMinimumFrameCount, workerCount > 1 else {
+            var result: [Element] = []
+            result.reserveCapacity(count)
+            for index in 0..<count {
+                if index.isMultiple(of: 128), shouldCancel() {
+                    return nil
+                }
+                result.append(transform(index))
+            }
+            return shouldCancel() ? nil : result
+        }
+
+        let chunkSize = (count + workerCount - 1) / workerCount
+        let resultLock = NSLock()
+        var chunkResults = Array<[Element]?>(repeating: nil, count: workerCount)
+        DispatchQueue.concurrentPerform(iterations: workerCount) { workerIndex in
+            let lowerBound = workerIndex * chunkSize
+            let upperBound = min(count, lowerBound + chunkSize)
+            guard lowerBound < upperBound else {
+                resultLock.lock()
+                chunkResults[workerIndex] = []
+                resultLock.unlock()
+                return
+            }
+            var chunk: [Element] = []
+            chunk.reserveCapacity(upperBound - lowerBound)
+            for index in lowerBound..<upperBound {
+                if (index - lowerBound).isMultiple(of: 128), shouldCancel() {
+                    break
+                }
+                chunk.append(transform(index))
+            }
+            resultLock.lock()
+            chunkResults[workerIndex] = chunk
+            resultLock.unlock()
+        }
+
+        guard !shouldCancel() else {
+            return nil
+        }
+        var result: [Element] = []
+        result.reserveCapacity(count)
+        for workerIndex in 0..<workerCount {
+            guard let chunk = chunkResults[workerIndex] else {
+                return nil
+            }
+            result.append(contentsOf: chunk)
+        }
+        return result.count == count ? result : nil
+    }
+
     private static func buildPlaybackTrajectory(
         analysis: StabilizerPreparedAnalysis,
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths
-    ) -> PlaybackTransformTrajectory {
+        strengths: StabilizerCorrectionStrengths,
+        shouldCancel: @escaping () -> Bool
+    ) -> PlaybackTransformTrajectory? {
         let frames = analysis.frames
         guard frames.count >= 3 else {
             return PlaybackTransformTrajectory(
@@ -5572,14 +5739,23 @@ enum AutoStabilizationEstimator {
                 outputSize: outputSize
             )
         }
-        let rawTransforms = preparedPlaybackTrajectoryRawTransforms(
+        guard !shouldCancel() else {
+            return nil
+        }
+        guard let rawTransforms = preparedPlaybackTrajectoryRawTransforms(
             analysis: analysis,
             frames: frames,
             outputSize: outputSize,
             panSmoothSeconds: panSmoothSeconds,
-            strengths: strengths
-        )
-        let transforms = frames.indices.map { index in
+            strengths: strengths,
+            shouldCancel: shouldCancel
+        ) else {
+            return nil
+        }
+        guard let transforms: [StabilizerAutoTransform] = parallelPreparationMap(
+            count: frames.count,
+            shouldCancel: shouldCancel,
+            transform: { index in
             playbackTrajectorySmoothedTransform(
                 index: index,
                 frames: frames,
@@ -5587,6 +5763,12 @@ enum AutoStabilizationEstimator {
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths
             )
+            }
+        ) else {
+            return nil
+        }
+        guard !shouldCancel() else {
+            return nil
         }
         let limitedTransforms = playbackTrajectoryZeroPhaseLimitedTransforms(
             frames: frames,
@@ -5594,18 +5776,27 @@ enum AutoStabilizationEstimator {
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
+        guard !shouldCancel() else {
+            return nil
+        }
         let finalTransforms = playbackTrajectoryZeroPhaseLimitedTransforms(
             frames: frames,
             rawTransforms: limitedTransforms,
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
+        guard !shouldCancel() else {
+            return nil
+        }
         let landingShockLimited = playbackTrajectoryLandingShockLimitedTransforms(
             frames: frames,
             transforms: finalTransforms,
             diagnosticTransforms: rawTransforms,
             outputSize: outputSize
         )
+        guard !shouldCancel() else {
+            return nil
+        }
         if landingShockLimited.pixelFrameCount > 0 || landingShockLimited.rotationFrameCount > 0 {
             os_log(
                 "Playback trajectory landing-shock limit | pixelFrames %d rotationFrames %d maxPixel %.3f maxRotation %.4f",
@@ -5622,6 +5813,9 @@ enum AutoStabilizationEstimator {
             transforms: landingShockLimited.transforms,
             outputSize: outputSize
         )
+        guard !shouldCancel() else {
+            return nil
+        }
         if despiked.pixelFrameCount > 0 || despiked.rotationFrameCount > 0 {
             os_log(
                 "Playback trajectory frame-cadence despike | pixelFrames %d rotationFrames %d maxPixel %.3f maxRotation %.4f",
@@ -5638,6 +5832,9 @@ enum AutoStabilizationEstimator {
             transforms: despiked.transforms,
             outputSize: outputSize
         )
+        guard !shouldCancel() else {
+            return nil
+        }
         if velocityCollapseGuarded.pixelFrameCount > 0 {
             os_log(
                 "Playback trajectory velocity-collapse guard | pixelFrames %d maxPixel %.3f",
@@ -5652,6 +5849,9 @@ enum AutoStabilizationEstimator {
             transforms: velocityCollapseGuarded.transforms,
             outputSize: outputSize
         )
+        guard !shouldCancel() else {
+            return nil
+        }
         if microJitterSuppressed.pixelFrameCount > 0 {
             os_log(
                 "Playback trajectory micro-jitter suppression | pixelFrames %d maxPixel %.3f",
@@ -5666,6 +5866,9 @@ enum AutoStabilizationEstimator {
             transforms: microJitterSuppressed.transforms,
             outputSize: outputSize
         )
+        guard !shouldCancel() else {
+            return nil
+        }
         if alternatingYFiltered.pixelFrameCount > 0 {
             os_log(
                 "Playback trajectory alternating Y filter | pixelFrames %d maxDeviation %.3f",
@@ -7103,10 +7306,14 @@ enum AutoStabilizationEstimator {
         frames: [StabilizerAnalysisFrame],
         outputSize: vector_float2,
         panSmoothSeconds: Double,
-        strengths: StabilizerCorrectionStrengths
-    ) -> [StabilizerAutoTransform] {
+        strengths: StabilizerCorrectionStrengths,
+        shouldCancel: @escaping () -> Bool
+    ) -> [StabilizerAutoTransform]? {
         guard frames.count >= 3 else {
             return Array(repeating: .identity, count: frames.count)
+        }
+        guard !shouldCancel() else {
+            return nil
         }
 
         let cache = renderEstimateCache(for: analysis)
@@ -7165,6 +7372,9 @@ enum AutoStabilizationEstimator {
             outerWindowSeconds: footstepImpulseOuterWindowSeconds,
             cache: cache
         )
+        guard !shouldCancel() else {
+            return nil
+        }
 
         let turnStrideSmoothedXPath = cache.locallyTimeWeightedAveragePath(
             .footstepX,
@@ -7307,6 +7517,9 @@ enum AutoStabilizationEstimator {
             targetIndices: allIndices,
             windowSeconds: strideWobbleWindowSeconds
         )
+        guard !shouldCancel() else {
+            return nil
+        }
         let broadWindowSeconds = broadHalfWindow * 2.0
         let xScale = outputSize.x / Float(max(1, frames[0].sampleWidth))
         let broadXBuild = adaptiveXTurnIntentPath(
@@ -7528,7 +7741,10 @@ enum AutoStabilizationEstimator {
             fullImpulseScale: footstepImpulseFullScaleDegrees
         )
 
-        let transforms = frames.indices.map { index in
+        guard let transforms: [StabilizerAutoTransform] = parallelPreparationMap(
+            count: frames.count,
+            shouldCancel: shouldCancel,
+            transform: { index in
             let frame = frames[index]
             let renderSeconds = frame.time
             let xScale = outputSize.x / Float(max(1, frame.sampleWidth))
@@ -8300,6 +8516,9 @@ enum AutoStabilizationEstimator {
                 searchRadiusHitCount: searchRadiusHitCount,
                 searchRadiusTotalCount: searchRadiusTotalCount
             )
+            }
+        ) else {
+            return nil
         }
         return transforms
     }

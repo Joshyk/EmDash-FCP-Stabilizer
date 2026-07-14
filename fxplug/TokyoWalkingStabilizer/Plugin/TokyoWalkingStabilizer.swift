@@ -1151,6 +1151,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private var lastPublishedActiveAnalysisFrameCount = 0
     private var activeAnalyzerSessionID: UUID?
     private var persistentCacheMonitor: DispatchSourceTimer?
+    private let playbackPreparationScope = UUID()
     private var hostAnalysisStore: StabilizerHostAnalysisStore {
         Self.sharedHostAnalysisStore
     }
@@ -1172,6 +1173,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     deinit {
         persistentCacheMonitor?.cancel()
+        AutoStabilizationEstimator.cancelPlaybackPreparations(for: playbackPreparationScope)
     }
 
     func addParameters() throws {
@@ -2028,6 +2030,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         analysisRevision: UInt64,
         cacheIdentity: String?,
         playbackMode: Bool = false,
+        playbackPreparationScope: UUID? = nil,
         onPlaybackPreparationReady: (() -> Void)? = nil
     ) -> StabilizerAutoTransform {
         let firstFrame = preparedAnalysis.frames.first
@@ -2090,6 +2093,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 panSmoothSeconds: panSmoothSeconds,
                 strengths: strengths,
                 waitForPreparation: false,
+                preparationScope: playbackPreparationScope,
                 onPrepared: onPlaybackPreparationReady
             ) {
                 transform = readyTransform
@@ -10661,6 +10665,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 analysisRevision: renderStoreRevision,
                 cacheIdentity: renderCacheIdentity,
                 playbackMode: true,
+                playbackPreparationScope: playbackPreparationScope,
                 onPlaybackPreparationReady: playbackTrajectoryPrepared
             )
             autoTransform = Self.turnViewportPlanningTransform(
