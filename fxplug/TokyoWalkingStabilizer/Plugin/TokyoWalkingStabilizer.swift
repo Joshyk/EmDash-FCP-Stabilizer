@@ -10596,6 +10596,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             turnSmoothingZoom: state.turnSmoothingZoom,
             turnTransitionWindowSeconds: state.turnTransitionWindow
         )
+        // TURN is rendered only in viewport/crop space.  Build one canonical
+        // full-authority trajectory for every non-zero TURN value so the
+        // ordinary transform and Auto Crop preparation share the same cache.
+        // Apply the UI strength exactly once after sampling that trajectory.
+        let playbackTrajectoryStrengths = Self.fullTurnAnalysisStrengths(correctionStrengths)
         let configuredProjectBundleCache = transformEnabled
             ? configureProjectBundleCacheDirectory(markUnavailable: false, expectedRange: expectedRange)
             : false
@@ -10652,11 +10657,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 renderTime: analysisRenderTime,
                 outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
                 panSmoothSeconds: 0.0,
-                strengths: correctionStrengths,
+                strengths: playbackTrajectoryStrengths,
                 analysisRevision: renderStoreRevision,
                 cacheIdentity: renderCacheIdentity,
                 playbackMode: true,
                 onPlaybackPreparationReady: playbackTrajectoryPrepared
+            )
+            autoTransform = Self.turnViewportPlanningTransform(
+                autoTransform,
+                turnSmoothingStrength: correctionStrengths.turnSmoothingZoom
             )
             transformFinishedAt = CFAbsoluteTimeGetCurrent()
         } else {
@@ -10869,10 +10878,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             let autoCropRenderTime = activeAnalysisRenderTime ?? hostAnalysisStore.analysisRenderTime(for: renderTime, preparedAnalysis: preparedAnalysis)
             let autoCropOutputSize = vector_float2(Float(outputWidth), Float(outputHeight))
             let playbackPreparationCacheIdentity = renderCacheIdentity
-            let autoCropPlanningTransform = Self.turnViewportPlanningTransform(
-                autoTransform,
-                turnSmoothingStrength: correctionStrengths.turnSmoothingZoom
-            )
+            // autoTransform already contains the UI-strength viewport result
+            // sampled from the shared canonical TURN trajectory.
+            let autoCropPlanningTransform = autoTransform
             let autoCropPlaybackPlanPrepared: () -> Void = { [weak self] in
                 guard let self else {
                     return
