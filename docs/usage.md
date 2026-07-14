@@ -173,18 +173,19 @@ fallbacks.
   Analyzer`.
 - Older saved timeline instances can keep stale saved Inspector strings, so check the compact
   runtime/source row in `Debug Overlay` when confirming the active render runtime.
-- `Debug Overlay`: labeled top-left diagnostics for final `X`/`Y`/`ROLL`, `CAM`,
-  `WARP`, `TURN`, live `C Q`/`W Q`/`T Q` confidence, plus `SMTH`,
-  `TRK`, `SHRP`, `RES`, search-radius `HIT`, walking-band `WLK`, and compact runtime/source bars while
-  checking runtime behavior. `R###` means the current FxPlug runtime is rendering
+- `Debug Overlay`: a fixed 21-row top-left diagnostic contract, ordered as
+  `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
+  `LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T Q`, `S Q`, `F Q`,
+  `W Q`, `L Q`, then the compact runtime/source row. `R###` means the current FxPlug runtime is rendering
   original/optimized frames, while `P###` means proxy playback is using the same
   saved-analysis correction path; the digits are derived from the active FxPlug version.
   The overlay scales from the current render output so the top-left panel occupies roughly
   half of the viewer height in original, optimized, and proxy playback.
-  `X`, `Y`, and `CAM` use a fine-motion render-pixel scale, so subpixel-to-few-pixel
-  Camera Jitter corrections remain visible instead of reading as empty or permanently full.
-  `TRK`, `SHRP`, `RES`, and `HIT` are quality bars: higher is better and lower means weaker
-  tracking evidence.
+  Activity rows use final values actually applied to Metal. `CROP` and `TURN` are zero when
+  Remove Black Edges is off. `LENS` includes only rendered band/ridge/local offsets and `L Q`
+  reports their effective support. `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` are quality bars:
+  higher is better. Confidence rows stay visible as analysis evidence even when Master Strength
+  is zero. Unavailable residual or search-radius evidence is zero and logged as unavailable.
   Labels use raw English control/diagnostic abbreviations and should not be translated in the preview. When
   enabled, `Host Analysis Status` also shows the current FxPlug version, the raw center-frame transform, the
   smoothed transform delta, strict tracking, walking-band tracking, motion confidence, blur, residual,

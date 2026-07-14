@@ -352,15 +352,16 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   visible Inspector metadata. Older saved timeline instances may keep stale saved Inspector
   strings, so use the compact runtime/source row in `Debug Overlay` to confirm the active
   render runtime.
-- `Debug Overlay`: normally off. When enabled, the labeled top-left bars show `X`, `Y`,
-  `ROLL`, `CAM`, `WARP`, `TURN`, confidence (`C Q`, `W Q`, `T Q`), `SMTH`, tracking-quality, and compact
-  runtime/source diagnostics so Final Cut Pro runtime analysis can be checked. `R###` means
+- `Debug Overlay`: normally off. When enabled, the fixed 21-row panel shows
+  `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
+  `LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T Q`, `S Q`, `F Q`,
+  `W Q`, `L Q`, then compact runtime/source diagnostics. `R###` means
   the current FxPlug runtime is rendering original/optimized frames, and `P###` means proxy
   playback is using the same saved-analysis correction path. The digits are derived from the active FxPlug
   version. The overlay scales from the current render output so
   the top-left panel occupies roughly half of the viewer height in original, optimized, and
-  proxy playback. `X`, `Y`, and `CAM` use a fine-motion render-pixel scale so
-  frame-local Camera Jitter changes remain readable. These labels are raw English control/diagnostic
+  proxy playback. Activity rows use final values actually sent to Metal; `CROP` and `TURN`
+  are zero with Remove Black Edges off. These labels are raw English control/diagnostic
   abbreviations and should not be translated in the preview. It also writes current FxPlug version and render
   correction values into `Host Analysis Status`, including strict tracking, walking-band tracking, motion quality, turn
   confidence, applied warp confidence, edge-hit counts, and the final Camera Jitter component.
@@ -368,22 +369,18 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   only the lens-local mesh, only band guides, or all meshes at once. The lines are thicker
   and color-separated so mesh boundaries can be reviewed without the top-left diagnostic bars.
   The labels mean:
-  `X` final horizontal correction,
-  `Y` final vertical correction,
-  `ROLL` final roll correction,
-  `CAM` Camera Jitter correction activity from the unified nonTURN/non-far-field camera stage,
-  `WARP` Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim,
-  `TURN` X-only Turn Smoothing,
-  `SMTH` temporal smoothing delta,
-  `C Q` Camera Jitter confidence,
-  `W Q` applied Far-field Warp confidence after tracking and search-radius safety gates,
-  `T Q` Turn Smoothing confidence,
-  `WLK` walking-band tracking gate for Camera Jitter,
-  `TRK` current frame tracking quality,
-  `SHRP` frame sharpness/clarity quality where higher means less blur,
-  `RES` residual quality where higher means lower block-matching error, and
-  `HIT` search-radius headroom quality where higher means fewer searches hit the radius edge.
-  `TRK`, `SHRP`, `RES`, and `HIT` all use the same high-is-good direction.
+  `X OFFSET`/`Y OFFSET`/`ROLL` final rigid correction after applicable limits and Master Strength,
+  `CROP` applied Auto Crop scale and `TURN` applied viewport position,
+  `SWOB` Stride Wobble and `FJIT` short-period micro/continuity/final Camera Rigid activity,
+  `FAR WARP` final shear and combined perspective/yaw-pitch,
+  `LENS` only rendered band/ridge/local offsets weighted by effective support,
+  `SMOOTH` Master-Strength-adjusted temporal smoothing delta,
+  `TRK` current frame tracking quality and `WLK` walking-band tracking quality,
+  `SHRP` sharpness quality, `RES` residual quality, and `HIT` search-radius headroom quality,
+  `T Q`/`S Q`/`F Q`/`W Q`/`L Q` effective band support grouped above the runtime row.
+  Confidence rows remain evidence when Master Strength is zero. Unavailable `RES`/`HIT`
+  values are zero and logged as unavailable instead of using inferred fallback values.
+  `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` all use the same high-is-good direction.
 
 ## Feedback CLI
 

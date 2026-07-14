@@ -236,12 +236,13 @@ list unless the stored fields are no longer safe to interpret.
 
 Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
 raw Footstep Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
-visible while tuning walking footage. Debug Overlay correction rows should keep walking
-components in order before turn correction: `FJIT`, `SWOB`, `WARP`, then `TURN`;
-confidence rows should match as `F Q`, `S Q`, `W Q`, `T Q`. `TRK`, `SHRP`,
-`RES`, and `HIT` should all be quality bars where higher means better tracking evidence
-and lower means weaker evidence. `WLK` should show the walking-band tracking gate used by
-Footstep Jitter and Stride Wobble. Debug Overlay should also expose a compact
+visible while tuning walking footage. Debug Overlay must keep the shared 21-row contract:
+`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
+`LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T Q`, `S Q`, `F Q`,
+`W Q`, `L Q`, then the runtime/source row. Activity rows must report final values actually
+applied to Metal. `TRK`, `WLK`, `SHRP`, `RES`, and `HIT` should all be quality bars where
+higher means better tracking evidence and lower means weaker evidence. All quality and
+confidence rows must stay grouped immediately above the version row. Debug Overlay should also expose a compact
 active runtime/source row so stale saved Inspector strings do not hide which binary is rendering:
 `R###` means an original/optimized render frame is using that FxPlug runtime version, while
 `P###` means a proxy render frame is using the same saved Host Analysis path.

@@ -220,8 +220,10 @@ version. It does not control black outside-source pixels; `Edge Display Mode`
 controls that separately.
 The overlay scales from the current render output so the top-left panel occupies
 roughly half of the viewer height in original, optimized, and proxy playback.
-Its `X`, `Y`, and `CAM` activity bars use a fine-motion render-pixel scale so
-frame-local Camera Jitter changes remain readable.
+Its correction rows are ordered from final rigid/crop motion through lower-frequency walking
+bands to higher-frequency and spatial correction. `X OFFSET`, `Y OFFSET`, `ROLL`, `SWOB`,
+`FJIT`, `FAR WARP`, `LENS`, and `SMOOTH` use final values that are actually handed to Metal,
+after their applicable limits and Master Strength.
 `Mesh Overlay` is separate from `Debug Overlay`: it can show the far-field mesh,
 lens-local mesh, band guides, or all meshes without drawing the top-left bars.
 Mesh families use distinct thicker colors so source-space cell boundaries remain
@@ -413,32 +415,43 @@ validated candidates on demand.
 
 ## Diagnostics
 
-`Debug Overlay` reports final `X`/`Y`/`ROLL`, `FJIT`, `SWOB`, `WARP`, `TURN`,
-live `F Q`/`S Q`/`W Q`/`T Q` confidence, `SMTH`, `TRK`, `SHRP`, `RES`, and
-search-radius `HIT`, `WLK`, and compact runtime/source bars. Labels use raw English control/diagnostic abbreviations;
-do not translate them in the preview.
+`Debug Overlay` has one fixed 21-row contract:
+`X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `SWOB`, `FJIT`, `FAR WARP`,
+`LENS`, `SMOOTH`, `TRK`, `WLK`, `SHRP`, `RES`, `HIT`, `T Q`, `S Q`, `F Q`,
+`W Q`, `L Q`, then the compact `R###`/`P###` runtime/source row. All confidence and
+quality bars are grouped immediately above the version row. Labels use raw English
+control/diagnostic abbreviations; do not translate them in the preview.
 
 The overlay bars are normalized magnitudes or quality signals, not signed directions:
 
-- `X`: final horizontal automatic correction.
-- `Y`: final vertical automatic correction.
+- `X OFFSET`: final horizontal automatic correction after TURN separation, Camera Rigid
+  limiting, and Master Strength.
+- `Y OFFSET`: final vertical automatic correction after Camera Rigid limiting and Master Strength.
 - `ROLL`: final automatic roll/rotation correction.
-- `FJIT`: Footstep Jitter correction activity from the fixed second-based impulse range.
+- `CROP`: Auto Crop scale actually sent to the renderer; zero when Remove Black Edges is off.
+- `TURN`: Auto Crop viewport-position activity actually sent to the renderer; zero when
+  Remove Black Edges is off.
 - `SWOB`: Stride Wobble correction activity from the fixed internal stride-wobble window.
-- `WARP`: Far-field Warp correction activity from shear, yaw/pitch proxy, and perspective trim.
-- `TURN`: X-only Turn Smoothing correction for stop-and-go pan motion.
-- `SMTH`: render-time temporal smoothing delta.
-- `F Q`: Footstep Jitter confidence.
-- `S Q`: Stride Wobble confidence.
-- `W Q`: applied Far-field Warp confidence after tracking and search-radius safety gates.
-- `T Q`: Turn Smoothing confidence.
+- `FJIT`: short-period activity combining micro, trajectory continuity, and final-limited
+  Camera Rigid X/Y/roll correction.
+- `FAR WARP`: final shear plus combined perspective/yaw-pitch values sent to Metal.
+- `LENS`: only applied band/ridge/local offsets that Metal renders, weighted by effective support.
+- `SMOOTH`: Master-Strength-adjusted render-time temporal smoothing delta.
 - `TRK`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
+- `WLK`: count-aware walking-band tracking quality used by FJIT and SWOB.
 - `SHRP`: frame sharpness/clarity quality; higher means less blur.
 - `RES`: residual quality; higher means lower block-matching residual/error.
 - `HIT`: search-radius headroom quality; higher means fewer searches hit the radius edge.
-- `WLK`: count-aware walking-band tracking quality used by FJIT and SWOB.
+- `T Q`: effective Turn Smoothing confidence.
+- `S Q`: Stride Wobble confidence.
+- `F Q`: combined micro and actually applied Camera Rigid X/Y/roll support.
+- `W Q`: effective Far-field Warp confidence after tracking and search-radius safety gates.
+- `L Q`: effective support for the rendered band/ridge/local lens warp.
 
-`TRK`, `SHRP`, `RES`, and `HIT` are all aligned as quality signals: high is good, low is bad.
+`TRK`, `WLK`, `SHRP`, `RES`, and `HIT` are aligned as quality signals: high is good,
+low is bad. Confidence rows remain analysis evidence even when Master Strength is zero.
+Unavailable `RES` or `HIT` evidence is shown as zero and its unavailable reason is logged;
+the overlay does not invent a fallback value.
 
 `Host Analysis Status` also reports:
 

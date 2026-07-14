@@ -3666,30 +3666,35 @@ labels = [
     "X OFFSET",
     "Y OFFSET",
     "ROLL",
-    "CAM JITTER",
-    "FAR WARP",
+    "CROP",
     "TURN",
-    "CAM CONF",
-    "WARP CONF",
-    "TURN CONF",
-    "SMOOTH",
-    "TRACK CONF",
-    "SHARPNESS",
-    "MATCH QUAL",
-    "EDGE SAFE",
-    "WALK CONF",
+    "SWOB",
+    "FJIT",
+    "FAR WARP",
     "LENS",
+    "SMOOTH",
+    "TRK",
+    "WLK",
+    "SHRP",
+    "RES",
+    "HIT",
+    "T Q",
+    "S Q",
+    "F Q",
+    "W Q",
+    "L Q",
     "RUNTIME",
 ]
 
-overlay_scale = max(float(h) * 0.5 / (17.0 * 13.0), 0.25)
+row_count = float(len(labels))
+overlay_scale = max(float(h) * 0.5 / (row_count * 13.0), 0.25)
 panel_y = 16.0 * overlay_scale
 label_width = 96.0 * overlay_scale
 label_gap = 2.0 * overlay_scale
 bar_width = 180.0 * overlay_scale
 row_height = 13.0 * overlay_scale
 panel_width = label_width + label_gap + bar_width
-panel_height = 17.0 * row_height
+panel_height = row_count * row_height
 if panel_y >= h:
     raise SystemExit(f"{label}: predicted Debug Overlay panel origin is outside viewer ROI {w}x{h}")
 

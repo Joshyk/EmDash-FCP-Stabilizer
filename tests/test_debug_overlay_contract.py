@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HEADER = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/StabilizerShaderTypes.h"
 METAL = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizerTransform.metal"
 SWIFT = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizer.swift"
+E2E = ROOT / "scripts/stabilizer_fcp_screen_capture_e2e.sh"
 
 ROWS = [
     "XOffset",
@@ -32,6 +33,30 @@ ROWS = [
     "Runtime",
 ]
 
+LABELS = [
+    "X OFFSET",
+    "Y OFFSET",
+    "ROLL",
+    "CROP",
+    "TURN",
+    "SWOB",
+    "FJIT",
+    "FAR WARP",
+    "LENS",
+    "SMOOTH",
+    "TRK",
+    "WLK",
+    "SHRP",
+    "RES",
+    "HIT",
+    "T Q",
+    "S Q",
+    "F Q",
+    "W Q",
+    "L Q",
+    "RUNTIME",
+]
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"test_debug_overlay_contract: FAIL: {message}")
@@ -40,6 +65,7 @@ def fail(message: str) -> None:
 header = HEADER.read_text()
 metal = METAL.read_text()
 swift = SWIFT.read_text()
+e2e = E2E.read_text()
 
 count_match = re.search(r"#define\s+STABILIZER_DEBUG_OVERLAY_ROW_COUNT\s+(\d+)", header)
 if not count_match or int(count_match.group(1)) != len(ROWS):
@@ -80,5 +106,14 @@ if fill_rows != ROWS:
 
 if "Float(STABILIZER_DEBUG_OVERLAY_ROW_COUNT)" not in swift:
     fail("Swift overlay scaling does not use the shared row count")
+
+e2e_labels_match = re.search(r"labels = \[(?P<body>.*?)\n\]", e2e, re.S)
+if not e2e_labels_match:
+    fail("E2E label contract is missing")
+e2e_labels = re.findall(r'\s+"([A-Z /]+)",', e2e_labels_match.group("body"))
+if e2e_labels != LABELS:
+    fail(f"E2E label order mismatch: {e2e_labels}")
+if "row_count = float(len(labels))" not in e2e:
+    fail("E2E overlay sizing does not derive its row count from labels")
 
 print("test_debug_overlay_contract: PASS")
