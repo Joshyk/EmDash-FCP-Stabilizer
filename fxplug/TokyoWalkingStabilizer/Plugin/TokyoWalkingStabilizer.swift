@@ -1893,7 +1893,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
     private static func debugOverlayScale(outputWidth _: Int, outputHeight: Int, renderSourceIsProxy _: Bool) -> Float {
         let height = max(1, outputHeight)
-        let panelRows: Float = 18.0
+        let panelRows = Float(STABILIZER_DEBUG_OVERLAY_ROW_COUNT)
         let rowHeight: Float = 13.0
         return max(Float(height) * 0.5 / (panelRows * rowHeight), 0.25)
     }
@@ -1959,6 +1959,88 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         case .fxplugHostAnalysis, .none:
             return max(0.0, min(1.0, 1.0 - (residual * 0.7)))
         }
+    }
+
+    private static func debugOverlayLensComponents(
+        _ transform: StabilizerAutoTransform
+    ) -> [StabilizerDebugOverlayLensComponent] {
+        let bandOffset = (
+            transform.lensBandTopOffset
+            + transform.lensBandRidgeOffset
+            + transform.lensBandMidOffset
+        ) / 3.0
+        let bandSupport = min(1.0, max(0.0, transform.lensBandWarpApplied))
+            * StabilizerDebugOverlayCalculator.lensAppliedGain(transform.lensBandWarpSupport)
+
+        let localOffset = (
+            transform.sourceLensShakeLocalTopLeftOffset
+            + transform.sourceLensShakeLocalTopCenterOffset
+            + transform.sourceLensShakeLocalTopRightOffset
+            + transform.sourceLensShakeLocalRidgeLeftOffset
+            + transform.sourceLensShakeLocalRidgeCenterOffset
+            + transform.sourceLensShakeLocalRidgeRightOffset
+            + transform.sourceLensShakeLocalMidLeftOffset
+            + transform.sourceLensShakeLocalMidCenterOffset
+            + transform.sourceLensShakeLocalMidRightOffset
+        ) / 9.0
+        let localWarpEscape = StabilizerDebugOverlayCalculator.rigidLocalWarpEscapeGain(
+            transform.lensFarFieldRigidShakeLocalWarpSuppressed
+        )
+        let localSupport = min(1.0, max(0.0, transform.sourceLensShakeLocalApplied))
+            * StabilizerDebugOverlayCalculator.lensAppliedGain(transform.sourceLensShakeLocalSupport)
+            * localWarpEscape
+        let ridgeSupport = min(1.0, max(0.0, transform.sourceLensShakeRidgeApplied))
+            * StabilizerDebugOverlayCalculator.lensAppliedGain(transform.sourceLensShakeRidgeSupport)
+            * localWarpEscape
+
+        return [
+            StabilizerDebugOverlayLensComponent(offset: bandOffset, effectiveSupport: bandSupport),
+            StabilizerDebugOverlayLensComponent(offset: localOffset, effectiveSupport: localSupport),
+            StabilizerDebugOverlayLensComponent(
+                offset: transform.sourceLensShakeRidgeOffset,
+                effectiveSupport: ridgeSupport
+            )
+        ]
+    }
+
+    private static func debugOverlayFineJitterConfidence(
+        _ transform: StabilizerAutoTransform
+    ) -> Float {
+        let rigidApplied = min(1.0, max(0.0, transform.lensFarFieldRigidShakeApplied))
+        let rigidRollApplied = min(1.0, max(0.0, transform.lensFarFieldRigidRollApplied))
+        return max(
+            transform.microConfidence,
+            transform.lensFarFieldRigidShakeSupportX * rigidApplied,
+            transform.lensFarFieldRigidShakeSupportY * rigidApplied,
+            transform.lensFarFieldRigidRollSupport * rigidRollApplied
+        )
+    }
+
+    private static func debugOverlayUniform(
+        _ metrics: StabilizerDebugOverlayMetrics
+    ) -> StabilizerDebugOverlayDiagnostics {
+        var diagnostics = StabilizerDebugOverlayDiagnostics()
+        diagnostics.xOffset = metrics.xOffset
+        diagnostics.yOffset = metrics.yOffset
+        diagnostics.roll = metrics.roll
+        diagnostics.crop = metrics.crop
+        diagnostics.turn = metrics.turn
+        diagnostics.strideWobble = metrics.strideWobble
+        diagnostics.footstepJitter = metrics.footstepJitter
+        diagnostics.farFieldWarp = metrics.farFieldWarp
+        diagnostics.lens = metrics.lens
+        diagnostics.smoothing = metrics.smoothing
+        diagnostics.trackingQuality = metrics.trackingQuality
+        diagnostics.walkingQuality = metrics.walkingQuality
+        diagnostics.sharpnessQuality = metrics.sharpnessQuality
+        diagnostics.residualQuality = metrics.residualQuality
+        diagnostics.searchRadiusHeadroomQuality = metrics.searchRadiusHeadroomQuality
+        diagnostics.turnConfidence = metrics.turnConfidence
+        diagnostics.strideConfidence = metrics.strideConfidence
+        diagnostics.footstepConfidence = metrics.footstepConfidence
+        diagnostics.warpConfidence = metrics.warpConfidence
+        diagnostics.lensConfidence = metrics.lensConfidence
+        return diagnostics
     }
 
     private static func analysisRevisionCacheKey(_ revision: UInt64, cacheIdentity: String?) -> UInt64 {
@@ -10519,11 +10601,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         cacheIdentityShort: String,
         autoTransform: StabilizerAutoTransform,
         autoCropFraming: AutoCropFraming,
-        diagnostic: vector_float4,
-        diagnostic2: vector_float4,
-        diagnostic3: vector_float4,
-        diagnostic4: vector_float4,
-        diagnostic5: vector_float4,
+        metrics: StabilizerDebugOverlayMetrics,
         previewWarmupDecision: RenderPreviewWarmupDecision
     ) {
         guard debugOverlayActive,
@@ -10595,18 +10673,20 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform.effectiveStrideWobbleStrength.z
         )
         os_log(
-            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f CAM %.3f FAR WARP %.3f TURN %.3f SMOOTH %.3f LENS %.3f CROP X %.2f CROP Y %.2f CROP MISS %d WORST %.4f/%.4f MERGE %d/%d %{public}@",
+            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f CROP %.3f TURN %.3f SWOB %.3f FJIT %.3f FAR WARP %.3f LENS %.3f SMOOTH %.3f CROP X %.2f CROP Y %.2f CROP MISS %d WORST %.4f/%.4f MERGE %d/%d %{public}@",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
-            diagnostic.x,
-            diagnostic.y,
-            diagnostic.z,
-            diagnostic2.y,
-            diagnostic2.w,
-            diagnostic2.x,
-            diagnostic3.x,
-            diagnostic5.z,
+            metrics.xOffset,
+            metrics.yOffset,
+            metrics.roll,
+            metrics.crop,
+            metrics.turn,
+            metrics.strideWobble,
+            metrics.footstepJitter,
+            metrics.farFieldWarp,
+            metrics.lens,
+            metrics.smoothing,
             autoCropFraming.positionPixels.x,
             autoCropFraming.positionPixels.y,
             autoCropFraming.telemetry.missCount,
@@ -10617,18 +10697,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFraming.telemetry.mergeBypassed ? "bypass" : "ok"
         )
         os_log(
-            "Debug Overlay bars quality | FxPlug %{public}@ | CAM CONF %.3f WARP CONF %.3f TURN CONF %.3f TRACK CONF %.3f SHARPNESS %.3f MATCH QUAL %.3f EDGE SAFE %.3f WALK CONF %.3f",
+            "Debug Overlay bars quality | FxPlug %{public}@ | TRK %.3f WLK %.3f SHRP %.3f RES %.3f %{public}@ HIT %.3f %{public}@ T Q %.3f S Q %.3f F Q %.3f W Q %.3f L Q %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
-            diagnostic3.y,
-            diagnostic3.z,
-            diagnostic4.x,
-            diagnostic4.y,
-            diagnostic4.z,
-            diagnostic4.w,
-            diagnostic.w,
-            diagnostic5.x
+            metrics.trackingQuality,
+            metrics.walkingQuality,
+            metrics.sharpnessQuality,
+            metrics.residualQuality,
+            metrics.residualQualityAvailable ? "available" : "unavailable",
+            metrics.searchRadiusHeadroomQuality,
+            metrics.searchRadiusHeadroomAvailable ? "available" : "unavailable",
+            metrics.turnConfidence,
+            metrics.strideConfidence,
+            metrics.footstepConfidence,
+            metrics.warpConfidence,
+            metrics.lensConfidence
         )
     }
 
@@ -10960,122 +11044,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputHeight: Int(outputHeight),
             renderSourceIsProxy: renderSourceIsProxy
         ) : 1.0
-        var diagnostic: vector_float4
-        var diagnostic2: vector_float4
-        var diagnostic3: vector_float4
-        var diagnostic4: vector_float4
-        var diagnostic5: vector_float4
-        if debugOverlayActive {
-            // X/Y OFFSET and CAM JITTER report the final render correction.
-            // Use a fine-motion scale so subpixel-to-few-pixel corrections are
-            // visible in both proxy and original playback instead of appearing
-            // empty at the old five-percent crop scale.
-            let diagnosticScaleX = max(4.0, Float(outputWidth) * 0.004)
-            let diagnosticScaleY = max(4.0, Float(outputHeight) * 0.004)
-            let turnScaleX = max(1.0, Float(outputWidth) * 0.01)
-            let turnScaleY = max(1.0, Float(outputHeight) * 0.01)
-            let temporalSmoothingScale = max(1.0, min(Float(outputWidth), Float(outputHeight)) * 0.01)
-            let edgeSafetyQuality: Float
-            if autoTransform.searchRadiusTotalCount > 0 {
-                let searchRadiusHitRatio = min(1.0, Float(autoTransform.searchRadiusHitCount) / Float(autoTransform.searchRadiusTotalCount))
-                edgeSafetyQuality = 1.0 - searchRadiusHitRatio
-            } else {
-                edgeSafetyQuality = 0.0
-            }
-            let fitQuality = Self.debugMatchQuality(
-                residual: autoTransform.residual,
-                preparedAnalysis: activePreparedAnalysis
-            )
-            let rotationActivity = min(1.0, max(
-                abs(autoTransform.rotationDegrees),
-                abs(autoTransform.rawRotationDegrees),
-                abs(autoTransform.footstepJitterRotationDegrees) + abs(autoTransform.strideWobbleRotationDegrees),
-                abs(autoTransform.temporalSmoothingRotationDelta)
-            ) / 0.05)
-            let separatedTurnActivity = simd_length(vector_float2(
-                autoTransform.macroPixelOffset.x / turnScaleX,
-                autoTransform.macroPixelOffset.y / turnScaleY
-            ))
-            let turnActivity = min(1.0, separatedTurnActivity)
-            let separatedTemporalSmoothingActivity = max(
-                simd_length(autoTransform.temporalSmoothingPixelDelta) / temporalSmoothingScale,
-                abs(autoTransform.temporalSmoothingRotationDelta) / 0.05
-            )
-            let temporalSmoothingActivity = min(1.0, separatedTemporalSmoothingActivity)
-            let cameraJitterPixelOffset = autoTransform.microPixelOffset
-                + autoTransform.strideWobblePixelOffset
-                + autoTransform.trajectoryMicroJitterPixelOffset
-                + autoTransform.trajectoryContinuityPixelOffset
-                + autoTransform.cameraRigidPixelOffset
-            let cameraJitterRotation = autoTransform.footstepJitterRotationDegrees
-                + autoTransform.strideWobbleRotationDegrees
-                + autoTransform.cameraRigidRotationDegrees
-            // Camera Jitter is intentionally sub-pixel sensitive: its bar is a
-            // diagnostic of active correction, not a crop-scale displacement.
-            let cameraJitterActivity = min(1.0, max(
-                abs(cameraJitterPixelOffset.x) / diagnosticScaleX,
-                abs(cameraJitterPixelOffset.y) / diagnosticScaleY,
-                abs(cameraJitterRotation) / 0.05
-            ))
-            let cameraJitterConfidence = max(
-                max(autoTransform.microConfidence, autoTransform.strideConfidence),
-                max(autoTransform.lensFarFieldRigidShakeSupport, autoTransform.lensFarFieldRigidRollSupport)
-            )
-            let farFieldWarpActivity = min(1.0, max(
-                simd_length(autoTransform.shear) / 0.016,
-                simd_length(autoTransform.yawPitchProxy) / 0.010,
-                simd_length(autoTransform.perspective) / 0.006
-            ))
-            let lensShakeActivity = min(1.0, max(
-                simd_length(vector_float2(
-                    autoTransform.lensShakePixelOffset.x / diagnosticScaleX,
-                    autoTransform.lensShakePixelOffset.y / diagnosticScaleY
-                )),
-                abs(autoTransform.lensShakeRotationDegrees) / 0.08,
-                simd_length(autoTransform.lensShakeYawPitch) / 0.0015,
-                simd_length(autoTransform.lensShakeShear) / 0.0025,
-                simd_length(autoTransform.lensShakePerspective) / 0.0012,
-                simd_length(autoTransform.lensBandTopOffset) / max(diagnosticScaleX, Float.ulpOfOne),
-                simd_length(autoTransform.lensBandRidgeOffset) / max(diagnosticScaleX, Float.ulpOfOne),
-                simd_length(autoTransform.lensBandMidOffset) / max(diagnosticScaleX, Float.ulpOfOne)
-            ))
-            diagnostic = vector_float4(
-                min(1.0, abs(autoTransform.pixelOffset.x) / diagnosticScaleX),
-                min(1.0, abs(autoTransform.pixelOffset.y) / diagnosticScaleY),
-                rotationActivity,
-                edgeSafetyQuality
-            )
-            diagnostic2 = vector_float4(
-                turnActivity,
-                cameraJitterActivity,
-                0.0,
-                farFieldWarpActivity
-            )
-            diagnostic3 = vector_float4(
-                temporalSmoothingActivity,
-                min(1.0, cameraJitterConfidence),
-                min(1.0, autoTransform.warpConfidence),
-                0.0
-            )
-            diagnostic4 = vector_float4(
-                min(1.0, autoTransform.turnConfidence),
-                min(1.0, autoTransform.trackingConfidence),
-                AutoStabilizationEstimator.blurEvidenceQuality(autoTransform.blurAmount),
-                fitQuality
-            )
-            diagnostic5 = vector_float4(
-                min(1.0, autoTransform.walkingTrackingConfidence),
-                0.0,
-                lensShakeActivity,
-                0.0
-            )
-        } else {
-            diagnostic = vector_float4(0.0, 0.0, 0.0, 0.0)
-            diagnostic2 = vector_float4(0.0, 0.0, 0.0, 0.0)
-            diagnostic3 = vector_float4(0.0, 0.0, 0.0, 0.0)
-            diagnostic4 = vector_float4(0.0, 0.0, 0.0, 0.0)
-            diagnostic5 = vector_float4(0.0, 0.0, 0.0, 0.0)
-        }
+        var debugOverlayMetrics = StabilizerDebugOverlayMetrics.zero
         let cropStartedAt = CFAbsoluteTimeGetCurrent()
         let autoCropFraming: AutoCropFraming
         let autoCropSamplingProfile = Self.autoCropSamplingProfile(forQualityLevel: state.renderQualityLevel, renderSourceIsProxy: renderSourceIsProxy)
@@ -11155,33 +11124,69 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             state: state,
             masterStrength: masterStrength
         )
-        if debugOverlayActive {
-            let diagnosticScaleX = max(4.0, Float(outputWidth) * 0.004)
-            let diagnosticScaleY = max(4.0, Float(outputHeight) * 0.004)
-            let finalCameraJitterOffset = (
-                renderedAutoTransform.microPixelOffset
-                + renderedAutoTransform.strideWobblePixelOffset
-                + renderedAutoTransform.trajectoryMicroJitterPixelOffset
-                + renderedAutoTransform.trajectoryContinuityPixelOffset
-                + renderedAutoTransform.cameraRigidPixelOffset
-            ) * masterStrength
-            let finalCameraJitterRotation = (
-                renderedAutoTransform.footstepJitterRotationDegrees
-                + renderedAutoTransform.strideWobbleRotationDegrees
-                + renderedAutoTransform.cameraRigidRotationDegrees
-            ) * masterStrength
-            diagnostic.x = min(1.0, abs(renderedAutoTransform.pixelOffset.x * masterStrength) / diagnosticScaleX)
-            diagnostic.y = min(1.0, abs(renderedAutoTransform.pixelOffset.y * masterStrength) / diagnosticScaleY)
-            diagnostic.z = min(1.0, abs(renderedAutoTransform.rotationDegrees * masterStrength) / 0.05)
-            diagnostic2.y = min(1.0, max(
-                abs(finalCameraJitterOffset.x) / diagnosticScaleX,
-                abs(finalCameraJitterOffset.y) / diagnosticScaleY,
-                abs(finalCameraJitterRotation) / 0.05
-            ))
-        }
         let renderedAutoCropPosition = state.autoCropEnabled
             ? renderedAutoCropFraming.positionPixels
             : vector_float2(0.0, 0.0)
+        if debugOverlayActive {
+            let searchRadiusHeadroomAvailable = renderedAutoTransform.searchRadiusTotalCount > 0
+            let searchRadiusHeadroomQuality: Float
+            if searchRadiusHeadroomAvailable {
+                let hitRatio = min(
+                    1.0,
+                    Float(renderedAutoTransform.searchRadiusHitCount)
+                        / Float(renderedAutoTransform.searchRadiusTotalCount)
+                )
+                searchRadiusHeadroomQuality = 1.0 - hitRatio
+            } else {
+                searchRadiusHeadroomQuality = 0.0
+            }
+            let residualQualityAvailable = renderedAutoTransform.residual.isFinite
+                && activePreparedAnalysis != nil
+                && !previewWarmupDecision.active
+            let residualQuality = residualQualityAvailable
+                ? Self.debugMatchQuality(
+                    residual: renderedAutoTransform.residual,
+                    preparedAnalysis: activePreparedAnalysis
+                )
+                : 0.0
+            let fineJitterPixelOffset = renderedAutoTransform.microPixelOffset
+                + renderedAutoTransform.trajectoryMicroJitterPixelOffset
+                + renderedAutoTransform.trajectoryContinuityPixelOffset
+                + renderedAutoTransform.cameraRigidPixelOffset
+            let fineJitterRotation = renderedAutoTransform.footstepJitterRotationDegrees
+                + renderedAutoTransform.cameraRigidRotationDegrees
+            debugOverlayMetrics = StabilizerDebugOverlayCalculator.metrics(
+                for: StabilizerDebugOverlayInputs(
+                    outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
+                    masterStrength: masterStrength,
+                    finalPixelOffset: renderedAutoTransform.pixelOffset,
+                    finalRotationDegrees: renderedAutoTransform.rotationDegrees,
+                    cropEnabled: state.autoCropEnabled && !previewWarmupDecision.active,
+                    cropScale: renderedAutoCropFraming.scale,
+                    cropPositionPixels: renderedAutoCropPosition,
+                    stridePixelOffset: renderedAutoTransform.strideWobblePixelOffset,
+                    strideRotationDegrees: renderedAutoTransform.strideWobbleRotationDegrees,
+                    fineJitterPixelOffset: fineJitterPixelOffset,
+                    fineJitterRotationDegrees: fineJitterRotation,
+                    warpShear: renderedAutoTransform.shear,
+                    warpPerspective: renderedAutoTransform.perspective + renderedAutoTransform.yawPitchProxy,
+                    lensComponents: Self.debugOverlayLensComponents(renderedAutoTransform),
+                    temporalSmoothingPixelDelta: renderedAutoTransform.temporalSmoothingPixelDelta,
+                    temporalSmoothingRotationDelta: renderedAutoTransform.temporalSmoothingRotationDelta,
+                    trackingConfidence: renderedAutoTransform.trackingConfidence,
+                    walkingTrackingConfidence: renderedAutoTransform.walkingTrackingConfidence,
+                    sharpnessQuality: AutoStabilizationEstimator.blurEvidenceQuality(renderedAutoTransform.blurAmount),
+                    residualQuality: residualQuality,
+                    residualQualityAvailable: residualQualityAvailable,
+                    searchRadiusHeadroomQuality: searchRadiusHeadroomQuality,
+                    searchRadiusHeadroomAvailable: searchRadiusHeadroomAvailable,
+                    turnConfidence: renderedAutoTransform.turnConfidence,
+                    strideConfidence: renderedAutoTransform.strideConfidence,
+                    fineJitterConfidence: Self.debugOverlayFineJitterConfidence(renderedAutoTransform),
+                    warpConfidence: renderedAutoTransform.warpConfidence
+                )
+            )
+        }
         if transformEnabled,
            renderUsesPreparedAnalysis,
            let preparedAnalysis = activePreparedAnalysis {
@@ -11204,7 +11209,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         if debugOverlayActive {
-            diagnostic5.y = min(1.0, max(0.0, (renderedAutoCropFraming.scale - 1.0) / 0.25))
             logDebugOverlayRenderTruthIfNeeded(
                 debugOverlayActive: true,
                 transformEnabled: transformEnabled,
@@ -11216,11 +11220,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 cacheIdentityShort: renderCacheIdentityShort,
                 autoTransform: renderedAutoTransform,
                 autoCropFraming: renderedAutoCropFraming,
-                diagnostic: diagnostic,
-                diagnostic2: diagnostic2,
-                diagnostic3: diagnostic3,
-                diagnostic4: diagnostic4,
-                diagnostic5: diagnostic5,
+                metrics: debugOverlayMetrics,
                 previewWarmupDecision: previewWarmupDecision
             )
         }
@@ -11234,11 +11234,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             ),
             strength: 1.0,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
-            diagnostic: diagnostic,
-            diagnostic2: diagnostic2,
-            diagnostic3: diagnostic3,
-            diagnostic4: diagnostic4,
-            diagnostic5: diagnostic5,
+            debugDiagnostics: Self.debugOverlayUniform(debugOverlayMetrics),
             shear: renderedAutoTransform.shear * masterStrength,
             perspective: (renderedAutoTransform.perspective + renderedAutoTransform.yawPitchProxy) * masterStrength,
             edgeMode: Float(state.edgeDisplayMode),

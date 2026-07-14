@@ -91,17 +91,62 @@ typedef struct StabilizerShiftResolveUniforms {
     uint refine;
 } StabilizerShiftResolveUniforms;
 
+#define STABILIZER_DEBUG_OVERLAY_ROW_COUNT 21
+
+typedef enum StabilizerDebugOverlayRow {
+    StabilizerDebugOverlayRowXOffset = 0,
+    StabilizerDebugOverlayRowYOffset = 1,
+    StabilizerDebugOverlayRowRoll = 2,
+    StabilizerDebugOverlayRowCrop = 3,
+    StabilizerDebugOverlayRowTurn = 4,
+    StabilizerDebugOverlayRowStrideWobble = 5,
+    StabilizerDebugOverlayRowFootstepJitter = 6,
+    StabilizerDebugOverlayRowFarFieldWarp = 7,
+    StabilizerDebugOverlayRowLens = 8,
+    StabilizerDebugOverlayRowSmoothing = 9,
+    StabilizerDebugOverlayRowTrackingQuality = 10,
+    StabilizerDebugOverlayRowWalkingQuality = 11,
+    StabilizerDebugOverlayRowSharpnessQuality = 12,
+    StabilizerDebugOverlayRowResidualQuality = 13,
+    StabilizerDebugOverlayRowSearchRadiusHeadroomQuality = 14,
+    StabilizerDebugOverlayRowTurnConfidence = 15,
+    StabilizerDebugOverlayRowStrideConfidence = 16,
+    StabilizerDebugOverlayRowFootstepConfidence = 17,
+    StabilizerDebugOverlayRowWarpConfidence = 18,
+    StabilizerDebugOverlayRowLensConfidence = 19,
+    StabilizerDebugOverlayRowRuntime = 20
+} StabilizerDebugOverlayRow;
+
+typedef struct StabilizerDebugOverlayDiagnostics {
+    float xOffset;
+    float yOffset;
+    float roll;
+    float crop;
+    float turn;
+    float strideWobble;
+    float footstepJitter;
+    float farFieldWarp;
+    float lens;
+    float smoothing;
+    float trackingQuality;
+    float walkingQuality;
+    float sharpnessQuality;
+    float residualQuality;
+    float searchRadiusHeadroomQuality;
+    float turnConfidence;
+    float strideConfidence;
+    float footstepConfidence;
+    float warpConfidence;
+    float lensConfidence;
+} StabilizerDebugOverlayDiagnostics;
+
 typedef struct TokyoWalkingStabilizerTransformUniforms {
     vector_float2 pixelOffset;
     float rotationRadians;
     vector_float2 rotationSinCos;
     float strength;
     vector_float2 outputSize;
-    vector_float4 diagnostic;
-    vector_float4 diagnostic2;
-    vector_float4 diagnostic3;
-    vector_float4 diagnostic4;
-    vector_float4 diagnostic5;
+    StabilizerDebugOverlayDiagnostics debugDiagnostics;
     vector_float2 shear;
     vector_float2 perspective;
     float edgeMode;

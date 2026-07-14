@@ -190,39 +190,47 @@ static uint debugLabelCharAt(uint index, uint c0, uint c1, uint c2, uint c3, uin
 
 static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeBuild, float4 runtimeVersion) {
     switch (row) {
-        case 0:
+        case StabilizerDebugOverlayRowXOffset:
             return debugLabelCharAt(index, 88, 0, 79, 70, 70, 83, 69, 84, 0, 0, 0, 0); // X OFFSET
-        case 1:
+        case StabilizerDebugOverlayRowYOffset:
             return debugLabelCharAt(index, 89, 0, 79, 70, 70, 83, 69, 84, 0, 0, 0, 0); // Y OFFSET
-        case 2:
+        case StabilizerDebugOverlayRowRoll:
             return debugLabelCharAt(index, 82, 79, 76, 76, 0, 0, 0, 0, 0, 0, 0, 0); // ROLL
-        case 3:
-            return debugLabelCharAt(index, 67, 65, 77, 0, 74, 73, 84, 84, 69, 82, 0, 0); // CAM JITTER
-        case 4:
-            return debugLabelCharAt(index, 70, 65, 82, 0, 87, 65, 82, 80, 0, 0, 0, 0); // FAR WARP
-        case 5:
+        case StabilizerDebugOverlayRowCrop:
+            return debugLabelCharAt(index, 67, 82, 79, 80, 0, 0, 0, 0, 0, 0, 0, 0); // CROP
+        case StabilizerDebugOverlayRowTurn:
             return debugLabelCharAt(index, 84, 85, 82, 78, 0, 0, 0, 0, 0, 0, 0, 0); // TURN
-        case 6:
-            return debugLabelCharAt(index, 67, 65, 77, 0, 67, 79, 78, 70, 0, 0, 0, 0); // CAM CONF
-        case 7:
-            return debugLabelCharAt(index, 87, 65, 82, 80, 0, 67, 79, 78, 70, 0, 0, 0); // WARP CONF
-        case 8:
-            return debugLabelCharAt(index, 84, 85, 82, 78, 0, 67, 79, 78, 70, 0, 0, 0); // TURN CONF
-        case 9:
-            return debugLabelCharAt(index, 83, 77, 79, 79, 84, 72, 0, 0, 0, 0, 0, 0); // SMOOTH
-        case 10:
-            return debugLabelCharAt(index, 84, 82, 65, 67, 75, 0, 67, 79, 78, 70, 0, 0); // TRACK CONF
-        case 11:
-            return debugLabelCharAt(index, 83, 72, 65, 82, 80, 78, 69, 83, 83, 0, 0, 0); // SHARPNESS
-        case 12:
-            return debugLabelCharAt(index, 77, 65, 84, 67, 72, 0, 81, 85, 65, 76, 0, 0); // MATCH QUAL
-        case 13:
-            return debugLabelCharAt(index, 69, 68, 71, 69, 0, 83, 65, 70, 69, 0, 0, 0); // EDGE SAFE
-        case 14:
-            return debugLabelCharAt(index, 87, 65, 76, 75, 0, 67, 79, 78, 70, 0, 0, 0); // WALK CONF
-        case 15:
+        case StabilizerDebugOverlayRowStrideWobble:
+            return debugLabelCharAt(index, 83, 87, 79, 66, 0, 0, 0, 0, 0, 0, 0, 0); // SWOB
+        case StabilizerDebugOverlayRowFootstepJitter:
+            return debugLabelCharAt(index, 70, 74, 73, 84, 0, 0, 0, 0, 0, 0, 0, 0); // FJIT
+        case StabilizerDebugOverlayRowFarFieldWarp:
+            return debugLabelCharAt(index, 70, 65, 82, 0, 87, 65, 82, 80, 0, 0, 0, 0); // FAR WARP
+        case StabilizerDebugOverlayRowLens:
             return debugLabelCharAt(index, 76, 69, 78, 83, 0, 0, 0, 0, 0, 0, 0, 0); // LENS
-        case 16:
+        case StabilizerDebugOverlayRowSmoothing:
+            return debugLabelCharAt(index, 83, 77, 79, 79, 84, 72, 0, 0, 0, 0, 0, 0); // SMOOTH
+        case StabilizerDebugOverlayRowTrackingQuality:
+            return debugLabelCharAt(index, 84, 82, 75, 0, 0, 0, 0, 0, 0, 0, 0, 0); // TRK
+        case StabilizerDebugOverlayRowWalkingQuality:
+            return debugLabelCharAt(index, 87, 76, 75, 0, 0, 0, 0, 0, 0, 0, 0, 0); // WLK
+        case StabilizerDebugOverlayRowSharpnessQuality:
+            return debugLabelCharAt(index, 83, 72, 82, 80, 0, 0, 0, 0, 0, 0, 0, 0); // SHRP
+        case StabilizerDebugOverlayRowResidualQuality:
+            return debugLabelCharAt(index, 82, 69, 83, 0, 0, 0, 0, 0, 0, 0, 0, 0); // RES
+        case StabilizerDebugOverlayRowSearchRadiusHeadroomQuality:
+            return debugLabelCharAt(index, 72, 73, 84, 0, 0, 0, 0, 0, 0, 0, 0, 0); // HIT
+        case StabilizerDebugOverlayRowTurnConfidence:
+            return debugLabelCharAt(index, 84, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // T Q
+        case StabilizerDebugOverlayRowStrideConfidence:
+            return debugLabelCharAt(index, 83, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // S Q
+        case StabilizerDebugOverlayRowFootstepConfidence:
+            return debugLabelCharAt(index, 70, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // F Q
+        case StabilizerDebugOverlayRowWarpConfidence:
+            return debugLabelCharAt(index, 87, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // W Q
+        case StabilizerDebugOverlayRowLensConfidence:
+            return debugLabelCharAt(index, 76, 0, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0); // L Q
+        case StabilizerDebugOverlayRowRuntime:
             return debugModeLabelChar(debugMode, runtimeBuild, runtimeVersion, index);
         default:
             return 0;
@@ -700,46 +708,35 @@ fragment float4 fragmentShader(
         float barWidth = 180.0 * overlayScale;
         float rowHeight = 13.0 * overlayScale;
         float panelWidth = labelWidth + labelGap + barWidth;
-        float panelHeight = 17.0 * rowHeight;
+        float panelHeight = float(STABILIZER_DEBUG_OVERLAY_ROW_COUNT) * rowHeight;
         if (panelX >= 0.0 && panelX < panelWidth && panelY >= 0.0 && panelY < panelHeight) {
             uint row = uint(floor(panelY / rowHeight));
             float rowY = panelY - (float(row) * rowHeight);
             float fill = 0.0;
             float3 color = float3(0.94, 0.96, 0.98);
-            if (row == 0) {
-                fill = saturate(transform->diagnostic.x);
-            } else if (row == 1) {
-                fill = saturate(transform->diagnostic.y);
-            } else if (row == 2) {
-                fill = saturate(transform->diagnostic.z);
-            } else if (row == 3) {
-                fill = saturate(transform->diagnostic2.y);
-            } else if (row == 4) {
-                fill = saturate(transform->diagnostic2.w);
-            } else if (row == 5) {
-                fill = saturate(transform->diagnostic2.x);
-            } else if (row == 6) {
-                fill = saturate(transform->diagnostic3.y);
-            } else if (row == 7) {
-                fill = saturate(transform->diagnostic3.z);
-            } else if (row == 8) {
-                fill = saturate(transform->diagnostic4.x);
-            } else if (row == 9) {
-                fill = saturate(transform->diagnostic3.x);
-            } else if (row == 10) {
-                fill = saturate(transform->diagnostic4.y);
-            } else if (row == 11) {
-                fill = saturate(transform->diagnostic4.z);
-            } else if (row == 12) {
-                fill = saturate(transform->diagnostic4.w);
-            } else if (row == 13) {
-                fill = saturate(transform->diagnostic.w);
-            } else if (row == 14) {
-                fill = saturate(transform->diagnostic5.x);
-            } else if (row == 15) {
-                fill = saturate(transform->diagnostic5.z);
-            } else if (row == 16) {
-                fill = 1.0;
+            switch (row) {
+                case StabilizerDebugOverlayRowXOffset: fill = saturate(transform->debugDiagnostics.xOffset); break;
+                case StabilizerDebugOverlayRowYOffset: fill = saturate(transform->debugDiagnostics.yOffset); break;
+                case StabilizerDebugOverlayRowRoll: fill = saturate(transform->debugDiagnostics.roll); break;
+                case StabilizerDebugOverlayRowCrop: fill = saturate(transform->debugDiagnostics.crop); break;
+                case StabilizerDebugOverlayRowTurn: fill = saturate(transform->debugDiagnostics.turn); break;
+                case StabilizerDebugOverlayRowStrideWobble: fill = saturate(transform->debugDiagnostics.strideWobble); break;
+                case StabilizerDebugOverlayRowFootstepJitter: fill = saturate(transform->debugDiagnostics.footstepJitter); break;
+                case StabilizerDebugOverlayRowFarFieldWarp: fill = saturate(transform->debugDiagnostics.farFieldWarp); break;
+                case StabilizerDebugOverlayRowLens: fill = saturate(transform->debugDiagnostics.lens); break;
+                case StabilizerDebugOverlayRowSmoothing: fill = saturate(transform->debugDiagnostics.smoothing); break;
+                case StabilizerDebugOverlayRowTrackingQuality: fill = saturate(transform->debugDiagnostics.trackingQuality); break;
+                case StabilizerDebugOverlayRowWalkingQuality: fill = saturate(transform->debugDiagnostics.walkingQuality); break;
+                case StabilizerDebugOverlayRowSharpnessQuality: fill = saturate(transform->debugDiagnostics.sharpnessQuality); break;
+                case StabilizerDebugOverlayRowResidualQuality: fill = saturate(transform->debugDiagnostics.residualQuality); break;
+                case StabilizerDebugOverlayRowSearchRadiusHeadroomQuality: fill = saturate(transform->debugDiagnostics.searchRadiusHeadroomQuality); break;
+                case StabilizerDebugOverlayRowTurnConfidence: fill = saturate(transform->debugDiagnostics.turnConfidence); break;
+                case StabilizerDebugOverlayRowStrideConfidence: fill = saturate(transform->debugDiagnostics.strideConfidence); break;
+                case StabilizerDebugOverlayRowFootstepConfidence: fill = saturate(transform->debugDiagnostics.footstepConfidence); break;
+                case StabilizerDebugOverlayRowWarpConfidence: fill = saturate(transform->debugDiagnostics.warpConfidence); break;
+                case StabilizerDebugOverlayRowLensConfidence: fill = saturate(transform->debugDiagnostics.lensConfidence); break;
+                case StabilizerDebugOverlayRowRuntime: fill = 1.0; break;
+                default: fill = 0.0; break;
             }
             float barX = panelX - labelWidth - labelGap;
             bool inBar = barX >= 0.0
