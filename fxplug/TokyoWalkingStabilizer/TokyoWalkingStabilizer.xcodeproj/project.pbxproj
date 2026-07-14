@@ -28,6 +28,7 @@
 		00000000000000000000011D /* StabilizerHostAnalysisStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000220 /* StabilizerHostAnalysisStore.swift */; };
 		00000000000000000000011E /* DebugOverlayDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000221 /* DebugOverlayDiagnostics.swift */; };
 		00000000000000000000011F /* AutoCropScalePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000222 /* AutoCropScalePolicy.swift */; };
+		000000000000000000000120 /* TurnTransitionPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000223 /* TurnTransitionPath.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -82,6 +83,7 @@
 		000000000000000000000220 /* StabilizerHostAnalysisStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilizerHostAnalysisStore.swift; sourceTree = "<group>"; };
 		000000000000000000000221 /* DebugOverlayDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugOverlayDiagnostics.swift; sourceTree = "<group>"; };
 		000000000000000000000222 /* AutoCropScalePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCropScalePolicy.swift; sourceTree = "<group>"; };
+		000000000000000000000223 /* TurnTransitionPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnTransitionPath.swift; sourceTree = "<group>"; };
 		000000000000000000000300 /* TokyoWalkingStabilizer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TokyoWalkingStabilizer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000301 /* TokyoWalkingStabilizer XPC Service.pluginkit */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "TokyoWalkingStabilizer XPC Service.pluginkit"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -126,6 +128,7 @@
 				000000000000000000000211 /* TokyoWalkingStabilizer.swift */,
 				000000000000000000000221 /* DebugOverlayDiagnostics.swift */,
 				000000000000000000000222 /* AutoCropScalePolicy.swift */,
+				000000000000000000000223 /* TurnTransitionPath.swift */,
 				000000000000000000000220 /* StabilizerHostAnalysisStore.swift */,
 				00000000000000000000021F /* AutoStabilizationEstimator.swift */,
 				000000000000000000000212 /* MetalDeviceCache.swift */,
@@ -328,6 +331,7 @@
 				000000000000000000000111 /* TokyoWalkingStabilizer.swift in Sources */,
 				00000000000000000000011E /* DebugOverlayDiagnostics.swift in Sources */,
 				00000000000000000000011F /* AutoCropScalePolicy.swift in Sources */,
+				000000000000000000000120 /* TurnTransitionPath.swift in Sources */,
 				00000000000000000000011D /* StabilizerHostAnalysisStore.swift in Sources */,
 				00000000000000000000011C /* AutoStabilizationEstimator.swift in Sources */,
 				000000000000000000000112 /* MetalDeviceCache.swift in Sources */,

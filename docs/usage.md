@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.2.4` is the current review baseline for all-axis Camera Jitter.
+Version `1.2.5` is the current review baseline for all-axis Camera Jitter.
 Use schema 52 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;
@@ -112,11 +112,12 @@ fallbacks.
   Pull this down if close grass, roads, water, or frame edges start to swim.
 - `Turn Smoothing Strength`: the X-only correction-amplitude control. It defaults to
   `12.0`, ranges from `0.00...36.00`, and does not choose the turn duration or window.
-- `Turn Transition Window (s)`: the `0.5...8.0` second same-direction X-pan span that
-  Turn groups as one event through a causal recent-history S curve. Larger values own
-  more prior pan and make the same movement slower. Curves may pre-roll by up to 30% of
-  their known Turn X travel; Camera Jitter X remains mean-free within the Window. They are not a
-  second amplitude control.
+- `Turn Transition Window (s)`: the `0.5...8.0` second maximum event span for
+  same-direction X-pan. Turn accumulates all direction-consistent travel, pauses, and
+  speed changes whose first-to-last activity fits inside the Window, then redistributes
+  the total through one quintic S curve. Reversals and activity outside the Window start
+  new events. Curves may pre-roll by up to 30% of their known Turn X travel; Camera Jitter
+  X remains mean-free within the Window. The Window is not a second amplitude control.
 - `Remove Black Edges`: off is a true diagnostic mode. It forces `1.0x` scale and removes
   Auto Crop's look-ahead position reservation, so visible edge movement comes only from
   the stabilized TURN/Camera Jitter transform. On enables Auto Crop to hide those edges.

@@ -1,5 +1,15 @@
 # Tests
 
+Run the standalone TURN/X-pan transition path tests with:
+
+```sh
+scripts/run_turn_transition_path_tests.sh
+```
+
+These synthetic tests verify same-direction turn accumulation across pauses and speed
+changes, direction reversal and Window boundaries, sub-threshold jitter, irregular frame
+timing, and clip-edge events without opening Final Cut Pro.
+
 Run the standalone active-library resolver regression tests with:
 
 ```sh

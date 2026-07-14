@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.2.4` maps Turn Smoothing Strength linearly in viewport space: 12 equals the former 36 result and 36 applies three times that zoom and X movement. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
+- Version `1.2.5` maps Turn Smoothing Strength linearly in viewport space: 12 equals the former 36 result and 36 applies three times that zoom and X movement. The Turn Transition Window accumulates same-direction turn bursts, pauses, and pan-speed changes into one quintic S curve when their complete activity span fits inside the Window. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
   Schema 52 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
@@ -257,12 +257,14 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   High values increase the X-pan bridge floor and release center anchoring earlier; Camera
   Jitter continues to own short-period X during the pan.
-- `Turn Transition Window (s)`: controls only the X-pan pre-roll and transition duration
-  (`0.5...8.0` seconds; default `5.0`); it is independent from correction amplitude.
-  It defaults to `12.0` and ranges from `0.00...36.00`. `0` disables turn correction and
-  turn zoom; `12` uses the standard `2.8` second monotonic S-curve transition; and `36`
-  can extend the transition to three times the standard duration while spending the maximum
-  available X-position and crop-aware zoom budget. Actual turn correction and zoom demand
+- `Turn Transition Window (s)`: sets the maximum complete activity span for one
+  same-direction X-pan event (`0.5...8.0` seconds; default `5.0`). Direction-consistent
+  travel across pauses and speed changes is accumulated monotonically, then redistributed
+  through one quintic S curve; reversals and later activity outside the Window start a new
+  event. It is independent from correction amplitude. `Turn Smoothing Strength` defaults
+  to `12.0` and ranges from `0.00...36.00`; `0` disables turn correction and turn zoom,
+  while higher values spend more of the available X-position and crop-aware zoom budget.
+  Actual turn correction and zoom demand
   still require tracking evidence plus real X-turn travel, so static or low-confidence
   frames do not receive hidden turn correction. Auto Crop uses
   `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time` directly and holds release when a

@@ -1796,8 +1796,8 @@ private func renderTurnBridgeAssessment(
     let sampleStep = transitionWindowSeconds / denominator
     let sigma = max(1e-6, halfWindow * 0.55)
     let renderSeconds = frames[index].time
-    var rawSamples: [(sample: TurnCorrectionSample, timeWeight: Float, isCenter: Bool)] = [
-        (centerSample, 1.0, true)
+    var rawSamples: [(sample: TurnCorrectionSample, timeWeight: Float, isCenter: Bool, seconds: Double)] = [
+        (centerSample, 1.0, true, renderSeconds)
     ]
     rawSamples.reserveCapacity(sampleCount)
     for sampleIndex in 0..<sampleCount {
@@ -1818,7 +1818,8 @@ private func renderTurnBridgeAssessment(
         rawSamples.append((
             turnCorrectionSample(for: context, index: sampleFrameIndex, options: options),
             weight,
-            false
+            false,
+            sampleSeconds
         ))
     }
 
@@ -1960,6 +1961,11 @@ private func renderTurnBridgeAssessment(
     ) * turnSmoothingBridgeBlend(options.turnStrength)
     let blendedMacro = centerMacro + ((anchoredMacro - centerMacro) * bridgeBlend)
     let bridgedApplied = abs(blendedMacro)
+    let concatenationNote = turnTransitionConcatenationNote(
+        samples: rawSamples.map { (seconds: $0.seconds, sample: $0.sample) },
+        centerSeconds: renderSeconds,
+        windowSeconds: options.turnWindowSeconds
+    )
     return RenderTurnBridgeAssessment(
         applied: bridgedApplied,
         remaining: max(0.0, centerSample.detected - bridgedApplied),
@@ -1967,7 +1973,53 @@ private func renderTurnBridgeAssessment(
         sampleCount: acceptedSamples,
         rawApplied: centerSample.applied,
         delta: bridgedApplied - centerSample.applied,
-        note: String(format: "29-sample %.2fs bridge support %.3f adaptive %.2fs/%.1fpx zoomAuthority %.2f blend %.2f centerKeep %.3f centerAnchor %.3f uncapped", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, transitionWindowSeconds, timing.travelPixels, zoomBridgeAuthority, bridgeBlend, abs(bridgedMacro - averagedMacro), abs(anchoredMacro - bridgedMacro))
+        note: String(format: "29-sample %.2fs bridge support %.3f adaptive %.2fs/%.1fpx zoomAuthority %.2f blend %.2f centerKeep %.3f centerAnchor %.3f uncapped | %@", renderTurnTransitionSmoothingWindowSeconds, supportMagnitude, transitionWindowSeconds, timing.travelPixels, zoomBridgeAuthority, bridgeBlend, abs(bridgedMacro - averagedMacro), abs(anchoredMacro - bridgedMacro), concatenationNote)
+    )
+}
+
+private func turnTransitionConcatenationNote(
+    samples: [(seconds: Double, sample: TurnCorrectionSample)],
+    centerSeconds: Double,
+    windowSeconds: Double
+) -> String {
+    let orderedSamples = samples.sorted { $0.seconds < $1.seconds }
+    guard orderedSamples.count >= 3 else {
+        return "concat unavailable"
+    }
+    let activity = orderedSamples.map { entry -> Float in
+        let sample = entry.sample
+        guard sample.detected >= 0.5,
+              abs(sample.macroPixelOffsetX) > Float.ulpOfOne
+        else {
+            return 0.0
+        }
+        return sample.macroPixelOffsetX >= 0.0 ? sample.detected : -sample.detected
+    }
+    let transition = StabilizerTurnTransitionPath.concatenate(
+        times: orderedSamples.map(\.seconds),
+        positions: orderedSamples.map { $0.sample.macroPixelOffsetX },
+        activity: activity,
+        windowSeconds: windowSeconds
+    )
+    if let rejectionReason = transition.rejectionReason {
+        return "concat rejected: \(rejectionReason)"
+    }
+    let localIndex = orderedSamples.indices.min {
+        abs(orderedSamples[$0].seconds - centerSeconds)
+            < abs(orderedSamples[$1].seconds - centerSeconds)
+    } ?? 0
+    guard let event = transition.events.first(where: {
+        $0.startIndex <= localIndex && localIndex <= $0.endIndex
+    }) else {
+        return "concat inactive"
+    }
+    return String(
+        format: "concat %@ %.3f...%.3f active %d cumulativeX %.3f",
+        event.direction >= 0.0 ? "right" : "left",
+        event.startSeconds,
+        event.endSeconds,
+        event.activeSampleCount,
+        event.cumulativeX
     )
 }
 

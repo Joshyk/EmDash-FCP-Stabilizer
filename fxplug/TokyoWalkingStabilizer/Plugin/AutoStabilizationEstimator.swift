@@ -6182,6 +6182,42 @@ enum AutoStabilizationEstimator {
             result[index].macroPixelOffset.x += preRoll
         }
 
+        let concatenatedTurn = StabilizerTurnTransitionPath.concatenate(
+            times: frames.map(\.time),
+            positions: result.map { $0.macroPixelOffset.x },
+            activity: result.map { $0.turnDetectedPixelOffset.x },
+            windowSeconds: windowSeconds
+        )
+        if let rejectionReason = concatenatedTurn.rejectionReason {
+            os_log(
+                "TURN transition concatenation rejected | reason %{public}@",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                rejectionReason
+            )
+        } else {
+            for index in result.indices {
+                result[index].macroPixelOffset.x = concatenatedTurn.positions[index]
+            }
+            for (eventID, event) in concatenatedTurn.events.enumerated() {
+                os_log(
+                    "TURN transition event | id %d direction %{public}@ firstActive %d lastActive %d start %.3f end %.3f duration %.3f window %.3f activeSamples %d cumulativeX %.3f",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    eventID + 1,
+                    event.direction >= 0.0 ? "right" : "left",
+                    event.firstActiveIndex,
+                    event.lastActiveIndex,
+                    event.startSeconds,
+                    event.endSeconds,
+                    event.endSeconds - event.startSeconds,
+                    windowSeconds,
+                    event.activeSampleCount,
+                    event.cumulativeX
+                )
+            }
+        }
+
         for index in result.indices {
             result[index].pixelOffset = playbackTrajectoryComposedPixelOffset(result[index])
             result[index].rawPixelOffset = result[index].pixelOffset
