@@ -1318,11 +1318,24 @@ enum AutoStabilizationEstimator {
         let outerWindowSeconds: UInt64
     }
 
+    private struct OuterPredictionPathCacheKey: Hashable {
+        let kind: MotionPathKind
+        let innerWindowSeconds: UInt64
+        let outerWindowSeconds: UInt64
+    }
+
     private struct LocalAverageCacheKey: Hashable {
         let kind: MotionPathKind
         let sourceRole: LocalAverageSourceRole
         let sourceVariant: UInt64
         let index: Int
+        let windowSeconds: UInt64
+    }
+
+    private struct LocalAveragePathCacheKey: Hashable {
+        let kind: MotionPathKind
+        let sourceRole: LocalAverageSourceRole
+        let sourceVariant: UInt64
         let windowSeconds: UInt64
     }
 
@@ -1454,6 +1467,12 @@ enum AutoStabilizationEstimator {
         let index: Int
         let trackingConfidence: UInt32
         let fullImpulseScale: UInt32
+    }
+
+    private struct ConfidenceCleanedPathCacheKey: Hashable {
+        let kind: MotionPathKind
+        let fullImpulseScale: UInt32
+        let confidenceScaleFingerprint: UInt64
     }
 
     private struct RenderEstimateCacheStoreKey: Hashable {
@@ -1786,11 +1805,14 @@ enum AutoStabilizationEstimator {
     private final class RenderEstimateCache {
         private let lock = NSLock()
         private var outerPredictions: [OuterPredictionCacheKey: Float] = [:]
+        private var outerPredictionPaths: [OuterPredictionPathCacheKey: [Float]] = [:]
         private var localAverages: [LocalAverageCacheKey: Float] = [:]
+        private var localAveragePaths: [LocalAveragePathCacheKey: [Float]] = [:]
         private var rawTransforms: [RawTransformCacheKey: StabilizerAutoTransform] = [:]
         private var rawTransformOrder: [RawTransformCacheKey] = []
         private var residualPercentiles: [ResidualPercentileCacheKey: Float] = [:]
         private var footstepConfidences: [FootstepConfidenceCacheKey: Float] = [:]
+        private var confidenceCleanedPaths: [ConfidenceCleanedPathCacheKey: [Float]] = [:]
         private var pathValueSlices: [MotionPathKind: [Float]] = [:]
         private let rawTransformLimit = 32768
 
@@ -1942,6 +1964,23 @@ enum AutoStabilizationEstimator {
             return confidence
         }
 
+        func confidenceCleanedPath(for key: ConfidenceCleanedPathCacheKey) -> [Float]? {
+            lock.lock()
+            let cached = confidenceCleanedPaths[key]
+            lock.unlock()
+            return cached
+        }
+
+        func storeConfidenceCleanedPath(_ path: [Float], for key: ConfidenceCleanedPathCacheKey) -> [Float] {
+            lock.lock()
+            if confidenceCleanedPaths[key] == nil {
+                confidenceCleanedPaths[key] = path
+            }
+            let stored = confidenceCleanedPaths[key] ?? path
+            lock.unlock()
+            return stored
+        }
+
         func outerLinearPredictionPath(
             _ kind: MotionPathKind,
             analysis: StabilizerPreparedAnalysis,
@@ -1952,6 +1991,36 @@ enum AutoStabilizationEstimator {
             let values = pathValues(kind, analysis: analysis)
             guard !values.isEmpty else {
                 return EstimatedPath(values: values)
+            }
+            if indices.elementsEqual(analysis.frames.indices) {
+                let key = OuterPredictionPathCacheKey(
+                    kind: kind,
+                    innerWindowSeconds: innerWindowSeconds.bitPattern,
+                    outerWindowSeconds: outerWindowSeconds.bitPattern
+                )
+                lock.lock()
+                if let cached = outerPredictionPaths[key] {
+                    lock.unlock()
+                    return EstimatedPath(values: cached)
+                }
+                lock.unlock()
+
+                let path = analysis.frames.indices.map { index in
+                    outerLinearPrediction(
+                        kind,
+                        analysis: analysis,
+                        index: index,
+                        innerWindowSeconds: innerWindowSeconds,
+                        outerWindowSeconds: outerWindowSeconds
+                    )
+                }
+                lock.lock()
+                if outerPredictionPaths[key] == nil {
+                    outerPredictionPaths[key] = path
+                }
+                let stored = outerPredictionPaths[key] ?? path
+                lock.unlock()
+                return EstimatedPath(values: stored)
             }
             let targetIndexSet = Set(indices)
             return EstimatedPath(
@@ -1986,6 +2055,39 @@ enum AutoStabilizationEstimator {
         ) -> EstimatedPath {
             guard !source.values.isEmpty else {
                 return source
+            }
+            if targetIndices.elementsEqual(analysis.frames.indices) {
+                let key = LocalAveragePathCacheKey(
+                    kind: kind,
+                    sourceRole: sourceRole,
+                    sourceVariant: sourceVariant,
+                    windowSeconds: windowSeconds.bitPattern
+                )
+                lock.lock()
+                if let cached = localAveragePaths[key] {
+                    lock.unlock()
+                    return EstimatedPath(values: cached)
+                }
+                lock.unlock()
+
+                let path = analysis.frames.indices.map { index in
+                    localTimeWeightedAverage(
+                        kind,
+                        sourceRole: sourceRole,
+                        sourceVariant: sourceVariant,
+                        source: source,
+                        analysis: analysis,
+                        index: index,
+                        windowSeconds: windowSeconds
+                    )
+                }
+                lock.lock()
+                if localAveragePaths[key] == nil {
+                    localAveragePaths[key] = path
+                }
+                let stored = localAveragePaths[key] ?? path
+                lock.unlock()
+                return EstimatedPath(values: stored)
             }
             let targetIndexSet = Set(targetIndices)
             var overrides = source.overrides
@@ -5742,6 +5844,7 @@ enum AutoStabilizationEstimator {
         guard !shouldCancel() else {
             return nil
         }
+        let phasesStartedAt = CFAbsoluteTimeGetCurrent()
         guard let rawTransforms = preparedPlaybackTrajectoryRawTransforms(
             analysis: analysis,
             frames: frames,
@@ -5752,6 +5855,7 @@ enum AutoStabilizationEstimator {
         ) else {
             return nil
         }
+        let rawCompletedAt = CFAbsoluteTimeGetCurrent()
         guard let transforms: [StabilizerAutoTransform] = parallelPreparationMap(
             count: frames.count,
             shouldCancel: shouldCancel,
@@ -5767,6 +5871,7 @@ enum AutoStabilizationEstimator {
         ) else {
             return nil
         }
+        let smoothingCompletedAt = CFAbsoluteTimeGetCurrent()
         guard !shouldCancel() else {
             return nil
         }
@@ -5889,6 +5994,7 @@ enum AutoStabilizationEstimator {
             transforms: postShockLimitedTransforms,
             strengths: strengths
         )
+        let limitingCompletedAt = CFAbsoluteTimeGetCurrent()
         let componentDiagnostics = playbackTrajectoryComponentDiagnostics(
             frames: frames,
             transforms: turnOwnedXTransforms
@@ -5923,11 +6029,23 @@ enum AutoStabilizationEstimator {
             componentDiagnostics.maximumWarpJerk,
             componentDiagnostics.maximumRotationJerkDegrees
         )
-        return PlaybackTransformTrajectory(
+        let trajectory = PlaybackTransformTrajectory(
             times: frames.map(\.time),
             transforms: turnOwnedXTransforms,
             outputSize: outputSize
         )
+        let completedAt = CFAbsoluteTimeGetCurrent()
+        os_log(
+            "Playback trajectory phases | frames %d baseRaw %.3fms smoothing %.3fms limiting %.3fms diagnostics %.3fms",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            frames.count,
+            (rawCompletedAt - phasesStartedAt) * 1000.0,
+            (smoothingCompletedAt - rawCompletedAt) * 1000.0,
+            (limitingCompletedAt - smoothingCompletedAt) * 1000.0,
+            (completedAt - limitingCompletedAt) * 1000.0
+        )
+        return trajectory
     }
 
     private static func playbackTrajectoryTurnOwnedXTransforms(
@@ -19297,6 +19415,27 @@ enum AutoStabilizationEstimator {
         guard !values.isEmpty else {
             return EstimatedPath(values: values)
         }
+        let coversWholeAnalysis = indices.elementsEqual(analysis.frames.indices)
+        var wholePathCacheKey: ConfidenceCleanedPathCacheKey?
+        if coversWholeAnalysis {
+            var confidenceScaleFingerprint: UInt64 = 1_469_598_103_934_665_603
+            for index in analysis.frames.indices {
+                combinePreparedPathHash(UInt64(index), into: &confidenceScaleFingerprint)
+                combinePreparedPathHash(
+                    UInt64((confidenceScales[index] ?? 1.0).bitPattern),
+                    into: &confidenceScaleFingerprint
+                )
+            }
+            let key = ConfidenceCleanedPathCacheKey(
+                kind: kind,
+                fullImpulseScale: fullImpulseScale.bitPattern,
+                confidenceScaleFingerprint: confidenceScaleFingerprint
+            )
+            if let cached = cache.confidenceCleanedPath(for: key) {
+                return EstimatedPath(values: cached)
+            }
+            wholePathCacheKey = key
+        }
         var overrides: [Int: Float] = [:]
         overrides.reserveCapacity(indices.count)
         for index in indices {
@@ -19333,6 +19472,15 @@ enum AutoStabilizationEstimator {
             let confidenceScale = clamp(confidenceScales[index] ?? 1.0, min: 0.0, max: 1.0)
             let effectiveConfidence = confidence * confidenceScale
             overrides[index] = rawValue - ((rawValue - baselineValue) * effectiveConfidence)
+        }
+        if let wholePathCacheKey {
+            var path = values
+            for (index, value) in overrides where path.indices.contains(index) {
+                path[index] = value
+            }
+            return EstimatedPath(
+                values: cache.storeConfidenceCleanedPath(path, for: wholePathCacheKey)
+            )
         }
         return EstimatedPath(values: values, overrides: overrides)
     }
