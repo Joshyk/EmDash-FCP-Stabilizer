@@ -236,11 +236,11 @@ list unless the stored fields are no longer safe to interpret.
 
 Debug/status diagnostics should expose tracking confidence, blur/sharpness, residual error,
 raw Micro Jitter impulse, and search-radius edge-hit counts so fine-shake causes are
-visible while tuning walking footage. Debug Overlay must keep the shared 21-row contract:
+visible while tuning walking footage. Debug Overlay must keep the shared 19-row contract:
 `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `MACRO JITTER`, `MICRO JITTER`, `FAR WARP`,
-`LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
+`SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
 `TURN CONFIDENCE`, `MACRO CONFIDENCE`, `MICRO CONFIDENCE`, `WARP CONFIDENCE`,
-`LENS CONFIDENCE`, then the runtime/source row. Activity rows must report final values actually
+then the runtime/source row. Activity rows must report final values actually
 applied to Metal. `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` should all be quality bars where
 higher means better tracking evidence and lower means weaker evidence. All quality and
 confidence rows must stay grouped immediately above the version row. Debug Overlay should also expose a compact

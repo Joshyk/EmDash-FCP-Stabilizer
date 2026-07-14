@@ -19,7 +19,6 @@ ROWS = [
     "MacroJitter",
     "MicroJitter",
     "FarFieldWarp",
-    "Lens",
     "Smoothing",
     "TrackingQuality",
     "WalkingQuality",
@@ -30,7 +29,6 @@ ROWS = [
     "MacroConfidence",
     "MicroConfidence",
     "WarpConfidence",
-    "LensConfidence",
     "Runtime",
 ]
 
@@ -43,7 +41,6 @@ LABELS = [
     "MACRO JITTER",
     "MICRO JITTER",
     "FAR WARP",
-    "LENS",
     "SMOOTHING",
     "TRACKING",
     "WALKING",
@@ -54,7 +51,6 @@ LABELS = [
     "MACRO CONFIDENCE",
     "MICRO CONFIDENCE",
     "WARP CONFIDENCE",
-    "LENS CONFIDENCE",
     "RUNTIME",
 ]
 
@@ -71,7 +67,7 @@ e2e = E2E.read_text()
 
 count_match = re.search(r"#define\s+STABILIZER_DEBUG_OVERLAY_ROW_COUNT\s+(\d+)", header)
 if not count_match or int(count_match.group(1)) != len(ROWS):
-    fail("shared row count is not 21")
+    fail("shared row count is not 19")
 
 enum_match = re.search(
     r"typedef enum StabilizerDebugOverlayRow \{(?P<body>.*?)\} StabilizerDebugOverlayRow;",

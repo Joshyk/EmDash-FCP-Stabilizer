@@ -1961,48 +1961,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
     }
 
-    private static func debugOverlayLensComponents(
-        _ transform: StabilizerAutoTransform
-    ) -> [StabilizerDebugOverlayLensComponent] {
-        let bandOffset = (
-            transform.lensBandTopOffset
-            + transform.lensBandRidgeOffset
-            + transform.lensBandMidOffset
-        ) / 3.0
-        let bandSupport = min(1.0, max(0.0, transform.lensBandWarpApplied))
-            * StabilizerDebugOverlayCalculator.lensAppliedGain(transform.lensBandWarpSupport)
-
-        let localOffset = (
-            transform.sourceLensShakeLocalTopLeftOffset
-            + transform.sourceLensShakeLocalTopCenterOffset
-            + transform.sourceLensShakeLocalTopRightOffset
-            + transform.sourceLensShakeLocalRidgeLeftOffset
-            + transform.sourceLensShakeLocalRidgeCenterOffset
-            + transform.sourceLensShakeLocalRidgeRightOffset
-            + transform.sourceLensShakeLocalMidLeftOffset
-            + transform.sourceLensShakeLocalMidCenterOffset
-            + transform.sourceLensShakeLocalMidRightOffset
-        ) / 9.0
-        let localWarpEscape = StabilizerDebugOverlayCalculator.rigidLocalWarpEscapeGain(
-            transform.lensFarFieldRigidShakeLocalWarpSuppressed
-        )
-        let localSupport = min(1.0, max(0.0, transform.sourceLensShakeLocalApplied))
-            * StabilizerDebugOverlayCalculator.lensAppliedGain(transform.sourceLensShakeLocalSupport)
-            * localWarpEscape
-        let ridgeSupport = min(1.0, max(0.0, transform.sourceLensShakeRidgeApplied))
-            * StabilizerDebugOverlayCalculator.lensAppliedGain(transform.sourceLensShakeRidgeSupport)
-            * localWarpEscape
-
-        return [
-            StabilizerDebugOverlayLensComponent(offset: bandOffset, effectiveSupport: bandSupport),
-            StabilizerDebugOverlayLensComponent(offset: localOffset, effectiveSupport: localSupport),
-            StabilizerDebugOverlayLensComponent(
-                offset: transform.sourceLensShakeRidgeOffset,
-                effectiveSupport: ridgeSupport
-            )
-        ]
-    }
-
     private static func debugOverlayMicroJitterConfidence(
         _ transform: StabilizerAutoTransform
     ) -> Float {
@@ -2028,7 +1986,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         diagnostics.macroJitter = metrics.macroJitter
         diagnostics.microJitter = metrics.microJitter
         diagnostics.farFieldWarp = metrics.farFieldWarp
-        diagnostics.lens = metrics.lens
         diagnostics.smoothing = metrics.smoothing
         diagnostics.trackingQuality = metrics.trackingQuality
         diagnostics.walkingQuality = metrics.walkingQuality
@@ -2039,7 +1996,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         diagnostics.macroConfidence = metrics.macroConfidence
         diagnostics.microConfidence = metrics.microConfidence
         diagnostics.warpConfidence = metrics.warpConfidence
-        diagnostics.lensConfidence = metrics.lensConfidence
         return diagnostics
     }
 
@@ -10673,7 +10629,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoTransform.effectiveMacroJitterStrength.z
         )
         os_log(
-            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f CROP %.3f TURN %.3f MAJIT %.3f MIJIT %.3f FAR WARP %.3f LENS %.3f SMOOTH %.3f CROP X %.2f CROP Y %.2f CROP MISS %d WORST %.4f/%.4f MERGE %d/%d %{public}@",
+            "Debug Overlay bars motion | FxPlug %{public}@ | X OFFSET %.3f Y OFFSET %.3f ROLL %.3f CROP %.3f TURN %.3f MAJIT %.3f MIJIT %.3f FAR WARP %.3f SMOOTH %.3f CROP X %.2f CROP Y %.2f CROP MISS %d WORST %.4f/%.4f MERGE %d/%d %{public}@",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -10685,7 +10641,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             metrics.macroJitter,
             metrics.microJitter,
             metrics.farFieldWarp,
-            metrics.lens,
             metrics.smoothing,
             autoCropFraming.positionPixels.x,
             autoCropFraming.positionPixels.y,
@@ -10697,7 +10652,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             autoCropFraming.telemetry.mergeBypassed ? "bypass" : "ok"
         )
         os_log(
-            "Debug Overlay bars confidence | FxPlug %{public}@ | TRK %.3f WLK %.3f SHRP %.3f RES %.3f %{public}@ HIT %.3f %{public}@ T CONF %.3f MA CONF %.3f MI CONF %.3f W CONF %.3f L CONF %.3f",
+            "Debug Overlay bars confidence | FxPlug %{public}@ | TRK %.3f WLK %.3f SHRP %.3f RES %.3f %{public}@ HIT %.3f %{public}@ T CONF %.3f MA CONF %.3f MI CONF %.3f W CONF %.3f",
             log: stabilizerHostAnalysisLog,
             type: .default,
             tokyoWalkingStabilizerVersion,
@@ -10711,8 +10666,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             metrics.turnConfidence,
             metrics.macroConfidence,
             metrics.microConfidence,
-            metrics.warpConfidence,
-            metrics.lensConfidence
+            metrics.warpConfidence
         )
     }
 
@@ -11170,7 +11124,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     microJitterRotationDegrees: microJitterRotation,
                     warpShear: renderedAutoTransform.shear,
                     warpPerspective: renderedAutoTransform.perspective + renderedAutoTransform.yawPitchProxy,
-                    lensComponents: Self.debugOverlayLensComponents(renderedAutoTransform),
                     temporalSmoothingPixelDelta: renderedAutoTransform.temporalSmoothingPixelDelta,
                     temporalSmoothingRotationDelta: renderedAutoTransform.temporalSmoothingRotationDelta,
                     trackingConfidence: renderedAutoTransform.trackingConfidence,

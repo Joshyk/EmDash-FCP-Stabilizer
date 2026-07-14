@@ -91,7 +91,7 @@ typedef struct StabilizerShiftResolveUniforms {
     uint refine;
 } StabilizerShiftResolveUniforms;
 
-#define STABILIZER_DEBUG_OVERLAY_ROW_COUNT 21
+#define STABILIZER_DEBUG_OVERLAY_ROW_COUNT 19
 
 typedef enum StabilizerDebugOverlayRow {
     StabilizerDebugOverlayRowXOffset = 0,
@@ -102,19 +102,17 @@ typedef enum StabilizerDebugOverlayRow {
     StabilizerDebugOverlayRowMacroJitter = 5,
     StabilizerDebugOverlayRowMicroJitter = 6,
     StabilizerDebugOverlayRowFarFieldWarp = 7,
-    StabilizerDebugOverlayRowLens = 8,
-    StabilizerDebugOverlayRowSmoothing = 9,
-    StabilizerDebugOverlayRowTrackingQuality = 10,
-    StabilizerDebugOverlayRowWalkingQuality = 11,
-    StabilizerDebugOverlayRowSharpnessQuality = 12,
-    StabilizerDebugOverlayRowResidualQuality = 13,
-    StabilizerDebugOverlayRowSearchRadiusHeadroomQuality = 14,
-    StabilizerDebugOverlayRowTurnConfidence = 15,
-    StabilizerDebugOverlayRowMacroConfidence = 16,
-    StabilizerDebugOverlayRowMicroConfidence = 17,
-    StabilizerDebugOverlayRowWarpConfidence = 18,
-    StabilizerDebugOverlayRowLensConfidence = 19,
-    StabilizerDebugOverlayRowRuntime = 20
+    StabilizerDebugOverlayRowSmoothing = 8,
+    StabilizerDebugOverlayRowTrackingQuality = 9,
+    StabilizerDebugOverlayRowWalkingQuality = 10,
+    StabilizerDebugOverlayRowSharpnessQuality = 11,
+    StabilizerDebugOverlayRowResidualQuality = 12,
+    StabilizerDebugOverlayRowSearchRadiusHeadroomQuality = 13,
+    StabilizerDebugOverlayRowTurnConfidence = 14,
+    StabilizerDebugOverlayRowMacroConfidence = 15,
+    StabilizerDebugOverlayRowMicroConfidence = 16,
+    StabilizerDebugOverlayRowWarpConfidence = 17,
+    StabilizerDebugOverlayRowRuntime = 18
 } StabilizerDebugOverlayRow;
 
 typedef struct StabilizerDebugOverlayDiagnostics {
@@ -126,7 +124,6 @@ typedef struct StabilizerDebugOverlayDiagnostics {
     float macroJitter;
     float microJitter;
     float farFieldWarp;
-    float lens;
     float smoothing;
     float trackingQuality;
     float walkingQuality;
@@ -137,7 +134,6 @@ typedef struct StabilizerDebugOverlayDiagnostics {
     float macroConfidence;
     float microConfidence;
     float warpConfidence;
-    float lensConfidence;
 } StabilizerDebugOverlayDiagnostics;
 
 typedef struct TokyoWalkingStabilizerTransformUniforms {

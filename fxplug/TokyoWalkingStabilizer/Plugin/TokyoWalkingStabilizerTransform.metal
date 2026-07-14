@@ -216,8 +216,6 @@ static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeB
             return debugLabelCharAt(index, uint4(77, 73, 67, 82), uint4(79, 0, 74, 73), uint4(84, 84, 69, 82), uint4(0), uint4(0)); // MICRO JITTER
         case StabilizerDebugOverlayRowFarFieldWarp:
             return debugLabelCharAt(index, uint4(70, 65, 82, 0), uint4(87, 65, 82, 80), uint4(0), uint4(0), uint4(0)); // FAR WARP
-        case StabilizerDebugOverlayRowLens:
-            return debugLabelCharAt(index, uint4(76, 69, 78, 83), uint4(0), uint4(0), uint4(0), uint4(0)); // LENS
         case StabilizerDebugOverlayRowSmoothing:
             return debugLabelCharAt(index, uint4(83, 77, 79, 79), uint4(84, 72, 73, 78), uint4(71, 0, 0, 0), uint4(0), uint4(0)); // SMOOTHING
         case StabilizerDebugOverlayRowTrackingQuality:
@@ -238,8 +236,6 @@ static uint debugLabelChar(uint row, uint index, float debugMode, float runtimeB
             return debugLabelCharAt(index, uint4(77, 73, 67, 82), uint4(79, 0, 67, 79), uint4(78, 70, 73, 68), uint4(69, 78, 67, 69), uint4(0)); // MICRO CONFIDENCE
         case StabilizerDebugOverlayRowWarpConfidence:
             return debugLabelCharAt(index, uint4(87, 65, 82, 80), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0), uint4(0)); // WARP CONFIDENCE
-        case StabilizerDebugOverlayRowLensConfidence:
-            return debugLabelCharAt(index, uint4(76, 69, 78, 83), uint4(0, 67, 79, 78), uint4(70, 73, 68, 69), uint4(78, 67, 69, 0), uint4(0)); // LENS CONFIDENCE
         case StabilizerDebugOverlayRowRuntime:
             return debugModeLabelChar(debugMode, runtimeVersion, index);
         default:
@@ -733,7 +729,6 @@ fragment float4 fragmentShader(
                 case StabilizerDebugOverlayRowMacroJitter: fill = saturate(transform->debugDiagnostics.macroJitter); break;
                 case StabilizerDebugOverlayRowMicroJitter: fill = saturate(transform->debugDiagnostics.microJitter); break;
                 case StabilizerDebugOverlayRowFarFieldWarp: fill = saturate(transform->debugDiagnostics.farFieldWarp); break;
-                case StabilizerDebugOverlayRowLens: fill = saturate(transform->debugDiagnostics.lens); break;
                 case StabilizerDebugOverlayRowSmoothing: fill = saturate(transform->debugDiagnostics.smoothing); break;
                 case StabilizerDebugOverlayRowTrackingQuality: fill = saturate(transform->debugDiagnostics.trackingQuality); break;
                 case StabilizerDebugOverlayRowWalkingQuality: fill = saturate(transform->debugDiagnostics.walkingQuality); break;
@@ -744,7 +739,6 @@ fragment float4 fragmentShader(
                 case StabilizerDebugOverlayRowMacroConfidence: fill = saturate(transform->debugDiagnostics.macroConfidence); break;
                 case StabilizerDebugOverlayRowMicroConfidence: fill = saturate(transform->debugDiagnostics.microConfidence); break;
                 case StabilizerDebugOverlayRowWarpConfidence: fill = saturate(transform->debugDiagnostics.warpConfidence); break;
-                case StabilizerDebugOverlayRowLensConfidence: fill = saturate(transform->debugDiagnostics.lensConfidence); break;
                 case StabilizerDebugOverlayRowRuntime: fill = 1.0; break;
                 default: fill = 0.0; break;
             }

@@ -3671,7 +3671,6 @@ labels = [
     "MACRO JITTER",
     "MICRO JITTER",
     "FAR WARP",
-    "LENS",
     "SMOOTHING",
     "TRACKING",
     "WALKING",
@@ -3682,7 +3681,6 @@ labels = [
     "MACRO CONFIDENCE",
     "MICRO CONFIDENCE",
     "WARP CONFIDENCE",
-    "LENS CONFIDENCE",
     "RUNTIME",
 ]
 

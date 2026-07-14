@@ -28,7 +28,6 @@ struct DebugOverlayDiagnosticsTests {
         microJitterRotationDegrees: Float = 0.0,
         warpShear: vector_float2 = .zero,
         warpPerspective: vector_float2 = .zero,
-        lensComponents: [StabilizerDebugOverlayLensComponent] = [],
         temporalSmoothingPixelDelta: vector_float2 = .zero,
         temporalSmoothingRotationDelta: Float = 0.0,
         trackingConfidence: Float = 0.0,
@@ -57,7 +56,6 @@ struct DebugOverlayDiagnosticsTests {
             microJitterRotationDegrees: microJitterRotationDegrees,
             warpShear: warpShear,
             warpPerspective: warpPerspective,
-            lensComponents: lensComponents,
             temporalSmoothingPixelDelta: temporalSmoothingPixelDelta,
             temporalSmoothingRotationDelta: temporalSmoothingRotationDelta,
             trackingConfidence: trackingConfidence,
@@ -122,7 +120,6 @@ struct DebugOverlayDiagnosticsTests {
             macroJitterPixelOffset: vector_float2(20.0, 20.0),
             microJitterPixelOffset: vector_float2(20.0, 20.0),
             warpShear: vector_float2(0.1, 0.1),
-            lensComponents: [StabilizerDebugOverlayLensComponent(offset: vector_float2(20.0, 20.0), effectiveSupport: 1.0)],
             temporalSmoothingPixelDelta: vector_float2(20.0, 20.0),
             turnConfidence: 0.8
         ))
@@ -130,7 +127,6 @@ struct DebugOverlayDiagnosticsTests {
         expect(close(disabled.macroJitter, 0.0), "master zero must disable MAJIT activity")
         expect(close(disabled.microJitter, 0.0), "master zero must disable MIJIT activity")
         expect(close(disabled.farFieldWarp, 0.0), "master zero must disable WARP activity")
-        expect(close(disabled.lens, 0.0), "master zero must disable LENS activity")
         expect(close(disabled.turnConfidence, 0.8), "confidence must remain visible when strength is zero")
 
         let cropOff = StabilizerDebugOverlayCalculator.metrics(for: inputs(
@@ -148,22 +144,6 @@ struct DebugOverlayDiagnosticsTests {
         ))
         expect(close(cropOn.crop, 1.0), "crop scale must map to CROP")
         expect(close(cropOn.turn, 1.0), "applied crop position must map to TURN")
-    }
-
-    private static func testLensUsesOnlyAppliedComponents() {
-        let support = StabilizerDebugOverlayCalculator.lensAppliedGain(0.55)
-        let values = StabilizerDebugOverlayCalculator.metrics(for: inputs(
-            lensComponents: [
-                StabilizerDebugOverlayLensComponent(
-                    offset: vector_float2(7.68, 0.0),
-                    effectiveSupport: support
-                )
-            ]
-        ))
-        expect(close(values.lens, 1.0), "LENS must use the actual supported Metal offset")
-        expect(close(values.lensConfidence, 1.0), "L CONF must use effective applied support")
-        expect(close(StabilizerDebugOverlayCalculator.lensAppliedGain(0.08), 0.0), "lens gain lower edge")
-        expect(close(StabilizerDebugOverlayCalculator.rigidLocalWarpEscapeGain(0.42), 0.0), "rigid mode must suppress local warp")
     }
 
     private static func testQualityDirectionAndClamping() {
@@ -192,7 +172,6 @@ struct DebugOverlayDiagnosticsTests {
         testZeroAndUnavailable()
         testBandIsolationAndFrequencyRows()
         testFinalStrengthAndCropSemantics()
-        testLensUsesOnlyAppliedComponents()
         testQualityDirectionAndClamping()
 
         if failures.isEmpty {

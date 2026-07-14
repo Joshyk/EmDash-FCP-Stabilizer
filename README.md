@@ -222,7 +222,7 @@ The overlay scales from the current render output so the top-left panel occupies
 roughly half of the viewer height in original, optimized, and proxy playback.
 Its correction rows are ordered from final rigid/crop motion through lower-frequency walking
 bands to higher-frequency and spatial correction. `X OFFSET`, `Y OFFSET`, `ROLL`, `MACRO JITTER`,
-`MICRO JITTER`, `FAR WARP`, `LENS`, and `SMOOTHING` use final values that are actually handed to Metal,
+`MICRO JITTER`, `FAR WARP`, and `SMOOTHING` use final values that are actually handed to Metal,
 after their applicable limits and Master Strength.
 `Mesh Overlay` is separate from `Debug Overlay`: it can show the far-field mesh,
 lens-local mesh, band guides, or all meshes without drawing the top-left bars.
@@ -415,11 +415,11 @@ validated candidates on demand.
 
 ## Diagnostics
 
-`Debug Overlay` has one fixed 21-row contract:
+`Debug Overlay` has one fixed 19-row contract:
 `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `MACRO JITTER`, `MICRO JITTER`, `FAR WARP`,
-`LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
+`SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
 `TURN CONFIDENCE`, `MACRO CONFIDENCE`, `MICRO CONFIDENCE`, `WARP CONFIDENCE`,
-`LENS CONFIDENCE`, then the readable `ORIGINAL <version>`/`PROXY <version>` runtime/source row. All confidence and
+then the readable `ORIGINAL <version>`/`PROXY <version>` runtime/source row. All confidence and
 quality bars are grouped immediately above the version row. Labels use readable English
 diagnostic names and are not translated in the preview.
 
@@ -436,7 +436,6 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `MICRO JITTER`: short-period activity combining micro, trajectory continuity, and final-limited
   Camera Rigid X/Y/roll correction.
 - `FAR WARP`: final shear plus combined perspective/yaw-pitch values sent to Metal.
-- `LENS`: only applied band/ridge/local offsets that Metal renders, weighted by effective support.
 - `SMOOTHING`: Master-Strength-adjusted render-time temporal smoothing delta.
 - `TRACKING`: current frame tracking quality after motion evidence, residual, blur, and block coverage.
 - `WALKING`: count-aware walking-band tracking quality used by Micro Jitter and Macro Jitter.
@@ -447,7 +446,6 @@ The overlay bars are normalized magnitudes or quality signals, not signed direct
 - `MACRO CONFIDENCE`: Macro Jitter confidence.
 - `MICRO CONFIDENCE`: combined micro and actually applied Camera Rigid X/Y/roll support.
 - `WARP CONFIDENCE`: effective Far-field Warp confidence after tracking and search-radius safety gates.
-- `LENS CONFIDENCE`: effective support for the rendered band/ridge/local lens warp.
 
 `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` are aligned as quality signals: high is good,
 low is bad. Confidence rows remain analysis evidence even when Master Strength is zero.

@@ -352,11 +352,11 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   visible Inspector metadata. Older saved timeline instances may keep stale saved Inspector
   strings, so use the compact runtime/source row in `Debug Overlay` to confirm the active
   render runtime.
-- `Debug Overlay`: normally off. When enabled, the fixed 21-row panel shows
+- `Debug Overlay`: normally off. When enabled, the fixed 19-row panel shows
   `X OFFSET`, `Y OFFSET`, `ROLL`, `CROP`, `TURN`, `MACRO JITTER`, `MICRO JITTER`, `FAR WARP`,
-  `LENS`, `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
+  `SMOOTHING`, `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, `SEARCH HEADROOM`,
   `TURN CONFIDENCE`, `MACRO CONFIDENCE`, `MICRO CONFIDENCE`, `WARP CONFIDENCE`,
-  `LENS CONFIDENCE`, then readable runtime/source diagnostics. `ORIGINAL <version>` means
+  then readable runtime/source diagnostics. `ORIGINAL <version>` means
   the current FxPlug runtime is rendering original/optimized frames, and `PROXY <version>` means proxy
   playback is using the same saved-analysis correction path. The version is derived from the active FxPlug
   version. The overlay scales from the current render output so
@@ -374,11 +374,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   `CROP` applied Auto Crop scale and `TURN` applied viewport position,
   `MACRO JITTER` and `MICRO JITTER` short-period micro/continuity/final Camera Rigid activity,
   `FAR WARP` final shear and combined perspective/yaw-pitch,
-  `LENS` only rendered band/ridge/local offsets weighted by effective support,
   `SMOOTH` Master-Strength-adjusted temporal smoothing delta,
   `TRACKING` current frame tracking quality and `WALKING` walking-band tracking quality,
   `SHARPNESS` sharpness quality, `RESIDUAL` residual quality, and `SEARCH HEADROOM` quality,
-  the five full `... CONFIDENCE` labels show effective band support grouped above the runtime row.
+  the four full `... CONFIDENCE` labels show effective band support grouped above the runtime row.
   Confidence rows remain evidence when Master Strength is zero. Unavailable `RESIDUAL`/`SEARCH HEADROOM`
   values are zero and logged as unavailable instead of using inferred fallback values.
   `TRACKING`, `WALKING`, `SHARPNESS`, `RESIDUAL`, and `SEARCH HEADROOM` all use the same high-is-good direction.

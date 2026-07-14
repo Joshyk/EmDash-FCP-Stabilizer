@@ -1,11 +1,6 @@
 import Foundation
 import simd
 
-struct StabilizerDebugOverlayLensComponent {
-    let offset: vector_float2
-    let effectiveSupport: Float
-}
-
 struct StabilizerDebugOverlayInputs {
     let outputSize: vector_float2
     let masterStrength: Float
@@ -20,7 +15,6 @@ struct StabilizerDebugOverlayInputs {
     let microJitterRotationDegrees: Float
     let warpShear: vector_float2
     let warpPerspective: vector_float2
-    let lensComponents: [StabilizerDebugOverlayLensComponent]
     let temporalSmoothingPixelDelta: vector_float2
     let temporalSmoothingRotationDelta: Float
     let trackingConfidence: Float
@@ -45,7 +39,6 @@ struct StabilizerDebugOverlayMetrics {
     let macroJitter: Float
     let microJitter: Float
     let farFieldWarp: Float
-    let lens: Float
     let smoothing: Float
     let trackingQuality: Float
     let walkingQuality: Float
@@ -56,7 +49,6 @@ struct StabilizerDebugOverlayMetrics {
     let macroConfidence: Float
     let microConfidence: Float
     let warpConfidence: Float
-    let lensConfidence: Float
     let residualQualityAvailable: Bool
     let searchRadiusHeadroomAvailable: Bool
 
@@ -69,7 +61,6 @@ struct StabilizerDebugOverlayMetrics {
         macroJitter: 0.0,
         microJitter: 0.0,
         farFieldWarp: 0.0,
-        lens: 0.0,
         smoothing: 0.0,
         trackingQuality: 0.0,
         walkingQuality: 0.0,
@@ -80,7 +71,6 @@ struct StabilizerDebugOverlayMetrics {
         macroConfidence: 0.0,
         microConfidence: 0.0,
         warpConfidence: 0.0,
-        lensConfidence: 0.0,
         residualQualityAvailable: false,
         searchRadiusHeadroomAvailable: false
     )
@@ -116,19 +106,6 @@ enum StabilizerDebugOverlayCalculator {
             abs(appliedOffset.y) / max(scaleY, Float.ulpOfOne),
             abs(appliedRotation) / max(rotationScale, Float.ulpOfOne)
         ))
-    }
-
-    static func lensAppliedGain(_ support: Float) -> Float {
-        let normalized = unit(support)
-        let t = unit((normalized - 0.08) / (0.55 - 0.08))
-        return t * t * (3.0 - (2.0 * t))
-    }
-
-    static func rigidLocalWarpEscapeGain(_ rigidOnlyApplied: Float) -> Float {
-        let normalized = unit(rigidOnlyApplied)
-        let t = unit((normalized - 0.18) / (0.42 - 0.18))
-        let lock = t * t * (3.0 - (2.0 * t))
-        return powf(max(0.0, 1.0 - lock), 6.0)
     }
 
     static func metrics(for input: StabilizerDebugOverlayInputs) -> StabilizerDebugOverlayMetrics {
@@ -175,19 +152,6 @@ enum StabilizerDebugOverlayCalculator {
             simd_length(input.warpPerspective * masterStrength) / 0.006
         ))
 
-        var lensActivity: Float = 0.0
-        var lensConfidence: Float = 0.0
-        for component in input.lensComponents {
-            let support = unit(component.effectiveSupport)
-            lensConfidence = max(lensConfidence, support)
-            let appliedOffset = component.offset * masterStrength * support
-            lensActivity = max(
-                lensActivity,
-                abs(appliedOffset.x) / fineScaleX,
-                abs(appliedOffset.y) / fineScaleY
-            )
-        }
-
         let smoothing = correctionActivity(
             offset: input.temporalSmoothingPixelDelta,
             rotationDegrees: input.temporalSmoothingRotationDelta,
@@ -206,7 +170,6 @@ enum StabilizerDebugOverlayCalculator {
             macroJitter: macroJitter,
             microJitter: microJitter,
             farFieldWarp: farFieldWarp,
-            lens: unit(lensActivity),
             smoothing: smoothing,
             trackingQuality: unit(input.trackingConfidence),
             walkingQuality: unit(input.walkingTrackingConfidence),
@@ -217,7 +180,6 @@ enum StabilizerDebugOverlayCalculator {
             macroConfidence: unit(input.macroConfidence),
             microConfidence: unit(input.microJitterConfidence),
             warpConfidence: unit(input.warpConfidence),
-            lensConfidence: unit(lensConfidence),
             residualQualityAvailable: input.residualQualityAvailable,
             searchRadiusHeadroomAvailable: input.searchRadiusHeadroomAvailable
         )
