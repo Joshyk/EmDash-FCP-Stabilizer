@@ -3041,6 +3041,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         guard !autoCropPlaybackScalePlanPreparations.contains(key) else {
             if let onPrepared {
+                if let preparationScope {
+                    autoCropPlaybackScalePlanPreparationCallbacks[key]?.removeAll {
+                        $0.scope == preparationScope
+                    }
+                }
                 autoCropPlaybackScalePlanPreparationCallbacks[key, default: []].append(
                     AutoCropPlaybackPreparationCallback(scope: preparationScope, callback: onPrepared)
                 )
@@ -3050,6 +3055,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         autoCropPlaybackScalePlanPreparations.insert(key)
         if let onPrepared {
+            if let preparationScope {
+                autoCropPlaybackScalePlanPreparationCallbacks[key]?.removeAll {
+                    $0.scope == preparationScope
+                }
+            }
             autoCropPlaybackScalePlanPreparationCallbacks[key, default: []].append(
                 AutoCropPlaybackPreparationCallback(scope: preparationScope, callback: onPrepared)
             )

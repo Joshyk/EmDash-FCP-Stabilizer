@@ -5522,6 +5522,11 @@ enum AutoStabilizationEstimator {
         }
         if sharedPlaybackTrajectoryPreparations.contains(key) {
             if let onPrepared {
+                if let preparationScope {
+                    sharedPlaybackTrajectoryPreparationCallbacks[key]?.removeAll {
+                        $0.scope == preparationScope
+                    }
+                }
                 sharedPlaybackTrajectoryPreparationCallbacks[key, default: []].append(
                     PlaybackTrajectoryPreparationCallback(scope: preparationScope, callback: onPrepared)
                 )
@@ -5531,6 +5536,11 @@ enum AutoStabilizationEstimator {
         }
         sharedPlaybackTrajectoryPreparations.insert(key)
         if let onPrepared {
+            if let preparationScope {
+                sharedPlaybackTrajectoryPreparationCallbacks[key]?.removeAll {
+                    $0.scope == preparationScope
+                }
+            }
             sharedPlaybackTrajectoryPreparationCallbacks[key, default: []].append(
                 PlaybackTrajectoryPreparationCallback(scope: preparationScope, callback: onPrepared)
             )
