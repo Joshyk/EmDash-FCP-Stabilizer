@@ -1211,6 +1211,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryTurnOwnedXPreservationFarFieldFloorMax: Float = 0.10
     private static let playbackTrajectoryTurnOwnedXPreservationFarFieldStart: Float = 0.45
     private static let playbackTrajectoryTurnOwnedXPreservationFarFieldFull: Float = 0.85
+    private static let playbackTrajectoryTurnOwnedXTransitionRescueMaximumPixels: Float = 0.42
     private static let playbackTrajectoryFarFieldMacroDespikeInnerWindowSeconds = 0.12
     private static let playbackTrajectoryFarFieldMacroDespikeOuterWindowSeconds = 0.72
     private static let playbackTrajectoryFarFieldMacroDespikeLocalWindowSeconds = 0.36
@@ -4503,10 +4504,7 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
-            turnOwnedFarFieldXImpulseAuthority: max(
-                microXRescue.continuityFloor,
-                macroJitterXRescue.continuityFloor
-            ),
+            turnOwnedFarFieldXImpulseAuthority: microXRescue.continuityFloor,
             warpConfidence: appliedWarpConfidence,
             microConfidence: playbackMicroConfidence,
             macroJitterConfidence: playbackMacroJitterConfidence,
@@ -6094,18 +6092,25 @@ enum AutoStabilizationEstimator {
         } else {
             for index in result.indices {
                 // Keep each diagnostic X component visible, but let TURN own the
-                // final sum through an explicit continuity correction. A
-                // supported frame-local far-field X impulse must retain its
-                // scoped authority here; otherwise concatenation restores the
-                // one-frame shake that the Camera Jitter path already found.
+                // final sum through an explicit continuity correction. Restore
+                // only a tightly capped part of a supported Micro X impulse;
+                // restoring the whole composed delta breaks the TURN curve.
                 let impulseAuthority = clamp(
                     result[index].turnOwnedFarFieldXImpulseAuthority,
                     min: 0.0,
                     max: 1.0
                 )
                 let transitionPosition = concatenatedTurn.positions[index]
-                let finalPosition = transitionPosition
-                    + ((composedX[index] - transitionPosition) * impulseAuthority)
+                let requestedRestoration = (composedX[index] - transitionPosition) * impulseAuthority
+                let restorationLimit = min(
+                    playbackTrajectoryTurnOwnedXTransitionRescueMaximumPixels,
+                    abs(result[index].microPixelOffset.x) * impulseAuthority
+                )
+                let finalPosition = transitionPosition + clamp(
+                    requestedRestoration,
+                    min: -restorationLimit,
+                    max: restorationLimit
+                )
                 result[index].trajectoryContinuityPixelOffset.x += finalPosition - composedX[index]
             }
             for (eventID, event) in concatenatedTurn.events.enumerated() {
@@ -8521,10 +8526,7 @@ enum AutoStabilizationEstimator {
                     macroJitterYCorrectionStrength,
                     macroJitterRotationCorrectionStrength
                 ),
-                turnOwnedFarFieldXImpulseAuthority: max(
-                    microXRescue.continuityFloor,
-                    macroJitterXRescue.continuityFloor
-                ),
+                turnOwnedFarFieldXImpulseAuthority: microXRescue.continuityFloor,
                 warpConfidence: appliedWarpConfidence,
                 microConfidence: playbackMicroConfidence,
                 macroJitterConfidence: playbackMacroJitterConfidence,
@@ -10353,10 +10355,7 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
-            turnOwnedFarFieldXImpulseAuthority: max(
-                microXRescue.continuityFloor,
-                macroJitterXRescue.continuityFloor
-            ),
+            turnOwnedFarFieldXImpulseAuthority: microXRescue.continuityFloor,
             warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             macroJitterConfidence: macroJitterConfidence,
@@ -11338,10 +11337,7 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
-            turnOwnedFarFieldXImpulseAuthority: max(
-                microXRescue.continuityFloor,
-                macroJitterXRescue.continuityFloor
-            ),
+            turnOwnedFarFieldXImpulseAuthority: microXRescue.continuityFloor,
             warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             macroJitterConfidence: macroJitterConfidence,
