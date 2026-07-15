@@ -36,6 +36,12 @@ Options:
   --assume-current-fcp-state   Do not open the project by UI helper; use current FCP state.
   --assume-prepared-fcp        Skip prepare and only verify/capture current FCP state.
 
+Manual Inspector fallback:
+  STABILIZER_E2E_MANUAL_INSPECTOR_PREP=1 may be used only after the user visibly
+  sets Remove Black Edges to the case value and enables Debug Overlay. The harness
+  still enforces Proxy Only/Green and rejects post-capture logs unless proxy/crop
+  match the case. This fallback is logged explicitly.
+
 Capture prerequisites:
   - FCP has Screen Recording and Accessibility permission for the invoking terminal.
   - The case library can be opened from disk.
@@ -945,7 +951,7 @@ if missing_stage_fields:
     )
 
 obsolete_stage_fields = [
-    field for field in ("microX", "microY", "macroX", "macroY", "trajectoryMicroX", "trajectoryMicroY")
+    field for field in ("microX", "microY", "trajectoryMicroX", "trajectoryMicroY")
     if any(field in row for row in rows)
 ]
 if obsolete_stage_fields:
@@ -5259,22 +5265,26 @@ assert_case_prepared() {
 	sleep 0.4
 	ensure_selected_timeline_clip_enabled
 	sleep 0.4
-	printf 'Checking Inspector for expected Stabilizer controls...\n'
-	if assert_inspector_contains_case_effect "$expected_effect" "$remove_black_edges"; then
-		printf 'Inspector shows expected Stabilizer controls.\n'
+	if [[ "${STABILIZER_E2E_MANUAL_INSPECTOR_PREP:-0}" == "1" ]]; then
+		printf 'Manual Inspector preparation fallback active: user visibly set Remove Black Edges=%s and Debug Overlay=on; post-capture proxy/crop render diagnostics remain mandatory.\n' "$remove_black_edges"
 	else
-		fail "selected timeline clip Inspector is not showing ${expected_effect}; refusing to toggle Debug Overlay on the wrong item"
-	fi
-	set_fcp_remove_black_edges_via_local_ax "$remove_black_edges" \
-		|| fail "case requires Remove Black Edges ${remove_black_edges}, but the Inspector checkbox could not be set"
-	printf 'Remove Black Edges set to: %s\n' "$remove_black_edges"
-	set_fcp_debug_overlay_on "$viewer_roi"
-	assert_inspector_contains_case_effect_if_readable "$expected_effect" "$remove_black_edges"
-	if [[ "$remove_black_edges" == "false" ]]; then
-		if [[ "${STABILIZER_E2E_SKIP_REMOVE_BLACK_EDGES_RENDER_PULSE:-0}" == "1" ]]; then
-			printf 'Skipping Remove Black Edges render pulse because STABILIZER_E2E_SKIP_REMOVE_BLACK_EDGES_RENDER_PULSE=1; render revision must provide invalidation evidence.\n'
+		printf 'Checking Inspector for expected Stabilizer controls...\n'
+		if assert_inspector_contains_case_effect "$expected_effect" "$remove_black_edges"; then
+			printf 'Inspector shows expected Stabilizer controls.\n'
 		else
-			force_fcp_remove_black_edges_render_pulse "$remove_black_edges"
+			fail "selected timeline clip Inspector is not showing ${expected_effect}; refusing to toggle Debug Overlay on the wrong item"
+		fi
+		set_fcp_remove_black_edges_via_local_ax "$remove_black_edges" \
+			|| fail "case requires Remove Black Edges ${remove_black_edges}, but the Inspector checkbox could not be set"
+		printf 'Remove Black Edges set to: %s\n' "$remove_black_edges"
+		set_fcp_debug_overlay_on "$viewer_roi"
+		assert_inspector_contains_case_effect_if_readable "$expected_effect" "$remove_black_edges"
+		if [[ "$remove_black_edges" == "false" ]]; then
+			if [[ "${STABILIZER_E2E_SKIP_REMOVE_BLACK_EDGES_RENDER_PULSE:-0}" == "1" ]]; then
+				printf 'Skipping Remove Black Edges render pulse because STABILIZER_E2E_SKIP_REMOVE_BLACK_EDGES_RENDER_PULSE=1; render revision must provide invalidation evidence.\n'
+			else
+				force_fcp_remove_black_edges_render_pulse "$remove_black_edges"
+			fi
 		fi
 	fi
 	normalize_fcp_layout

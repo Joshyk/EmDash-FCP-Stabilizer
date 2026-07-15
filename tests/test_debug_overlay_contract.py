@@ -175,4 +175,18 @@ if e2e_labels != LABELS:
 if "row_count = float(len(labels))" not in e2e:
     fail("E2E overlay sizing does not derive its row count from labels")
 
+required_stage_match = re.search(
+    r'required_stage_fields = \[(?P<body>.*?)\n\]', e2e, re.S
+)
+obsolete_stage_match = re.search(
+    r'obsolete_stage_fields = \[\s*field for field in \((?P<body>.*?)\)', e2e, re.S
+)
+if not required_stage_match or not obsolete_stage_match:
+    fail("E2E render component stage contracts are missing")
+required_stage_fields = set(re.findall(r'"([A-Za-z.]+)"', required_stage_match.group("body")))
+obsolete_stage_fields = set(re.findall(r'"([A-Za-z.]+)"', obsolete_stage_match.group("body")))
+contradictory_stage_fields = required_stage_fields & obsolete_stage_fields
+if contradictory_stage_fields:
+    fail(f"E2E render fields are both required and obsolete: {sorted(contradictory_stage_fields)}")
+
 print("test_debug_overlay_contract: PASS")
