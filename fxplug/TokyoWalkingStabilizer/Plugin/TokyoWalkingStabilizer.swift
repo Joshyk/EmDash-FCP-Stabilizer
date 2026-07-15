@@ -692,6 +692,7 @@ private struct StabilizerAutoTransformCacheKey: Hashable {
     let farFieldWarp: UInt64
     let turnSmoothingZoom: UInt64
     let turnTransitionWindow: UInt64
+    let turnIdleReleaseSeconds: UInt64
 }
 
 private struct RenderAnalysisDecisionSignature: Equatable {
@@ -2254,6 +2255,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             farFieldWarp: strengths.farFieldWarp.bitPattern,
             turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
             turnTransitionWindow: strengths.turnTransitionWindowSeconds.bitPattern,
+            turnIdleReleaseSeconds: strengths.turnIdleReleaseSeconds.bitPattern,
             currentTransform: AutoCropTransformSignature(framingTransform)
         )
 

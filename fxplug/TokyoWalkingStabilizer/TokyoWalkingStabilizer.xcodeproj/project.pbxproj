@@ -403,9 +403,8 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = MVL44V84KR;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = WrapperApp/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.TokyoWalkingStabilizer;
@@ -421,9 +420,8 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = MVL44V84KR;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = WrapperApp/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = com.justadev.TokyoWalkingStabilizer;
@@ -439,9 +437,8 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = MVL44V84KR;
 				HEADER_SEARCH_PATHS = Plugin;
 				INFOPLIST_FILE = Plugin/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -463,9 +460,8 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = MVL44V84KR;
 				HEADER_SEARCH_PATHS = Plugin;
 				INFOPLIST_FILE = Plugin/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
