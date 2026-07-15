@@ -18,7 +18,7 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.2.8` uses schema 52 all-axis Camera Jitter analysis. It stores
+Version `1.2.9` uses schema 52 all-axis Camera Jitter analysis. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
@@ -174,6 +174,12 @@ With `Remove Black Edges` off, Auto Crop is completely bypassed: scale is exactl
 and its look-ahead position reservation is not mixed into TURN. The uncovered edge is
 therefore the direct result of Camera Jitter and TURN only. When on, Auto Crop zoom hides
 that same edge according to `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time`.
+For overlapping intervals whose next peak needs less scale, the previous Hold now hands
+zoom down with an ease-in/out curve over the shorter of `Zoom-Out Time` and the time
+remaining to that next peak. The curve stops at the next turn's protected scale instead
+of returning to `1.0x`; coverage, planned-position, and final framing-repair floors remain
+absolute. Equal or higher next peaks retain existing look-ahead behavior, and the last
+peak retains its ordinary release.
 TURN confidence now requires both tracking evidence and a real X turn band, so
 low-evidence frames do not get a hidden minimum turn correction.
 

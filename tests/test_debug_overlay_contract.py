@@ -122,8 +122,8 @@ for row, expected_label in zip(ROWS[:-1], LABELS[:-1]):
             f"expected {expected_label!r}, found {decoded_label!r}"
         )
 
-if "vector_float4(1.0, 2.0, 8.0, 1_015.0)" not in swift:
-    fail("Swift runtime version components do not encode version 1.2.8")
+if "vector_float4(1.0, 2.0, 9.0, 1_016.0)" not in swift:
+    fail("Swift runtime version components do not encode version 1.2.9")
 if "result[index].microPixelOffset.x = 0.0" in estimator:
     fail("TURN concatenation must not erase Debug Overlay X component activity")
 if "result[index].trajectoryContinuityPixelOffset.x += concatenatedTurn.positions[index] - composedX[index]" not in estimator:
@@ -131,10 +131,10 @@ if "result[index].trajectoryContinuityPixelOffset.x += concatenatedTurn.position
 for plist_path in VERSION_PLISTS:
     with plist_path.open("rb") as handle:
         version_info = plistlib.load(handle)
-    if version_info.get("CFBundleShortVersionString") != "1.2.8":
-        fail(f"bundle version is not 1.2.8: {plist_path}")
-    if version_info.get("CFBundleVersion") != "1015":
-        fail(f"bundle build does not match runtime build 1015: {plist_path}")
+    if version_info.get("CFBundleShortVersionString") != "1.2.9":
+        fail(f"bundle version is not 1.2.9: {plist_path}")
+    if version_info.get("CFBundleVersion") != "1016":
+        fail(f"bundle build does not match runtime build 1016: {plist_path}")
 if "patch >= 10 ? debugDigitChar(patch / 10)" not in metal:
     fail("Metal runtime label does not suppress patch-version leading zeroes")
 if "// PROXY" not in metal or "// ORIGINAL" not in metal:

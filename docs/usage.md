@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.2.8` is the current review baseline for all-axis Camera Jitter.
+Version `1.2.9` is the current review baseline for all-axis Camera Jitter.
 Use schema 52 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;
@@ -139,6 +139,11 @@ fallbacks.
   the exact release length after an Auto Crop zoom keypoint. Final zoom
   is read from a cached keypoint plan built from the prepared analysis, not
   recalculated from each render frame's safe-crop scale.
+  When a lower protected peak follows an overlapping higher peak, release becomes a
+  descending handoff over `min(Zoom-Out Time, time to next peak)` and stops at that
+  next protected scale. Coverage, planned-position, and final framing-repair floors
+  can only raise this curve; they are never bypassed. Equal/higher next peaks keep
+  the existing look-ahead behavior, while a final peak keeps the ordinary release.
 - `Auto Crop Hold Time`: retained for parameter compatibility and now defines the
   exact hold after a keypoint peak. When `Remove Black Edges` is on,
   each local peak safe-crop demand becomes an internal zoom keypoint; the visible

@@ -54,11 +54,11 @@ private struct StabilizerInfoFields {
     let queue: String
 }
 
-private let tokyoWalkingStabilizerVersion = "1.2.8"
-private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_015.0
-private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 2.0, 8.0, 1_015.0)
+private let tokyoWalkingStabilizerVersion = "1.2.9"
+private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_016.0
+private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 2.0, 9.0, 1_016.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_448_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_449_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -3325,6 +3325,18 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 positionPixels: demandSample.positionPixels
             )
         }
+        let playbackScaleHandoffs = autoCropZoomHandoffSegments(playbackKeypoints)
+        let capScaleHandoffs = autoCropZoomHandoffSegments(capKeypoints)
+        if !playbackScaleHandoffs.isEmpty {
+            os_log(
+                "Auto Crop playback descending handoff plan | handoffs %d capHandoffs %d release %.3f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                playbackScaleHandoffs.count,
+                capScaleHandoffs.count,
+                releaseSeconds
+            )
+        }
 
         var rawPlannedSamples: [AutoCropPlaybackScaleSample] = []
         rawPlannedSamples.reserveCapacity(samples.count)
@@ -3376,6 +3388,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             if compositionPositionWeight > 0.0001 {
                 compositionPosition = weightedCompositionPosition / compositionPositionWeight
             }
+            scale = StabilizerAutoCropZoomHandoff.scale(
+                baseScale: scale,
+                at: sample.seconds,
+                handoffs: playbackScaleHandoffs
+            ).scale
             compositionPositionSamples.append(
                 AutoCropPlaybackPositionSample(
                     seconds: sample.seconds,
@@ -3417,6 +3434,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 }
                 capKeypointIndex = capKeypoints.index(after: capKeypointIndex)
             }
+            capScale = StabilizerAutoCropZoomHandoff.scale(
+                baseScale: capScale,
+                at: sample.seconds,
+                handoffs: capScaleHandoffs
+            ).scale
             capSamples.append(
                 AutoCropPlaybackScaleSample(
                     seconds: sample.seconds,
@@ -5120,6 +5142,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             holdTimeSeconds: holdTimeSeconds,
             transitionDurationSeconds: transitionDurationSeconds
         )
+        let descendingHandoffCount = autoCropZoomHandoffSegments(keypoints).count
         let telemetry = AutoCropCoverageTelemetry(
             planCount: keypoints.count,
             rawCount: preMergeSamples.count,
@@ -5135,10 +5158,11 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
 
         if let strongest = keypoints.max(by: { $0.scale < $1.scale }) {
             os_log(
-                "Auto Crop zoom keypoint plan | count %d rawCount %d mergedCount %d clusters %d missCount %d worstDeficit %.4f strongestPeak %.3f start %.3f holdEnd %.3f end %.3f scale %.4f lead %.3f",
+                "Auto Crop zoom keypoint plan | count %d descendingHandoffs %d rawCount %d mergedCount %d clusters %d missCount %d worstDeficit %.4f strongestPeak %.3f start %.3f holdEnd %.3f end %.3f scale %.4f lead %.3f",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
                 keypoints.count,
+                descendingHandoffCount,
                 telemetry.rawCount,
                 telemetry.mergedCount,
                 telemetry.mergeClusterCount,
@@ -5486,6 +5510,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         for index in adjusted.indices.dropLast() {
             let current = adjusted[index]
             let next = adjusted[adjusted.index(after: index)]
+            guard next.scale >= current.scale - 0.00001 else {
+                continue
+            }
             guard next.startSeconds <= current.endSeconds + effectiveLeadTime + 1e-9 else {
                 continue
             }
@@ -6001,7 +6028,36 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 peakSeconds: keypoint.peakSeconds
             )
         }
+        let handoff = StabilizerAutoCropZoomHandoff.scale(
+            baseScale: bestSample.scale,
+            at: seconds,
+            handoffs: autoCropZoomHandoffSegments(plan.keypoints)
+        )
+        if handoff.applied {
+            bestSample = AutoCropZoomPlanSample(
+                scale: handoff.scale,
+                positionPixels: bestSample.positionPixels,
+                influence: bestSample.influence,
+                peakSeconds: bestSample.peakSeconds
+            )
+        }
         return bestSample
+    }
+
+    private static func autoCropZoomHandoffSegments(
+        _ keypoints: [AutoCropZoomKeypoint]
+    ) -> [StabilizerAutoCropZoomHandoffSegment] {
+        StabilizerAutoCropZoomHandoff.segments(
+            keypoints: keypoints.map { keypoint in
+                StabilizerAutoCropZoomHandoffKeypoint(
+                    peakSeconds: keypoint.peakSeconds,
+                    startSeconds: keypoint.startSeconds,
+                    holdEndSeconds: keypoint.holdEndSeconds,
+                    endSeconds: keypoint.endSeconds,
+                    protectedScale: keypoint.scale
+                )
+            }
+        )
     }
 
     private static func autoCropZoomKeypointInfluence(
