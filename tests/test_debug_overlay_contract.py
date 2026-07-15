@@ -10,6 +10,7 @@ METAL = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizerTrans
 SWIFT = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/TokyoWalkingStabilizer.swift"
 ESTIMATOR = ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/AutoStabilizationEstimator.swift"
 E2E = ROOT / "scripts/stabilizer_fcp_screen_capture_e2e.sh"
+LENS_DIAGNOSTICS = ROOT / "tests/stabilizer_lens_band_diagnostics.py"
 VERSION_PLISTS = [
     ROOT / "fxplug/TokyoWalkingStabilizer/Plugin/Info.plist",
     ROOT / "fxplug/TokyoWalkingStabilizer/WrapperApp/Info.plist",
@@ -70,6 +71,7 @@ metal = METAL.read_text()
 swift = SWIFT.read_text()
 estimator = ESTIMATOR.read_text()
 e2e = E2E.read_text()
+lens_diagnostics = LENS_DIAGNOSTICS.read_text()
 
 count_match = re.search(r"#define\s+STABILIZER_DEBUG_OVERLAY_ROW_COUNT\s+(\d+)", header)
 if not count_match or int(count_match.group(1)) != len(ROWS):
@@ -188,5 +190,8 @@ obsolete_stage_fields = set(re.findall(r'"([A-Za-z.]+)"', obsolete_stage_match.g
 contradictory_stage_fields = required_stage_fields & obsolete_stage_fields
 if contradictory_stage_fields:
     fail(f"E2E render fields are both required and obsolete: {sorted(contradictory_stage_fields)}")
+
+if 'PREFIX = "Render frame components csv v2 |"' not in lens_diagnostics:
+    fail("lens-band diagnostics must consume the current render component csv v2 contract")
 
 print("test_debug_overlay_contract: PASS")
