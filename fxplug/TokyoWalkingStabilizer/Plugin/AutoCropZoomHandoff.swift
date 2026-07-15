@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 struct StabilizerAutoCropZoomHandoffKeypoint {
     let peakSeconds: Double
@@ -6,10 +7,13 @@ struct StabilizerAutoCropZoomHandoffKeypoint {
     let holdEndSeconds: Double
     let endSeconds: Double
     let protectedScale: Float
+    let protectedPositionPixels: vector_float2
 }
 
 struct StabilizerAutoCropZoomHandoffResult {
     let scale: Float
+    let positionPixels: vector_float2
+    let progress: Float
     let applied: Bool
     let fromPeakSeconds: Double?
     let toPeakSeconds: Double?
@@ -20,6 +24,8 @@ struct StabilizerAutoCropZoomHandoffSegment {
     let endSeconds: Double
     let fromScale: Float
     let toScale: Float
+    let fromPositionPixels: vector_float2
+    let toPositionPixels: vector_float2
     let fromPeakSeconds: Double
     let toPeakSeconds: Double
 }
@@ -82,6 +88,8 @@ enum StabilizerAutoCropZoomHandoff {
                     endSeconds: current.holdEndSeconds + handoffDuration,
                     fromScale: current.protectedScale,
                     toScale: next.protectedScale,
+                    fromPositionPixels: current.protectedPositionPixels,
+                    toPositionPixels: next.protectedPositionPixels,
                     fromPeakSeconds: current.peakSeconds,
                     toPeakSeconds: next.peakSeconds
                 )
@@ -90,8 +98,9 @@ enum StabilizerAutoCropZoomHandoff {
         return segments
     }
 
-    static func scale(
+    static func framing(
         baseScale: Float,
+        basePositionPixels: vector_float2,
         at seconds: Double,
         handoffs: [StabilizerAutoCropZoomHandoffSegment],
         coverageFloorScale: Float = 1.0,
@@ -106,6 +115,8 @@ enum StabilizerAutoCropZoomHandoff {
         guard seconds.isFinite, !handoffs.isEmpty else {
             return StabilizerAutoCropZoomHandoffResult(
                 scale: max(safeBaseScale, absoluteFloor),
+                positionPixels: basePositionPixels,
+                progress: 0.0,
                 applied: false,
                 fromPeakSeconds: nil,
                 toPeakSeconds: nil
@@ -125,6 +136,8 @@ enum StabilizerAutoCropZoomHandoff {
         guard let handoff = selectedHandoff else {
             return StabilizerAutoCropZoomHandoffResult(
                 scale: max(safeBaseScale, absoluteFloor),
+                positionPixels: basePositionPixels,
+                progress: 0.0,
                 applied: false,
                 fromPeakSeconds: nil,
                 toPeakSeconds: nil
@@ -132,33 +145,57 @@ enum StabilizerAutoCropZoomHandoff {
         }
 
         let handoffDuration = handoff.endSeconds - handoff.startSeconds
-        let progress: Float
-        if handoffDuration <= 1e-9 {
-            progress = 1.0
-        } else {
-            progress = Float(
-                min(
-                    max((seconds - handoff.startSeconds) / handoffDuration, 0.0),
-                    1.0
-                )
-            )
-        }
-        let easedProgress = quinticEaseInOut(progress)
+        let progress = constantVelocityProgress(
+            elapsedSeconds: seconds - handoff.startSeconds,
+            durationSeconds: handoffDuration
+        )
         let handoffScale = handoff.fromScale
-            + ((handoff.toScale - handoff.fromScale) * easedProgress)
+            + ((handoff.toScale - handoff.fromScale) * progress)
+        let handoffPosition = handoff.fromPositionPixels
+            + ((handoff.toPositionPixels - handoff.fromPositionPixels) * progress)
         let loweredScale = min(safeBaseScale, max(Float(1.0), handoffScale))
+        let positionChanged = simd_length(handoffPosition - basePositionPixels) > 0.0001
         return StabilizerAutoCropZoomHandoffResult(
             scale: max(loweredScale, absoluteFloor),
-            applied: loweredScale + 0.00001 < safeBaseScale,
+            positionPixels: handoffPosition,
+            progress: progress,
+            applied: loweredScale + 0.00001 < safeBaseScale || positionChanged,
             fromPeakSeconds: handoff.fromPeakSeconds,
             toPeakSeconds: handoff.toPeakSeconds
         )
     }
 
-    private static func quinticEaseInOut(_ value: Float) -> Float {
+    private static func integratedQuinticSmootherStep(_ value: Float) -> Float {
         let t = min(max(value, 0.0), 1.0)
         let t2 = t * t
-        let t3 = t2 * t
-        return t3 * ((t * ((t * 6.0) - 15.0)) + 10.0)
+        let t4 = t2 * t2
+        return t4 * ((t2 - (3.0 * t)) + 2.5)
+    }
+
+    private static func constantVelocityProgress(
+        elapsedSeconds: Double,
+        durationSeconds: Double
+    ) -> Float {
+        guard durationSeconds > 1e-9 else {
+            return 1.0
+        }
+        let elapsed = min(max(elapsedSeconds, 0.0), durationSeconds)
+        let ease = min(0.30, durationSeconds * 0.15)
+        guard ease > 1e-9 else {
+            return Float(elapsed / durationSeconds)
+        }
+
+        let travelTime = durationSeconds - ease
+        let distance: Double
+        if elapsed < ease {
+            distance = ease * Double(integratedQuinticSmootherStep(Float(elapsed / ease)))
+        } else if elapsed <= durationSeconds - ease {
+            distance = (ease * 0.5) + (elapsed - ease)
+        } else {
+            let ramp = Float((elapsed - (durationSeconds - ease)) / ease)
+            let decelerationArea = Double(ramp - integratedQuinticSmootherStep(ramp))
+            distance = (durationSeconds - (ease * 1.5)) + (ease * decelerationArea)
+        }
+        return min(max(Float(distance / travelTime), 0.0), 1.0)
     }
 }

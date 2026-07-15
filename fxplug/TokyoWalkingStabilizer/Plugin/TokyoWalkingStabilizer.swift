@@ -58,7 +58,7 @@ private let tokyoWalkingStabilizerVersion = "1.2.9"
 private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_016.0
 private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 2.0, 9.0, 1_016.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_455_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_456_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -3394,11 +3394,14 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             if compositionPositionWeight > 0.0001 {
                 compositionPosition = weightedCompositionPosition / compositionPositionWeight
             }
-            scale = StabilizerAutoCropZoomHandoff.scale(
+            let framingHandoff = StabilizerAutoCropZoomHandoff.framing(
                 baseScale: scale,
+                basePositionPixels: compositionPosition,
                 at: sample.seconds,
                 handoffs: playbackScaleHandoffs
-            ).scale
+            )
+            scale = framingHandoff.scale
+            compositionPosition = framingHandoff.positionPixels
             compositionPositionSamples.append(
                 AutoCropPlaybackPositionSample(
                     seconds: sample.seconds,
@@ -3440,8 +3443,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 }
                 capKeypointIndex = capKeypoints.index(after: capKeypointIndex)
             }
-            capScale = StabilizerAutoCropZoomHandoff.scale(
+            capScale = StabilizerAutoCropZoomHandoff.framing(
                 baseScale: capScale,
+                basePositionPixels: .zero,
                 at: sample.seconds,
                 handoffs: capScaleHandoffs
             ).scale
@@ -6044,15 +6048,16 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 peakSeconds: keypoint.peakSeconds
             )
         }
-        let handoff = StabilizerAutoCropZoomHandoff.scale(
+        let handoff = StabilizerAutoCropZoomHandoff.framing(
             baseScale: bestSample.scale,
+            basePositionPixels: bestSample.positionPixels,
             at: seconds,
             handoffs: autoCropZoomHandoffSegments(plan.keypoints)
         )
         if handoff.applied {
             bestSample = AutoCropZoomPlanSample(
                 scale: handoff.scale,
-                positionPixels: bestSample.positionPixels,
+                positionPixels: handoff.positionPixels,
                 influence: bestSample.influence,
                 peakSeconds: bestSample.peakSeconds
             )
@@ -6070,7 +6075,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     startSeconds: keypoint.startSeconds,
                     holdEndSeconds: keypoint.holdEndSeconds,
                     endSeconds: keypoint.endSeconds,
-                    protectedScale: keypoint.scale
+                    protectedScale: keypoint.scale,
+                    protectedPositionPixels: keypoint.positionPixels
                 )
             }
         )

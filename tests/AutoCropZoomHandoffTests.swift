@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 @main
 struct AutoCropZoomHandoffTests {
@@ -19,30 +20,52 @@ struct AutoCropZoomHandoffTests {
         start: Double,
         holdEnd: Double,
         end: Double,
-        scale: Float
+        scale: Float,
+        positionX: Float = 0.0
     ) -> StabilizerAutoCropZoomHandoffKeypoint {
         StabilizerAutoCropZoomHandoffKeypoint(
             peakSeconds: peak,
             startSeconds: start,
             holdEndSeconds: holdEnd,
             endSeconds: end,
-            protectedScale: scale
+            protectedScale: scale,
+            protectedPositionPixels: vector_float2(positionX, 0.0)
         )
     }
 
     static func main() {
         let descending = StabilizerAutoCropZoomHandoff.segments(
             keypoints: [
-                keypoint(peak: 0.0, start: 0.0, holdEnd: 2.0, end: 8.0, scale: 1.20),
-                keypoint(peak: 5.0, start: 1.0, holdEnd: 7.0, end: 13.0, scale: 1.08),
+                keypoint(peak: 0.0, start: 0.0, holdEnd: 2.0, end: 8.0, scale: 1.20, positionX: 120.0),
+                keypoint(peak: 5.0, start: 1.0, holdEnd: 7.0, end: 13.0, scale: 1.08, positionX: 40.0),
             ]
         )
         expect(descending.count == 1, "overlapping high-to-low peaks must create one handoff")
-        expect(close(StabilizerAutoCropZoomHandoff.scale(baseScale: 1.20, at: 2.0, handoffs: descending).scale, 1.20), "handoff must start at the high protected scale")
-        let midpoint = StabilizerAutoCropZoomHandoff.scale(baseScale: 1.20, at: 3.5, handoffs: descending)
+        let handoffStart = StabilizerAutoCropZoomHandoff.framing(
+            baseScale: 1.20,
+            basePositionPixels: vector_float2(120.0, 0.0),
+            at: 2.0,
+            handoffs: descending
+        )
+        expect(close(handoffStart.scale, 1.20), "handoff must start at the high protected scale")
+        expect(close(handoffStart.positionPixels.x, 120.0), "handoff must start at the high-turn X reservation")
+        let midpoint = StabilizerAutoCropZoomHandoff.framing(
+            baseScale: 1.20,
+            basePositionPixels: vector_float2(120.0, 0.0),
+            at: 3.5,
+            handoffs: descending
+        )
         expect(midpoint.applied, "descending handoff must lower the existing max-composed plan")
         expect(close(midpoint.scale, 1.14), "handoff midpoint must ease between the protected peaks")
-        expect(close(StabilizerAutoCropZoomHandoff.scale(baseScale: 1.20, at: 5.0, handoffs: descending).scale, 1.08), "handoff must reach the next protected scale instead of returning to 1x")
+        expect(close(midpoint.positionPixels.x, 80.0), "zoom and X must share one handoff progress")
+        let handoffEnd = StabilizerAutoCropZoomHandoff.framing(
+            baseScale: 1.20,
+            basePositionPixels: vector_float2(120.0, 0.0),
+            at: 5.0,
+            handoffs: descending
+        )
+        expect(close(handoffEnd.scale, 1.08), "handoff must reach the next protected scale instead of returning to 1x")
+        expect(close(handoffEnd.positionPixels.x, 40.0), "handoff must reach the next required X instead of returning to center")
 
         let densePlayback = StabilizerAutoCropZoomHandoff.segments(
             keypoints: [
@@ -55,8 +78,9 @@ struct AutoCropZoomHandoffTests {
         expect(densePlayback.count == 1, "dense samples inside one Hold must collapse to their strongest peak")
         expect(close(densePlayback.first?.fromScale ?? .nan, 1.20), "dense handoff must start from the true high peak")
 
-        let floored = StabilizerAutoCropZoomHandoff.scale(
+        let floored = StabilizerAutoCropZoomHandoff.framing(
             baseScale: 1.20,
+            basePositionPixels: vector_float2(120.0, 0.0),
             at: 5.0,
             handoffs: descending,
             coverageFloorScale: 1.09,
@@ -80,7 +104,23 @@ struct AutoCropZoomHandoffTests {
             ]
         )
         expect(rising.isEmpty, "equal or larger next peaks must keep existing lookahead behavior")
-        expect(close(StabilizerAutoCropZoomHandoff.scale(baseScale: 1.16, at: 3.0, handoffs: rising).scale, 1.16), "no handoff must preserve the current plan")
+        expect(close(StabilizerAutoCropZoomHandoff.framing(baseScale: 1.16, basePositionPixels: .zero, at: 3.0, handoffs: rising).scale, 1.16), "no handoff must preserve the current plan")
+
+        let bodySamples = [2.6, 3.0, 3.4, 3.8, 4.2].map {
+            StabilizerAutoCropZoomHandoff.framing(
+                baseScale: 1.20,
+                basePositionPixels: vector_float2(120.0, 0.0),
+                at: $0,
+                handoffs: descending
+            )
+        }
+        let bodyXSteps = zip(bodySamples, bodySamples.dropFirst()).map {
+            $1.positionPixels.x - $0.positionPixels.x
+        }
+        expect(
+            bodyXSteps.allSatisfy { close($0, bodyXSteps[0], tolerance: 0.001) },
+            "the middle of a joined zoom/X handoff must keep one constant speed"
+        )
 
         let separate = StabilizerAutoCropZoomHandoff.segments(
             keypoints: [

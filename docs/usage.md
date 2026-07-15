@@ -146,10 +146,12 @@ fallbacks.
   is read from a cached keypoint plan built from the prepared analysis, not
   recalculated from each render frame's safe-crop scale.
   When a lower protected peak follows an overlapping higher peak, release becomes a
-  descending handoff over `min(Zoom-Out Time, time to next peak)` and stops at that
-  next protected scale. Coverage, planned-position, and final framing-repair floors
-  can only raise this curve; they are never bypassed. Equal/higher next peaks keep
-  the existing look-ahead behavior, while a final peak keeps the ordinary release.
+  descending zoom/X handoff over `min(Zoom-Out Time, time to next peak)` and stops at
+  that next protected scale and crop-X reservation. Zoom and X use one constant cruising
+  progress with quintic easing limited to 0.30 seconds at the endpoints. Coverage,
+  planned-position, and final framing-repair floors can only raise this curve; they are
+  never bypassed. Equal/higher next peaks keep the existing look-ahead behavior, while
+  a final peak keeps the ordinary release.
 - `Auto Crop Hold Time`: retained for parameter compatibility and now defines the
   exact hold after a keypoint peak. When `Remove Black Edges` is on,
   each local peak safe-crop demand becomes an internal zoom keypoint; the visible
