@@ -115,6 +115,7 @@ struct StabilizerAutoTransform {
     var temporalSmoothingWindowSeconds: Float
     var effectiveMicroJitterStrength: vector_float3
     var effectiveMacroJitterStrength: vector_float3
+    var turnOwnedFarFieldXImpulseAuthority: Float = 0.0
     var warpConfidence: Float
     var microConfidence: Float
     var macroJitterConfidence: Float
@@ -4502,6 +4503,10 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
+            turnOwnedFarFieldXImpulseAuthority: max(
+                microXRescue.continuityFloor,
+                macroJitterXRescue.continuityFloor
+            ),
             warpConfidence: appliedWarpConfidence,
             microConfidence: playbackMicroConfidence,
             macroJitterConfidence: playbackMacroJitterConfidence,
@@ -8505,6 +8510,10 @@ enum AutoStabilizationEstimator {
                     macroJitterYCorrectionStrength,
                     macroJitterRotationCorrectionStrength
                 ),
+                turnOwnedFarFieldXImpulseAuthority: max(
+                    microXRescue.continuityFloor,
+                    macroJitterXRescue.continuityFloor
+                ),
                 warpConfidence: appliedWarpConfidence,
                 microConfidence: playbackMicroConfidence,
                 macroJitterConfidence: playbackMacroJitterConfidence,
@@ -8967,15 +8976,29 @@ enum AutoStabilizationEstimator {
             previous: previous.macroJitterPixelOffset,
             limit: pixelLimit * 0.65
         )
+        let turnOwnedFarFieldXImpulseAuthority = clamp(
+            current.turnOwnedFarFieldXImpulseAuthority,
+            min: 0.0,
+            max: 1.0
+        )
+        limited.microPixelOffset.x += (
+            current.microPixelOffset.x - limited.microPixelOffset.x
+        ) * turnOwnedFarFieldXImpulseAuthority
+        limited.macroJitterPixelOffset.x += (
+            current.macroJitterPixelOffset.x - limited.macroJitterPixelOffset.x
+        ) * turnOwnedFarFieldXImpulseAuthority
         let componentPixelOffset = playbackTrajectoryComposedNonLensPixelOffset(limited)
         let previousNonLensPixelOffset = previous.pixelOffset
             - previous.cameraRigidPixelOffset
             - previous.lensShakePixelOffset
-        let finalPixelOffset = playbackTrajectoryLimitedVector(
+        var finalPixelOffset = playbackTrajectoryLimitedVector(
             componentPixelOffset,
             previous: previousNonLensPixelOffset,
             limit: pixelLimit * finalPixelLimitScale
         )
+        finalPixelOffset.x += (
+            componentPixelOffset.x - finalPixelOffset.x
+        ) * turnOwnedFarFieldXImpulseAuthority
         limited.trajectoryContinuityPixelOffset = finalPixelOffset - componentPixelOffset
         limited.pixelOffset = playbackTrajectoryComposedPixelOffset(limited)
 
@@ -9089,6 +9112,7 @@ enum AutoStabilizationEstimator {
         transform.temporalSmoothingWindowSeconds = Float(windowSeconds)
         transform.effectiveMicroJitterStrength = rawTransform.effectiveMicroJitterStrength
         transform.effectiveMacroJitterStrength = rawTransform.effectiveMacroJitterStrength
+        transform.turnOwnedFarFieldXImpulseAuthority = rawTransform.turnOwnedFarFieldXImpulseAuthority
         transform.warpConfidence = rawTransform.warpConfidence
         transform.microConfidence = rawTransform.microConfidence
         transform.macroJitterConfidence = rawTransform.macroJitterConfidence
@@ -10317,6 +10341,10 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
+            turnOwnedFarFieldXImpulseAuthority: max(
+                microXRescue.continuityFloor,
+                macroJitterXRescue.continuityFloor
+            ),
             warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             macroJitterConfidence: macroJitterConfidence,
@@ -11298,6 +11326,10 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
+            turnOwnedFarFieldXImpulseAuthority: max(
+                microXRescue.continuityFloor,
+                macroJitterXRescue.continuityFloor
+            ),
             warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             macroJitterConfidence: macroJitterConfidence,
@@ -12204,6 +12236,7 @@ enum AutoStabilizationEstimator {
         var temporalSmoothingRotationDelta: Float = 0.0
         var effectiveMicroJitterStrength = vector_float3(0.0, 0.0, 0.0)
         var effectiveMacroJitterStrength = vector_float3(0.0, 0.0, 0.0)
+        var turnOwnedFarFieldXImpulseAuthority: Float = 0.0
         var warpConfidence: Float = 0.0
         var microConfidence: Float = 0.0
         var macroJitterConfidence: Float = 0.0
@@ -12328,6 +12361,7 @@ enum AutoStabilizationEstimator {
             temporalSmoothingRotationDelta += transform.temporalSmoothingRotationDelta * weight
             effectiveMicroJitterStrength += transform.effectiveMicroJitterStrength * weight
             effectiveMacroJitterStrength += transform.effectiveMacroJitterStrength * weight
+            turnOwnedFarFieldXImpulseAuthority += transform.turnOwnedFarFieldXImpulseAuthority * weight
             warpConfidence += transform.warpConfidence * weight
             microConfidence += transform.microConfidence * weight
             macroJitterConfidence += transform.macroJitterConfidence * weight
@@ -12467,6 +12501,7 @@ enum AutoStabilizationEstimator {
             temporalSmoothingWindowSeconds: 0.0,
             effectiveMicroJitterStrength: effectiveMicroJitterStrength / totalWeight,
             effectiveMacroJitterStrength: effectiveMacroJitterStrength / totalWeight,
+            turnOwnedFarFieldXImpulseAuthority: turnOwnedFarFieldXImpulseAuthority / totalWeight,
             warpConfidence: warpConfidence / totalWeight,
             microConfidence: microConfidence / totalWeight,
             macroJitterConfidence: macroJitterConfidence / totalWeight,
