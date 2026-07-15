@@ -10,6 +10,7 @@ struct StabilizerTurnTransitionEvent {
     let endSeconds: Double
     let cumulativeX: Float
     let propagatedEndpointShiftX: Float
+    let reversalThresholdX: Float
     let activeSampleCount: Int
 }
 
@@ -25,12 +26,18 @@ enum StabilizerTurnTransitionPath {
         let indices: [Int]
     }
 
+    private struct SignedRun {
+        let direction: Float
+        let indices: [Int]
+    }
+
     static func concatenate(
         times: [Double],
         positions: [Float],
         travelPositions: [Float],
         activity: [Float],
         windowSeconds: Double,
+        smoothingStrength: Float,
         activityThreshold: Float = 0.5
     ) -> StabilizerTurnTransitionResult {
         guard times.count == positions.count,
@@ -51,6 +58,9 @@ enum StabilizerTurnTransitionPath {
         }
         guard activityThreshold.isFinite, activityThreshold >= 0.0 else {
             return rejected(positions, "TURN activity threshold is invalid")
+        }
+        guard smoothingStrength.isFinite, smoothingStrength >= 0.0 else {
+            return rejected(positions, "TURN smoothing strength is invalid")
         }
         for index in times.indices {
             guard times[index].isFinite,
@@ -76,43 +86,100 @@ enum StabilizerTurnTransitionPath {
             )
         }
 
-        var groups: [ActiveGroup] = []
-        var currentDirection = Float(0.0)
-        var currentIndices: [Int] = []
-        var groupStartSeconds = Double(0.0)
-
-        func appendCurrentGroup() {
-            guard !currentIndices.isEmpty else {
-                return
+        // The Window is a rolling maximum pause between active samples. A
+        // continuously active turn may therefore be longer than the Window;
+        // only a pause longer than the Window starts a new cluster.
+        var clusters: [[Int]] = []
+        var cluster: [Int] = []
+        for index in activeIndices {
+            if let previousIndex = cluster.last,
+               times[index] - times[previousIndex] > windowSeconds + 1e-9 {
+                clusters.append(cluster)
+                cluster = []
             }
-            groups.append(
-                ActiveGroup(
-                    direction: currentDirection,
-                    indices: currentIndices
-                )
-            )
-            currentIndices.removeAll(keepingCapacity: true)
+            cluster.append(index)
+        }
+        if !cluster.isEmpty {
+            clusters.append(cluster)
         }
 
-        for index in activeIndices {
-            let direction: Float = activity[index] >= 0.0 ? 1.0 : -1.0
-            if currentIndices.isEmpty {
-                currentDirection = direction
-                currentIndices = [index]
-                groupStartSeconds = times[index]
+        let normalizedStrength = max(0.0, smoothingStrength / 12.0)
+        let reversalThresholdX = max(
+            activityThreshold * 4.0,
+            2.4 * normalizedStrength * normalizedStrength
+        )
+
+        func directionalMagnitude(_ run: SignedRun) -> Float {
+            let startIndex = max(positions.startIndex, run.indices[0] - 1)
+            let endIndex = min(
+                positions.index(before: positions.endIndex),
+                run.indices[run.indices.count - 1] + 1
+            )
+            guard endIndex > startIndex else {
+                return 0.0
+            }
+            var magnitude = Float(0.0)
+            for index in (startIndex + 1)...endIndex {
+                let delta = (travelPositions[index] - travelPositions[index - 1]) * run.direction
+                magnitude += max(0.0, delta)
+            }
+            return magnitude
+        }
+
+        var groups: [ActiveGroup] = []
+        for cluster in clusters {
+            var runs: [SignedRun] = []
+            var runDirection = Float(0.0)
+            var runIndices: [Int] = []
+            for index in cluster {
+                let direction: Float = activity[index] >= 0.0 ? 1.0 : -1.0
+                if !runIndices.isEmpty, direction != runDirection {
+                    runs.append(SignedRun(direction: runDirection, indices: runIndices))
+                    runIndices = []
+                }
+                runDirection = direction
+                runIndices.append(index)
+            }
+            if !runIndices.isEmpty {
+                runs.append(SignedRun(direction: runDirection, indices: runIndices))
+            }
+
+            let runMagnitudes = runs.map(directionalMagnitude)
+            guard let dominantRun = runMagnitudes.indices.max(by: {
+                runMagnitudes[$0] < runMagnitudes[$1]
+            }) else {
                 continue
             }
-            let withinWindow = times[index] - groupStartSeconds <= windowSeconds + 1e-9
-            if direction == currentDirection, withinWindow {
-                currentIndices.append(index)
-            } else {
-                appendCurrentGroup()
-                currentDirection = direction
-                currentIndices = [index]
-                groupStartSeconds = times[index]
+            let firstSignificantRun = runs.indices.first(where: {
+                runMagnitudes[$0] >= reversalThresholdX
+            }) ?? dominantRun
+
+            var currentDirection = runs[firstSignificantRun].direction
+            var currentIndices = Array(runs[..<firstSignificantRun].flatMap(\.indices))
+            currentIndices.append(contentsOf: runs[firstSignificantRun].indices)
+            var pendingOppositeIndices: [Int] = []
+
+            for (runOffset, run) in runs.dropFirst(firstSignificantRun + 1).enumerated() {
+                let runIndex = firstSignificantRun + 1 + runOffset
+                if run.direction == currentDirection {
+                    currentIndices.append(contentsOf: pendingOppositeIndices)
+                    pendingOppositeIndices.removeAll(keepingCapacity: true)
+                    currentIndices.append(contentsOf: run.indices)
+                    continue
+                }
+                if runMagnitudes[runIndex] < reversalThresholdX {
+                    pendingOppositeIndices.append(contentsOf: run.indices)
+                    continue
+                }
+                currentIndices.append(contentsOf: pendingOppositeIndices)
+                pendingOppositeIndices.removeAll(keepingCapacity: true)
+                groups.append(ActiveGroup(direction: currentDirection, indices: currentIndices))
+                currentDirection = run.direction
+                currentIndices = run.indices
             }
+            currentIndices.append(contentsOf: pendingOppositeIndices)
+            groups.append(ActiveGroup(direction: currentDirection, indices: currentIndices))
         }
-        appendCurrentGroup()
 
         var boundaries = groups.map { group in
             (
@@ -184,6 +251,7 @@ enum StabilizerTurnTransitionPath {
                     endSeconds: endSeconds,
                     cumulativeX: cumulativeX,
                     propagatedEndpointShiftX: propagatedEndpointShiftX,
+                    reversalThresholdX: reversalThresholdX,
                     activeSampleCount: group.indices.count
                 )
             )

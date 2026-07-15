@@ -6040,7 +6040,8 @@ enum AutoStabilizationEstimator {
             positions: composedX,
             travelPositions: result.map { $0.macroPixelOffset.x },
             activity: result.map { $0.turnDetectedPixelOffset.x },
-            windowSeconds: windowSeconds
+            windowSeconds: windowSeconds,
+            smoothingStrength: Float(strengths.turnSmoothingZoom)
         )
         if let rejectionReason = concatenatedTurn.rejectionReason {
             os_log(
@@ -6050,33 +6051,14 @@ enum AutoStabilizationEstimator {
                 rejectionReason
             )
         } else {
-            var turnOwnedIndices = Array(repeating: false, count: result.count)
-            for event in concatenatedTurn.events {
-                for index in event.startIndex...event.endIndex {
-                    turnOwnedIndices[index] = true
-                }
-            }
             for index in result.indices {
-                if turnOwnedIndices[index] {
-                    // TURN exclusively owns rendered X inside its event. Keep
-                    // component diagnostics honest by clearing every subordinate
-                    // X correction instead of merely cancelling it in the sum.
-                    result[index].macroPixelOffset.x = concatenatedTurn.positions[index]
-                    result[index].microPixelOffset.x = 0.0
-                    result[index].macroJitterPixelOffset.x = 0.0
-                    result[index].trajectoryMicroJitterPixelOffset.x = 0.0
-                    result[index].trajectoryContinuityPixelOffset.x = 0.0
-                    result[index].cameraRigidPixelOffset.x = 0.0
-                    result[index].lensShakePixelOffset.x = 0.0
-                } else {
-                    // Endpoint propagation is a constant TURN-owned translation;
-                    // retain ordinary Camera Jitter outside the event itself.
-                    result[index].macroPixelOffset.x += concatenatedTurn.positions[index] - composedX[index]
-                }
+                // Keep each diagnostic X component visible, but let TURN own the
+                // final sum through an explicit continuity correction.
+                result[index].trajectoryContinuityPixelOffset.x += concatenatedTurn.positions[index] - composedX[index]
             }
             for (eventID, event) in concatenatedTurn.events.enumerated() {
                 os_log(
-                    "TURN transition event | id %d direction %{public}@ firstActive %d lastActive %d start %.3f end %.3f duration %.3f window %.3f activeSamples %d cumulativeX %.3f endpointShiftX %.3f",
+                    "TURN transition event | id %d direction %{public}@ firstActive %d lastActive %d start %.3f end %.3f duration %.3f rollingWindow %.3f strength %.1f reversalThresholdX %.3f activeSamples %d cumulativeX %.3f endpointShiftX %.3f",
                     log: stabilizerHostAnalysisLog,
                     type: .default,
                     eventID + 1,
@@ -6087,6 +6069,8 @@ enum AutoStabilizationEstimator {
                     event.endSeconds,
                     event.endSeconds - event.startSeconds,
                     windowSeconds,
+                    strengths.turnSmoothingZoom,
+                    event.reversalThresholdX,
                     event.activeSampleCount,
                     event.cumulativeX,
                     event.propagatedEndpointShiftX

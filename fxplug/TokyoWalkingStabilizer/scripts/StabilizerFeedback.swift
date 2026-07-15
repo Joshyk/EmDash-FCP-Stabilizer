@@ -1931,7 +1931,8 @@ private func renderTurnBridgeAssessment(
     let concatenationNote = turnTransitionConcatenationNote(
         samples: rawSamples.map { (seconds: $0.seconds, sample: $0.sample) },
         centerSeconds: renderSeconds,
-        windowSeconds: options.turnWindowSeconds
+        windowSeconds: options.turnWindowSeconds,
+        smoothingStrength: options.turnStrength
     )
     return RenderTurnBridgeAssessment(
         applied: bridgedApplied,
@@ -1947,7 +1948,8 @@ private func renderTurnBridgeAssessment(
 private func turnTransitionConcatenationNote(
     samples: [(seconds: Double, sample: TurnCorrectionSample)],
     centerSeconds: Double,
-    windowSeconds: Double
+    windowSeconds: Double,
+    smoothingStrength: Double
 ) -> String {
     let orderedSamples = samples.sorted { $0.seconds < $1.seconds }
     guard orderedSamples.count >= 3 else {
@@ -1967,7 +1969,8 @@ private func turnTransitionConcatenationNote(
         positions: orderedSamples.map { $0.sample.macroPixelOffsetX },
         travelPositions: orderedSamples.map { $0.sample.macroPixelOffsetX },
         activity: activity,
-        windowSeconds: windowSeconds
+        windowSeconds: windowSeconds,
+        smoothingStrength: Float(smoothingStrength)
     )
     if let rejectionReason = transition.rejectionReason {
         return "concat rejected: \(rejectionReason)"
@@ -1982,13 +1985,14 @@ private func turnTransitionConcatenationNote(
         return "concat inactive"
     }
     return String(
-        format: "concat %@ %.3f...%.3f active %d cumulativeX %.3f endpointShiftX %.3f",
+        format: "concat %@ %.3f...%.3f active %d cumulativeX %.3f endpointShiftX %.3f reversalThresholdX %.3f",
         event.direction >= 0.0 ? "right" : "left",
         event.startSeconds,
         event.endSeconds,
         event.activeSampleCount,
         event.cumulativeX,
-        event.propagatedEndpointShiftX
+        event.propagatedEndpointShiftX,
+        event.reversalThresholdX
     )
 }
 

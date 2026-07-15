@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.2.6` is the current review baseline for all-axis Camera Jitter.
+Version `1.2.7` is the current review baseline for all-axis Camera Jitter.
 Use schema 52 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;
@@ -27,6 +27,11 @@ Inside a detected TURN group, final composed X is instead owned by one quintic
 S curve. Same-direction macro travel defines the accumulated distance, pauses and
 speed changes are removed from the Viewer path, and the endpoint correction is
 carried forward so the next frame cannot jump back to the pre-concatenated path.
+Turn Transition Window measures the maximum pause between active samples, allowing
+one continuous turn to exceed the Window duration. Higher Turn Smoothing Strength
+raises the travel-based reversal hysteresis, so brief activity-sign chatter remains
+inside the dominant curve while a substantial physical reversal still starts a new
+event. Component X activity remains available to Debug Overlay diagnostics.
 Camera Rigid X/Y are bounded at 1.5% of their render dimension rather than by
 fixed source-pixel caps, then scaled consistently for proxy diagnostics and rendering.
 Camera Rigid X is measured after removing a centered one-second quadratic pan
