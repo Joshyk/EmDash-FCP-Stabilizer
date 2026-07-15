@@ -7,10 +7,14 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  analysisQueueItem,
+  analysisQueueKey,
   analysisBenchmarkPayload,
   analysisTimingBreakdown,
+  appendAnalysisQueueItems,
   buildCacheRootFromAnalysis,
   cacheRootValue,
+  cancelPendingAnalysisQueueItem,
   combineSourceSummaries,
   defaultImportsDirForSource,
   failedRunResult,
@@ -20,6 +24,7 @@ const {
   parseAnalyzerProgressLine,
   processFailureDetails,
   processFailureMessage,
+  publicAnalysisQueueState,
   readNativeAnalyzerCacheSchemaVersion,
   removeCompletedCheckpointWork,
   restorePackageInfoForPath,
@@ -252,6 +257,28 @@ test("normalizeSourceJobs merges duplicate source jobs and asset IDs", () => {
   assert.deepEqual(jobs[0].assetIds, ["r2", "r3", "r4"]);
 });
 
+test("normalizeSourceJobs preserves selected clip labels for batch pool rows", () => {
+  const jobs = normalizeSourceJobs({
+    sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+    importsDir: "/tmp/imports",
+    cacheRoot: "/tmp/cache",
+    assetIds: ["r2"],
+    clips: [{
+      assetId: "r2",
+      name: "P1000307",
+      eventName: "gh6",
+      mediaPath: "/Volumes/Edit/P1000307.mov",
+    }],
+  });
+
+  assert.deepEqual(jobs[0].clips, [{
+    assetId: "r2",
+    name: "P1000307",
+    eventName: "gh6",
+    mediaPath: "/Volumes/Edit/P1000307.mov",
+  }]);
+});
+
 test("normalizeSourceJobs rejects duplicate source jobs with conflicting roots", () => {
   assert.throws(
     () => normalizeSourceJobs({
@@ -336,6 +363,116 @@ test("serialAnalysisWorkItems preserves analyze-all as one explicit work item", 
   assert.equal(workItems.length, 1);
   assert.equal(workItems[0].sourceJob.analyzeAll, true);
   assert.deepEqual(workItems[0].sourceJob.assetIds, []);
+});
+
+test("appendAnalysisQueueItems skips waiting duplicates but permits active clips to be queued again", () => {
+  const batchState = {
+    sampleScalePercent: 100,
+    sourcePaths: [],
+    pendingItems: [],
+    activeItem: null,
+    completedResults: [],
+    failedResults: [],
+    cancelledItems: [],
+    nextSequence: 0,
+    acceptingAdditions: true,
+  };
+  const source = {
+    sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+    importsDir: "/tmp/imports",
+    cacheRoot: "/tmp/cache",
+  };
+  const initialJobs = normalizeSourceJobs({
+    ...source,
+    assetIds: ["r2", "r3"],
+    clips: [
+      { assetId: "r2", name: "P1000307", mediaPath: "/Volumes/Edit/P1000307.mov" },
+      { assetId: "r3", name: "P1000304", mediaPath: "/Volumes/Edit/P1000304.mov" },
+    ],
+  });
+  const initial = appendAnalysisQueueItems(batchState, initialJobs);
+  batchState.activeItem = batchState.pendingItems.shift();
+  const additions = appendAnalysisQueueItems(batchState, normalizeSourceJobs({
+    ...source,
+    assetIds: ["r2", "r3", "r4"],
+    clips: [
+      { assetId: "r2", name: "P1000307", mediaPath: "/Volumes/Edit/P1000307.mov" },
+      { assetId: "r3", name: "P1000304", mediaPath: "/Volumes/Edit/P1000304.mov" },
+      { assetId: "r4", name: "P1000305", mediaPath: "/Volumes/Edit/P1000305.mov" },
+    ],
+  }));
+
+  assert.equal(initial.addedItems.length, 2);
+  assert.deepEqual(additions.addedItems.map((item) => item.clipName), ["P1000307", "P1000305"]);
+  assert.deepEqual(additions.skippedDuplicates.map((item) => item.clipName), ["P1000304"]);
+  assert.deepEqual(batchState.pendingItems.map((item) => item.id), ["queue-000002", "queue-000003", "queue-000004"]);
+  assert.equal(analysisQueueKey(batchState.activeItem), JSON.stringify([path.resolve(source.sourcePath), "r2"]));
+  assert.equal(analysisQueueItem(9, serialAnalysisWorkItems(initialJobs)[0]).id, "queue-000010");
+});
+
+test("publicAnalysisQueueState exposes active, waiting, completed, failed, and cancelled counts", () => {
+  const workItem = serialAnalysisWorkItems(normalizeSourceJobs({
+    sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+    importsDir: "/tmp/imports",
+    cacheRoot: "/tmp/cache",
+    assetIds: ["r2"],
+  }))[0];
+  const item = analysisQueueItem(0, workItem);
+  const payload = publicAnalysisQueueState({
+    sampleScalePercent: 50,
+    sourcePaths: [workItem.sourceJob.sourcePath],
+    pendingItems: [item],
+    activeItem: item,
+    completedResults: [{ status: "ok" }],
+    failedResults: [{ status: "error" }],
+    cancelledItems: [item],
+    nextSequence: 3,
+    acceptingAdditions: true,
+  });
+
+  assert.equal(payload.sampleScalePercent, 50);
+  assert.equal(payload.pendingCount, 1);
+  assert.equal(payload.completedCount, 1);
+  assert.equal(payload.failedCount, 1);
+  assert.equal(payload.cancelledCount, 1);
+  assert.equal(payload.activeItem.clipName, "r2");
+});
+
+test("cancelPendingAnalysisQueueItem removes only a waiting clip", () => {
+  const workItems = serialAnalysisWorkItems(normalizeSourceJobs({
+    sourcePath: "/Volumes/Edit/Project/Event.fcpxmld",
+    importsDir: "/tmp/imports",
+    cacheRoot: "/tmp/cache",
+    assetIds: ["r2", "r3"],
+  }));
+  const activeItem = analysisQueueItem(0, workItems[0]);
+  const waitingItem = analysisQueueItem(1, workItems[1]);
+  const state = { pendingItems: [waitingItem], activeItem, cancelledItems: [] };
+
+  const cancelled = cancelPendingAnalysisQueueItem(state, waitingItem.id);
+
+  assert.equal(cancelled.id, waitingItem.id);
+  assert.deepEqual(state.pendingItems, []);
+  assert.deepEqual(state.cancelledItems.map((item) => item.id), [waitingItem.id]);
+  assert.throws(
+    () => cancelPendingAnalysisQueueItem(state, activeItem.id),
+    /only waiting clips can be cancelled/
+  );
+});
+
+test("frontend exposes batch append, waiting cancel, and busy spinner contracts", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
+  const app = fs.readFileSync(path.join(__dirname, "..", "public", "app.js"), "utf8");
+  const styles = fs.readFileSync(path.join(__dirname, "..", "public", "styles.css"), "utf8");
+
+  assert.match(html, /id="runButtonLabel"/);
+  assert.match(html, /id="runButtonSpinner" class="button-spinner hidden"/);
+  assert.match(html, /id="batchPool"/);
+  assert.match(app, /\/api\/batch-queue\/add/);
+  assert.match(app, /\/api\/batch-queue\/cancel/);
+  assert.match(app, /Adding to Batch\.\.\./);
+  assert.match(app, /setAttribute\("aria-busy", "true"\)/);
+  assert.match(styles, /@keyframes button-spinner-spin/);
 });
 
 test("combineSourceSummaries keeps partial batch failures visible", () => {

@@ -138,6 +138,7 @@ function publicJob(job) {
     cacheSchemaVersion: job.cacheSchemaVersion || CACHE_SCHEMA_VERSION,
     progress: job.progress,
     readyPackages: Array.isArray(job.readyPackages) ? job.readyPackages : [],
+    batchQueue: job.batchState ? publicAnalysisQueueState(job.batchState) : null,
     result: job.result,
     error: job.error,
   };
@@ -849,6 +850,7 @@ function normalizeSourceJobs(body = {}) {
       importsDir: body.importsDir,
       outputDir: body.outputDir,
       assetIds: body.assetIds,
+      clips: body.clips,
       analyzeAll: body.analyzeAll,
     }] : []);
   if (!requestedJobs.length) {
@@ -868,6 +870,16 @@ function normalizeSourceJobs(body = {}) {
     }
     const importsDir = outputDirValue(job.importsDir || job.outputDir || body.importsDir || body.outputDir, sourcePath);
     const cacheRoot = cacheRootValue(job.cacheRoot || body.cacheRoot || importsDir, sourcePath, importsDir);
+    const requestedClips = Array.isArray(job.clips) ? job.clips : [];
+    const clips = analyzeAll ? [] : assetIds.map((assetId) => {
+      const requestedClip = requestedClips.find((clip) => clip && clip.assetId === assetId) || {};
+      return {
+        assetId,
+        name: requestedClip.name || assetId,
+        eventName: requestedClip.eventName || "",
+        mediaPath: requestedClip.mediaPath || "",
+      };
+    });
     const normalizedJob = {
       sourcePath,
       sourceItem: job.sourceItem || null,
@@ -876,6 +888,7 @@ function normalizeSourceJobs(body = {}) {
       outputDir: importsDir,
       cacheRoot,
       assetIds: analyzeAll ? [] : assetIds,
+      clips,
       analyzeAll,
     };
     const existing = jobsBySourcePath.get(sourcePath);
@@ -889,6 +902,13 @@ function normalizeSourceJobs(body = {}) {
     }
     existing.analyzeAll = existing.analyzeAll || normalizedJob.analyzeAll;
     existing.assetIds = existing.analyzeAll ? [] : uniqueStrings([...existing.assetIds, ...normalizedJob.assetIds]);
+    existing.clips = existing.analyzeAll
+      ? []
+      : existing.assetIds.map((assetId) => (
+        existing.clips.find((clip) => clip.assetId === assetId)
+        || normalizedJob.clips.find((clip) => clip.assetId === assetId)
+        || { assetId, name: assetId, eventName: "", mediaPath: "" }
+      ));
     if (!existing.sourceItem && normalizedJob.sourceItem) {
       existing.sourceItem = normalizedJob.sourceItem;
       existing.sourceName = normalizedJob.sourceName;
@@ -903,13 +923,17 @@ function serialAnalysisWorkItems(sourceJobs) {
   for (const [sourceIndex, sourceJob] of sourceJobs.entries()) {
     const assetIds = sourceJob.analyzeAll === true ? [null] : sourceJob.assetIds;
     for (const assetId of assetIds) {
+      const clip = assetId
+        ? (sourceJob.clips.find((item) => item.assetId === assetId) || { assetId, name: assetId, eventName: "", mediaPath: "" })
+        : { assetId: null, name: "All supported clips", eventName: "", mediaPath: "" };
       workItems.push({
         sourceJob: assetId
-          ? { ...sourceJob, assetIds: [assetId], analyzeAll: false }
+          ? { ...sourceJob, assetIds: [assetId], clips: [clip], analyzeAll: false }
           : sourceJob,
         sourceIndex,
         totalSources,
         assetId,
+        clip,
       });
     }
   }
@@ -918,6 +942,96 @@ function serialAnalysisWorkItems(sourceJobs) {
     workIndex,
     totalWorkItems: workItems.length,
   }));
+}
+
+function analysisQueueKey(workItem) {
+  return JSON.stringify([workItem.sourceJob.sourcePath, workItem.assetId || "*"]);
+}
+
+function analysisQueueItem(sequence, workItem) {
+  return {
+    id: `queue-${String(sequence + 1).padStart(6, "0")}`,
+    sequence,
+    key: analysisQueueKey(workItem),
+    sourceJob: workItem.sourceJob,
+    sourceIndex: workItem.sourceIndex,
+    assetId: workItem.assetId,
+    clip: workItem.clip,
+  };
+}
+
+function publicAnalysisQueueItem(item) {
+  return {
+    id: item.id,
+    index: item.sequence,
+    assetId: item.assetId,
+    clipName: item.clip.name,
+    eventName: item.clip.eventName,
+    mediaPath: item.clip.mediaPath,
+    sourceName: item.sourceJob.sourceName,
+    sourcePath: item.sourceJob.sourcePath,
+  };
+}
+
+function publicAnalysisQueueState(state) {
+  return {
+    acceptingAdditions: state.acceptingAdditions === true,
+    sampleScalePercent: state.sampleScalePercent,
+    submittedCount: state.nextSequence,
+    pendingCount: state.pendingItems.length,
+    completedCount: state.completedResults.length,
+    failedCount: state.failedResults.length,
+    cancelledCount: state.cancelledItems.length,
+    activeItem: state.activeItem ? publicAnalysisQueueItem(state.activeItem) : null,
+    pendingItems: state.pendingItems.map(publicAnalysisQueueItem),
+    cancelledItems: state.cancelledItems.map(publicAnalysisQueueItem),
+  };
+}
+
+function appendAnalysisQueueItems(state, sourceJobs) {
+  const workItems = serialAnalysisWorkItems(sourceJobs);
+  const pendingKeys = new Set(state.pendingItems.map((item) => item.key));
+  const sourceIndexByPath = new Map(state.sourcePaths.map((sourcePath, index) => [sourcePath, index]));
+  const addedItems = [];
+  const skippedDuplicates = [];
+  for (const workItem of workItems) {
+    const key = analysisQueueKey(workItem);
+    if (pendingKeys.has(key)) {
+      skippedDuplicates.push({
+        clipName: workItem.clip.name,
+        mediaPath: workItem.clip.mediaPath,
+        sourceName: workItem.sourceJob.sourceName,
+        sourcePath: workItem.sourceJob.sourcePath,
+      });
+      continue;
+    }
+    let sourceIndex = sourceIndexByPath.get(workItem.sourceJob.sourcePath);
+    if (!Number.isInteger(sourceIndex)) {
+      sourceIndex = state.sourcePaths.length;
+      state.sourcePaths.push(workItem.sourceJob.sourcePath);
+      sourceIndexByPath.set(workItem.sourceJob.sourcePath, sourceIndex);
+    }
+    const item = analysisQueueItem(state.nextSequence, { ...workItem, sourceIndex });
+    state.nextSequence += 1;
+    state.pendingItems.push(item);
+    pendingKeys.add(key);
+    addedItems.push(publicAnalysisQueueItem(item));
+  }
+  return { addedItems, skippedDuplicates };
+}
+
+function cancelPendingAnalysisQueueItem(state, queueItemId) {
+  const id = String(queueItemId || "").trim();
+  if (!id) {
+    throw new Error("queueItemId is required");
+  }
+  const index = state.pendingItems.findIndex((item) => item.id === id);
+  if (index < 0) {
+    throw new Error("Queued clip was not found; only waiting clips can be cancelled individually");
+  }
+  const [cancelled] = state.pendingItems.splice(index, 1);
+  state.cancelledItems.push(cancelled);
+  return cancelled;
 }
 
 function sourceResultDir(id, sourceIndex, totalSources) {
@@ -1329,14 +1443,41 @@ function combineSourceSummaries(sourceResults) {
 async function runBatchAnalyzer(body, progress, forcedJobId) {
   const id = forcedJobId || jobId();
   const sourceJobs = normalizeSourceJobs(body);
-  const workItems = serialAnalysisWorkItems(sourceJobs);
   const sampleScalePercent = normalizeSampleScalePercent(body.sampleScalePercent);
-  const sourceResults = [];
-  const failedSources = [];
-  const readyPackages = [];
-  for (const workItem of workItems) {
+  const batchState = {
+    sampleScalePercent,
+    sourcePaths: [],
+    pendingItems: [],
+    activeItem: null,
+    completedResults: [],
+    failedResults: [],
+    resultEntries: [],
+    cancelledItems: [],
+    readyPackages: [],
+    nextSequence: 0,
+    acceptingAdditions: true,
+  };
+  appendAnalysisQueueItems(batchState, sourceJobs);
+  updateJob(id, { batchState, readyPackages: [] });
+
+  while (batchState.pendingItems.length) {
     assertNotCancelled(id);
-    const { sourceJob, sourceIndex, totalSources, workIndex, totalWorkItems } = workItem;
+    const queueItem = batchState.pendingItems.shift();
+    batchState.activeItem = queueItem;
+    const { sourceJob, sourceIndex, sequence } = queueItem;
+    const totalSources = batchState.sourcePaths.length;
+    const totalWorkItems = batchState.nextSequence;
+    const clipName = queueItem.clip.name || queueItem.assetId || "selected clip";
+    progress("clip-starting", `Clip ${sequence + 1}/${totalWorkItems}: preparing ${clipName}.`, {
+      currentSourceIndex: sourceIndex + 1,
+      totalSources,
+      currentSourcePath: sourceJob.sourcePath,
+      currentSourceName: sourceJob.sourceName,
+      currentAnalysisIndex: sequence + 1,
+      totalAnalysisItems: totalWorkItems,
+      currentAssetId: queueItem.assetId,
+      readyPackages: batchState.readyPackages.slice(),
+    });
     try {
       const result = await runSourceAnalyzer(
         sourceJob,
@@ -1345,51 +1486,61 @@ async function runBatchAnalyzer(body, progress, forcedJobId) {
         id,
         sourceIndex,
         totalSources,
-        workIndex,
+        sequence,
         totalWorkItems
       );
-      sourceResults.push(result);
+      batchState.completedResults.push(result);
+      batchState.resultEntries.push({ sequence, result });
       const completedPackages = Array.isArray(result.summary && result.summary.packages)
         ? result.summary.packages.filter((pkg) => pkg.importReady === true && pkg.fcpxmldPath)
         : [];
-      readyPackages.push(...completedPackages);
+      batchState.readyPackages.push(...completedPackages);
       const completedNames = completedPackages
         .map((pkg) => pkg.footageName || pkg.packageFootageLabel || path.basename(pkg.fcpxmldPath, ".fcpxmld"))
         .join(", ");
       progress(
         "clip-complete",
-        `Clip ${workIndex + 1}/${totalWorkItems} complete${completedNames ? `: ${completedNames}` : "."}`,
+        `Clip ${sequence + 1}/${batchState.nextSequence} complete${completedNames ? `: ${completedNames}` : "."}`,
         {
           currentSourceIndex: sourceIndex + 1,
-          totalSources,
+          totalSources: batchState.sourcePaths.length,
           currentSourcePath: result.sourcePath,
           currentSourceName: result.sourceName,
-          currentAnalysisIndex: workIndex + 1,
-          totalAnalysisItems: totalWorkItems,
-          readyPackages: readyPackages.slice(),
+          currentAnalysisIndex: sequence + 1,
+          totalAnalysisItems: batchState.nextSequence,
+          readyPackages: batchState.readyPackages.slice(),
         }
       );
     } catch (error) {
       if (error instanceof CancelledError) throw error;
       const failed = failedSourceResult(sourceJob, error, sourceIndex, totalSources);
-      sourceResults.push(failed);
-      failedSources.push({
-        sourcePath: failed.sourcePath,
-        sourceName: failed.sourceName,
-        sourceIndex: failed.sourceIndex,
-        error: failed.error,
-      });
-      progress("clip-failed", `Clip ${workIndex + 1}/${totalWorkItems} ${failed.sourceName} failed: ${failed.error}`, {
+      batchState.failedResults.push(failed);
+      batchState.resultEntries.push({ sequence, result: failed });
+      progress("clip-failed", `Clip ${sequence + 1}/${batchState.nextSequence} ${clipName} failed: ${failed.error}`, {
         currentSourceIndex: sourceIndex + 1,
-        totalSources,
+        totalSources: batchState.sourcePaths.length,
         currentSourcePath: failed.sourcePath,
         currentSourceName: failed.sourceName,
-        currentAnalysisIndex: workIndex + 1,
-        totalAnalysisItems: totalWorkItems,
-        readyPackages: readyPackages.slice(),
+        currentAnalysisIndex: sequence + 1,
+        totalAnalysisItems: batchState.nextSequence,
+        readyPackages: batchState.readyPackages.slice(),
       });
+    } finally {
+      batchState.activeItem = null;
     }
   }
+  batchState.acceptingAdditions = false;
+  updateJob(id, { batchState, readyPackages: batchState.readyPackages.slice() });
+
+  const sourceResults = batchState.resultEntries
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((entry) => entry.result);
+  const failedSources = batchState.failedResults.map((failed) => ({
+    sourcePath: failed.sourcePath,
+    sourceName: failed.sourceName,
+    sourceIndex: failed.sourceIndex,
+    error: failed.error,
+  }));
   const summary = combineSourceSummaries(sourceResults);
   const successfulResults = sourceResults.filter((result) => result.status === "ok");
   const packages = successfulResults.flatMap((result) => Array.isArray(result.packages) ? result.packages : []);
@@ -1403,7 +1554,7 @@ async function runBatchAnalyzer(body, progress, forcedJobId) {
     appVersion: packageInfo.version,
     gitCommit: GIT_COMMIT,
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
-    sourceCount: sourceJobs.length,
+    sourceCount: batchState.sourcePaths.length,
     summaryAnalysisTimings: summary.analysisTimings || null,
     sourceResults: sourceResults.map((result) => ({
       status: result.status,
@@ -1421,7 +1572,7 @@ async function runBatchAnalyzer(body, progress, forcedJobId) {
     status: failedSources.length ? "partial" : "ok",
     jobId: id,
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
-    sourceCount: sourceJobs.length,
+    sourceCount: batchState.sourcePaths.length,
     sourceResults,
     failedSources,
     cacheRoot: successfulResults[0] && successfulResults[0].cacheRoot,
@@ -1441,6 +1592,44 @@ async function runBatchAnalyzer(body, progress, forcedJobId) {
   };
 }
 
+function addBatchQueueItems(body = {}) {
+  const id = String(body.id || "").trim();
+  const job = jobs.get(id);
+  if (!job || !job.batchState) {
+    throw new Error("Batch job is not ready to accept queued clips");
+  }
+  if (job.status !== "running" || job.batchState.acceptingAdditions !== true) {
+    throw new Error("Batch job is no longer accepting queued clips");
+  }
+  const sampleScalePercent = normalizeSampleScalePercent(body.sampleScalePercent);
+  if (sampleScalePercent !== job.batchState.sampleScalePercent) {
+    throw new Error(`Added clips must use the active batch sample size (${job.batchState.sampleScalePercent}%)`);
+  }
+  const sourceJobs = normalizeSourceJobs(body);
+  const { addedItems, skippedDuplicates } = appendAnalysisQueueItems(job.batchState, sourceJobs);
+  updateJob(id, {
+    batchState: job.batchState,
+    message: addedItems.length
+      ? `Added ${addedItems.length} clip(s) to the analysis batch.`
+      : "No clips were added; all selected clips are already waiting in the batch.",
+  });
+  return { job: publicJob(jobs.get(id)), addedItems, skippedDuplicates };
+}
+
+function cancelBatchQueueItem(body = {}) {
+  const id = String(body.id || "").trim();
+  const job = jobs.get(id);
+  if (!job || !job.batchState) {
+    throw new Error("Batch job was not found");
+  }
+  const cancelled = cancelPendingAnalysisQueueItem(job.batchState, body.queueItemId);
+  updateJob(id, {
+    batchState: job.batchState,
+    message: `Cancelled queued clip: ${cancelled.clip.name}.`,
+  });
+  return { job: publicJob(jobs.get(id)), cancelledItem: publicAnalysisQueueItem(cancelled) };
+}
+
 function startRunJob(body) {
   const id = jobId();
   updateJob(id, {
@@ -1457,14 +1646,25 @@ function startRunJob(body) {
       }, id);
       updateJob(id, { status: "done", stage: "done", message: "Analysis complete.", result });
     } catch (error) {
+      const failedJob = jobs.get(id);
+      if (failedJob && failedJob.batchState) {
+        failedJob.batchState.activeItem = null;
+        failedJob.batchState.acceptingAdditions = false;
+      }
       if (error instanceof CancelledError) {
-        updateJob(id, { status: "cancelled", stage: "cancelled", message: error.message });
+        updateJob(id, {
+          status: "cancelled",
+          stage: "cancelled",
+          message: error.message,
+          batchState: failedJob && failedJob.batchState,
+        });
       } else {
         updateJob(id, {
           status: "error",
           stage: "error",
           message: error.message,
           error: error.message,
+          batchState: failedJob && failedJob.batchState,
           result: failedRunResult(error),
         });
       }
@@ -1553,6 +1753,14 @@ async function handleApi(req, res, pathname) {
     if (req.method === "POST" && pathname === "/api/run") {
       const body = await readJsonBody(req);
       return sendJson(res, 200, { status: "ok", job: startRunJob(body) });
+    }
+    if (req.method === "POST" && pathname === "/api/batch-queue/add") {
+      const body = await readJsonBody(req);
+      return sendJson(res, 200, { status: "ok", ...addBatchQueueItems(body) });
+    }
+    if (req.method === "POST" && pathname === "/api/batch-queue/cancel") {
+      const body = await readJsonBody(req);
+      return sendJson(res, 200, { status: "ok", ...cancelBatchQueueItem(body) });
     }
     if (req.method === "GET" && pathname === "/api/job") {
       const url = new URL(req.url || "/", `http://${HOST}:${PORT}`);
@@ -1647,10 +1855,14 @@ if (require.main === module) {
 }
 
 module.exports = {
+  analysisQueueItem,
+  analysisQueueKey,
   analysisBenchmarkPayload,
   analysisTimingBreakdown,
+  appendAnalysisQueueItems,
   buildCacheRootFromAnalysis,
   cacheRootValue,
+  cancelPendingAnalysisQueueItem,
   combineSourceSummaries,
   defaultImportsDirForSource,
   failedRunResult,
@@ -1660,6 +1872,7 @@ module.exports = {
   parseAnalyzerProgressLine,
   processFailureDetails,
   processFailureMessage,
+  publicAnalysisQueueState,
   readNativeAnalyzerCacheSchemaVersion,
   removeCompletedCheckpointWork,
   retainedAnalysisBundleDirName,

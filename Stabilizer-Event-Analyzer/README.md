@@ -130,6 +130,14 @@ package row appears with its own `Reveal Import` and `Open Import` actions while
 the remaining clips continue. The completed batch summary keeps those actions
 on every import-ready clip instead of exposing only one batch-level import.
 
+While a batch is running, another FCP source selection can be loaded and its
+selected clips appended with `Add Selected to Batch`. The batch pool shows the
+active clip, waiting clips, completion/failure counts, and a cancel action for
+each waiting clip. Duplicate identity is the exact source path plus asset ID and
+is rejected only when the same clip is already waiting; active or completed
+clips may be intentionally queued again. During an add request the primary
+button is disabled and displays `Adding to Batch...` with a spinner.
+
 ## Imports
 
 `Imports` defaults to a sibling `_walking_stabilizer_analysis` folder next to the

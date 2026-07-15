@@ -88,10 +88,20 @@
               </select>
             </label>
             <div class="button-row">
-              <button id="runButton" class="primary-button" type="button" disabled>Run Serial Analysis</button>
+              <button id="runButton" class="primary-button" type="button" aria-busy="false" disabled>
+                <span id="runButtonLabel">Run Serial Analysis</span>
+                <span id="runButtonSpinner" class="button-spinner hidden" aria-hidden="true"></span>
+              </button>
               <button id="cancelButton" type="button" class="hidden">Cancel</button>
             </div>
             <div id="statusBox" class="status-box"></div>
+            <div id="batchPool" class="batch-summary hidden">
+              <div class="batch-pool-header">
+                <strong>Analysis batch pool</strong>
+                <span id="batchPoolSummary" class="muted"></span>
+              </div>
+              <div id="batchPoolItems" class="batch-pool-items"></div>
+            </div>
             <div id="readyImports" class="batch-summary hidden"></div>
             <div id="batchSummary" class="batch-summary hidden"></div>
             <div id="resultActions" class="button-row hidden">

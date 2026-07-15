@@ -14,6 +14,8 @@ const state = {
   pendingPresetClipKeys: null,
   importsOverride: "",
   currentJobId: "",
+  activeBatchJob: null,
+  isAddingToBatch: false,
   lastResult: null,
   restorePackage: null,
   restoreInstallation: null,
@@ -36,8 +38,13 @@ const el = {
   selectCacheRootButton: document.getElementById("selectCacheRootButton"),
   sampleScaleInput: document.getElementById("sampleScaleInput"),
   runButton: document.getElementById("runButton"),
+  runButtonLabel: document.getElementById("runButtonLabel"),
+  runButtonSpinner: document.getElementById("runButtonSpinner"),
   cancelButton: document.getElementById("cancelButton"),
   statusBox: document.getElementById("statusBox"),
+  batchPool: document.getElementById("batchPool"),
+  batchPoolSummary: document.getElementById("batchPoolSummary"),
+  batchPoolItems: document.getElementById("batchPoolItems"),
   readyImports: document.getElementById("readyImports"),
   batchSummary: document.getElementById("batchSummary"),
   resultActions: document.getElementById("resultActions"),
@@ -290,6 +297,7 @@ function attachRunningJob(job) {
   el.runButton.disabled = true;
   el.cancelButton.disabled = job.status === "cancelling";
   el.cancelButton.classList.remove("hidden");
+  updateActiveBatchJob(job);
   renderReadyImports(job.readyPackages);
   setStatus(jobStatusText(job));
   pollJob();
@@ -596,11 +604,84 @@ function renderAssets() {
   updateRunState();
 }
 
+function updateActiveBatchJob(job) {
+  state.activeBatchJob = job || null;
+  const queue = job && job.batchQueue;
+  if (!queue) {
+    el.batchPool.classList.add("hidden");
+    updateRunState();
+    return;
+  }
+  el.batchPool.classList.remove("hidden");
+  if (state.currentJobId && queue.sampleScalePercent) {
+    el.sampleScaleInput.value = String(queue.sampleScalePercent);
+  }
+  el.batchPoolSummary.textContent = [
+    `${queue.pendingCount || 0} waiting`,
+    `${queue.completedCount || 0} completed`,
+    `${queue.failedCount || 0} failed`,
+    `${queue.cancelledCount || 0} cancelled`,
+  ].join(" · ");
+  el.batchPoolItems.textContent = "";
+  if (queue.activeItem) {
+    const active = document.createElement("div");
+    active.className = "batch-pool-item";
+    const content = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = `Processing: ${queue.activeItem.clipName}`;
+    const detail = document.createElement("span");
+    detail.textContent = queue.activeItem.mediaPath || `${queue.activeItem.sourceName} / ${queue.activeItem.assetId || "all clips"}`;
+    content.append(label, detail);
+    active.appendChild(content);
+    el.batchPoolItems.appendChild(active);
+  }
+  for (const item of queue.pendingItems || []) {
+    const row = document.createElement("div");
+    row.className = "batch-pool-item";
+    const content = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = `Waiting: ${item.clipName}`;
+    const detail = document.createElement("span");
+    detail.textContent = item.mediaPath || `${item.sourceName} / ${item.assetId || "all clips"}`;
+    content.append(label, detail);
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "queue-cancel";
+    cancelButton.textContent = "Cancel queued clip";
+    cancelButton.addEventListener("click", () => cancelQueuedClip(item.id));
+    row.append(content, cancelButton);
+    el.batchPoolItems.appendChild(row);
+  }
+  if (!queue.activeItem && !(queue.pendingItems || []).length) {
+    const empty = document.createElement("span");
+    empty.textContent = queue.acceptingAdditions
+      ? "No clips are waiting. Select clips and add them before the batch finishes."
+      : "No clips are waiting.";
+    el.batchPoolItems.appendChild(empty);
+  }
+  updateRunState();
+}
+
 function updateRunState() {
   const count = state.selectedClipKeys.size;
   const sourceCount = new Set(state.assets.filter((asset) => state.selectedClipKeys.has(clipKey(asset.sourcePath, asset.assetId))).map((asset) => asset.sourcePath)).size;
+  const acceptingQueueAdditions = Boolean(
+    state.currentJobId
+    && state.activeBatchJob
+    && state.activeBatchJob.status === "running"
+    && state.activeBatchJob.batchQueue
+    && state.activeBatchJob.batchQueue.acceptingAdditions
+  );
   el.selectedText.textContent = count ? `${count} media selected from ${sourceCount} source(s)` : "No media selected";
-  el.runButton.disabled = Boolean(state.currentJobId) || count === 0 || sourceCount === 0;
+  el.runButtonLabel.textContent = state.isAddingToBatch
+    ? "Adding to Batch..."
+    : (acceptingQueueAdditions ? "Add Selected to Batch" : "Run Serial Analysis");
+  el.selectExportFilesButton.textContent = acceptingQueueAdditions ? "Select More FCP Sources" : "Select FCP Source";
+  el.runButton.disabled = state.isAddingToBatch
+    || count === 0
+    || sourceCount === 0
+    || (Boolean(state.currentJobId) && !acceptingQueueAdditions);
+  el.sampleScaleInput.disabled = Boolean(state.currentJobId);
 }
 
 async function loadConfig() {
@@ -662,10 +743,12 @@ async function loadAssets() {
   sources = activeSources();
   state.assets = [];
   state.selectedClipKeys.clear();
-  state.lastResult = null;
-  el.resultActions.classList.add("hidden");
-  renderReadyImports([]);
-  renderBatchSummary(null);
+  if (!state.currentJobId) {
+    state.lastResult = null;
+    el.resultActions.classList.add("hidden");
+    renderReadyImports([]);
+    renderBatchSummary(null);
+  }
   renderAssets();
   setStatus(`Loading Event media from ${sources.length} source(s)...`);
   let loadedSourceCount = 0;
@@ -833,9 +916,9 @@ function runBody() {
   const sources = activeSources();
   const sourceJobs = [];
   for (const source of sources) {
-    const assetIds = state.assets
-      .filter((asset) => asset.sourcePath === source.path && state.selectedClipKeys.has(clipKey(asset.sourcePath, asset.assetId)))
-      .map((asset) => asset.assetId);
+    const selectedAssets = state.assets
+      .filter((asset) => asset.sourcePath === source.path && state.selectedClipKeys.has(clipKey(asset.sourcePath, asset.assetId)));
+    const assetIds = selectedAssets.map((asset) => asset.assetId);
     if (!assetIds.length) continue;
     const importsDir = importsDirForSource(source);
     sourceJobs.push({
@@ -845,6 +928,12 @@ function runBody() {
       importsDir,
       outputDir: importsDir,
       assetIds,
+      clips: selectedAssets.map((asset) => ({
+        assetId: asset.assetId,
+        name: asset.name || asset.assetId,
+        eventName: asset.eventName || "",
+        mediaPath: asset.mediaPath || "",
+      })),
     });
   }
   return {
@@ -853,7 +942,60 @@ function runBody() {
   };
 }
 
+async function addSelectedToBatch() {
+  const body = runBody();
+  if (!body.sourceJobs.length) {
+    setStatus("Select at least one supported clip to add.", "error");
+    return;
+  }
+  const payload = await api("/api/batch-queue/add", {
+    method: "POST",
+    body: { id: state.currentJobId, ...body },
+  });
+  state.selectedClipKeys.clear();
+  renderAssets();
+  updateActiveBatchJob(payload.job);
+  renderReadyImports(payload.job.readyPackages);
+  const skippedCount = Array.isArray(payload.skippedDuplicates) ? payload.skippedDuplicates.length : 0;
+  setStatus(
+    `${payload.addedItems.length} clip(s) added to the analysis batch${skippedCount ? `; ${skippedCount} waiting duplicate(s) skipped` : ""}.`,
+    skippedCount ? "warn" : "ok"
+  );
+}
+
+async function cancelQueuedClip(queueItemId) {
+  if (!state.currentJobId || !queueItemId) return;
+  try {
+    const payload = await api("/api/batch-queue/cancel", {
+      method: "POST",
+      body: { id: state.currentJobId, queueItemId },
+    });
+    updateActiveBatchJob(payload.job);
+    setStatus(`Cancelled queued clip: ${payload.cancelledItem.clipName}.`, "ok");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
 async function runAnalysis() {
+  if (state.currentJobId) {
+    if (state.isAddingToBatch) return;
+    state.isAddingToBatch = true;
+    el.runButton.setAttribute("aria-busy", "true");
+    el.runButtonSpinner.classList.remove("hidden");
+    updateRunState();
+    try {
+      await addSelectedToBatch();
+    } catch (error) {
+      setStatus(error.message, "error");
+    } finally {
+      state.isAddingToBatch = false;
+      el.runButton.setAttribute("aria-busy", "false");
+      el.runButtonSpinner.classList.add("hidden");
+      updateRunState();
+    }
+    return;
+  }
   const body = runBody();
   if (!body.sourceJobs.length) {
     setStatus("Select at least one supported clip.", "error");
@@ -866,6 +1008,7 @@ async function runAnalysis() {
   const payload = await api("/api/run", { method: "POST", body });
   saveLastAnalysisSettings(body);
   state.currentJobId = payload.job.id;
+  updateActiveBatchJob(payload.job);
   el.runButton.disabled = true;
   el.cancelButton.disabled = false;
   el.cancelButton.classList.remove("hidden");
@@ -877,6 +1020,7 @@ async function pollJob() {
   try {
     const payload = await api(`/api/job?id=${encodeURIComponent(state.currentJobId)}`);
     const job = payload.job;
+    updateActiveBatchJob(job);
     renderReadyImports(job.readyPackages);
     setStatus(jobStatusText(job));
     if (job.status === "done") {

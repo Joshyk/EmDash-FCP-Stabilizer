@@ -10,6 +10,7 @@
   --accent-strong: #39a9ff;
   --error: #ff7a7a;
   --ok: #8ee8ac;
+  --warning: #f2c96d;
   --shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -178,6 +179,22 @@ button:disabled {
   font-weight: 650;
 }
 
+.button-spinner {
+  animation: button-spinner-spin 700ms linear infinite;
+  border: 2px solid currentColor;
+  border-left-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  height: 12px;
+  margin-left: 7px;
+  vertical-align: -1px;
+  width: 12px;
+}
+
+@keyframes button-spinner-spin {
+  to { transform: rotate(360deg); }
+}
+
 .exports-list {
   display: grid;
   gap: 8px;
@@ -285,6 +302,10 @@ td:nth-child(5) {
   color: var(--error);
 }
 
+.status-box.warn {
+  color: var(--warning);
+}
+
 .batch-summary,
 .restore-summary {
   display: grid;
@@ -342,6 +363,45 @@ td:nth-child(5) {
 }
 
 .package-actions button {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
+.batch-pool-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.batch-pool-items {
+  display: grid;
+  gap: 8px;
+}
+
+.batch-pool-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #2a3038;
+  border-radius: 6px;
+  padding: 8px;
+  background: #14171c;
+}
+
+.batch-pool-item > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.batch-pool-item span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.queue-cancel {
+  flex: 0 0 auto;
   min-height: 28px;
   padding: 4px 8px;
 }
