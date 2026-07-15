@@ -280,7 +280,7 @@
 				<parameter name="Remove Black Edges" id="41" flags="12884901904" default="1" value="1"/>
 				<parameter name="Auto Crop Zoom-Out Time" id="42" flags="12884901904" default="6" value="6"/>
 				<parameter name="Auto Crop Zoom-In Time" id="43" flags="12884901904" default="6" value="6"/>
-				<parameter name="Auto Crop Hold Time" id="44" flags="12884901904" default="2" value="2"/>
+				<parameter name="Auto Crop Hold Time" id="44" flags="12884901904" default="0" value="0"/>
 				<parameter name="Sample Size" id="19" flags="12884901906" default="0" value="0"/>
 				<parameter name="Edge Display Mode" id="27" flags="12884901904" default="1" value="1"/>
 				<parameter name="Mesh Overlay" id="47" flags="12884901904" default="0" value="0"/>

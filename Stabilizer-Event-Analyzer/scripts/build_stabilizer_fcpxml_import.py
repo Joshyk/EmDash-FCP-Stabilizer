@@ -48,7 +48,7 @@ STABILIZER_VISIBLE_DEFAULT_PARAMS = [
     ("Remove Black Edges", 41, "1"),
     ("Auto Crop Zoom-Out Time", 42, "10"),
     ("Auto Crop Zoom-In Time", 43, "10"),
-    ("Auto Crop Hold Time", 44, "2"),
+    ("Auto Crop Hold Time", 44, "0"),
     ("Sample Size", 19, "0"),
     ("Edge Display Mode", 27, "1"),
     ("Debug Overlay", 10, "0"),

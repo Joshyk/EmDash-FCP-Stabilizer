@@ -325,7 +325,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - `Auto Crop Zoom-Out Time`: default `6` seconds, range `0...30` seconds. This
   parameter is retained for compatibility and now defines the exact release
   length after an Auto Crop zoom keypoint.
-- `Auto Crop Hold Time`: default `2` seconds, range `0...30` seconds. This
+- `Auto Crop Hold Time`: default `0` seconds, range `0...30` seconds. This
   parameter is retained for compatibility and now defines the exact hold after
   an Auto Crop zoom keypoint peak. With `Remove Black Edges` on, final crop
   zoom is read from a cached keypoint plan built from prepared analysis instead

@@ -530,6 +530,7 @@ test("build_stabilizer_fcpxml_import inserts Stabilizer filter", () => {
   const info = fs.readFileSync(path.join(payload.outputPackage, "Info.fcpxml"), "utf8");
   assert.match(info, /Tokyo Walking Stabilizer/);
   assert.match(info, /Host Analysis Cache Identity/);
+  assert.match(info, /name="Auto Crop Hold Time" key="[^"]+\/44" value="0"/);
   assert.doesNotMatch(info, /nameOverride=/);
   assert.doesNotMatch(info, /videoOverride=/);
 });
