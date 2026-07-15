@@ -2189,7 +2189,7 @@ set_fcp_viewer_option_via_view_options_ax() {
 	local target_value="$1"
 	local setting_kind="$2"
 	normalize_fcp_window_frame
-	timeout 12 /usr/bin/osascript - "$target_value" "$setting_kind" <<'APPLESCRIPT'
+	timeout 45 /usr/bin/osascript - "$target_value" "$setting_kind" <<'APPLESCRIPT'
 on run argv
 	set targetValue to item 1 of argv
 	set settingKind to item 2 of argv
@@ -2224,14 +2224,29 @@ on viewOptionsButton()
 			set frontWindow to my frontFinalCutProWindow()
 			set directButton to my viewOptionsButtonByKnownPath(frontWindow)
 			if directButton is not missing value then return directButton
-			return my firstMenuButtonByDescription(frontWindow, "View Options Menu Button", 14)
+			return my menuButtonByDescriptionInEntireContents(frontWindow, "View Options Menu Button")
 		end tell
 	end tell
 end viewOptionsButton
 
+on menuButtonByDescriptionInEntireContents(rootElement, wantedDescription)
+	tell application "System Events"
+		set allElements to entire contents of rootElement
+		repeat with candidateElement in allElements
+			try
+				if (role of candidateElement as text) is "AXMenuButton" and (description of candidateElement as text) is wantedDescription then return candidateElement
+			end try
+		end repeat
+	end tell
+	return missing value
+end menuButtonByDescriptionInEntireContents
+
 on viewOptionsButtonByKnownPath(rootElement)
 	tell application "System Events"
-		repeat with pathRef in {{1, 1, 1, 2, 1, 4, 2, 4}, {1, 1, 1, 2, 1, 5, 2, 4}}
+		-- FCP 11's standard single-Viewer layout inserts two additional
+		-- splitter groups before the Viewer toolbar. Keep its measured AX path
+		-- first so Proxy Only/Green setup does not time out in a full-tree scan.
+		repeat with pathRef in {{1, 1, 1, 1, 1, 5, 2, 4}, {1, 1, 1, 2, 1, 4, 2, 4}, {1, 1, 1, 2, 1, 5, 2, 4}}
 			try
 				set currentElement to rootElement
 				repeat with childIndex in pathRef
