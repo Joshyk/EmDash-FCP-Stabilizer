@@ -34,9 +34,10 @@ Camera Rigid X target, so sustained pan curvature remains Turn-owned without
 suppressing two-to-five-frame X reversals.
 During a TURN event, the final composed Viewer X path uses one constant cruising
 velocity with quintic easing limited to up to 0.30 seconds at each endpoint. TURN macro travel remains the distance authority, while Camera
-Jitter and continuity X cannot reintroduce pauses or speed steps inside the curve;
-any accumulated endpoint correction is carried into later frames so the path does
-not snap back when TURN activity ends. The Window caps each accumulation event
+Jitter and continuity X cannot reintroduce pauses or speed steps inside the curve.
+Endpoint correction carries through a continuous handoff, but during a true idle span
+it releases with a quintic curve (up to 0.5 seconds) back to the underlying X path so
+Crop Off does not retain a stationary black edge. The Window caps each accumulation event
 from its first active sample. If that cap alone splits uninterrupted
 same-direction activity, the bounded events share one constant-velocity render
 chain instead of stopping and restarting at the Window boundary. Brief

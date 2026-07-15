@@ -25,8 +25,9 @@ During playback, high-confidence rigid X/Y/roll stays on its frame-local Camera
 Jitter path instead of entering the 2.2-second Turn/Macro Jitter smoother.
 Inside a detected TURN group, final composed X is owned by one constant cruising
 velocity with quintic easing limited to up to 0.30 seconds at each endpoint. Same-direction macro travel defines the accumulated distance, pauses and
-speed changes are removed from the Viewer path, and the endpoint correction is
-carried forward so the next frame cannot jump back to the pre-concatenated path.
+speed changes are removed from the Viewer path, and endpoint correction carries through
+continuous handoffs. During a true idle span it releases with a quintic curve (up to
+0.5 seconds) back to the underlying X path, so Crop Off does not retain a stationary black edge.
 Turn Strength scales travel before concatenation, so higher Strength cannot restore
 the raw macro speed changes after the constant path is built.
 Turn Transition Window caps accumulation from the first active sample; later active

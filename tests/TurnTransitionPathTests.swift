@@ -59,11 +59,11 @@ struct TurnTransitionPathTests {
         )
         expect(propagatedEndpoint.events.count == 1, "same-direction travel with relaxation must remain one event")
         expect(close(propagatedEndpoint.events.first?.cumulativeX ?? .nan, 40.0), "relaxation must not erase accumulated travel")
-        expect(close(propagatedEndpoint.events.first?.propagatedEndpointShiftX ?? .nan, 6.0), "removed relaxation must propagate past the endpoint")
+        expect(close(propagatedEndpoint.events.first?.propagatedEndpointShiftX ?? .nan, 6.0), "removed relaxation must be measured at the endpoint")
         expectStrictlyIncreasing(propagatedEndpoint.positions, range: 0...6, "relaxation must become one continuous event curve")
         expect(close(propagatedEndpoint.positions[6], 40.0), "event endpoint must contain all same-direction travel")
-        expect(close(propagatedEndpoint.positions[7], 40.0), "first post-event sample must not jump back")
-        expect(close(propagatedEndpoint.positions[8], 40.0), "propagated endpoint must remain stable")
+        expect(close(propagatedEndpoint.positions[7], 34.0), "idle after an event must return to the original X path")
+        expect(close(propagatedEndpoint.positions[8], 34.0), "released endpoint correction must not remain as a static tail")
 
         let composedResidual = StabilizerTurnTransitionPath.concatenate(
             times: [0, 1, 2, 3, 4, 5, 6, 7, 8].map(Double.init),
@@ -77,7 +77,37 @@ struct TurnTransitionPathTests {
         expect(close(composedResidual.positions[0], 2.0), "final composite X must preserve the rendered start")
         expect(close(composedResidual.positions[6], 42.0), "final composite X must end at rendered start plus TURN travel")
         expectStrictlyIncreasing(composedResidual.positions, range: 0...6, "all rendered X bands must collapse into the event S curve")
-        expect(close(composedResidual.positions[7], 42.0), "composite endpoint correction must propagate to the tail")
+        expect(close(composedResidual.positions[7], 36.2), "composite endpoint correction must release during idle")
+
+        let releasedIdle = StabilizerTurnTransitionPath.concatenate(
+            times: (0...30).map { Double($0) * 0.1 },
+            positions: [0.0, 4.0, 8.0, 12.0, 16.0, 20.0, 14.0, 14.0, 14.0, 14.0, 14.0,
+                        14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0,
+                        14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0],
+            travelPositions: [0.0, 4.0, 8.0, 12.0, 16.0, 20.0, 14.0, 14.0, 14.0, 14.0, 14.0,
+                              14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0,
+                              14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0],
+            activity: [0.0, 4.0, 4.0, 4.0, 4.0, 4.0] + Array(repeating: 0.0, count: 25),
+            windowSeconds: 5.0,
+            smoothingStrength: 12.0
+        )
+        expect(releasedIdle.events.count == 1, "idle-release fixture must contain one turn")
+        expect(
+            releasedIdle.events.first?.endpointReleaseEndSeconds ?? .infinity
+                > releasedIdle.events.first?.endpointReleaseStartSeconds ?? -.infinity,
+            "a genuine idle span must schedule an endpoint release"
+        )
+        expect(
+            releasedIdle.positions[6] > releasedIdle.positions[7]
+                && releasedIdle.positions[7] > releasedIdle.positions[8]
+                && releasedIdle.positions[8] > releasedIdle.positions[9],
+            "endpoint correction must recede smoothly through idle samples"
+        )
+        expect(close(releasedIdle.positions[11], 14.0), "idle release must converge to the original X path")
+        expect(
+            releasedIdle.positions[11...].allSatisfy { close($0, 14.0) },
+            "idle release must not leave a stationary black-edge offset"
+        )
 
         let signChatter = StabilizerTurnTransitionPath.concatenate(
             times: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(Double.init),
@@ -229,6 +259,12 @@ struct TurnTransitionPathTests {
         )
         expect(reversed.events.count == 2, "direction reversal must split the transition")
         expect(reversed.events.map(\.direction) == [1.0, -1.0], "reversed events must retain their directions")
+        expect(
+            reversed.events.allSatisfy {
+                close(Float($0.endpointReleaseEndSeconds - $0.endpointReleaseStartSeconds), 0.0)
+            },
+            "an immediate reversal must hand off without an idle endpoint release"
+        )
 
         let outsideWindow = StabilizerTurnTransitionPath.concatenate(
             times: [0, 1, 2, 3, 4, 5, 6, 7, 8].map(Double.init),

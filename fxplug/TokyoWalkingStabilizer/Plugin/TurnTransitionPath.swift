@@ -10,6 +10,9 @@ struct StabilizerTurnTransitionEvent {
     let endSeconds: Double
     let cumulativeX: Float
     let propagatedEndpointShiftX: Float
+    let endpointReleaseStartSeconds: Double
+    let endpointReleaseEndSeconds: Double
+    let endpointReleaseShiftX: Float
     let reversalThresholdX: Float
     let endpointEaseSeconds: Double
     let activeSampleCount: Int
@@ -299,9 +302,33 @@ enum StabilizerTurnTransitionPath {
                 result[index] = startX + (chainCumulativeX * progress)
             }
             let propagatedChainEndpointShiftX = result[chainEndIndex] - previousChainEndX
-            if chainEndIndex + 1 < result.endIndex {
-                for index in (chainEndIndex + 1)..<result.endIndex {
-                    result[index] += propagatedChainEndpointShiftX
+
+            // Keep the endpoint correction only while it is needed to join a
+            // continuous turn.  Holding it indefinitely makes Crop Off expose
+            // a stationary black edge long after the camera has become idle.
+            // A non-contiguous next chain proves there is a genuine idle span;
+            // release the correction at the start of that span and finish
+            // before the next chain.  A contiguous chain (including an
+            // immediate reversal) has no idle samples and keeps its handoff.
+            let nextChainStartIndex = chainEnd + 1 < work.endIndex
+                ? work[chainEnd + 1].startIndex
+                : result.endIndex
+            let firstIdleIndex = chainEndIndex + 1
+            let lastIdleIndex = min(result.index(before: result.endIndex), nextChainStartIndex - 1)
+            let releaseStartSeconds = chainEndSeconds
+            var releaseEndSeconds = chainEndSeconds
+            if firstIdleIndex <= lastIdleIndex,
+               abs(propagatedChainEndpointShiftX) > Float.ulpOfOne {
+                let idleEndSeconds = times[lastIdleIndex]
+                let releaseDuration = min(0.5, max(0.0, idleEndSeconds - chainEndSeconds))
+                if releaseDuration > 1e-9 {
+                    releaseEndSeconds = chainEndSeconds + releaseDuration
+                    for index in firstIdleIndex...lastIdleIndex {
+                        let progress = Float((times[index] - releaseStartSeconds) / releaseDuration)
+                        let retainedCorrection = propagatedChainEndpointShiftX
+                            * (1.0 - quinticSmootherStep(progress))
+                        result[index] += retainedCorrection
+                    }
                 }
             }
             for eventIndex in chainRange {
@@ -317,6 +344,15 @@ enum StabilizerTurnTransitionPath {
                         endSeconds: eventWork.endSeconds,
                         cumulativeX: eventWork.cumulativeX,
                         propagatedEndpointShiftX: eventIndex == chainEnd
+                            ? propagatedChainEndpointShiftX
+                            : 0.0,
+                        endpointReleaseStartSeconds: eventIndex == chainEnd
+                            ? releaseStartSeconds
+                            : eventWork.endSeconds,
+                        endpointReleaseEndSeconds: eventIndex == chainEnd
+                            ? releaseEndSeconds
+                            : eventWork.endSeconds,
+                        endpointReleaseShiftX: eventIndex == chainEnd
                             ? propagatedChainEndpointShiftX
                             : 0.0,
                         reversalThresholdX: reversalThresholdX,
@@ -344,6 +380,11 @@ enum StabilizerTurnTransitionPath {
         let t2 = t * t
         let t4 = t2 * t2
         return t4 * ((t2 - (3.0 * t)) + 2.5)
+    }
+
+    private static func quinticSmootherStep(_ value: Float) -> Float {
+        let t = min(max(value, 0.0), 1.0)
+        return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
     }
 
     private static func constantVelocityProgress(
