@@ -87,14 +87,14 @@ enum StabilizerTurnTransitionPath {
             )
         }
 
-        // The Window is a rolling maximum pause between active samples. A
-        // continuously active turn may therefore be longer than the Window;
-        // only a pause longer than the Window starts a new cluster.
+        // The Window is the maximum accumulation span measured from the first
+        // active sample. It must not roll forward with later active samples,
+        // otherwise a long turn can grow indefinitely and become visibly slow.
         var clusters: [[Int]] = []
         var cluster: [Int] = []
         for index in activeIndices {
-            if let previousIndex = cluster.last,
-               times[index] - times[previousIndex] > windowSeconds + 1e-9 {
+            if let firstIndex = cluster.first,
+               times[index] - times[firstIndex] > windowSeconds + 1e-9 {
                 clusters.append(cluster)
                 cluster = []
             }

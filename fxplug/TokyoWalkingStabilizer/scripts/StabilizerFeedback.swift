@@ -1985,10 +1985,11 @@ private func turnTransitionConcatenationNote(
         return "concat inactive"
     }
     return String(
-        format: "concat %@ %.3f...%.3f active %d cumulativeX %.3f endpointShiftX %.3f reversalThresholdX %.3f endpointEase %.3f",
+        format: "concat %@ %.3f...%.3f window %.3f active %d cumulativeX %.3f endpointShiftX %.3f reversalThresholdX %.3f endpointEase %.3f",
         event.direction >= 0.0 ? "right" : "left",
         event.startSeconds,
         event.endSeconds,
+        windowSeconds,
         event.activeSampleCount,
         event.cumulativeX,
         event.propagatedEndpointShiftX,

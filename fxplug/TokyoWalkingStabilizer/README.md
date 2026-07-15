@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.2.8` maps Turn Smoothing Strength linearly in viewport space: 12 equals the former 36 result and 36 applies three times that zoom and X movement. The Turn Transition Window is a rolling maximum pause between active same-direction samples, so a continuous event may exceed the Window duration. Final composed Viewer X uses one constant cruising velocity, with quintic easing limited to up to 0.30 seconds at each endpoint. TURN macro X remains its travel authority, and endpoint adjustment propagates so residual Camera Jitter or continuity X cannot restore an internal speed step or post-event snap-back. Brief opposite-sign activity is absorbed by travel-based reversal hysteresis that rises with Strength; substantial physical reversals still start a new event. Diagnostic X components remain visible while continuity correction owns the final sum. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
+- Version `1.2.8` maps Turn Smoothing Strength linearly in viewport space: 12 equals the former 36 result and 36 applies three times that zoom and X movement. The Turn Transition Window is a fixed maximum accumulation span measured from the first active same-direction sample; later samples do not roll it forward. Final composed Viewer X uses one constant cruising velocity, with quintic easing limited to up to 0.30 seconds at each endpoint. TURN macro X remains its travel authority, and endpoint adjustment propagates so residual Camera Jitter or continuity X cannot restore an internal speed step or post-event snap-back. Brief opposite-sign activity is absorbed by travel-based reversal hysteresis that rises with Strength; substantial physical reversals still start a new event. Diagnostic X components remain visible while continuity correction owns the final sum. Auto Crop Zoom-In and Zoom-Out default to 6 seconds and Hold remains between them.
   Schema 52 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback
@@ -257,10 +257,10 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
 - `Turn Smoothing Strength`: controls large segmented walking turns in X translation only.
   High values increase the X-pan bridge floor and release center anchoring earlier; Camera
   Jitter continues to own short-period X during the pan.
-- `Turn Transition Window (s)`: sets the maximum pause between active samples in one
-  same-direction X-pan event (`0.5...8.0` seconds; default `5.0`). Direction-consistent
+- `Turn Transition Window (s)`: sets the maximum accumulation span from the first active
+  sample in one same-direction X-pan event (`0.5...8.0` seconds; default `5.0`). Direction-consistent
   travel across pauses and speed changes is accumulated monotonically, then redistributed
-  at one cruising velocity with quintic easing only for up to 0.30 seconds at each endpoint; reversals and later activity outside the Window start a new
+  at one cruising velocity with quintic easing only for up to 0.30 seconds at each endpoint; reversals and activity beyond the fixed Window start a new
   event. It is independent from correction amplitude. `Turn Smoothing Strength` defaults
   to `12.0` and ranges from `0.00...36.00`; `0` disables turn correction and turn zoom,
   while higher values spend more of the available X-position and crop-aware zoom budget.

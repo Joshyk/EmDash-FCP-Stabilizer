@@ -6058,7 +6058,7 @@ enum AutoStabilizationEstimator {
             }
             for (eventID, event) in concatenatedTurn.events.enumerated() {
                 os_log(
-                    "TURN transition event | id %d direction %{public}@ firstActive %d lastActive %d start %.3f end %.3f duration %.3f rollingWindow %.3f strength %.1f reversalThresholdX %.3f endpointEase %.3f activeSamples %d cumulativeX %.3f endpointShiftX %.3f",
+                    "TURN transition event | id %d direction %{public}@ firstActive %d lastActive %d start %.3f end %.3f duration %.3f maxSpanWindow %.3f strength %.1f reversalThresholdX %.3f endpointEase %.3f activeSamples %d cumulativeX %.3f endpointShiftX %.3f",
                     log: stabilizerHostAnalysisLog,
                     type: .default,
                     eventID + 1,

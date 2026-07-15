@@ -161,11 +161,11 @@ evidence differences, not a Macro-only confidence bias.
 `Turn Smoothing Strength` is the single X-turn correction-amplitude control. It defaults
 to `12.0` and ranges from `0.00...36.00`; `0` disables TURN correction and `36`
 requests the maximum confidence-qualified X correction. `Turn Transition Window (s)`
-independently selects the `0.5...8.0` second maximum pause between active same-direction
-samples grouped as one turn. Same-direction turn bursts, pauses, and pan-speed changes
-separated by no more than that rolling gap are accumulated monotonically and redistributed through one
+independently selects the `0.5...8.0` second maximum accumulation span measured from
+the first active sample. Same-direction turn bursts, pauses, and pan-speed changes
+inside that fixed span are accumulated monotonically and redistributed through one
 constant-velocity path with short quintic endpoint ramps, so intermediate pauses or speed steps do not survive as separate viewport
-transitions. A reversal or later activity outside the Window starts a new event. A curve may
+transitions. A reversal or activity beyond the first-sample Window starts a new event. A curve may
 pre-roll by up to 30% of its known Turn X travel. Camera Jitter X is made mean-free within
 that Window so it cannot become a
 second low-frequency pan owner. Actual

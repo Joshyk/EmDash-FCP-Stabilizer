@@ -27,8 +27,8 @@ Inside a detected TURN group, final composed X is owned by one constant cruising
 velocity with quintic easing limited to up to 0.30 seconds at each endpoint. Same-direction macro travel defines the accumulated distance, pauses and
 speed changes are removed from the Viewer path, and the endpoint correction is
 carried forward so the next frame cannot jump back to the pre-concatenated path.
-Turn Transition Window measures the maximum pause between active samples, allowing
-one continuous turn to exceed the Window duration. Higher Turn Smoothing Strength
+Turn Transition Window caps accumulation from the first active sample; later active
+samples do not roll the Window forward. Higher Turn Smoothing Strength
 raises the travel-based reversal hysteresis, so brief activity-sign chatter remains
 inside the dominant curve while a substantial physical reversal still starts a new
 event. Component X activity remains available to Debug Overlay diagnostics.
@@ -121,9 +121,9 @@ fallbacks.
   Pull this down if close grass, roads, water, or frame edges start to swim.
 - `Turn Smoothing Strength`: the X-only correction-amplitude control. It defaults to
   `12.0`, ranges from `0.00...36.00`, and does not choose the turn duration or window.
-- `Turn Transition Window (s)`: the `0.5...8.0` second maximum pause between active
-  samples of a same-direction X-pan. Turn accumulates all direction-consistent travel,
-  pauses, and speed changes separated by no more than the Window, then redistributes
+- `Turn Transition Window (s)`: the `0.5...8.0` second maximum accumulation span from
+  the first active sample of a same-direction X-pan. Turn accumulates all direction-consistent travel,
+  pauses, and speed changes inside that fixed Window, then redistributes
   the total through one constant-velocity path with short quintic endpoint ramps. Reversals and activity outside the Window start
   new events. Curves may pre-roll by up to 30% of their known Turn X travel; Camera Jitter
   X remains mean-free within the Window. The Window is not a second amplitude control.

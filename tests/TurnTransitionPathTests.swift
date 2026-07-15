@@ -84,24 +84,32 @@ struct TurnTransitionPathTests {
             positions: [0.0, 5.0, 10.0, 9.5, 15.0, 14.5, 20.0, 19.5, 25.0, 30.0, 30.0],
             travelPositions: [0.0, 5.0, 10.0, 9.5, 15.0, 14.5, 20.0, 19.5, 25.0, 30.0, 30.0],
             activity: [0.0, 5.0, 5.0, -0.6, 5.0, -0.6, 5.0, -0.6, 5.0, 5.0, 0.0],
-            windowSeconds: 3.0,
+            windowSeconds: 10.0,
             smoothingStrength: 12.0
         )
         expect(signChatter.events.count == 1, "substantial TURN must absorb short opposite-sign chatter")
         expect(signChatter.events.first?.direction == 1.0, "absorbed sign chatter must keep the dominant direction")
         expectStrictlyIncreasing(signChatter.positions, range: 0...10, "sign chatter must not create internal deceleration boundaries")
 
-        let rollingWindow = StabilizerTurnTransitionPath.concatenate(
-            times: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(Double.init),
+        let boundedWindowTimes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(Double.init)
+        let boundedWindow = StabilizerTurnTransitionPath.concatenate(
+            times: boundedWindowTimes,
             positions: [0.0, 4.0, 4.0, 8.0, 8.0, 12.0, 12.0, 16.0, 16.0, 20.0, 20.0, 24.0, 24.0],
             travelPositions: [0.0, 4.0, 4.0, 8.0, 8.0, 12.0, 12.0, 16.0, 16.0, 20.0, 20.0, 24.0, 24.0],
             activity: [0.0, 4.0, 0.0, 4.0, 0.0, 4.0, 0.0, 4.0, 0.0, 4.0, 0.0, 4.0, 0.0],
             windowSeconds: 3.0,
             smoothingStrength: 12.0
         )
-        expect(rollingWindow.events.count == 1, "continuous same-direction activity may exceed one Window span")
-        expect((rollingWindow.events.first?.endSeconds ?? 0.0) - (rollingWindow.events.first?.startSeconds ?? 0.0) > 3.0, "Window must measure the pause gap rather than cap event duration")
-        expectStrictlyIncreasing(rollingWindow.positions, range: 0...12, "rolling Window must produce one uninterrupted curve")
+        expect(boundedWindow.events.count == 3, "activity beyond the first-sample Window must start a new event")
+        expect(
+            boundedWindow.events.allSatisfy {
+                let first = $0.firstActiveIndex
+                let last = $0.lastActiveIndex
+                return boundedWindowTimes[last] - boundedWindowTimes[first] <= 3.0
+            },
+            "every event must keep active samples inside the first-sample Window"
+        )
+        expectStrictlyIncreasing(boundedWindow.positions, range: 0...12, "bounded Window events must preserve monotonic travel")
 
         let strengthInputTimes = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(Double.init)
         let strengthInputPositions: [Float] = [0.0, 5.0, 10.0, 10.0, 6.0, 6.0, 11.0, 16.0, 16.0]
@@ -111,7 +119,7 @@ struct TurnTransitionPathTests {
             positions: strengthInputPositions,
             travelPositions: strengthInputPositions,
             activity: strengthInputActivity,
-            windowSeconds: 5.0,
+            windowSeconds: 8.0,
             smoothingStrength: 12.0
         )
         let maximumStrength = StabilizerTurnTransitionPath.concatenate(
@@ -119,7 +127,7 @@ struct TurnTransitionPathTests {
             positions: strengthInputPositions.map { $0 * 3.0 },
             travelPositions: strengthInputPositions.map { $0 * 3.0 },
             activity: strengthInputActivity,
-            windowSeconds: 5.0,
+            windowSeconds: 8.0,
             smoothingStrength: 36.0
         )
         expect(standardStrength.events.count == 3, "standard Strength must retain a meaningful 4px reversal")
