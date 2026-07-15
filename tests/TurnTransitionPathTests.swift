@@ -29,6 +29,10 @@ struct TurnTransitionPathTests {
         }
     }
 
+    private static func segmentSpeed(_ values: [Float], times: [Double], from index: Int) -> Float {
+        (values[index + 1] - values[index]) / Float(times[index + 1] - times[index])
+    }
+
     static func main() {
         let accumulated = StabilizerTurnTransitionPath.concatenate(
             times: [0.0, 0.7, 1.5, 2.4, 3.1, 4.0, 5.2, 6.4, 7.0],
@@ -142,6 +146,35 @@ struct TurnTransitionPathTests {
         )
         expect(variableSpeed.events.count == 1, "same-direction speed changes must remain one event")
         expectStrictlyIncreasing(variableSpeed.positions, range: 0...5, "speed changes must not leave an internal stop")
+        let variableSpeedTimes = [0.0, 0.4, 1.1, 2.3, 3.0, 4.8]
+        let variableSpeedBody = [1, 2, 3].map {
+            segmentSpeed(variableSpeed.positions, times: variableSpeedTimes, from: $0)
+        }
+        expect(
+            variableSpeedBody.allSatisfy { close($0, variableSpeedBody[0], tolerance: 0.001) },
+            "concatenated turn body must replace input speed changes with one constant velocity"
+        )
+
+        let constantBodyTimes = [0.0, 0.1, 0.3, 0.6, 1.0, 1.4, 1.7, 1.9, 2.0]
+        let constantBody = StabilizerTurnTransitionPath.concatenate(
+            times: constantBodyTimes,
+            positions: [0.0, 2.0, 8.0, 8.0, 8.0, 35.0, 35.0, 39.0, 40.0],
+            travelPositions: [0.0, 2.0, 8.0, 8.0, 8.0, 35.0, 35.0, 39.0, 40.0],
+            activity: [0.0, 2.0, 6.0, 0.0, 0.0, 27.0, 0.0, 4.0, 1.0],
+            windowSeconds: 5.0,
+            smoothingStrength: 12.0
+        )
+        let bodySpeeds = [2, 3, 4, 5].map {
+            segmentSpeed(constantBody.positions, times: constantBodyTimes, from: $0)
+        }
+        expect(
+            bodySpeeds.allSatisfy { close($0, bodySpeeds[0], tolerance: 0.001) },
+            "irregular frame timing must keep the middle of a concatenated turn at constant velocity"
+        )
+        expect(
+            segmentSpeed(constantBody.positions, times: constantBodyTimes, from: 0) < bodySpeeds[0],
+            "only the short endpoint ramp may be slower than the constant-velocity body"
+        )
 
         let reversed = StabilizerTurnTransitionPath.concatenate(
             times: [0, 1, 2, 3, 4, 5, 6].map(Double.init),

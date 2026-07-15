@@ -11,6 +11,7 @@ struct StabilizerTurnTransitionEvent {
     let cumulativeX: Float
     let propagatedEndpointShiftX: Float
     let reversalThresholdX: Float
+    let endpointEaseSeconds: Double
     let activeSampleCount: Int
 }
 
@@ -229,9 +230,16 @@ enum StabilizerTurnTransitionPath {
             let startX = result[startIndex]
             let cumulativeX = cumulativeMagnitude * group.direction
             let previousEndX = result[endIndex]
+            // Keep the body of a concatenated pan at one constant velocity.
+            // Quintic easing is restricted to short endpoint ramps so it can
+            // remove start/stop jerk without imposing a full-event speed ramp.
+            let endpointEaseSeconds = min(0.30, duration * 0.15)
             for index in startIndex...endIndex {
-                let normalizedTime = Float((times[index] - startSeconds) / duration)
-                let progress = quinticSmootherStep(normalizedTime)
+                let progress = constantVelocityProgress(
+                    elapsedSeconds: times[index] - startSeconds,
+                    durationSeconds: duration,
+                    endpointEaseSeconds: endpointEaseSeconds
+                )
                 result[index] = startX + (cumulativeX * progress)
             }
             let propagatedEndpointShiftX = result[endIndex] - previousEndX
@@ -252,6 +260,7 @@ enum StabilizerTurnTransitionPath {
                     cumulativeX: cumulativeX,
                     propagatedEndpointShiftX: propagatedEndpointShiftX,
                     reversalThresholdX: reversalThresholdX,
+                    endpointEaseSeconds: endpointEaseSeconds,
                     activeSampleCount: group.indices.count
                 )
             )
@@ -264,9 +273,39 @@ enum StabilizerTurnTransitionPath {
         )
     }
 
-    private static func quinticSmootherStep(_ value: Float) -> Float {
+    private static func integratedQuinticSmootherStep(_ value: Float) -> Float {
         let t = min(max(value, 0.0), 1.0)
-        return t * t * t * (t * ((t * 6.0) - 15.0) + 10.0)
+        let t2 = t * t
+        let t4 = t2 * t2
+        return t4 * ((t2 - (3.0 * t)) + 2.5)
+    }
+
+    private static func constantVelocityProgress(
+        elapsedSeconds: Double,
+        durationSeconds: Double,
+        endpointEaseSeconds: Double
+    ) -> Float {
+        let elapsed = min(max(elapsedSeconds, 0.0), durationSeconds)
+        let ease = min(max(endpointEaseSeconds, 0.0), durationSeconds * 0.5)
+        guard ease > 1e-9 else {
+            return Float(elapsed / durationSeconds)
+        }
+
+        // Velocity is quintic only in the endpoint ramps and exactly one in
+        // the body. Each ramp has area ease/2, hence total area duration-ease.
+        let travelTime = durationSeconds - ease
+        let distance: Double
+        if elapsed < ease {
+            let ramp = Float(elapsed / ease)
+            distance = ease * Double(integratedQuinticSmootherStep(ramp))
+        } else if elapsed <= durationSeconds - ease {
+            distance = (ease * 0.5) + (elapsed - ease)
+        } else {
+            let ramp = Float((elapsed - (durationSeconds - ease)) / ease)
+            let decelerationArea = Double(ramp - integratedQuinticSmootherStep(ramp))
+            distance = (durationSeconds - (ease * 1.5)) + (ease * decelerationArea)
+        }
+        return Float(distance / travelTime)
     }
 
     private static func rejected(
