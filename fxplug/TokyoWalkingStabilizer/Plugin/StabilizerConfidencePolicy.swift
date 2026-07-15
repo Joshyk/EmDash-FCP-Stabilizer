@@ -1,6 +1,8 @@
 import Foundation
 
 enum StabilizerConfidencePolicy {
+    private static let turnOwnedFarFieldRigidXTransitionMaximumPixels: Float = 3.2
+
     struct TurnOwnedFarFieldXImpulseRescue {
         let gateFloor: Float
         let confidenceFloor: Float
@@ -61,6 +63,20 @@ enum StabilizerConfidencePolicy {
             gateFloor: gateAuthority,
             confidenceFloor: confidenceAuthority,
             continuityFloor: farFieldSupport * confidenceAuthority
+        )
+    }
+
+    static func turnOwnedFarFieldRigidXTransitionRestoration(
+        rigidPixels: Float,
+        authority: Float
+    ) -> Float {
+        guard rigidPixels.isFinite, authority.isFinite else {
+            return 0.0
+        }
+        let requested = rigidPixels * unbiased(authority)
+        return min(
+            turnOwnedFarFieldRigidXTransitionMaximumPixels,
+            max(-turnOwnedFarFieldRigidXTransitionMaximumPixels, requested)
         )
     }
 
