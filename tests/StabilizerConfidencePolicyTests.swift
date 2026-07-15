@@ -31,6 +31,49 @@ struct StabilizerConfidencePolicyTests {
             "nonfinite axis confidence must contribute zero"
         )
 
+        let rescuedImpulse = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
+            rawConfidence: 0.8,
+            bandPixels: 82.0,
+            turnSuppression: 1.0,
+            turnOwnership: 1.0,
+            turnMacroPixels: 28.0,
+            farFieldSupport: 1.0
+        )
+        expect(close(rescuedImpulse.gateFloor, 1.0), "strong far-field X impulse must retain full Camera Jitter gate authority")
+        expect(close(rescuedImpulse.confidenceFloor, 1.0), "strong far-field X impulse must retain full confidence authority")
+        expect(close(rescuedImpulse.continuityFloor, 1.0), "strong far-field X impulse must retain continuity authority")
+
+        let broadTurn = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
+            rawConfidence: 0.8,
+            bandPixels: 82.0,
+            turnSuppression: 1.0,
+            turnOwnership: 1.0,
+            turnMacroPixels: 180.0,
+            farFieldSupport: 1.0
+        )
+        expect(close(broadTurn.gateFloor, 0.0), "broad turn travel must not be rescued as Camera Jitter")
+
+        let weakFarField = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
+            rawConfidence: 0.8,
+            bandPixels: 82.0,
+            turnSuppression: 1.0,
+            turnOwnership: 1.0,
+            turnMacroPixels: 28.0,
+            farFieldSupport: 0.1
+        )
+        expect(close(weakFarField.gateFloor, 0.0), "weak far-field evidence must not bypass Turn ownership")
+
+        let fineImpulse = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
+            rawConfidence: 0.8,
+            bandPixels: 10.0,
+            turnSuppression: 1.0,
+            turnOwnership: 1.0,
+            turnMacroPixels: 28.0,
+            farFieldSupport: 1.0
+        )
+        expect(close(fineImpulse.gateFloor, 0.0), "fine impulse must not reopen the broad Turn gate")
+        expect(close(fineImpulse.confidenceFloor, 1.0), "fine impulse must retain frame-local Camera Jitter confidence")
+
         if failures.isEmpty {
             print("StabilizerConfidencePolicyTests: PASS")
             return

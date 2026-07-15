@@ -2255,13 +2255,30 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
     let baseMacroXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroXSuppression), min: 0.0, max: 1.0)
     let turnXMacroPixels = abs(turnBandX * xScale)
     let turnYMacroPixels = abs(turnBandY * yScale)
-    let microXTurnGate = baseMicroXTurnGate
+    let microXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
+        rawConfidence: rawMicroQX,
+        bandPixels: microX * xScale,
+        turnSuppression: turnShakeSuppression,
+        turnOwnership: turnOwnershipX,
+        turnMacroPixels: turnXMacroPixels,
+        farFieldSupport: farFieldTurnOwnedXSupport
+    )
+    let macroXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
+        rawConfidence: rawMacroQX,
+        bandPixels: macroX * xScale,
+        turnSuppression: turnShakeSuppression,
+        turnOwnership: turnOwnershipX,
+        turnMacroPixels: turnXMacroPixels,
+        farFieldSupport: farFieldTurnOwnedXSupport
+    )
+    let microXTurnGate = max(baseMicroXTurnGate, microXRescue.gateFloor)
     let microYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroYSuppression), min: 0.0, max: 1.0)
     let microRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroRollSuppression), min: 0.0, max: 1.0)
-    let macroXTurnGate = baseMacroXTurnGate
+    let macroXTurnGate = max(baseMacroXTurnGate, macroXRescue.gateFloor)
     let macroYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroYSuppression), min: 0.0, max: 1.0)
     let macroRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroRollSuppression), min: 0.0, max: 1.0)
-    let microQX = StabilizerConfidencePolicy.unbiased(rawMicroQX * microXTurnGate)
+    let unbiasedMicroQX = StabilizerConfidencePolicy.unbiased(rawMicroQX * microXTurnGate)
+    let microQX = max(unbiasedMicroQX, microXRescue.confidenceFloor)
     let microQY = StabilizerConfidencePolicy.unbiased(rawMicroQY * microYTurnGate)
     let microQR = StabilizerConfidencePolicy.unbiased(rawMicroQR * microRollTurnGate)
     let unscaledRawMicroCorrectionX = -(microX * xScale) * walkingCorrectionFactor(options.strengths.microX, confidence: microQX, maxStrength: 10.0)
@@ -2271,7 +2288,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         farFieldSupport: farFieldTurnOwnedXSupport
     )
     let rawMicroCorrectionY = -(microY * yScale) * verticalWalkingCorrectionFactor(options.strengths.microY, confidence: microQY, maxStrength: 10.0)
-    let microXContinuityConfidenceScale = microXTurnGate
+    let microXContinuityConfidenceScale = max(microXTurnGate, microXRescue.continuityFloor)
     let limitedMicroCorrectionX = microContinuityLimitedCorrection(
         values: analysis.microJitterPathX,
         baselineValues: context.microBaselineXPath,
@@ -2281,7 +2298,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         outputScale: xScale,
         requestedStrength: options.strengths.microX,
         fullImpulseScale: microFullScalePixels,
-        confidenceScale: microXContinuityConfidenceScale
+        confidenceScale: microXContinuityConfidenceScale,
+        confidenceFloor: microXRescue.confidenceFloor
     )
     let limitedMicroCorrectionY = microContinuityLimitedCorrection(
         values: analysis.microJitterPathY,
@@ -2294,7 +2312,8 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         fullImpulseScale: microFullScalePixels,
         confidenceScale: microYTurnGate
     )
-    let macroQX = StabilizerConfidencePolicy.unbiased(rawMacroQX * macroXTurnGate)
+    let unbiasedMacroQX = StabilizerConfidencePolicy.unbiased(rawMacroQX * macroXTurnGate)
+    let macroQX = max(unbiasedMacroQX, macroXRescue.confidenceFloor)
     let macroQY = StabilizerConfidencePolicy.unbiased(rawMacroQY * macroYTurnGate)
     let macroQR = StabilizerConfidencePolicy.unbiased(rawMacroQR * macroRollTurnGate)
     let macroCorrectionX = -(macroX * xScale) * walkingCorrectionFactor(options.strengths.macroX, confidence: macroQX, maxStrength: 10.0)
@@ -2449,7 +2468,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             applied: cameraApplied,
             remaining: walkingResidualAfter + cameraMacroRemaining,
             confidence: cameraConfidence,
-            note: String(format: "micro X %.3f Y %.3f R %.3f | macro X %.3f Y %.3f R %.3f | macro Y %.3f R %.3f corr %.3f %.3f | rigid %@ | traj %.3f %.3f | post %.3f", microX, microY, microR, macroX, macroY, macroR, turnBandY, turnBandRoll, cameraMacroCorrectionY, cameraMacroCorrectionRoll, lensBand.note, trajectoryMicroJitterOffset.x, trajectoryMicroJitterOffset.y, walkingResidualAfter + cameraMacroRemaining)
+            note: String(format: "micro X %.3f Y %.3f R %.3f corrX %.3f rawQ %.3f | macro X %.3f Y %.3f R %.3f corrX %.3f rawQ %.3f | rescue gate %.3f/%.3f q %.3f/%.3f far %.3f turnMacro %.3f | macro Y %.3f R %.3f corr %.3f %.3f | rigid %@ | traj %.3f %.3f | post %.3f", microX, microY, microR, limitedMicroCorrectionX, rawMicroQX, macroX, macroY, macroR, macroCorrectionX, rawMacroQX, microXRescue.gateFloor, macroXRescue.gateFloor, microXRescue.confidenceFloor, macroXRescue.confidenceFloor, farFieldTurnOwnedXSupport, turnXMacroPixels, turnBandY, turnBandRoll, cameraMacroCorrectionY, cameraMacroCorrectionRoll, lensBand.note, trajectoryMicroJitterOffset.x, trajectoryMicroJitterOffset.y, walkingResidualAfter + cameraMacroRemaining)
         ),
         BandAssessment(
             name: "WARP",
@@ -2783,7 +2802,8 @@ private func microContinuityLimitedCorrection(
     outputScale: Float,
     requestedStrength: Double,
     fullImpulseScale: Float,
-    confidenceScale: Float = 1.0
+    confidenceScale: Float = 1.0,
+    confidenceFloor: Float = 0.0
 ) -> Float {
     guard rawCorrection.isFinite,
           outputScale.isFinite,
@@ -2848,8 +2868,11 @@ private func microContinuityLimitedCorrection(
         )
         let correctionStrength = walkingCorrectionFactor(
             requestedStrength,
-            confidence: StabilizerConfidencePolicy.unbiased(
-                confidence * StabilizerConfidencePolicy.unbiased(confidenceScale)
+            confidence: max(
+                StabilizerConfidencePolicy.unbiased(
+                    confidence * StabilizerConfidencePolicy.unbiased(confidenceScale)
+                ),
+                StabilizerConfidencePolicy.unbiased(confidenceFloor)
             ),
             maxStrength: 10.0
         )
