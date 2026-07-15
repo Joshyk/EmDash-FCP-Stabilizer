@@ -8,7 +8,7 @@ struct StabilizerDebugOverlayInputs {
     let finalRotationDegrees: Float
     let cropEnabled: Bool
     let cropScale: Float
-    let cropPositionPixels: vector_float2
+    let turnPixelOffset: vector_float2
     let macroJitterPixelOffset: vector_float2
     let macroJitterRotationDegrees: Float
     let microJitterPixelOffset: vector_float2
@@ -125,12 +125,11 @@ enum StabilizerDebugOverlayCalculator {
         let crop = input.cropEnabled
             ? unit(max(0.0, input.cropScale - 1.0) / 0.25)
             : 0.0
-        let turn = input.cropEnabled
-            ? unit(max(
-                abs(input.cropPositionPixels.x) / turnScaleX,
-                abs(input.cropPositionPixels.y) / turnScaleY
-            ))
-            : 0.0
+        let appliedTurnOffset = input.turnPixelOffset * masterStrength
+        let turn = unit(max(
+            abs(appliedTurnOffset.x) / turnScaleX,
+            abs(appliedTurnOffset.y) / turnScaleY
+        ))
         let macroJitter = correctionActivity(
             offset: input.macroJitterPixelOffset,
             rotationDegrees: input.macroJitterRotationDegrees,

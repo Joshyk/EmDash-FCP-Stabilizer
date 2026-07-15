@@ -19,7 +19,7 @@ struct DebugOverlayDiagnosticsTests {
         masterStrength: Float = 1.0,
         cropEnabled: Bool = false,
         cropScale: Float = 1.0,
-        cropPositionPixels: vector_float2 = .zero,
+        turnPixelOffset: vector_float2 = .zero,
         finalPixelOffset: vector_float2 = .zero,
         finalRotationDegrees: Float = 0.0,
         macroJitterPixelOffset: vector_float2 = .zero,
@@ -49,7 +49,7 @@ struct DebugOverlayDiagnosticsTests {
             finalRotationDegrees: finalRotationDegrees,
             cropEnabled: cropEnabled,
             cropScale: cropScale,
-            cropPositionPixels: cropPositionPixels,
+            turnPixelOffset: turnPixelOffset,
             macroJitterPixelOffset: macroJitterPixelOffset,
             macroJitterRotationDegrees: macroJitterRotationDegrees,
             microJitterPixelOffset: microJitterPixelOffset,
@@ -115,6 +115,7 @@ struct DebugOverlayDiagnosticsTests {
     private static func testFinalStrengthAndCropSemantics() {
         let disabled = StabilizerDebugOverlayCalculator.metrics(for: inputs(
             masterStrength: 0.0,
+            turnPixelOffset: vector_float2(100.0, 50.0),
             finalPixelOffset: vector_float2(20.0, 20.0),
             finalRotationDegrees: 1.0,
             macroJitterPixelOffset: vector_float2(20.0, 20.0),
@@ -127,23 +128,24 @@ struct DebugOverlayDiagnosticsTests {
         expect(close(disabled.macroJitter, 0.0), "master zero must disable MAJIT activity")
         expect(close(disabled.microJitter, 0.0), "master zero must disable MIJIT activity")
         expect(close(disabled.farFieldWarp, 0.0), "master zero must disable WARP activity")
+        expect(close(disabled.turn, 0.0), "master zero must disable TURN activity")
         expect(close(disabled.turnConfidence, 0.8), "confidence must remain visible when strength is zero")
 
         let cropOff = StabilizerDebugOverlayCalculator.metrics(for: inputs(
             cropEnabled: false,
             cropScale: 1.25,
-            cropPositionPixels: vector_float2(100.0, 50.0)
+            turnPixelOffset: vector_float2(19.2, 0.0)
         ))
         expect(close(cropOff.crop, 0.0), "crop off must hide CROP activity")
-        expect(close(cropOff.turn, 0.0), "crop off must hide TURN viewport activity")
+        expect(close(cropOff.turn, 1.0), "crop off must not hide applied TURN correction")
 
         let cropOn = StabilizerDebugOverlayCalculator.metrics(for: inputs(
             cropEnabled: true,
             cropScale: 1.25,
-            cropPositionPixels: vector_float2(19.2, 0.0)
+            turnPixelOffset: vector_float2(19.2, 0.0)
         ))
         expect(close(cropOn.crop, 1.0), "crop scale must map to CROP")
-        expect(close(cropOn.turn, 1.0), "applied crop position must map to TURN")
+        expect(close(cropOn.turn, 1.0), "applied turn correction must map to TURN")
     }
 
     private static func testQualityDirectionAndClamping() {

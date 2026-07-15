@@ -58,7 +58,7 @@ private let tokyoWalkingStabilizerVersion = "1.2.9"
 private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_016.0
 private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 2.0, 9.0, 1_016.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_454_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_455_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -11028,7 +11028,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     finalRotationDegrees: renderedAutoTransform.rotationDegrees,
                     cropEnabled: state.autoCropEnabled && !previewWarmupDecision.active,
                     cropScale: renderedAutoCropFraming.scale,
-                    cropPositionPixels: renderedAutoCropPosition,
+                    turnPixelOffset: renderedAutoTransform.turnDetectedPixelOffset,
                     macroJitterPixelOffset: renderedAutoTransform.macroJitterPixelOffset,
                     macroJitterRotationDegrees: renderedAutoTransform.macroJitterRotationDegrees,
                     microJitterPixelOffset: microJitterPixelOffset,
