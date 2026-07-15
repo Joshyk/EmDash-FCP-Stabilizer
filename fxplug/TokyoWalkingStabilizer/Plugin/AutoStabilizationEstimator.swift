@@ -1221,8 +1221,10 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumBlend: Float = 0.82
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
+    private static let playbackTrajectoryRigidRollPulseMaximumCorrectionDegrees: Float = 0.18
+    private static let playbackTrajectoryRigidRollPulseMinimumSupport: Float = 0.72
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 99
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 100
     private enum MotionPathKind: Hashable {
         case microX
         case microY
@@ -5920,9 +5922,22 @@ enum AutoStabilizationEstimator {
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
+        let rigidRollPulseLimited = playbackTrajectoryRigidRollPulseLimitedTransforms(
+            frames: frames,
+            transforms: postShockLimitedTransforms
+        )
+        if rigidRollPulseLimited.rotationFrameCount > 0 {
+            os_log(
+                "Playback trajectory rigid-roll pulse limit | rotationFrames %d maxRotation %.4f",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                rigidRollPulseLimited.rotationFrameCount,
+                rigidRollPulseLimited.maximumRotationDeviation
+            )
+        }
         let turnOwnedXTransforms = playbackTrajectoryTurnOwnedXTransforms(
             frames: frames,
-            transforms: postShockLimitedTransforms,
+            transforms: rigidRollPulseLimited.transforms,
             strengths: strengths
         )
         let limitingCompletedAt = CFAbsoluteTimeGetCurrent()
@@ -6231,6 +6246,64 @@ enum AutoStabilizationEstimator {
             result[index] += correction
         }
         return result
+    }
+
+    private static func playbackTrajectoryRigidRollPulseLimitedTransforms(
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform]
+    ) -> PlaybackTrajectoryDespikeResult {
+        guard frames.count == transforms.count,
+              transforms.count >= 5
+        else {
+            return PlaybackTrajectoryDespikeResult(
+                transforms: transforms,
+                pixelFrameCount: 0,
+                rotationFrameCount: 0,
+                maximumPixelDeviation: 0.0,
+                maximumRotationDeviation: 0.0
+            )
+        }
+
+        let rigidRollValues = transforms.map(\.cameraRigidRotationDegrees)
+        let limitedRigidRollValues = playbackTrajectoryShortShockDespikedPath(
+            rigidRollValues,
+            frames: frames,
+            minimumThreshold: playbackTrajectoryFarFieldMacroDespikeMinimumRotationDegrees,
+            maximumCorrection: playbackTrajectoryRigidRollPulseMaximumCorrectionDegrees
+        )
+        var result = transforms
+        var rotationFrameCount = 0
+        var maximumRotationDeviation = Float(0.0)
+
+        for index in result.indices {
+            let source = transforms[index]
+            guard source.lensFarFieldRigidRollApplied > 0.5,
+                  source.lensFarFieldRigidRollSupport >= playbackTrajectoryRigidRollPulseMinimumSupport,
+                  source.lensFarFieldRigidShakeRollForwardBackwardConsistency >= playbackTrajectoryRigidRollPulseMinimumSupport
+            else {
+                continue
+            }
+            let limitedValue = limitedRigidRollValues[index]
+            let correctionDelta = limitedValue - source.cameraRigidRotationDegrees
+            guard abs(correctionDelta) > Float.ulpOfOne else {
+                continue
+            }
+
+            result[index].cameraRigidRotationDegrees = limitedValue
+            result[index].rotationDegrees += correctionDelta
+            result[index].lensFarFieldRigidGlobalRollDegrees += correctionDelta
+            result[index].temporalSmoothingRotationDelta += correctionDelta
+            rotationFrameCount += 1
+            maximumRotationDeviation = max(maximumRotationDeviation, abs(correctionDelta))
+        }
+
+        return PlaybackTrajectoryDespikeResult(
+            transforms: result,
+            pixelFrameCount: 0,
+            rotationFrameCount: rotationFrameCount,
+            maximumPixelDeviation: 0.0,
+            maximumRotationDeviation: maximumRotationDeviation
+        )
     }
 
     private static func playbackTrajectoryFrameCadenceDespikedTransforms(
