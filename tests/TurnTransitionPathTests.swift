@@ -111,6 +111,41 @@ struct TurnTransitionPathTests {
         )
         expectStrictlyIncreasing(boundedWindow.positions, range: 0...12, "bounded Window events must preserve monotonic travel")
 
+        let uninterruptedWindowSplitTimes = (0...12).map(Double.init)
+        let uninterruptedWindowSplit = StabilizerTurnTransitionPath.concatenate(
+            times: uninterruptedWindowSplitTimes,
+            positions: (0...12).map { Float($0 * 4) },
+            travelPositions: (0...12).map { Float($0 * 4) },
+            activity: [0.0] + Array(repeating: Float(4.0), count: 11) + [0.0],
+            windowSeconds: 3.0,
+            smoothingStrength: 12.0
+        )
+        expect(
+            uninterruptedWindowSplit.events.count == 3,
+            "Window must still report uninterrupted activity as bounded events"
+        )
+        expect(
+            Set(uninterruptedWindowSplit.events.map(\.renderChainID)).count == 1,
+            "adjacent same-direction Window events must share one render chain"
+        )
+        expect(
+            uninterruptedWindowSplit.events.allSatisfy { $0.renderChainEventCount == 3 },
+            "render-chain diagnostics must expose every joined Window event"
+        )
+        let uninterruptedBodySpeeds = (1...10).map {
+            segmentSpeed(
+                uninterruptedWindowSplit.positions,
+                times: uninterruptedWindowSplitTimes,
+                from: $0
+            )
+        }
+        expect(
+            uninterruptedBodySpeeds.allSatisfy {
+                close($0, uninterruptedBodySpeeds[0], tolerance: 0.001)
+            },
+            "Window boundaries must not insert a speed drop into uninterrupted same-direction activity"
+        )
+
         let strengthInputTimes = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(Double.init)
         let strengthInputPositions: [Float] = [0.0, 5.0, 10.0, 10.0, 6.0, 6.0, 11.0, 16.0, 16.0]
         let strengthInputActivity: [Float] = [0.0, 5.0, 5.0, 0.0, -4.0, -4.0, 5.0, 5.0, 0.0]

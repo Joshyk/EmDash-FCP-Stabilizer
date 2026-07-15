@@ -36,8 +36,10 @@ During a TURN event, the final composed Viewer X path uses one constant cruising
 velocity with quintic easing limited to up to 0.30 seconds at each endpoint. TURN macro travel remains the distance authority, while Camera
 Jitter and continuity X cannot reintroduce pauses or speed steps inside the curve;
 any accumulated endpoint correction is carried into later frames so the path does
-not snap back when TURN activity ends. The Window measures the maximum pause
-between accepted samples rather than limiting total event duration. Brief
+not snap back when TURN activity ends. The Window caps each accumulation event
+from its first active sample. If that cap alone splits uninterrupted
+same-direction activity, the bounded events share one constant-velocity render
+chain instead of stopping and restarting at the Window boundary. Brief
 opposite-sign activity is absorbed using travel-based reversal hysteresis that
 increases with Turn Smoothing Strength, while diagnostic X components remain
 visible.
@@ -165,7 +167,8 @@ independently selects the `0.5...8.0` second maximum accumulation span measured 
 the first active sample. Same-direction turn bursts, pauses, and pan-speed changes
 inside that fixed span are accumulated monotonically and redistributed through one
 constant-velocity path with short quintic endpoint ramps, so intermediate pauses or speed steps do not survive as separate viewport
-transitions. A reversal or activity beyond the first-sample Window starts a new event. A curve may
+transitions. A reversal or activity beyond the first-sample Window starts a new event;
+directly adjacent same-direction events remain one render chain. A curve may
 pre-roll by up to 30% of its known Turn X travel. Camera Jitter X is made mean-free within
 that Window so it cannot become a
 second low-frequency pan owner. Actual

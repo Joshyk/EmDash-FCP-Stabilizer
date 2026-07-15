@@ -13,6 +13,10 @@ struct StabilizerTurnTransitionEvent {
     let reversalThresholdX: Float
     let endpointEaseSeconds: Double
     let activeSampleCount: Int
+    let renderChainID: Int
+    let renderChainEventCount: Int
+    let renderChainStartSeconds: Double
+    let renderChainEndSeconds: Double
 }
 
 struct StabilizerTurnTransitionResult {
@@ -30,6 +34,15 @@ enum StabilizerTurnTransitionPath {
     private struct SignedRun {
         let direction: Float
         let indices: [Int]
+    }
+
+    private struct EventWork {
+        let group: ActiveGroup
+        let startIndex: Int
+        let endIndex: Int
+        let startSeconds: Double
+        let endSeconds: Double
+        let cumulativeX: Float
     }
 
     static func concatenate(
@@ -201,10 +214,8 @@ enum StabilizerTurnTransitionPath {
             }
         }
 
-        var result = positions
-        var events: [StabilizerTurnTransitionEvent] = []
-        events.reserveCapacity(groups.count)
-
+        var work: [EventWork] = []
+        work.reserveCapacity(groups.count)
         for (groupIndex, group) in groups.enumerated() {
             let startIndex = boundaries[groupIndex].start
             let endIndex = boundaries[groupIndex].end
@@ -227,43 +238,98 @@ enum StabilizerTurnTransitionPath {
             guard duration > 1e-9 else {
                 continue
             }
-            let startX = result[startIndex]
-            let cumulativeX = cumulativeMagnitude * group.direction
-            let previousEndX = result[endIndex]
-            // Keep the body of a concatenated pan at one constant velocity.
-            // Quintic easing is restricted to short endpoint ramps so it can
-            // remove start/stop jerk without imposing a full-event speed ramp.
-            let endpointEaseSeconds = min(0.30, duration * 0.15)
-            for index in startIndex...endIndex {
-                let progress = constantVelocityProgress(
-                    elapsedSeconds: times[index] - startSeconds,
-                    durationSeconds: duration,
-                    endpointEaseSeconds: endpointEaseSeconds
-                )
-                result[index] = startX + (cumulativeX * progress)
-            }
-            let propagatedEndpointShiftX = result[endIndex] - previousEndX
-            if endIndex + 1 < result.endIndex {
-                for index in (endIndex + 1)..<result.endIndex {
-                    result[index] += propagatedEndpointShiftX
-                }
-            }
-            events.append(
-                StabilizerTurnTransitionEvent(
-                    direction: group.direction,
-                    firstActiveIndex: group.indices[0],
-                    lastActiveIndex: group.indices[group.indices.count - 1],
+            work.append(
+                EventWork(
+                    group: group,
                     startIndex: startIndex,
                     endIndex: endIndex,
                     startSeconds: startSeconds,
                     endSeconds: endSeconds,
-                    cumulativeX: cumulativeX,
-                    propagatedEndpointShiftX: propagatedEndpointShiftX,
-                    reversalThresholdX: reversalThresholdX,
-                    endpointEaseSeconds: endpointEaseSeconds,
-                    activeSampleCount: group.indices.count
+                    cumulativeX: cumulativeMagnitude * group.direction
                 )
             )
+        }
+
+        var result = positions
+        var events: [StabilizerTurnTransitionEvent] = []
+        events.reserveCapacity(work.count)
+        var chainStart = work.startIndex
+        var chainID = 0
+        while chainStart < work.endIndex {
+            var chainEnd = chainStart
+            while chainEnd + 1 < work.endIndex {
+                let current = work[chainEnd]
+                let next = work[chainEnd + 1]
+                let activeSamplesAreContiguous = next.group.indices[0]
+                    == current.group.indices[current.group.indices.count - 1] + 1
+                guard next.group.direction == current.group.direction,
+                      activeSamplesAreContiguous
+                else {
+                    break
+                }
+                chainEnd += 1
+            }
+
+            chainID += 1
+            let chainRange = chainStart...chainEnd
+            let first = work[chainStart]
+            let last = work[chainEnd]
+            let chainStartIndex = first.startIndex
+            let chainEndIndex = last.endIndex
+            let chainStartSeconds = first.startSeconds
+            let chainEndSeconds = last.endSeconds
+            let chainDuration = chainEndSeconds - chainStartSeconds
+            let chainCumulativeX = work[chainRange].reduce(Float(0.0)) {
+                $0 + $1.cumulativeX
+            }
+            let startX = result[chainStartIndex]
+            let previousChainEndX = result[chainEndIndex]
+
+            // Window still caps each accumulation event. When the cap alone
+            // splits uninterrupted same-direction activity, render those
+            // events as one chain so an artificial stop is not inserted at
+            // every Window boundary. Pauses and reversals keep separate ramps.
+            let endpointEaseSeconds = min(0.30, chainDuration * 0.15)
+            for index in chainStartIndex...chainEndIndex {
+                let progress = constantVelocityProgress(
+                    elapsedSeconds: times[index] - chainStartSeconds,
+                    durationSeconds: chainDuration,
+                    endpointEaseSeconds: endpointEaseSeconds
+                )
+                result[index] = startX + (chainCumulativeX * progress)
+            }
+            let propagatedChainEndpointShiftX = result[chainEndIndex] - previousChainEndX
+            if chainEndIndex + 1 < result.endIndex {
+                for index in (chainEndIndex + 1)..<result.endIndex {
+                    result[index] += propagatedChainEndpointShiftX
+                }
+            }
+            for eventIndex in chainRange {
+                let eventWork = work[eventIndex]
+                events.append(
+                    StabilizerTurnTransitionEvent(
+                        direction: eventWork.group.direction,
+                        firstActiveIndex: eventWork.group.indices[0],
+                        lastActiveIndex: eventWork.group.indices[eventWork.group.indices.count - 1],
+                        startIndex: eventWork.startIndex,
+                        endIndex: eventWork.endIndex,
+                        startSeconds: eventWork.startSeconds,
+                        endSeconds: eventWork.endSeconds,
+                        cumulativeX: eventWork.cumulativeX,
+                        propagatedEndpointShiftX: eventIndex == chainEnd
+                            ? propagatedChainEndpointShiftX
+                            : 0.0,
+                        reversalThresholdX: reversalThresholdX,
+                        endpointEaseSeconds: endpointEaseSeconds,
+                        activeSampleCount: eventWork.group.indices.count,
+                        renderChainID: chainID,
+                        renderChainEventCount: chainRange.count,
+                        renderChainStartSeconds: chainStartSeconds,
+                        renderChainEndSeconds: chainEndSeconds
+                    )
+                )
+            }
+            chainStart = chainEnd + 1
         }
 
         return StabilizerTurnTransitionResult(

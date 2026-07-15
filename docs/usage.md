@@ -28,7 +28,9 @@ velocity with quintic easing limited to up to 0.30 seconds at each endpoint. Sam
 speed changes are removed from the Viewer path, and the endpoint correction is
 carried forward so the next frame cannot jump back to the pre-concatenated path.
 Turn Transition Window caps accumulation from the first active sample; later active
-samples do not roll the Window forward. Higher Turn Smoothing Strength
+samples do not roll the Window forward. Uninterrupted same-direction events that
+touch at the Window boundary share one constant-velocity render chain, so the cap
+does not insert a periodic stop. Higher Turn Smoothing Strength
 raises the travel-based reversal hysteresis, so brief activity-sign chatter remains
 inside the dominant curve while a substantial physical reversal still starts a new
 event. Component X activity remains available to Debug Overlay diagnostics.
@@ -125,7 +127,8 @@ fallbacks.
   the first active sample of a same-direction X-pan. Turn accumulates all direction-consistent travel,
   pauses, and speed changes inside that fixed Window, then redistributes
   the total through one constant-velocity path with short quintic endpoint ramps. Reversals and activity outside the Window start
-  new events. Curves may pre-roll by up to 30% of their known Turn X travel; Camera Jitter
+  new events. Directly adjacent same-direction events share one render chain; a pause
+  outside the Window remains a separate transition. Curves may pre-roll by up to 30% of their known Turn X travel; Camera Jitter
   X remains mean-free within the Window. The Window is not a second amplitude control.
 - `Remove Black Edges`: off is a true diagnostic mode. It forces `1.0x` scale and removes
   Auto Crop's look-ahead position reservation, so visible edge movement comes only from
