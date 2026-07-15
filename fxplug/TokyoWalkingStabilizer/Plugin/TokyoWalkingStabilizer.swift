@@ -58,7 +58,7 @@ private let tokyoWalkingStabilizerVersion = "1.2.9"
 private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_016.0
 private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 2.0, 9.0, 1_016.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_451_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_452_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -2323,6 +2323,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cameraJitterRotation: strengths.cameraJitterRotation,
             farFieldWarp: strengths.farFieldWarp,
             turnSmoothingZoom: 36.0,
+            turnViewportStrength: strengths.turnViewportStrength,
             turnTransitionWindowSeconds: strengths.turnTransitionWindowSeconds
         )
     }
@@ -5618,7 +5619,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             return []
         }
         let viewportTransforms: [StabilizerAutoTransform]
-        if turnViewportAuthority(strengths.turnSmoothingZoom) > Float.ulpOfOne {
+        if samplingProfile == .playback {
+            // Canonical playback applies Turn Strength before concatenation.
+            viewportTransforms = rawTransforms
+        } else if turnViewportAuthority(strengths.turnSmoothingZoom) > Float.ulpOfOne {
             viewportTransforms = rawTransforms.map {
                 turnViewportPlanningTransform(
                     $0,
@@ -5638,6 +5642,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 masterStrength: masterStrength,
                 strengths: strengths,
                 samplingProfile: samplingProfile,
+                turnTransformAlreadyScaled: samplingProfile == .playback
             ) {
                 samples.append(sample)
             }
@@ -5793,7 +5798,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             outputSize: outputSize,
             masterStrength: masterStrength,
             strengths: strengths,
-            samplingProfile: samplingProfile
+            samplingProfile: samplingProfile,
+            turnTransformAlreadyScaled: samplingProfile == .playback
         )
     }
 
@@ -5841,7 +5847,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         outputSize: vector_float2,
         masterStrength: Float,
         strengths: StabilizerCorrectionStrengths,
-        samplingProfile: AutoCropSamplingProfile
+        samplingProfile: AutoCropSamplingProfile,
+        turnTransformAlreadyScaled: Bool
     ) -> AutoCropZoomDemandSample? {
         guard seconds.isFinite,
               outputSize.x > 1.0,
@@ -5890,7 +5897,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sampleSteps: samplingProfile.scaleSearchSampleSteps,
             iterations: samplingProfile.scaleSearchIterations
         )
-        let turnStrength = turnViewportAuthority(strengths.turnSmoothingZoom)
+        let turnStrength = turnTransformAlreadyScaled
+            ? Float(1.0)
+            : turnViewportAuthority(strengths.turnSmoothingZoom)
         let turnOverflowScale = max(0.0, fullCropScale - cameraCropScale)
         let turnViewportDelta = fullPositionPixels - cameraPositionPixels
         let positionPixels = cameraPositionPixels + (turnViewportDelta * turnStrength)
@@ -5905,10 +5914,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             // Coverage repair must use the same Strength-scaled Turn path.
             // Supplying the full transform here made Strength 0 and 12 converge
             // to the same full-Turn coverage floor.
-            transform: turnViewportPlanningTransform(
-                transform,
-                turnSmoothingStrength: strengths.turnSmoothingZoom
-            )
+            transform: turnTransformAlreadyScaled
+                ? transform
+                : turnViewportPlanningTransform(
+                    transform,
+                    turnSmoothingStrength: strengths.turnSmoothingZoom
+                )
         )
     }
 
@@ -6432,7 +6443,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 outputSize: outputSize,
                 masterStrength: masterStrength,
                 strengths: strengths,
-                samplingProfile: samplingProfile
+                samplingProfile: samplingProfile,
+                turnTransformAlreadyScaled: true
             ) {
                 let protectedScale = autoCropPlaybackMinimumClippedScale(
                     autoCropPlaybackVisualScaleCap(fallbackDemand.scale)
@@ -10738,6 +10750,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cameraJitterRotation: state.cameraJitterRotationStrength,
             farFieldWarp: state.farFieldWarpStrength,
             turnSmoothingZoom: state.turnSmoothingZoom,
+            turnViewportStrength: state.turnSmoothingZoom,
             turnTransitionWindowSeconds: state.turnTransitionWindow
         )
         // TURN is rendered only in viewport/crop space.  Build one canonical
@@ -10807,10 +10820,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 playbackMode: true,
                 playbackPreparationScope: playbackPreparationScope,
                 onPlaybackPreparationReady: playbackTrajectoryPrepared
-            )
-            autoTransform = Self.turnViewportPlanningTransform(
-                autoTransform,
-                turnSmoothingStrength: correctionStrengths.turnSmoothingZoom
             )
             transformFinishedAt = CFAbsoluteTimeGetCurrent()
         } else {

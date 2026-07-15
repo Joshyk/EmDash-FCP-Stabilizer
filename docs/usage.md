@@ -27,6 +27,8 @@ Inside a detected TURN group, final composed X is owned by one constant cruising
 velocity with quintic easing limited to up to 0.30 seconds at each endpoint. Same-direction macro travel defines the accumulated distance, pauses and
 speed changes are removed from the Viewer path, and the endpoint correction is
 carried forward so the next frame cannot jump back to the pre-concatenated path.
+Turn Strength scales travel before concatenation, so higher Strength cannot restore
+the raw macro speed changes after the constant path is built.
 Turn Transition Window caps accumulation from the first active sample; later active
 samples do not roll the Window forward. Uninterrupted same-direction events that
 touch at the Window boundary share one constant-velocity render chain, so the cap

@@ -255,6 +255,7 @@ struct StabilizerCorrectionStrengths {
     let cameraJitterRotation: Double
     let farFieldWarp: Double
     let turnSmoothingZoom: Double
+    let turnViewportStrength: Double
     let turnTransitionWindowSeconds: Double
 
     // The estimator still uses its prepared short/medium residual measurements,
@@ -272,6 +273,7 @@ struct StabilizerCorrectionStrengths {
         cameraJitterRotation: 0.5,
         farFieldWarp: 0.5,
         turnSmoothingZoom: 5.0,
+        turnViewportStrength: 5.0,
         turnTransitionWindowSeconds: 2.8
     )
 }
@@ -1493,6 +1495,7 @@ enum AutoStabilizationEstimator {
         let macroJitterRotation: UInt64
         let farFieldWarp: UInt64
         let turnSmoothingZoom: UInt64
+        let turnViewportStrength: UInt64
     }
 
     private struct PlaybackTrajectoryPreparationCallback {
@@ -5577,7 +5580,8 @@ enum AutoStabilizationEstimator {
             macroJitterY: strengths.macroJitterY.bitPattern,
             macroJitterRotation: strengths.macroJitterRotation.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
-            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern
+            turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
+            turnViewportStrength: strengths.turnViewportStrength.bitPattern
         )
     }
 
@@ -5965,15 +5969,23 @@ enum AutoStabilizationEstimator {
         let halfWindow = windowSeconds * 0.5
         let preRollSeconds = min(windowSeconds * 0.30, 2.4)
         let strength = turnSmoothingZoomNormalized(strengths.turnSmoothingZoom)
-        let jitterX = transforms.map { transform in
+        let viewportAuthority = max(0.0, Float(strengths.turnViewportStrength / 12.0))
+        var result = transforms
+        for index in result.indices {
+            let fullTurnMacroX = result[index].macroPixelOffset.x
+            let plannedTurnMacroX = fullTurnMacroX * viewportAuthority
+            let turnDeltaX = plannedTurnMacroX - fullTurnMacroX
+            result[index].macroPixelOffset.x = plannedTurnMacroX
+            result[index].pixelOffset.x += turnDeltaX
+            result[index].rawPixelOffset.x += turnDeltaX
+        }
+        let jitterX = result.map { transform in
             transform.microPixelOffset.x
                 + transform.macroJitterPixelOffset.x
                 + transform.trajectoryMicroJitterPixelOffset.x
                 + transform.trajectoryContinuityPixelOffset.x
                 + transform.cameraRigidPixelOffset.x
         }
-        var result = transforms
-
         for index in transforms.indices {
             let time = frames[index].time
             let lower = lowerBoundFrameIndex(frames, time: time - halfWindow)
@@ -6041,7 +6053,7 @@ enum AutoStabilizationEstimator {
             travelPositions: result.map { $0.macroPixelOffset.x },
             activity: result.map { $0.turnDetectedPixelOffset.x },
             windowSeconds: windowSeconds,
-            smoothingStrength: Float(strengths.turnSmoothingZoom)
+            smoothingStrength: Float(strengths.turnViewportStrength)
         )
         if let rejectionReason = concatenatedTurn.rejectionReason {
             os_log(

@@ -167,7 +167,8 @@ independently selects the `0.5...8.0` second maximum accumulation span measured 
 the first active sample. Same-direction turn bursts, pauses, and pan-speed changes
 inside that fixed span are accumulated monotonically and redistributed through one
 constant-velocity path with short quintic endpoint ramps, so intermediate pauses or speed steps do not survive as separate viewport
-transitions. A reversal or activity beyond the first-sample Window starts a new event;
+transitions. Strength scales TURN travel before that redistribution; it is not
+reapplied to the unsmoothed macro path afterward. A reversal or activity beyond the first-sample Window starts a new event;
 directly adjacent same-direction events remain one render chain. A curve may
 pre-roll by up to 30% of its known Turn X travel. Camera Jitter X is made mean-free within
 that Window so it cannot become a

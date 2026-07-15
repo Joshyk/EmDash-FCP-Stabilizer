@@ -259,7 +259,7 @@ fxplug/TokyoWalkingStabilizer/scripts/install_debug_app.sh \
   Jitter continues to own short-period X during the pan.
 - `Turn Transition Window (s)`: sets the maximum accumulation span from the first active
   sample in one same-direction X-pan event (`0.5...8.0` seconds; default `5.0`). Direction-consistent
-  travel across pauses and speed changes is accumulated monotonically, then redistributed
+  travel across pauses and speed changes is Strength-scaled first, accumulated monotonically, then redistributed
   at one cruising velocity with quintic easing only for up to 0.30 seconds at each endpoint; reversals and activity beyond the fixed Window start a new
   event. Directly adjacent same-direction events share one render chain, while an actual
   pause outside the Window remains separate. It is independent from correction amplitude. `Turn Smoothing Strength` defaults
