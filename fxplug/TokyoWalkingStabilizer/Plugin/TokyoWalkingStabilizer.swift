@@ -58,7 +58,7 @@ private let tokyoWalkingStabilizerVersion = "1.2.9"
 private let tokyoWalkingStabilizerDebugBuildNumber: Float = 1_016.0
 private let tokyoWalkingStabilizerDebugVersion = vector_float4(1.0, 2.0, 9.0, 1_016.0)
 // Bump with render-path algorithm changes so Final Cut Pro discards stale rendered frames.
-private let tokyoWalkingStabilizerRenderRevisionSeed = 1_450_000.0
+private let tokyoWalkingStabilizerRenderRevisionSeed = 1_451_000.0
 let stabilizerHostAnalysisLog = OSLog(subsystem: "com.justadev.TokyoWalkingStabilizer", category: "HostAnalysis")
 private let stabilizerDefaultWalkingTranslationStrength = 2.0
 private let stabilizerDefaultWalkingRotationStrength = 0.5
@@ -10965,13 +10965,9 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let renderedAutoCropFraming: AutoCropFraming = previewWarmupDecision.active
             ? .identity
             : autoCropFraming
-        // TURN owns only the Auto Crop viewport.  It never directly translates
-        // the source texture: Crop off therefore hides TURN completely, while
-        // Crop on renders its strength-scaled viewport position and zoom.
-        let turnMacroX = renderedAutoTransform.macroPixelOffset.x
-        renderedAutoTransform.macroPixelOffset.x = 0.0
-        renderedAutoTransform.pixelOffset.x -= turnMacroX
-        renderedAutoTransform.rawPixelOffset.x -= turnMacroX
+        // Remove Black Edges owns only crop position and scale. Keep the same
+        // canonical TURN/X trajectory in both modes; disabling Auto Crop must
+        // change scale to 1.0x without restoring the pre-concatenated X path.
         renderedAutoTransform = cameraRigidFinalLimitTransform(
             renderedAutoTransform,
             outputSize: vector_float2(Float(outputWidth), Float(outputHeight)),
