@@ -1211,7 +1211,6 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryTurnOwnedXPreservationFarFieldFloorMax: Float = 0.10
     private static let playbackTrajectoryTurnOwnedXPreservationFarFieldStart: Float = 0.45
     private static let playbackTrajectoryTurnOwnedXPreservationFarFieldFull: Float = 0.85
-    private static let playbackTrajectoryTurnOwnedXTransitionRescueMaximumPixels: Float = 0.42
     private static let playbackTrajectoryFarFieldMacroDespikeInnerWindowSeconds = 0.12
     private static let playbackTrajectoryFarFieldMacroDespikeOuterWindowSeconds = 0.72
     private static let playbackTrajectoryFarFieldMacroDespikeLocalWindowSeconds = 0.36
@@ -1222,7 +1221,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 96
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 97
     private enum MotionPathKind: Hashable {
         case microX
         case microY
@@ -6101,16 +6100,12 @@ enum AutoStabilizationEstimator {
                     max: 1.0
                 )
                 let transitionPosition = concatenatedTurn.positions[index]
-                let requestedRestoration = (composedX[index] - transitionPosition) * impulseAuthority
-                let restorationLimit = min(
-                    playbackTrajectoryTurnOwnedXTransitionRescueMaximumPixels,
-                    abs(result[index].microPixelOffset.x) * impulseAuthority
+                let restoration = StabilizerConfidencePolicy.turnOwnedXTransitionRestoration(
+                    requestedPixels: composedX[index] - transitionPosition,
+                    microPixels: result[index].microPixelOffset.x,
+                    authority: impulseAuthority
                 )
-                let finalPosition = transitionPosition + clamp(
-                    requestedRestoration,
-                    min: -restorationLimit,
-                    max: restorationLimit
-                )
+                let finalPosition = transitionPosition + restoration
                 result[index].trajectoryContinuityPixelOffset.x += finalPosition - composedX[index]
             }
             for (eventID, event) in concatenatedTurn.events.enumerated() {

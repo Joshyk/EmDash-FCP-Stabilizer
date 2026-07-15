@@ -74,6 +74,51 @@ struct StabilizerConfidencePolicyTests {
         expect(close(fineImpulse.gateFloor, 0.0), "fine impulse must not reopen the broad Turn gate")
         expect(close(fineImpulse.confidenceFloor, 1.0), "fine impulse must retain frame-local Camera Jitter confidence")
 
+        expect(
+            close(
+                StabilizerConfidencePolicy.turnOwnedXTransitionRestoration(
+                    requestedPixels: 3.016,
+                    microPixels: 61.495,
+                    authority: 1.0
+                ),
+                3.016
+            ),
+            "supported 1:49 residual must pass through TURN concatenation"
+        )
+        expect(
+            close(
+                StabilizerConfidencePolicy.turnOwnedXTransitionRestoration(
+                    requestedPixels: 80.0,
+                    microPixels: 61.495,
+                    authority: 1.0
+                ),
+                3.2
+            ),
+            "TURN restoration must remain capped below the prior transition regression"
+        )
+        expect(
+            close(
+                StabilizerConfidencePolicy.turnOwnedXTransitionRestoration(
+                    requestedPixels: -80.0,
+                    microPixels: 2.0,
+                    authority: 0.5
+                ),
+                -1.0
+            ),
+            "TURN restoration must also respect available Micro X authority"
+        )
+        expect(
+            close(
+                StabilizerConfidencePolicy.turnOwnedXTransitionRestoration(
+                    requestedPixels: .nan,
+                    microPixels: 10.0,
+                    authority: 1.0
+                ),
+                0.0
+            ),
+            "nonfinite TURN restoration evidence must fail visibly as zero"
+        )
+
         if failures.isEmpty {
             print("StabilizerConfidencePolicyTests: PASS")
             return

@@ -1,6 +1,8 @@
 import Foundation
 
 enum StabilizerConfidencePolicy {
+    private static let turnOwnedXTransitionRescueMaximumPixels: Float = 3.2
+
     struct TurnOwnedFarFieldXImpulseRescue {
         let gateFloor: Float
         let confidenceFloor: Float
@@ -62,6 +64,26 @@ enum StabilizerConfidencePolicy {
             confidenceFloor: confidenceAuthority,
             continuityFloor: farFieldSupport * confidenceAuthority
         )
+    }
+
+    static func turnOwnedXTransitionRestoration(
+        requestedPixels: Float,
+        microPixels: Float,
+        authority: Float
+    ) -> Float {
+        guard requestedPixels.isFinite,
+              microPixels.isFinite,
+              authority.isFinite
+        else {
+            return 0.0
+        }
+
+        let boundedAuthority = unbiased(authority)
+        let limit = min(
+            turnOwnedXTransitionRescueMaximumPixels,
+            abs(microPixels) * boundedAuthority
+        )
+        return min(limit, max(-limit, requestedPixels * boundedAuthority))
     }
 
     private static func ramp(_ value: Float, start: Float, full: Float) -> Float {
