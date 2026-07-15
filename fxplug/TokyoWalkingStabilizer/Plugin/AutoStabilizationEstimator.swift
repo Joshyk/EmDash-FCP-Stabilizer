@@ -6094,8 +6094,19 @@ enum AutoStabilizationEstimator {
         } else {
             for index in result.indices {
                 // Keep each diagnostic X component visible, but let TURN own the
-                // final sum through an explicit continuity correction.
-                result[index].trajectoryContinuityPixelOffset.x += concatenatedTurn.positions[index] - composedX[index]
+                // final sum through an explicit continuity correction. A
+                // supported frame-local far-field X impulse must retain its
+                // scoped authority here; otherwise concatenation restores the
+                // one-frame shake that the Camera Jitter path already found.
+                let impulseAuthority = clamp(
+                    result[index].turnOwnedFarFieldXImpulseAuthority,
+                    min: 0.0,
+                    max: 1.0
+                )
+                let transitionPosition = concatenatedTurn.positions[index]
+                let finalPosition = transitionPosition
+                    + ((composedX[index] - transitionPosition) * impulseAuthority)
+                result[index].trajectoryContinuityPixelOffset.x += finalPosition - composedX[index]
             }
             for (eventID, event) in concatenatedTurn.events.enumerated() {
                 os_log(
@@ -9301,6 +9312,7 @@ enum AutoStabilizationEstimator {
         smoothedTransform.microPixelOffset = micro.microPixelOffset
         smoothedTransform.microJitterRotationDegrees = micro.rotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = centerTransform.effectiveMicroJitterStrength
+        smoothedTransform.turnOwnedFarFieldXImpulseAuthority = centerTransform.turnOwnedFarFieldXImpulseAuthority
         smoothedTransform.microConfidence = centerTransform.microConfidence
         smoothedTransform.microImpulse = centerTransform.microImpulse
         smoothedTransform.rawMicroCorrection = centerTransform.rawMicroCorrection
