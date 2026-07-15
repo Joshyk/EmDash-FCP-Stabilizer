@@ -78,7 +78,10 @@ struct StabilizerConfidencePolicyTests {
             close(
                 StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
                     rigidPixels: -2.66871,
-                    authority: 1.0
+                    turnPixels: -4.83667,
+                    support: 1.0,
+                    shapeConsistency: 1.0,
+                    forwardBackwardConsistency: 1.0
                 ),
                 -2.66871
             ),
@@ -88,7 +91,10 @@ struct StabilizerConfidencePolicyTests {
             close(
                 StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
                     rigidPixels: 38.42,
-                    authority: 1.0
+                    turnPixels: 4.0,
+                    support: 1.0,
+                    shapeConsistency: 1.0,
+                    forwardBackwardConsistency: 1.0
                 ),
                 3.2
             ),
@@ -98,21 +104,40 @@ struct StabilizerConfidencePolicyTests {
             close(
                 StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
                     rigidPixels: -2.0,
-                    authority: 0.5
+                    turnPixels: 0.0,
+                    support: 1.0,
+                    shapeConsistency: 1.0,
+                    forwardBackwardConsistency: 1.0
                 ),
-                -1.0
+                0.0
             ),
-            "far-field rigid restoration must scale with supported impulse authority"
+            "far-field rigid restoration must stay off without TURN activity"
         )
         expect(
             close(
                 StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
                     rigidPixels: .nan,
-                    authority: 1.0
+                    turnPixels: 4.0,
+                    support: 1.0,
+                    shapeConsistency: 1.0,
+                    forwardBackwardConsistency: 1.0
                 ),
                 0.0
             ),
             "nonfinite far-field rigid evidence must fail visibly as zero"
+        )
+        expect(
+            close(
+                StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
+                    rigidPixels: -2.0,
+                    turnPixels: 4.0,
+                    support: 0.1,
+                    shapeConsistency: 1.0,
+                    forwardBackwardConsistency: 1.0
+                ),
+                0.0
+            ),
+            "weak far-field support must not perturb a TURN transition"
         )
 
         if failures.isEmpty {

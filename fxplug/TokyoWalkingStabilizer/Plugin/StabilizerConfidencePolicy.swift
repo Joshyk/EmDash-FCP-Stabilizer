@@ -68,11 +68,23 @@ enum StabilizerConfidencePolicy {
 
     static func turnOwnedFarFieldRigidXTransitionRestoration(
         rigidPixels: Float,
-        authority: Float
+        turnPixels: Float,
+        support: Float,
+        shapeConsistency: Float,
+        forwardBackwardConsistency: Float
     ) -> Float {
-        guard rigidPixels.isFinite, authority.isFinite else {
+        guard rigidPixels.isFinite,
+              turnPixels.isFinite,
+              support.isFinite,
+              shapeConsistency.isFinite,
+              forwardBackwardConsistency.isFinite
+        else {
             return 0.0
         }
+        let authority = ramp(abs(turnPixels), start: 0.5, full: 2.4)
+            * ramp(support, start: 0.45, full: 0.85)
+            * ramp(shapeConsistency, start: 0.70, full: 0.95)
+            * ramp(forwardBackwardConsistency, start: 0.70, full: 0.92)
         let requested = rigidPixels * unbiased(authority)
         return min(
             turnOwnedFarFieldRigidXTransitionMaximumPixels,

@@ -1222,7 +1222,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 98
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 99
     private enum MotionPathKind: Hashable {
         case microX
         case microY
@@ -6112,7 +6112,10 @@ enum AutoStabilizationEstimator {
                     max: restorationLimit
                 ) + StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
                     rigidPixels: result[index].cameraRigidPixelOffset.x,
-                    authority: impulseAuthority
+                    turnPixels: result[index].turnDetectedPixelOffset.x,
+                    support: result[index].lensFarFieldRigidShakeSupportX,
+                    shapeConsistency: result[index].lensFarFieldRigidShakeShapeConsistencyX,
+                    forwardBackwardConsistency: result[index].lensFarFieldRigidShakeForwardBackwardConsistencyX
                 )
                 result[index].trajectoryContinuityPixelOffset.x += finalPosition - composedX[index]
             }
