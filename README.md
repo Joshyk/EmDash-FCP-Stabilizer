@@ -36,7 +36,7 @@ During a TURN event, the final composed Viewer X path uses one constant cruising
 velocity with quintic easing limited to up to 0.30 seconds at each endpoint. TURN macro travel remains the distance authority, while Camera
 Jitter and continuity X cannot reintroduce pauses or speed steps inside the curve.
 Endpoint correction carries through a continuous handoff, but during a true idle span
-it releases with a quintic curve (up to 0.5 seconds) back to the underlying X path so
+it releases with the configured `Auto Crop Zoom-Out Time` quintic duration (clamped by the available idle span) back to the underlying X path so
 Crop Off does not retain a stationary black edge. The Window caps each accumulation event
 from its first active sample. If that cap alone splits uninterrupted
 same-direction activity, the bounded events share one constant-velocity render

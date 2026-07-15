@@ -55,6 +55,7 @@ enum StabilizerTurnTransitionPath {
         activity: [Float],
         windowSeconds: Double,
         smoothingStrength: Float,
+        idleReleaseSeconds: Double = 6.0,
         activityThreshold: Float = 0.5
     ) -> StabilizerTurnTransitionResult {
         guard times.count == positions.count,
@@ -78,6 +79,9 @@ enum StabilizerTurnTransitionPath {
         }
         guard smoothingStrength.isFinite, smoothingStrength >= 0.0 else {
             return rejected(positions, "TURN smoothing strength is invalid")
+        }
+        guard idleReleaseSeconds.isFinite, idleReleaseSeconds >= 0.0 else {
+            return rejected(positions, "TURN idle release duration is invalid")
         }
         for index in times.indices {
             guard times[index].isFinite,
@@ -320,7 +324,10 @@ enum StabilizerTurnTransitionPath {
             if firstIdleIndex <= lastIdleIndex,
                abs(propagatedChainEndpointShiftX) > Float.ulpOfOne {
                 let idleEndSeconds = times[lastIdleIndex]
-                let releaseDuration = min(0.5, max(0.0, idleEndSeconds - chainEndSeconds))
+                let releaseDuration = min(
+                    idleReleaseSeconds,
+                    max(0.0, idleEndSeconds - chainEndSeconds)
+                )
                 if releaseDuration > 1e-9 {
                     releaseEndSeconds = chainEndSeconds + releaseDuration
                     for index in firstIdleIndex...lastIdleIndex {

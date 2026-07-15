@@ -257,6 +257,7 @@ struct StabilizerCorrectionStrengths {
     let turnSmoothingZoom: Double
     let turnViewportStrength: Double
     let turnTransitionWindowSeconds: Double
+    let turnIdleReleaseSeconds: Double
 
     // The estimator still uses its prepared short/medium residual measurements,
     // but they are one Camera Jitter stage with one set of user strengths.
@@ -274,7 +275,8 @@ struct StabilizerCorrectionStrengths {
         farFieldWarp: 0.5,
         turnSmoothingZoom: 5.0,
         turnViewportStrength: 5.0,
-        turnTransitionWindowSeconds: 2.8
+        turnTransitionWindowSeconds: 2.8,
+        turnIdleReleaseSeconds: 6.0
     )
 }
 
@@ -1496,6 +1498,7 @@ enum AutoStabilizationEstimator {
         let farFieldWarp: UInt64
         let turnSmoothingZoom: UInt64
         let turnViewportStrength: UInt64
+        let turnIdleReleaseSeconds: UInt64
     }
 
     private struct PlaybackTrajectoryPreparationCallback {
@@ -5581,7 +5584,8 @@ enum AutoStabilizationEstimator {
             macroJitterRotation: strengths.macroJitterRotation.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
             turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
-            turnViewportStrength: strengths.turnViewportStrength.bitPattern
+            turnViewportStrength: strengths.turnViewportStrength.bitPattern,
+            turnIdleReleaseSeconds: strengths.turnIdleReleaseSeconds.bitPattern
         )
     }
 
@@ -6053,7 +6057,8 @@ enum AutoStabilizationEstimator {
             travelPositions: result.map { $0.macroPixelOffset.x },
             activity: result.map { $0.turnDetectedPixelOffset.x },
             windowSeconds: windowSeconds,
-            smoothingStrength: Float(strengths.turnViewportStrength)
+            smoothingStrength: Float(strengths.turnViewportStrength),
+            idleReleaseSeconds: strengths.turnIdleReleaseSeconds
         )
         if let rejectionReason = concatenatedTurn.rejectionReason {
             os_log(

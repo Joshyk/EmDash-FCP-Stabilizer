@@ -585,6 +585,7 @@ private struct AutoCropFramingCacheKey: Hashable {
     let farFieldWarp: UInt64
     let turnSmoothingZoom: UInt64
     let turnTransitionWindow: UInt64
+    let turnIdleReleaseSeconds: UInt64
     let currentTransform: AutoCropTransformSignature
 }
 
@@ -2101,7 +2102,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             macroJitterRotation: strengths.macroJitterRotation.bitPattern,
             farFieldWarp: strengths.farFieldWarp.bitPattern,
             turnSmoothingZoom: strengths.turnSmoothingZoom.bitPattern,
-            turnTransitionWindow: strengths.turnTransitionWindowSeconds.bitPattern
+            turnTransitionWindow: strengths.turnTransitionWindowSeconds.bitPattern,
+            turnIdleReleaseSeconds: strengths.turnIdleReleaseSeconds.bitPattern
         )
 
         autoTransformCacheLock.lock()
@@ -2324,7 +2326,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             farFieldWarp: strengths.farFieldWarp,
             turnSmoothingZoom: 36.0,
             turnViewportStrength: strengths.turnViewportStrength,
-            turnTransitionWindowSeconds: strengths.turnTransitionWindowSeconds
+            turnTransitionWindowSeconds: strengths.turnTransitionWindowSeconds,
+            turnIdleReleaseSeconds: strengths.turnIdleReleaseSeconds
         )
     }
 
@@ -10751,7 +10754,8 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             farFieldWarp: state.farFieldWarpStrength,
             turnSmoothingZoom: state.turnSmoothingZoom,
             turnViewportStrength: state.turnSmoothingZoom,
-            turnTransitionWindowSeconds: state.turnTransitionWindow
+            turnTransitionWindowSeconds: state.turnTransitionWindow,
+            turnIdleReleaseSeconds: Self.autoCropTransitionDurationSeconds(state.autoCropTransitionDuration)
         )
         // TURN is rendered only in viewport/crop space.  Build one canonical
         // full-authority trajectory for every non-zero TURN value so the

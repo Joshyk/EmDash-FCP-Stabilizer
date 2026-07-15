@@ -55,7 +55,8 @@ struct TurnTransitionPathTests {
             travelPositions: [0.0, 10.0, 8.0, 28.0, 26.0, 36.0, 34.0, 34.0, 34.0],
             activity: [0.0, 10.0, 0.0, 20.0, 0.0, 10.0, 0.0, 0.0, 0.0],
             windowSeconds: 5.0,
-            smoothingStrength: 12.0
+            smoothingStrength: 12.0,
+            idleReleaseSeconds: 0.5
         )
         expect(propagatedEndpoint.events.count == 1, "same-direction travel with relaxation must remain one event")
         expect(close(propagatedEndpoint.events.first?.cumulativeX ?? .nan, 40.0), "relaxation must not erase accumulated travel")
@@ -71,7 +72,8 @@ struct TurnTransitionPathTests {
             travelPositions: [0.0, 10.0, 8.0, 28.0, 26.0, 36.0, 34.0, 34.0, 34.0],
             activity: [0.0, 10.0, 0.0, 20.0, 0.0, 10.0, 0.0, 0.0, 0.0],
             windowSeconds: 5.0,
-            smoothingStrength: 12.0
+            smoothingStrength: 12.0,
+            idleReleaseSeconds: 0.5
         )
         expect(close(composedResidual.events.first?.cumulativeX ?? .nan, 40.0), "final X residuals must not inflate TURN travel")
         expect(close(composedResidual.positions[0], 2.0), "final composite X must preserve the rendered start")
@@ -89,7 +91,8 @@ struct TurnTransitionPathTests {
                               14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0],
             activity: [0.0, 4.0, 4.0, 4.0, 4.0, 4.0] + Array(repeating: 0.0, count: 25),
             windowSeconds: 5.0,
-            smoothingStrength: 12.0
+            smoothingStrength: 12.0,
+            idleReleaseSeconds: 0.5
         )
         expect(releasedIdle.events.count == 1, "idle-release fixture must contain one turn")
         expect(
