@@ -321,7 +321,9 @@ enum StabilizerTurnTransitionPath {
             let lastIdleIndex = min(result.index(before: result.endIndex), nextChainStartIndex - 1)
             let releaseStartSeconds = chainEndSeconds
             var releaseEndSeconds = chainEndSeconds
-            if firstIdleIndex <= lastIdleIndex,
+            let idleSampleCount = max(0, lastIdleIndex - firstIdleIndex + 1)
+            let hasReleaseableIdleSpan = idleSampleCount >= 3
+            if hasReleaseableIdleSpan,
                abs(propagatedChainEndpointShiftX) > Float.ulpOfOne {
                 let idleEndSeconds = times[lastIdleIndex]
                 let releaseDuration = min(
@@ -336,6 +338,19 @@ enum StabilizerTurnTransitionPath {
                             * (1.0 - quinticSmootherStep(progress))
                         result[index] += retainedCorrection
                     }
+                }
+            } else if abs(propagatedChainEndpointShiftX) > Float.ulpOfOne,
+                      chainEndIndex + 1 < result.endIndex,
+                      nextChainStartIndex >= chainEndIndex + 1,
+                      nextChainStartIndex < result.endIndex {
+                // One or two inactive samples are a detector dropout, not a
+                // true idle. Carry the endpoint correction into the next
+                // chain's anchor so it cannot restart from raw X (often zero)
+                // and make the viewport jump at a direction handoff.
+                let handoffStart = chainEndIndex + 1
+                let handoffEnd = max(handoffStart, nextChainStartIndex)
+                for index in handoffStart...handoffEnd {
+                    result[index] += propagatedChainEndpointShiftX
                 }
             }
             for eventIndex in chainRange {

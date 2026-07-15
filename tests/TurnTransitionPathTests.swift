@@ -269,6 +269,21 @@ struct TurnTransitionPathTests {
             "an immediate reversal must hand off without an idle endpoint release"
         )
 
+        let oneSampleHandoff = StabilizerTurnTransitionPath.concatenate(
+            times: [0, 1, 2, 3, 4, 5, 6, 7].map(Double.init),
+            positions: [0.0, 10.0, 8.0, 8.0, 0.0, -10.0, -10.0, -10.0],
+            travelPositions: [0.0, 10.0, 8.0, 8.0, 0.0, -10.0, -10.0, -10.0],
+            activity: [0.0, 10.0, 0.0, 0.0, -8.0, -10.0, 0.0, 0.0],
+            windowSeconds: 6.0,
+            smoothingStrength: 12.0,
+            idleReleaseSeconds: 3.0
+        )
+        expect(oneSampleHandoff.events.count == 2, "opposite turns with a one-sample dropout must stay separate events")
+        expect(
+            close(oneSampleHandoff.positions[3], oneSampleHandoff.positions[2]),
+            "a one-sample detector dropout must carry the endpoint correction into the next turn anchor"
+        )
+
         let outsideWindow = StabilizerTurnTransitionPath.concatenate(
             times: [0, 1, 2, 3, 4, 5, 6, 7, 8].map(Double.init),
             positions: [0.0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 20.0, 20.0],
