@@ -1221,10 +1221,9 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumBlend: Float = 0.82
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionPixels: Float = 5.0
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
-    private static let playbackTrajectoryRigidRollPulseMaximumCorrectionDegrees: Float = 0.18
-    private static let playbackTrajectoryRigidRollPulseMinimumSupport: Float = 0.72
+    private static let playbackTrajectoryCameraRigidPulseMinimumSupport: Float = 0.72
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 100
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 101
     private enum MotionPathKind: Hashable {
         case microX
         case microY
@@ -5922,22 +5921,24 @@ enum AutoStabilizationEstimator {
             diagnosticTransforms: rawTransforms,
             preserveCurrentDiagnostics: false
         )
-        let rigidRollPulseLimited = playbackTrajectoryRigidRollPulseLimitedTransforms(
+        let cameraRigidPulseLimited = playbackTrajectoryCameraRigidPulseLimitedTransforms(
             frames: frames,
             transforms: postShockLimitedTransforms
         )
-        if rigidRollPulseLimited.rotationFrameCount > 0 {
+        if cameraRigidPulseLimited.pixelFrameCount > 0 || cameraRigidPulseLimited.rotationFrameCount > 0 {
             os_log(
-                "Playback trajectory rigid-roll pulse limit | rotationFrames %d maxRotation %.4f",
+                "Playback trajectory camera-rigid pulse limit | pixelFrames %d rotationFrames %d maxPixel %.3f maxRotation %.4f",
                 log: stabilizerHostAnalysisLog,
                 type: .default,
-                rigidRollPulseLimited.rotationFrameCount,
-                rigidRollPulseLimited.maximumRotationDeviation
+                cameraRigidPulseLimited.pixelFrameCount,
+                cameraRigidPulseLimited.rotationFrameCount,
+                cameraRigidPulseLimited.maximumPixelDeviation,
+                cameraRigidPulseLimited.maximumRotationDeviation
             )
         }
         let turnOwnedXTransforms = playbackTrajectoryTurnOwnedXTransforms(
             frames: frames,
-            transforms: rigidRollPulseLimited.transforms,
+            transforms: cameraRigidPulseLimited.transforms,
             strengths: strengths
         )
         let limitingCompletedAt = CFAbsoluteTimeGetCurrent()
@@ -6176,14 +6177,17 @@ enum AutoStabilizationEstimator {
         _ values: [Float],
         frames: [StabilizerAnalysisFrame],
         minimumThreshold: Float,
-        maximumCorrection: Float
+        maximumBlend: Float = playbackTrajectoryFarFieldMacroDespikeMaximumBlend,
+        maximumCorrection: Float? = nil
     ) -> [Float] {
         guard values.count == frames.count,
               values.count >= 5,
               minimumThreshold.isFinite,
               minimumThreshold > Float.ulpOfOne,
-              maximumCorrection.isFinite,
-              maximumCorrection > Float.ulpOfOne
+              maximumBlend.isFinite,
+              maximumBlend > Float.ulpOfOne,
+              maximumBlend <= 1.0,
+              maximumCorrection.map({ $0.isFinite && $0 > Float.ulpOfOne }) ?? true
         else {
             return values
         }
@@ -6236,19 +6240,18 @@ enum AutoStabilizationEstimator {
             let blend = clamp(
                 ((magnitude - threshold) / max(threshold * 2.0, Float.ulpOfOne)) * evidence,
                 min: 0.0,
-                max: playbackTrajectoryFarFieldMacroDespikeMaximumBlend
+                max: maximumBlend
             )
-            let correction = clamp(
-                -deviation * blend,
-                min: 0.0 - maximumCorrection,
-                max: maximumCorrection
-            )
+            let requestedCorrection = -deviation * blend
+            let correction = maximumCorrection.map { limit in
+                clamp(requestedCorrection, min: 0.0 - limit, max: limit)
+            } ?? requestedCorrection
             result[index] += correction
         }
         return result
     }
 
-    private static func playbackTrajectoryRigidRollPulseLimitedTransforms(
+    private static func playbackTrajectoryCameraRigidPulseLimitedTransforms(
         frames: [StabilizerAnalysisFrame],
         transforms: [StabilizerAutoTransform]
     ) -> PlaybackTrajectoryDespikeResult {
@@ -6264,44 +6267,75 @@ enum AutoStabilizationEstimator {
             )
         }
 
-        let rigidRollValues = transforms.map(\.cameraRigidRotationDegrees)
-        let limitedRigidRollValues = playbackTrajectoryShortShockDespikedPath(
-            rigidRollValues,
+        let rigidXValues = transforms.map { $0.cameraRigidPixelOffset.x }
+        let rigidYValues = transforms.map { $0.cameraRigidPixelOffset.y }
+        let rigidRotationValues = transforms.map(\.cameraRigidRotationDegrees)
+        let limitedRigidXValues = playbackTrajectoryShortShockDespikedPath(
+            rigidXValues,
+            frames: frames,
+            minimumThreshold: playbackTrajectoryFarFieldMacroDespikeMinimumPixels,
+            maximumBlend: 1.0
+        )
+        let limitedRigidYValues = playbackTrajectoryShortShockDespikedPath(
+            rigidYValues,
+            frames: frames,
+            minimumThreshold: playbackTrajectoryFarFieldMacroDespikeMinimumPixels,
+            maximumBlend: 1.0
+        )
+        let limitedRigidRotationValues = playbackTrajectoryShortShockDespikedPath(
+            rigidRotationValues,
             frames: frames,
             minimumThreshold: playbackTrajectoryFarFieldMacroDespikeMinimumRotationDegrees,
-            maximumCorrection: playbackTrajectoryRigidRollPulseMaximumCorrectionDegrees
+            maximumBlend: 1.0
         )
         var result = transforms
+        var pixelFrameCount = 0
         var rotationFrameCount = 0
+        var maximumPixelDeviation = Float(0.0)
         var maximumRotationDeviation = Float(0.0)
 
         for index in result.indices {
             let source = transforms[index]
-            guard source.lensFarFieldRigidRollApplied > 0.5,
-                  source.lensFarFieldRigidRollSupport >= playbackTrajectoryRigidRollPulseMinimumSupport,
-                  source.lensFarFieldRigidShakeRollForwardBackwardConsistency >= playbackTrajectoryRigidRollPulseMinimumSupport
-            else {
-                continue
+            var pixelCorrection = vector_float2(0.0, 0.0)
+            if source.lensFarFieldRigidShakeApplied > 0.5,
+               source.lensFarFieldRigidShakeSupportX >= playbackTrajectoryCameraRigidPulseMinimumSupport,
+               source.lensFarFieldRigidShakeForwardBackwardConsistencyX >= playbackTrajectoryCameraRigidPulseMinimumSupport {
+                pixelCorrection.x = limitedRigidXValues[index] - source.cameraRigidPixelOffset.x
             }
-            let limitedValue = limitedRigidRollValues[index]
-            let correctionDelta = limitedValue - source.cameraRigidRotationDegrees
-            guard abs(correctionDelta) > Float.ulpOfOne else {
-                continue
+            if source.lensFarFieldRigidShakeApplied > 0.5,
+               source.lensFarFieldRigidShakeSupportY >= playbackTrajectoryCameraRigidPulseMinimumSupport,
+               source.lensFarFieldRigidShakeForwardBackwardConsistencyY >= playbackTrajectoryCameraRigidPulseMinimumSupport {
+                pixelCorrection.y = limitedRigidYValues[index] - source.cameraRigidPixelOffset.y
+            }
+            if simd_length(pixelCorrection) > Float.ulpOfOne {
+                result[index].cameraRigidPixelOffset += pixelCorrection
+                result[index].pixelOffset += pixelCorrection
+                result[index].lensFarFieldRigidGlobalYOffset += pixelCorrection.y
+                result[index].temporalSmoothingPixelDelta += pixelCorrection
+                pixelFrameCount += 1
+                maximumPixelDeviation = max(maximumPixelDeviation, simd_length(pixelCorrection))
             }
 
-            result[index].cameraRigidRotationDegrees = limitedValue
-            result[index].rotationDegrees += correctionDelta
-            result[index].lensFarFieldRigidGlobalRollDegrees += correctionDelta
-            result[index].temporalSmoothingRotationDelta += correctionDelta
-            rotationFrameCount += 1
-            maximumRotationDeviation = max(maximumRotationDeviation, abs(correctionDelta))
+            if source.lensFarFieldRigidRollApplied > 0.5,
+               source.lensFarFieldRigidRollSupport >= playbackTrajectoryCameraRigidPulseMinimumSupport,
+               source.lensFarFieldRigidShakeRollForwardBackwardConsistency >= playbackTrajectoryCameraRigidPulseMinimumSupport {
+                let rotationCorrection = limitedRigidRotationValues[index] - source.cameraRigidRotationDegrees
+                if abs(rotationCorrection) > Float.ulpOfOne {
+                    result[index].cameraRigidRotationDegrees += rotationCorrection
+                    result[index].rotationDegrees += rotationCorrection
+                    result[index].lensFarFieldRigidGlobalRollDegrees += rotationCorrection
+                    result[index].temporalSmoothingRotationDelta += rotationCorrection
+                    rotationFrameCount += 1
+                    maximumRotationDeviation = max(maximumRotationDeviation, abs(rotationCorrection))
+                }
+            }
         }
 
         return PlaybackTrajectoryDespikeResult(
             transforms: result,
-            pixelFrameCount: 0,
+            pixelFrameCount: pixelFrameCount,
             rotationFrameCount: rotationFrameCount,
-            maximumPixelDeviation: 0.0,
+            maximumPixelDeviation: maximumPixelDeviation,
             maximumRotationDeviation: maximumRotationDeviation
         )
     }
