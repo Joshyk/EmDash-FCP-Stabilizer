@@ -146,6 +146,19 @@ struct DebugOverlayDiagnosticsTests {
         ))
         expect(close(cropOn.crop, 1.0), "crop scale must map to CROP")
         expect(close(cropOn.turn, 1.0), "applied turn correction must map to TURN")
+
+        let turnSeparated = StabilizerDebugOverlayCalculator.metrics(for: inputs(
+            turnPixelOffset: vector_float2(19.2, 0.0),
+            finalPixelOffset: vector_float2(19.2, 0.0)
+        ))
+        expect(close(turnSeparated.xOffset, 0.0), "TURN must not contribute to X OFFSET")
+        expect(close(turnSeparated.turn, 1.0), "TURN must remain visible in its own row")
+
+        let nonTurnX = StabilizerDebugOverlayCalculator.metrics(for: inputs(
+            turnPixelOffset: vector_float2(9.6, 0.0),
+            finalPixelOffset: vector_float2(19.2, 0.0)
+        ))
+        expect(close(nonTurnX.xOffset, 1.0), "X OFFSET must report only the non-TURN correction")
     }
 
     private static func testQualityDirectionAndClamping() {

@@ -119,13 +119,16 @@ enum StabilizerDebugOverlayCalculator {
         let smoothingScale = max(1.0, min(width, height) * 0.01)
 
         let appliedFinalOffset = input.finalPixelOffset * masterStrength
-        let xOffset = unit(abs(appliedFinalOffset.x) / fineScaleX)
+        let appliedTurnOffset = input.turnPixelOffset * masterStrength
+        // TURN owns its horizontal viewport travel and has its own row. Keep
+        // it out of X OFFSET while retaining the final non-TURN Y correction.
+        let nonTurnFinalXOffset = appliedFinalOffset.x - appliedTurnOffset.x
+        let xOffset = unit(abs(nonTurnFinalXOffset) / fineScaleX)
         let yOffset = unit(abs(appliedFinalOffset.y) / fineScaleY)
         let roll = unit(abs(input.finalRotationDegrees * masterStrength) / 0.05)
         let crop = input.cropEnabled
             ? unit(max(0.0, input.cropScale - 1.0) / 0.25)
             : 0.0
-        let appliedTurnOffset = input.turnPixelOffset * masterStrength
         let turn = unit(max(
             abs(appliedTurnOffset.x) / turnScaleX,
             abs(appliedTurnOffset.y) / turnScaleY
