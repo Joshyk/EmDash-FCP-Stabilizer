@@ -532,6 +532,37 @@ final class StabilizerHostAnalysisStore {
         return configured
     }
 
+    // A library can be moved while Final Cut Pro and this extension process are
+    // still alive. Do not keep treating the now-orphaned absolute cache path as
+    // configured: callers must clear it and resolve the library again through
+    // Final Cut Pro's current library references.
+    static func configuredProjectBundleCacheDirectoryUnavailableReason() -> String? {
+        projectCacheDirectoryLock.lock()
+        let cacheDirectoryURL = projectBundleCacheDirectoryURL
+        projectCacheDirectoryLock.unlock()
+
+        guard let cacheDirectoryURL else {
+            return nil
+        }
+
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: cacheDirectoryURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            return "configured Event cache root no longer exists at \(cacheDirectoryURL.path)"
+        }
+        do {
+            _ = try FileManager.default.contentsOfDirectory(
+                at: cacheDirectoryURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            return "configured Event cache root is unreadable at \(cacheDirectoryURL.path): \(error.localizedDescription)"
+        }
+        return nil
+    }
+
     var statusText: String {
         lock.lock()
         let currentStatus = status

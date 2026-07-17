@@ -422,6 +422,13 @@ Analyzer so Final Cut Pro preview/render extension processes can reuse the same 
 motion path. If the runtime cannot resolve a writable Event cache root, the Inspector shows
 `Project Bundle Cache Unavailable` instead of falling back to a shared user cache or a
 library-wide cache. The FCP effect does not create a shared fallback cache.
+If this cache root disappears because the `.fcpbundle` is moved while Final Cut Pro remains
+open, the persistent-cache monitor clears the stale absolute path and reconnects automatically
+to the standard Event cache in the library location Final Cut Pro currently exposes. Existing
+timeline effects reuse only a uniquely matching saved cache identity; they do not require a
+new Event Analyzer run or effect reapplication. The recovery checks Final Cut Pro's current
+media-folder path, then active and recent library bookmarks. It never searches arbitrary disks
+or accepts a duplicate/missing identity as a fallback.
 Older top-level bundle caches at `<active library>.fcpbundle/TokyoWalkingStabilizerHostAnalysis/`
 and older internal bundle caches at
 `<active library>.fcpbundle/__.fcpdata.apple.com/TokyoWalkingStabilizerHostAnalysis/` are moved into

@@ -8625,12 +8625,24 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         expectedRange: HostAnalysisExpectedRange? = nil,
         forceRefresh: Bool = false
     ) -> Bool {
+        var relocationRecoveryIdentity: String?
         if !forceRefresh,
            StabilizerHostAnalysisStore.hasConfiguredProjectBundleCacheDirectory {
-            if markUnavailable {
-                _ = hostAnalysisStore.persistCompletedAnalysisIfPossible()
+            if let unavailableReason = StabilizerHostAnalysisStore.configuredProjectBundleCacheDirectoryUnavailableReason() {
+                os_log(
+                    "Event cache relocation detected; clearing stale configured cache root: %{public}@.",
+                    log: stabilizerHostAnalysisLog,
+                    type: .default,
+                    unavailableReason
+                )
+                relocationRecoveryIdentity = currentPreferredHostAnalysisCacheIdentity()
+                StabilizerHostAnalysisStore.clearProjectBundleCacheDirectory(reason: unavailableReason)
+            } else {
+                if markUnavailable {
+                    _ = hostAnalysisStore.persistCompletedAnalysisIfPossible()
+                }
+                return true
             }
-            return true
         }
         func clearStaleProjectCacheIfNeeded(reason: String) {
             if forceRefresh {
@@ -8678,7 +8690,43 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                         let reason = "Ambiguous Event for Host Analysis cache. FxProjectAPI media folder did not resolve to a writable Event Analysis Files root: \(projectMediaURL.path)"
                         NSLog("TokyoWalkingStabilizer: \(reason)")
                         os_log("Event cache resolver rejected mediaFolderURL %{public}@ in bundle %{public}@ because no unambiguous Event candidate was selected.", log: stabilizerHostAnalysisLog, type: .error, projectMediaURL.path, bundleRoot.path)
+                        if let relocationRecoveryIdentity,
+                           configureRelocatedFinalCutLibraryCacheDirectory(
+                                cacheIdentity: relocationRecoveryIdentity,
+                                markUnavailable: markUnavailable
+                           ) {
+                            return true
+                        }
+                        if relocationRecoveryIdentity == nil,
+                           configureActiveFinalCutLibraryCacheDirectory(
+                            markUnavailable: markUnavailable,
+                            expectedRange: expectedRange,
+                            preferredCacheIdentity: currentPreferredHostAnalysisCacheIdentity(),
+                            triggerReason: reason,
+                            projectDocumentID: projectDocumentID,
+                            forceRefresh: forceRefresh
+                        ) {
+                            return true
+                        }
                         clearStaleProjectCacheIfNeeded(reason: reason)
+                        if markUnavailable {
+                            hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
+                        }
+                        return false
+                    }
+                    if let relocationRecoveryIdentity,
+                       Self.eventRootMatchingTokyoWalkingCacheIdentity(
+                            relocationRecoveryIdentity,
+                            in: [eventResolution.eventRoot]
+                       ) == nil {
+                        let reason = "Moved Event cache did not contain saved Tokyo Walking cache identity \(relocationRecoveryIdentity) at \(eventResolution.eventRoot.path)"
+                        os_log("Event cache relocation rejected FxProjectAPI Event %{public}@ because the saved cache identity is absent.", log: stabilizerHostAnalysisLog, type: .error, eventResolution.eventRoot.path)
+                        if configureRelocatedFinalCutLibraryCacheDirectory(
+                            cacheIdentity: relocationRecoveryIdentity,
+                            markUnavailable: markUnavailable
+                        ) {
+                            return true
+                        }
                         if markUnavailable {
                             hostAnalysisStore.markProjectCacheUnavailable(reason: reason)
                         }
@@ -8812,6 +8860,80 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         _ = hostAnalysisStore.persistCompletedAnalysisIfPossible()
         return true
+    }
+
+    @discardableResult
+    private func configureRelocatedFinalCutLibraryCacheDirectory(
+        cacheIdentity: String,
+        markUnavailable: Bool
+    ) -> Bool {
+        let activeLibraries = Self.activeFinalCutLibraryBundleURLs()
+        let activeCandidates = activeLibraries.bundleURLs
+        let activeSelection = Self.activeFinalCutLibraryCacheIdentityEventSelection(
+            from: activeCandidates,
+            preferredCacheIdentity: cacheIdentity
+        )
+        if let selection = activeSelection.selection {
+            for candidate in activeCandidates where candidate.bundleRoot.path != selection.candidate.bundleRoot.path {
+                candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+            }
+            os_log(
+                "Event cache relocation selected active bundle %{public}@ Event %{public}@ by saved Tokyo Walking cache identity.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                selection.candidate.bundleRoot.path,
+                selection.eventResolution.eventRoot.path
+            )
+            return configureEventHostAnalysisCache(
+                bundleRoot: selection.candidate.bundleRoot,
+                eventResolution: selection.eventResolution,
+                retainedSecurityScopedURL: selection.candidate.securityScopedURL,
+                legacyRoots: [
+                    Self.legacyHostAnalysisCacheRoot(under: selection.candidate.bundleRoot),
+                    Self.internalBundleHostAnalysisCacheRoot(in: selection.candidate.bundleRoot)
+                ],
+                markUnavailable: markUnavailable
+            )
+        }
+        for candidate in activeCandidates {
+            candidate.securityScopedURL?.stopAccessingSecurityScopedResource()
+        }
+
+        let recentLookup = Self.recentFinalCutLibraryEventRootMatchingTokyoWalkingCacheIdentity(
+            preferredCacheIdentity: cacheIdentity
+        )
+        guard let resolution = recentLookup.resolution else {
+            os_log(
+                "Event cache relocation could not reconnect saved Tokyo Walking cache identity %{public}@. active=%{public}@ recent=%{public}@.",
+                log: stabilizerHostAnalysisLog,
+                type: .error,
+                cacheIdentity,
+                activeSelection.rejectReason,
+                recentLookup.rejectReason
+            )
+            return false
+        }
+        os_log(
+            "Event cache relocation selected recent bundle %{public}@ Event %{public}@ by saved Tokyo Walking cache identity.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            resolution.bundleRoot.path,
+            resolution.eventResolution.eventRoot.path
+        )
+        let configured = configureEventHostAnalysisCache(
+            bundleRoot: resolution.bundleRoot,
+            eventResolution: resolution.eventResolution,
+            retainedSecurityScopedURL: resolution.securityScopedURL,
+            legacyRoots: [
+                Self.legacyHostAnalysisCacheRoot(under: resolution.bundleRoot),
+                Self.internalBundleHostAnalysisCacheRoot(in: resolution.bundleRoot)
+            ],
+            markUnavailable: markUnavailable
+        )
+        if !configured {
+            resolution.securityScopedURL?.stopAccessingSecurityScopedResource()
+        }
+        return configured
     }
 
     @discardableResult

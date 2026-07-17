@@ -399,6 +399,11 @@ the Event `Analysis Files` cache root when the effect configures the active Even
 If the runtime cannot resolve a writable Event cache root, the effect shows
 `Project Bundle Cache Unavailable` instead of falling back to a shared user cache or a
 library-wide cache. The FCP effect does not create an out-of-bundle fallback cache.
+When a library is moved while Final Cut Pro is still open, the effect detects the unavailable
+old Event cache root and reconnects the existing timeline effect to the matching standard
+Event cache in the bundle location Final Cut Pro exposes. Reconnection requires one unique
+saved cache identity and does not rerun analysis, reapply the effect, scan arbitrary disks, or
+choose a duplicate cache identity.
 Range-specific files under `caches/` include a readable clip label when available, analyzed
 start/end, actual `sampleWidth`/`sampleHeight`, frame count, and representative frame
 fingerprints in the filename.

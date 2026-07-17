@@ -152,6 +152,11 @@ estimators, or Transform-keyframe writers back into this target.
   through `CurrentVersion.flexolibrary`; stale import-target UUIDs are not used. Multiple active libraries with no unique selected Event, unreadable active-library state, unwritable Event roots, and ambiguous
   Events fail visibly instead of writing to a shared fallback, including
   `Project Bundle Cache Unavailable - Ambiguous Event`.
+- If a `.fcpbundle` moves while Final Cut Pro remains open, the persistent-cache monitor drops
+  the unavailable old root and reconnects the existing effect only when its saved cache
+  identity uniquely matches a standard Event cache exposed through Final Cut Pro's current,
+  active, or recent library references. It does not rerun analysis, reapply the effect, scan
+  arbitrary disk locations, or select a duplicate cache identity.
 - Estimates low-resolution global X/Y motion and roll from requested frames.
 - Is tuned for walking-gimbal footage: the render path corrects softened X/Y translation,
   roll, optional small-clamp Far-field Warp, and dynamic Auto Crop scale when

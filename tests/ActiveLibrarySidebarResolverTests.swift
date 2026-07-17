@@ -125,6 +125,20 @@ struct ActiveLibrarySidebarResolver {
         return try activeFinalCutLibrarySidebarEventSelection(from: candidates, sidebarSelection: sidebarSelection)
     }
 
+    func resolveRelocatedCacheIdentityEvent(
+        candidates: [URL],
+        preferredCacheIdentity: String?
+    ) throws -> EventSelection {
+        let lookup = activeFinalCutLibraryCacheIdentityEventSelection(
+            from: candidates,
+            preferredCacheIdentity: preferredCacheIdentity
+        )
+        if let selection = lookup.selection {
+            return selection
+        }
+        throw ResolverError.rejected(lookup.rejectReason)
+    }
+
     private func activeFinalCutLibraryCacheIdentityEventSelection(
         from candidates: [URL],
         preferredCacheIdentity: String?
@@ -867,6 +881,85 @@ func testSavedCacheIdentityDisambiguatesActiveLibrariesBeforeSidebarSelection() 
     try expectEqual(result.sourceDescription, "active Final Cut libraries saved Tokyo Walking cache identity", "Cache identity selection source should be visible")
 }
 
+func testMovedLibraryReconnectsUsingSavedCacheIdentity() throws {
+    let originalLibrary = try fixtures.makeLibrary(
+        name: "OriginalLibraryLocation",
+        libraryIdentifier: selectedLibraryID,
+        events: [
+            FakeEvent(identifier: selectedEventID, relativePath: "P1000307 Stabilized Review")
+        ]
+    )
+    try fixtures.writeTokyoWalkingCacheIdentity(
+        bundleRoot: originalLibrary,
+        eventRelativePath: "P1000307 Stabilized Review",
+        cacheIdentity: p1000307CacheIdentity
+    )
+    let movedParent = fixtures.root.appendingPathComponent("Moved Library Parent", isDirectory: true)
+    try FileManager.default.createDirectory(at: movedParent, withIntermediateDirectories: true)
+    let movedLibrary = movedParent.appendingPathComponent("Relocated.fcpbundle", isDirectory: true)
+    try FileManager.default.moveItem(at: originalLibrary, to: movedLibrary)
+
+    try expect(!FileManager.default.fileExists(atPath: originalLibrary.path), "Fixture should remove the old .fcpbundle location")
+    let staleSidebarSelection = ActiveLibrarySidebarResolver.SidebarSelection(
+        rawSelection: sidebarRawSelection(libraryID: otherLibraryID, eventID: otherEventID),
+        identifiers: [otherLibraryID, otherEventID]
+    )
+    let result = try resolver.resolveActiveLibraryEvent(
+        candidates: [movedLibrary],
+        rangeMatchedSelections: [],
+        preferredCacheIdentity: p1000307CacheIdentity,
+        sidebarSelection: staleSidebarSelection
+    )
+
+    try expectEqual(result.bundleRoot.path, movedLibrary.standardizedFileURL.path, "Moved library should reconnect through its saved cache identity")
+    try expectEqual(result.eventRoot.lastPathComponent, "P1000307 Stabilized Review", "Moved library should retain the cached Event selection")
+    try expectEqual(result.sourceDescription, "active Final Cut libraries saved Tokyo Walking cache identity", "Relocation must use the cache identity rather than stale sidebar state")
+}
+
+func testRelocationRejectsMissingDuplicateAndNonstandardCaches() throws {
+    let missingCacheLibrary = try fixtures.makeLibrary(
+        name: "MovedWithoutCache",
+        libraryIdentifier: selectedLibraryID,
+        events: [FakeEvent(identifier: selectedEventID, relativePath: "Event")]
+    )
+    try expectThrowsContaining("No active library Event matched saved Tokyo Walking cache identity") {
+        _ = try resolver.resolveRelocatedCacheIdentityEvent(
+            candidates: [missingCacheLibrary],
+            preferredCacheIdentity: p1000307CacheIdentity
+        )
+    }
+
+    let nonstandardCacheLibrary = try fixtures.makeLibrary(
+        name: "MovedNonstandardCache",
+        libraryIdentifier: otherLibraryID,
+        events: [FakeEvent(identifier: otherEventID, relativePath: "Event")]
+    )
+    let nonstandardRoot = nonstandardCacheLibrary
+        .appendingPathComponent("Event", isDirectory: true)
+        .appendingPathComponent("Elsewhere", isDirectory: true)
+        .appendingPathComponent("TokyoWalkingStabilizerHostAnalysis", isDirectory: true)
+    try FileManager.default.createDirectory(at: nonstandardRoot.appendingPathComponent("caches", isDirectory: true), withIntermediateDirectories: true)
+    let nonstandardIndex = ["entries": [["cacheFileName": "cache.json", "cacheIdentity": p1000307CacheIdentity]]]
+    try JSONSerialization.data(withJSONObject: nonstandardIndex).write(to: nonstandardRoot.appendingPathComponent("host-analysis-index-v2.json", isDirectory: false))
+    try expectThrowsContaining("No active library Event matched saved Tokyo Walking cache identity") {
+        _ = try resolver.resolveRelocatedCacheIdentityEvent(
+            candidates: [nonstandardCacheLibrary],
+            preferredCacheIdentity: p1000307CacheIdentity
+        )
+    }
+
+    let duplicateOne = try fixtures.makeLibrary(name: "MovedDuplicateOne", libraryIdentifier: duplicateLibraryID, events: [FakeEvent(identifier: duplicateEventID, relativePath: "Event")])
+    let duplicateTwo = try fixtures.makeLibrary(name: "MovedDuplicateTwo", libraryIdentifier: selectedLibraryID, events: [FakeEvent(identifier: selectedEventID, relativePath: "Event")])
+    try fixtures.writeTokyoWalkingCacheIdentity(bundleRoot: duplicateOne, eventRelativePath: "Event", cacheIdentity: p1000307CacheIdentity)
+    try fixtures.writeTokyoWalkingCacheIdentity(bundleRoot: duplicateTwo, eventRelativePath: "Event", cacheIdentity: p1000307CacheIdentity)
+    try expectThrowsContaining("Multiple active library Events matched saved Tokyo Walking cache identity") {
+        _ = try resolver.resolveRelocatedCacheIdentityEvent(
+            candidates: [duplicateOne, duplicateTwo],
+            preferredCacheIdentity: p1000307CacheIdentity
+        )
+    }
+}
+
 func testMultipleSidebarMatchesFailVisibly() throws {
     let firstLibrary = try fixtures.makeLibrary(
         name: "DuplicateOne",
@@ -929,6 +1022,9 @@ func testProductionSourceDoesNotReintroduceFFImportTargetSelectionHints() throws
     let sourceText = try String(contentsOf: productionSource, encoding: .utf8)
 
     try expectContains(sourceText, "FFSidebarModuleLibrary", "Production source sanity check should read the active library resolver implementation")
+    try expectContains(sourceText, "configuredProjectBundleCacheDirectoryUnavailableReason", "Production source should clear an unavailable configured cache root before resolving again")
+    try expectContains(sourceText, "configureRelocatedFinalCutLibraryCacheDirectory", "Production source should reconnect a moved library through its saved cache identity")
+    try expectContains(sourceText, "recentFinalCutLibraryEventRootMatchingTokyoWalkingCacheIdentity", "Production relocation recovery should inspect recent Final Cut libraries only by saved cache identity")
     for bannedToken in ["FFImportTarget", "activeFinalCutLibrarySelectionHints", "selectionHints"] {
         try expect(!sourceText.contains(bannedToken), "Production resolver should not reintroduce stale \(bannedToken)-based active library selection")
     }
@@ -940,6 +1036,8 @@ let tests: [(String, () throws -> Void)] = [
     ("lowercase flexolibrary identifiers still match sidebar selection", testLowercaseFlexolibraryIdentifiersStillMatchSidebarSelection),
     ("ignores stale FFImportTarget values and uses FFSidebarModuleLibrary selection", testIgnoresStaleFFImportTargetValuesAndUsesFFSidebarModuleLibrarySelection),
     ("saved cache identity disambiguates active libraries before sidebar selection", testSavedCacheIdentityDisambiguatesActiveLibrariesBeforeSidebarSelection),
+    ("moved library reconnects using saved cache identity", testMovedLibraryReconnectsUsingSavedCacheIdentity),
+    ("relocation rejects missing duplicate and nonstandard caches", testRelocationRejectsMissingDuplicateAndNonstandardCaches),
     ("multiple sidebar matches fail visibly", testMultipleSidebarMatchesFailVisibly),
     ("missing Event folder fails visibly", testSidebarSelectionWithMissingEventFolderFailsVisibly),
     ("production source does not reintroduce FFImportTarget selection hints", testProductionSourceDoesNotReintroduceFFImportTargetSelectionHints)
