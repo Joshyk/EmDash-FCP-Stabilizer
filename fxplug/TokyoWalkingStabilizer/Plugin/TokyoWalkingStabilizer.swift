@@ -7729,7 +7729,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 + autoTransform.cameraRigidRotationDegrees
             ) * masterStrength
             let appliedCameraRigidRotationDegrees = autoTransform.cameraRigidRotationDegrees * masterStrength
-            let cameraRigidLimitX = outputSize.x * Float(min(max(strengths.cameraJitterX, 0.0), 5.0) / 100.0)
             let cameraRigidLimitY = outputSize.y * Float(min(max(strengths.cameraJitterY, 0.0), 5.0) / 100.0)
             let cameraRigidLimitRotation = Float(min(max(strengths.cameraJitterRotation, 0.0), 2.0))
             let appliedRawRotationDegrees = autoTransform.rawRotationDegrees * masterStrength
@@ -7801,7 +7800,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 "cameraY=\(Self.renderCSVValue(appliedCameraJitterPixelOffset.y))",
                 "cameraRigidX=\(Self.renderCSVValue(appliedCameraRigidPixelOffset.x))",
                 "cameraRigidY=\(Self.renderCSVValue(appliedCameraRigidPixelOffset.y))",
-                "cameraRigidLimitX=\(Self.renderCSVValue(cameraRigidLimitX))",
+                "cameraRigidLimitX=unrestricted",
                 "cameraRigidLimitY=\(Self.renderCSVValue(cameraRigidLimitY))",
                 "cameraCadenceY=\(Self.renderCSVValue(autoTransform.cameraJitterCadenceCorrectionY * masterStrength))",
                 "cameraRigidRotation=\(Self.renderCSVValue(appliedCameraRigidRotationDegrees))",
@@ -10778,13 +10777,12 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard masterStrength > 0.0001 else {
             return source
         }
-        let xLimit = outputSize.x * Float(min(max(state.cameraJitterXStrength, 0.0), 5.0) / 100.0)
         let yLimit = outputSize.y * Float(min(max(state.cameraJitterYStrength, 0.0), 5.0) / 100.0)
         let rollLimit = Float(min(max(state.cameraJitterRotationStrength, 0.0), 2.0))
         var limited = source
         let appliedRigidOffset = source.cameraRigidPixelOffset * masterStrength
         let clampedRigidOffset = vector_float2(
-            min(max(appliedRigidOffset.x, -xLimit), xLimit),
+            appliedRigidOffset.x,
             min(max(appliedRigidOffset.y, -yLimit), yLimit)
         )
         let rigidOffsetDelta = (clampedRigidOffset - appliedRigidOffset) / masterStrength

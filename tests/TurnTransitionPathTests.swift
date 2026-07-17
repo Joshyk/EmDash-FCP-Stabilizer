@@ -81,6 +81,62 @@ struct TurnTransitionPathTests {
         expectStrictlyIncreasing(composedResidual.positions, range: 0...6, "all rendered X bands must collapse into the event S curve")
         expect(close(composedResidual.positions[7], 36.2), "composite endpoint correction must release during idle")
 
+        let unrestrictedTurnBase = StabilizerTurnTransitionPath.concatenate(
+            times: [0, 1, 2, 3, 4, 5, 6].map(Double.init),
+            positions: [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            travelPositions: [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            activity: [0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 0.0],
+            windowSeconds: 8.0,
+            smoothingStrength: 12.0
+        )
+        let unrestrictedImpulseX: [Float] = [0.0, 0.35, -1.0, 6.5, -9.0, 1.0, 0.0]
+        let unrestrictedTurn = StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX(
+            unrestrictedImpulseX,
+            on: unrestrictedTurnBase
+        )
+        expect(unrestrictedTurn.rejectionReason == nil, "finite X impulses must be accepted during TURN")
+        for index in unrestrictedImpulseX.indices {
+            expect(
+                close(unrestrictedTurn.positions[index] - unrestrictedTurnBase.positions[index], unrestrictedImpulseX[index]),
+                "subpixel, unit, and large X impulses must remain unscaled at index \(index)"
+            )
+        }
+        expect(close(unrestrictedTurnBase.positions.first ?? .nan, 0.0), "unrestricted X must not move the TURN start")
+        expect(close(unrestrictedTurnBase.positions.last ?? .nan, 60.0), "unrestricted X must not change TURN travel")
+
+        let unrestrictedReverseBase = StabilizerTurnTransitionPath.concatenate(
+            times: [0, 1, 2, 3, 4].map(Double.init),
+            positions: [0.0, -10.0, -20.0, -30.0, -40.0],
+            travelPositions: [0.0, -10.0, -20.0, -30.0, -40.0],
+            activity: [0.0, -10.0, -10.0, -10.0, 0.0],
+            windowSeconds: 6.0,
+            smoothingStrength: 12.0
+        )
+        let unrestrictedReverse = StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX(
+            [0.0, -0.7, 1.2, -4.0, 0.0],
+            on: unrestrictedReverseBase
+        )
+        expect(unrestrictedReverse.events.first?.direction == -1.0, "unrestricted X must preserve a left TURN")
+        expect(close(unrestrictedReverse.positions[2] - unrestrictedReverseBase.positions[2], 1.2), "left TURN must retain opposite-sign X jitter correction")
+
+        let nonTurnBase = StabilizerTurnTransitionPath.concatenate(
+            times: [0, 1, 2].map(Double.init),
+            positions: [0.0, 0.0, 0.0],
+            travelPositions: [0.0, 0.0, 0.0],
+            activity: [0.0, 0.0, 0.0],
+            windowSeconds: 2.0,
+            smoothingStrength: 12.0
+        )
+        let nonTurnImpulse = StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX([0.0, 2.0, 0.0], on: nonTurnBase)
+        expect(nonTurnImpulse.positions == [0.0, 2.0, 0.0], "non-TURN X correction must remain unchanged")
+
+        let nonfiniteImpulse = StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX([0.0, .nan, 0.0], on: nonTurnBase)
+        expect(nonfiniteImpulse.rejectionReason != nil, "nonfinite X correction must fail visibly")
+        expect(nonfiniteImpulse.positions == nonTurnBase.positions, "rejected nonfinite X must not partially mutate the path")
+
+        let mismatchedImpulse = StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX([1.0], on: nonTurnBase)
+        expect(mismatchedImpulse.rejectionReason != nil, "mismatched X correction must fail visibly")
+
         let releasedIdle = StabilizerTurnTransitionPath.concatenate(
             times: (0...30).map { Double($0) * 0.1 },
             positions: [0.0, 4.0, 8.0, 12.0, 16.0, 20.0, 14.0, 14.0, 14.0, 14.0, 14.0,

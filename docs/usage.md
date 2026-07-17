@@ -96,12 +96,14 @@ fallbacks.
 - `Camera Jitter X/Y Max Correction (%)` and `Camera Jitter ROLL Max Correction (°)`: the
   single walking-camera stage outside Far-field Warp and TURN-owned X motion. X/Y default to
   `2%` and range from `0...5%` of the render output; roll defaults to `0.5°` and ranges from
-  `0...2°`. These are Camera Rigid final limits, including after `Overall Strength`; they do
-  not alter the separate Micro/Macro detection bands. The controls consolidate prepared frame-local, medium, and
+  `0...2°`. Y and roll remain Camera Rigid final limits, including after `Overall Strength`.
+  X is retained as the saved parameter name/range but now controls an uncapped correction amount
+  and does not impose an output-percent ceiling. The controls consolidate prepared frame-local, medium, and
   trajectory-continuity residuals into one correction component. Its Y/rotation controls also
-  own broad global Y/roll residuals; Turn Smoothing remains X-only. Zero tracking evidence is
-  still zero correction, and the TURN ownership gate removes only the detected TURN X motion
-  from Camera Jitter input so the two stages cannot correct the same trajectory twice.
+  own broad global Y/roll residuals; Turn Smoothing remains X-only. X applies the finite
+  detected Micro/Macro/Camera Rigid path without confidence, continuity, or amplitude limits.
+  TURN is composed from the low-frequency macro path and the unrestricted high-frequency X
+  residual is added afterward, preserving both the fine correction and the TURN trajectory.
 - `Overall Strength`: master multiplier for automatic X/Y translation and roll compensation.
   Camera Rigid remains clamped to its X/Y/ROLL maximum correction limits after this multiplier.
   At `0`, the render path bypasses all automatic transform, crop-safety motion, and debug

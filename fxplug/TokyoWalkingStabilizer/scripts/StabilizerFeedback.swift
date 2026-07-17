@@ -767,10 +767,8 @@ private let macroFullScaleDegrees: Float = 0.16
 private let macroFullResponseScale: Float = 0.55
 private let turnFullScalePixels: Float = 2.0
 private let turnFullScaleDegrees: Float = 0.16
-private let turnOwnershipMicroXSuppression: Float = 1.0
 private let turnOwnershipMicroYSuppression: Float = 0.65
 private let turnOwnershipMicroRollSuppression: Float = 0.55
-private let turnOwnershipMacroXSuppression: Float = 1.0
 private let turnOwnershipMacroYSuppression: Float = 0.55
 private let turnOwnershipMacroRollSuppression: Float = 0.50
 private let farFieldWalkingResidualContinuityStartPixels: Float = 0.75
@@ -2251,56 +2249,18 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             totalCount: analysis.searchRadiusTotalCounts[index]
         )
     )
-    let baseMicroXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroXSuppression), min: 0.0, max: 1.0)
-    let baseMacroXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroXSuppression), min: 0.0, max: 1.0)
     let turnXMacroPixels = abs(turnBandX * xScale)
     let turnYMacroPixels = abs(turnBandY * yScale)
-    let microXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-        rawConfidence: rawMicroQX,
-        bandPixels: microX * xScale,
-        turnSuppression: turnShakeSuppression,
-        turnOwnership: turnOwnershipX,
-        turnMacroPixels: turnXMacroPixels,
-        farFieldSupport: farFieldTurnOwnedXSupport
-    )
-    let macroXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-        rawConfidence: rawMacroQX,
-        bandPixels: macroX * xScale,
-        turnSuppression: turnShakeSuppression,
-        turnOwnership: turnOwnershipX,
-        turnMacroPixels: turnXMacroPixels,
-        farFieldSupport: farFieldTurnOwnedXSupport
-    )
-    let microXTurnGate = max(baseMicroXTurnGate, microXRescue.gateFloor)
     let microYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroYSuppression), min: 0.0, max: 1.0)
     let microRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroRollSuppression), min: 0.0, max: 1.0)
-    let macroXTurnGate = max(baseMacroXTurnGate, macroXRescue.gateFloor)
     let macroYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroYSuppression), min: 0.0, max: 1.0)
     let macroRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroRollSuppression), min: 0.0, max: 1.0)
-    let unbiasedMicroQX = StabilizerConfidencePolicy.unbiased(rawMicroQX * microXTurnGate)
-    let microQX = max(unbiasedMicroQX, microXRescue.confidenceFloor)
+    let microQX: Float = options.strengths.microX > 0.0 ? 1.0 : 0.0
     let microQY = StabilizerConfidencePolicy.unbiased(rawMicroQY * microYTurnGate)
     let microQR = StabilizerConfidencePolicy.unbiased(rawMicroQR * microRollTurnGate)
-    let unscaledRawMicroCorrectionX = -(microX * xScale) * walkingCorrectionFactor(options.strengths.microX, confidence: microQX, maxStrength: 10.0)
-    let rawMicroCorrectionX = unscaledRawMicroCorrectionX * lowEvidenceLargeMicroXScale(
-        rawConfidence: rawMicroQX,
-        correctionPixels: unscaledRawMicroCorrectionX,
-        farFieldSupport: farFieldTurnOwnedXSupport
-    )
+    let rawMicroCorrectionX = -(microX * xScale) * StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(options.strengths.microX)
     let rawMicroCorrectionY = -(microY * yScale) * verticalWalkingCorrectionFactor(options.strengths.microY, confidence: microQY, maxStrength: 10.0)
-    let microXContinuityConfidenceScale = max(microXTurnGate, microXRescue.continuityFloor)
-    let limitedMicroCorrectionX = microContinuityLimitedCorrection(
-        values: analysis.microJitterPathX,
-        baselineValues: context.microBaselineXPath,
-        analysis: analysis,
-        centerIndex: index,
-        rawCorrection: rawMicroCorrectionX,
-        outputScale: xScale,
-        requestedStrength: options.strengths.microX,
-        fullImpulseScale: microFullScalePixels,
-        confidenceScale: microXContinuityConfidenceScale,
-        confidenceFloor: microXRescue.confidenceFloor
-    )
+    let limitedMicroCorrectionX = rawMicroCorrectionX
     let limitedMicroCorrectionY = microContinuityLimitedCorrection(
         values: analysis.microJitterPathY,
         baselineValues: context.microBaselineYPath,
@@ -2312,11 +2272,10 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
         fullImpulseScale: microFullScalePixels,
         confidenceScale: microYTurnGate
     )
-    let unbiasedMacroQX = StabilizerConfidencePolicy.unbiased(rawMacroQX * macroXTurnGate)
-    let macroQX = max(unbiasedMacroQX, macroXRescue.confidenceFloor)
+    let macroQX: Float = options.strengths.macroX > 0.0 ? 1.0 : 0.0
     let macroQY = StabilizerConfidencePolicy.unbiased(rawMacroQY * macroYTurnGate)
     let macroQR = StabilizerConfidencePolicy.unbiased(rawMacroQR * macroRollTurnGate)
-    let macroCorrectionX = -(macroX * xScale) * walkingCorrectionFactor(options.strengths.macroX, confidence: macroQX, maxStrength: 10.0)
+    let macroCorrectionX = -(macroX * xScale) * StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(options.strengths.macroX)
     let macroCorrectionY = -(macroY * yScale) * verticalWalkingCorrectionFactor(options.strengths.macroY, confidence: macroQY, maxStrength: 10.0)
     let cameraMacroYConfidence = turnConfidence(
         bandValue: turnBandY,
@@ -2468,7 +2427,7 @@ private func assessment(for context: AssessmentContext, index: Int, options: Opt
             applied: cameraApplied,
             remaining: walkingResidualAfter + cameraMacroRemaining,
             confidence: cameraConfidence,
-            note: String(format: "micro X %.3f Y %.3f R %.3f corrX %.3f rawQ %.3f | macro X %.3f Y %.3f R %.3f corrX %.3f rawQ %.3f | rescue gate %.3f/%.3f q %.3f/%.3f far %.3f turnMacro %.3f | macro Y %.3f R %.3f corr %.3f %.3f | rigid %@ | traj %.3f %.3f | post %.3f", microX, microY, microR, limitedMicroCorrectionX, rawMicroQX, macroX, macroY, macroR, macroCorrectionX, rawMacroQX, microXRescue.gateFloor, macroXRescue.gateFloor, microXRescue.confidenceFloor, macroXRescue.confidenceFloor, farFieldTurnOwnedXSupport, turnXMacroPixels, turnBandY, turnBandRoll, cameraMacroCorrectionY, cameraMacroCorrectionRoll, lensBand.note, trajectoryMicroJitterOffset.x, trajectoryMicroJitterOffset.y, walkingResidualAfter + cameraMacroRemaining)
+            note: String(format: "micro X %.3f Y %.3f R %.3f corrX %.3f rawQ %.3f | macro X %.3f Y %.3f R %.3f corrX %.3f rawQ %.3f | X unrestricted far %.3f turnMacro %.3f | macro Y %.3f R %.3f corr %.3f %.3f | rigid %@ | traj %.3f %.3f | post %.3f", microX, microY, microR, limitedMicroCorrectionX, rawMicroQX, macroX, macroY, macroR, macroCorrectionX, rawMacroQX, farFieldTurnOwnedXSupport, turnXMacroPixels, turnBandY, turnBandRoll, cameraMacroCorrectionY, cameraMacroCorrectionRoll, lensBand.note, trajectoryMicroJitterOffset.x, trajectoryMicroJitterOffset.y, walkingResidualAfter + cameraMacroRemaining)
         ),
         BandAssessment(
             name: "WARP",
@@ -3345,7 +3304,7 @@ private func turnOwnershipGateScales(
             turnBandValue: turnBand,
             trackingConfidence: turnTracking
         )
-        let gate = clamp(1.0 - (ownership * turnOwnershipMicroXSuppression), min: 0.0, max: 1.0)
+        let gate = clamp(1.0 - ownership, min: 0.0, max: 1.0)
         if gate < 0.9999 {
             scales[index] = gate
         }
@@ -4107,11 +4066,11 @@ private func sourceSpaceLensShakeBand(
             : rigidOnlyEvidence
         let xConfidence = rigidSupportX
         let yConfidence = rigidSupportY
-        let xStrength = walkingCorrectionFactor(cameraStrengthX, confidence: xConfidence)
+        let xStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(cameraStrengthX)
         let yStrength = verticalWalkingCorrectionFactor(cameraStrengthY, confidence: yConfidence)
         let rotationStrength = walkingCorrectionFactor(cameraStrengthR, confidence: rigidRollSupport)
         let detected = abs(rigidResidualX) + abs(rigidResidualY) + (abs(rigidRollResidual) * 12.0)
-        let rigidXLimit = analysis.sampleWidth > 0 ? Float(analysis.sampleWidth) * xScale * Float(min(max(cameraLimitXPercent, 0.0), 5.0) / 100.0) : 0.0
+        let rigidXLimit = Float.infinity
         let rigidYLimit = analysis.sampleHeight > 0 ? Float(analysis.sampleHeight) * yScale * Float(min(max(cameraLimitYPercent, 0.0), 5.0) / 100.0) : 0.0
         let rigidRollLimit = Float(min(max(cameraLimitRotationDegrees, 0.0), 2.0))
         let appliedRigidX = min(abs(rigidResidualX * xStrength), rigidXLimit)
@@ -5079,7 +5038,7 @@ private func parseOptions() throws -> Options {
         case "--limit":
             options.limit = max(1, Int(try nextDouble(for: arg)))
         case "--camera-x":
-            let value = min(max(0.0, try nextDouble(for: arg)), 5.0)
+            let value = max(0.0, try nextDouble(for: arg))
             options.strengths.cameraX = value
             options.strengths.microX = value * 2.0
             options.strengths.macroX = value * 2.0
@@ -5123,7 +5082,7 @@ private func printUsage() {
     time is clip-relative: 0.0 is the Host Analysis range start.
     caches are stored inside the active Final Cut Pro library bundle under TokyoWalkingStabilizerHostAnalysis.
     --turn-strength should match Turn Smoothing Strength when it is not 12.0; range is 0...36.
-    --camera-x and --camera-y are Camera Rigid maximum corrections in output percent (0...5).
+    --camera-x is the unrestricted X correction amount (>= 0); --camera-y remains a Camera Rigid maximum correction in output percent (0...5).
     --camera-r is Camera Rigid maximum correction in degrees (0...2).
     --turn-zoom and --max-turn-zoom are deprecated aliases for --turn-strength and print a warning when used.
     --turn-window should match Turn Transition Window (s); range is 0.5...8.0.

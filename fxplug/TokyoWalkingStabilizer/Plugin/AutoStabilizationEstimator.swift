@@ -119,7 +119,6 @@ struct StabilizerAutoTransform {
     var temporalSmoothingWindowSeconds: Float
     var effectiveMicroJitterStrength: vector_float3
     var effectiveMacroJitterStrength: vector_float3
-    var turnOwnedFarFieldXImpulseAuthority: Float = 0.0
     var warpConfidence: Float
     var microConfidence: Float
     var macroJitterConfidence: Float
@@ -266,7 +265,7 @@ struct StabilizerCorrectionStrengths {
 
     // The estimator still uses its prepared short/medium residual measurements,
     // but they are one Camera Jitter stage with one set of user strengths.
-    var microJitterX: Double { min(max(cameraJitterX, 0.0), 5.0) * 2.0 }
+    var microJitterX: Double { max(cameraJitterX, 0.0) * 2.0 }
     var microJitterY: Double { min(max(cameraJitterY, 0.0), 5.0) * 2.0 }
     var microJitterRotation: Double { min(max(cameraJitterRotation, 0.0), 2.0) * 2.0 }
     var macroJitterX: Double { microJitterX }
@@ -943,10 +942,8 @@ enum AutoStabilizationEstimator {
     private static let macroJitterFullResponseScale: Float = 0.55
     private static let turnSmoothingFullScalePixels: Float = 2.0
     private static let maximumTurnSmoothingCorrectionAuthority: Float = 36.0
-    private static let turnOwnershipMicroXSuppression: Float = 1.0
     private static let turnOwnershipMicroYSuppression: Float = 0.65
     private static let turnOwnershipMicroRollSuppression: Float = 0.55
-    private static let turnOwnershipMacroJitterXSuppression: Float = 1.0
     private static let turnOwnershipMacroJitterYSuppression: Float = 0.55
     private static let turnOwnershipMacroJitterRollSuppression: Float = 0.50
     private static let farFieldWalkingResidualContinuityStartPixels: Float = 0.75
@@ -1207,15 +1204,10 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryMicroJitterMaximumBlend: Float = 0.65
     private static let playbackTrajectoryMicroJitterMaximumCorrectionPixels: Float = 0.85
     private static let playbackTrajectoryMicroJitterMaximumCorrectionPixelFraction: Float = 0.00085
-    private static let playbackTrajectoryHorizontalMicroJitterTurnHardGateConfidence: Float = 0.05
     private static let playbackTrajectoryMicroPreservationStartPixels: Float = 0.38
     private static let playbackTrajectoryMicroPreservationFullPixels: Float = 1.65
     private static let playbackTrajectoryMicroRotationPreservationStartDegrees: Float = 0.020
     private static let playbackTrajectoryMicroRotationPreservationFullDegrees: Float = 0.10
-    private static let playbackTrajectoryTurnOwnedXPreservationFarFieldFloorMax: Float = 0.10
-    private static let playbackTrajectoryTurnOwnedXPreservationFarFieldStart: Float = 0.45
-    private static let playbackTrajectoryTurnOwnedXPreservationFarFieldFull: Float = 0.85
-    private static let playbackTrajectoryTurnOwnedXTransitionRescueMaximumPixels: Float = 0.42
     private static let playbackTrajectoryFarFieldMacroDespikeInnerWindowSeconds = 0.12
     private static let playbackTrajectoryFarFieldMacroDespikeOuterWindowSeconds = 0.72
     private static let playbackTrajectoryFarFieldMacroDespikeLocalWindowSeconds = 0.36
@@ -1227,7 +1219,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryCameraRigidPulseMinimumSupport: Float = 0.72
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 101
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 102
     private enum MotionPathKind: Hashable {
         case microX
         case microY
@@ -3707,16 +3699,6 @@ enum AutoStabilizationEstimator {
         let microImpulseX = microX - microBaselineX
         let microImpulseY = microY - microBaselineY
         let microImpulseRoll = microRoll - microBaselineRoll
-        let rawMicroXConfidenceBase = microFrameConfidence(
-            .microX,
-            values: analysis.microJitterPathX,
-            baselineValues: microBaselineXPath,
-            frames: frames,
-            interpolation: interpolation,
-            trackingConfidence: walkingTrackingConfidence,
-            fullImpulseScale: microImpulseFullScalePixels,
-            cache: cache
-        )
         let rawMicroYConfidenceBase = microFrameConfidence(
             .microY,
             values: analysis.microJitterPathY,
@@ -3761,13 +3743,6 @@ enum AutoStabilizationEstimator {
             targetIndices: continuitySampledIndices,
             windowSeconds: macroJitterWindowSeconds
         )
-        let microXTurnGateScales = turnOwnershipGateScales(
-            values: turnMacroJitterSmoothedXPath,
-            analysis: analysis,
-            targetIndices: macroJitterSupportIndices,
-            windowSeconds: continuityWindowSeconds,
-            cache: cache
-        )
         let microCleanXPath = confidenceCleanedMicroPath(
             .microX,
             values: analysis.microJitterPathX,
@@ -3775,7 +3750,6 @@ enum AutoStabilizationEstimator {
             analysis: analysis,
             indices: macroJitterSupportIndices,
             fullImpulseScale: microImpulseFullScalePixels,
-            confidenceScales: microXTurnGateScales,
             cache: cache
         )
         let microCleanYPath = confidenceCleanedMicroPath(
@@ -3803,7 +3777,6 @@ enum AutoStabilizationEstimator {
             analysis: analysis,
             indices: macroJitterSupportIndices,
             fullImpulseScale: microImpulseFullScalePixels,
-            confidenceScales: microXTurnGateScales,
             cache: cache
         )
         let farFieldCleanYPath = confidenceCleanedMicroPath(
@@ -3994,7 +3967,6 @@ enum AutoStabilizationEstimator {
         let farFieldBandBlendX = farFieldBandBlend * farFieldWalkingBandBlendXScale
         let farFieldBandBlendY = farFieldBandBlend * farFieldWalkingBandBlendYScale
         let farFieldBandBlendRoll = farFieldBandBlend * farFieldWalkingBandBlendRollScale
-        let rawMicroXConfidence = rawMicroXConfidenceBase
         let rawMicroYConfidence = rawMicroYConfidenceBase
         let rawMicroRollConfidence = rawMicroRollConfidenceBase
 
@@ -4033,11 +4005,6 @@ enum AutoStabilizationEstimator {
             farFieldBand: farFieldCleanedRoll - farFieldMediumRoll,
             blend: farFieldBandBlendRoll,
             hasFarField: !analysis.farFieldPathRoll.isEmpty
-        )
-        let rawMacroJitterXConfidence = macroJitterConfidence(
-            bandValue: macroJitterBandX,
-            trackingConfidence: macroJitterTrackingConfidence,
-            fullScale: macroJitterFullScalePixels
         )
         let rawMacroJitterYConfidence = macroJitterConfidence(
             bandValue: macroJitterBandY,
@@ -4079,11 +4046,6 @@ enum AutoStabilizationEstimator {
             turnOwnership: playbackTurnOwnershipX,
             turnConfidence: playbackTurnOwnershipX
         )
-        let baseMicroXTurnGate = clamp(
-            1.0 - (playbackTurnShakeSuppression * turnOwnershipMicroXSuppression),
-            min: 0.0,
-            max: 1.0
-        )
         let microYTurnGate = clamp(
             1.0 - (playbackTurnShakeSuppression * turnOwnershipMicroYSuppression),
             min: 0.0,
@@ -4091,11 +4053,6 @@ enum AutoStabilizationEstimator {
         )
         let microRollTurnGate = clamp(
             1.0 - (playbackTurnShakeSuppression * turnOwnershipMicroRollSuppression),
-            min: 0.0,
-            max: 1.0
-        )
-        let baseMacroJitterXTurnGate = clamp(
-            1.0 - (playbackTurnShakeSuppression * turnOwnershipMacroJitterXSuppression),
             min: 0.0,
             max: 1.0
         )
@@ -4109,30 +4066,10 @@ enum AutoStabilizationEstimator {
             min: 0.0,
             max: 1.0
         )
-        let microXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: rawMicroXConfidence,
-            bandPixels: microBandX * xScale,
-            turnSuppression: playbackTurnShakeSuppression,
-            turnOwnership: playbackTurnOwnershipX,
-            turnMacroPixels: turnXMacroPixels,
-            farFieldSupport: farFieldWalkingXSupport
-        )
-        let macroJitterXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: rawMacroJitterXConfidence,
-            bandPixels: macroJitterBandX * xScale,
-            turnSuppression: playbackTurnShakeSuppression,
-            turnOwnership: playbackTurnOwnershipX,
-            turnMacroPixels: turnXMacroPixels,
-            farFieldSupport: farFieldWalkingXSupport
-        )
-        let microXTurnGate = max(baseMicroXTurnGate, microXRescue.gateFloor)
-        let macroJitterXTurnGate = max(baseMacroJitterXTurnGate, macroJitterXRescue.gateFloor)
-        let unbiasedMicroXConfidence = StabilizerConfidencePolicy.unbiased(rawMicroXConfidence * microXTurnGate)
-        let microXConfidence = max(unbiasedMicroXConfidence, microXRescue.confidenceFloor)
+        let microXConfidence: Float = strengths.microJitterX > 0.0 ? 1.0 : 0.0
         let microYConfidence = StabilizerConfidencePolicy.unbiased(rawMicroYConfidence * microYTurnGate)
         let microRollConfidence = StabilizerConfidencePolicy.unbiased(rawMicroRollConfidence * microRollTurnGate)
-        let unbiasedMacroJitterXConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterXConfidence * macroJitterXTurnGate)
-        let macroJitterXConfidence = max(unbiasedMacroJitterXConfidence, macroJitterXRescue.confidenceFloor)
+        let macroJitterXConfidence: Float = strengths.macroJitterX > 0.0 ? 1.0 : 0.0
         let macroJitterYConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterYConfidence * macroJitterYTurnGate)
         let macroJitterRollConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterRollConfidence * macroJitterRollTurnGate)
         let playbackMicroConfidence = StabilizerConfidencePolicy.unbiasedMean(
@@ -4168,10 +4105,10 @@ enum AutoStabilizationEstimator {
             strengths.cameraJitterRotation,
             confidence: cameraJitterMacroRollConfidence
         )
-        let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: microXConfidence, maxStrength: 10.0)
+        let microXCorrectionStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.microJitterX)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: microYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: microRollConfidence)
-        let macroJitterXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterX, confidence: macroJitterXConfidence, maxStrength: 10.0)
+        let macroJitterXCorrectionStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.macroJitterX)
         let macroJitterYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterY, confidence: macroJitterYConfidence, maxStrength: 10.0)
         let macroJitterRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterRotation, confidence: macroJitterRollConfidence)
 
@@ -4187,35 +4124,11 @@ enum AutoStabilizationEstimator {
             -panBandY * yScale * positionGain * cameraJitterMacroYCorrectionStrength
         )
         let cameraJitterMacroRotation = -panBandRoll * rotationGain * cameraJitterMacroRollCorrectionStrength
-        let microPixelLimitX = max(2.0, outputSize.x * 0.055)
         let microPixelLimitY = max(2.0, outputSize.y * 0.055)
-        let unattenuatedRawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
-        let lowEvidenceMicroXScale = lowEvidenceLargeMicroXScale(
-            rawConfidence: rawMicroXConfidence,
-            correctionPixels: unattenuatedRawMicroPixelOffsetX,
-            farFieldSupport: farFieldWalkingXSupport
-        )
-        let effectiveMicroXCorrectionStrength = microXCorrectionStrength * lowEvidenceMicroXScale
-        let rawMicroPixelOffsetX = -microBandX * xScale * effectiveMicroXCorrectionStrength
+        let effectiveMicroXCorrectionStrength = microXCorrectionStrength
+        let rawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
         let rawMicroPixelOffsetY = -microBandY * yScale * microYCorrectionStrength
-        let microXContinuityConfidenceScale = max(microXTurnGate, microXRescue.continuityFloor)
         let microYContinuityConfidenceScale = microYTurnGate
-        let limitedMicroPixelOffsetX = strengths.microJitterX > 0.0
-            ? microContinuityLimitedCorrection(
-                .microX,
-                values: analysis.microJitterPathX,
-                baselineValues: microBaselineXPath,
-                analysis: analysis,
-                centerTime: renderSeconds,
-                rawCorrection: rawMicroPixelOffsetX,
-                outputScale: xScale,
-                requestedStrength: strengths.microJitterX,
-                fullImpulseScale: microImpulseFullScalePixels,
-                confidenceScale: microXContinuityConfidenceScale,
-                confidenceFloor: microXRescue.confidenceFloor,
-                cache: cache
-            )
-            : MicroContinuityLimitResult(limitedCorrection: rawMicroPixelOffsetX, limitedAmount: 0.0)
         let limitedMicroPixelOffsetY = strengths.microJitterY > 0.0
             ? microContinuityLimitedCorrection(
                 .microY,
@@ -4232,7 +4145,7 @@ enum AutoStabilizationEstimator {
             )
             : MicroContinuityLimitResult(limitedCorrection: rawMicroPixelOffsetY, limitedAmount: 0.0)
         let microPixelOffset = vector_float2(
-            softLimit(limitedMicroPixelOffsetX.limitedCorrection, limit: microPixelLimitX),
+            rawMicroPixelOffsetX,
             softLimit(limitedMicroPixelOffsetY.limitedCorrection, limit: microPixelLimitY)
         )
         let microRotation = softLimit(
@@ -4240,10 +4153,7 @@ enum AutoStabilizationEstimator {
             limit: 0.55
         )
         let macroJitterPixelOffset = vector_float2(
-            softLimit(
-                -macroJitterBandX * xScale * macroJitterXCorrectionStrength,
-                limit: microPixelLimitX * 1.25
-            ),
+            -macroJitterBandX * xScale * macroJitterXCorrectionStrength,
             softLimit(
                 -macroJitterBandY * yScale * macroJitterYCorrectionStrength,
                 limit: microPixelLimitY * 1.25
@@ -4509,7 +4419,6 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
-            turnOwnedFarFieldXImpulseAuthority: microXRescue.continuityFloor,
             warpConfidence: appliedWarpConfidence,
             microConfidence: playbackMicroConfidence,
             macroJitterConfidence: playbackMacroJitterConfidence,
@@ -4531,7 +4440,7 @@ enum AutoStabilizationEstimator {
             ),
             limitedMicroCorrection: microPixelOffset,
             microPulseLimited: vector_float2(
-                limitedMicroPixelOffsetX.limitedAmount,
+                0.0,
                 limitedMicroPixelOffsetY.limitedAmount
             ),
             searchRadiusHitCount: searchRadiusHitCount,
@@ -5247,6 +5156,10 @@ enum AutoStabilizationEstimator {
 
         let micro = smoothedMicroJitter(centerTransform: rawCenterTransform)
         smoothedTransform.microPixelOffset = micro.microPixelOffset
+        smoothedTransform.microPixelOffset.x = rawCenterTransform.microPixelOffset.x
+        smoothedTransform.macroJitterPixelOffset.x = rawCenterTransform.macroJitterPixelOffset.x
+        smoothedTransform.trajectoryMicroJitterPixelOffset.x = rawCenterTransform.trajectoryMicroJitterPixelOffset.x
+        smoothedTransform.trajectoryContinuityPixelOffset.x = rawCenterTransform.trajectoryContinuityPixelOffset.x
         smoothedTransform.microJitterRotationDegrees = micro.rotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = rawCenterTransform.effectiveMicroJitterStrength
         smoothedTransform.microConfidence = rawCenterTransform.microConfidence
@@ -5869,26 +5782,9 @@ enum AutoStabilizationEstimator {
                 despiked.maximumRotationDeviation
             )
         }
-        let velocityCollapseGuarded = playbackTrajectoryVelocityCollapseGuardedTransforms(
-            frames: frames,
-            transforms: despiked.transforms,
-            outputSize: outputSize
-        )
-        guard !shouldCancel() else {
-            return nil
-        }
-        if velocityCollapseGuarded.pixelFrameCount > 0 {
-            os_log(
-                "Playback trajectory velocity-collapse guard | pixelFrames %d maxPixel %.3f",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                velocityCollapseGuarded.pixelFrameCount,
-                velocityCollapseGuarded.maximumPixelDeviation
-            )
-        }
         let microJitterSuppressed = playbackTrajectoryMicroJitterSuppressedTransforms(
             frames: frames,
-            transforms: velocityCollapseGuarded.transforms,
+            transforms: despiked.transforms,
             outputSize: outputSize
         )
         guard !shouldCancel() else {
@@ -6047,17 +5943,8 @@ enum AutoStabilizationEstimator {
             let localJitter = Array(jitterX[lower..<upper])
             let localMean = localJitter.reduce(Float(0.0), +) / Float(max(1, localJitter.count))
             let rawJitter = jitterX[index]
-            var residualJitter = rawJitter - localMean
+            let residualJitter = rawJitter - localMean
 
-            // A stronger Camera Jitter X must not reverse a visible TURN edge.
-            // Preserve the short residual but bound it below the active TURN
-            // macro so Camera Jitter cannot become a second pan owner.
-            let macroX = result[index].macroPixelOffset.x
-            let turnActive = abs(result[index].turnDetectedPixelOffset.x) >= turnMacroOwnershipBandStartPixels
-            if turnActive {
-                let residualLimit = max(2.0, abs(macroX) * 0.35)
-                residualJitter = min(max(residualJitter, -residualLimit), residualLimit)
-            }
             result[index].trajectoryContinuityPixelOffset.x += residualJitter - rawJitter
 
             // Before a curve builds, borrow up to 30% of its known TURN macro
@@ -6093,15 +5980,21 @@ enum AutoStabilizationEstimator {
             result[index].macroPixelOffset.x += preRoll
         }
 
+        let turnBaseX = result.map { $0.macroPixelOffset.x }
         let composedX = result.map { playbackTrajectoryComposedPixelOffset($0).x }
-        let concatenatedTurn = StabilizerTurnTransitionPath.concatenate(
+        let highFrequencyX = zip(composedX, turnBaseX).map { $0 - $1 }
+        let concatenatedTurnBase = StabilizerTurnTransitionPath.concatenate(
             times: frames.map(\.time),
-            positions: composedX,
-            travelPositions: result.map { $0.macroPixelOffset.x },
+            positions: turnBaseX,
+            travelPositions: turnBaseX,
             activity: result.map { $0.turnDetectedPixelOffset.x },
             windowSeconds: windowSeconds,
             smoothingStrength: Float(strengths.turnViewportStrength),
             idleReleaseSeconds: strengths.turnIdleReleaseSeconds
+        )
+        let concatenatedTurn = StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX(
+            highFrequencyX,
+            on: concatenatedTurnBase
         )
         if let rejectionReason = concatenatedTurn.rejectionReason {
             os_log(
@@ -6112,32 +6005,7 @@ enum AutoStabilizationEstimator {
             )
         } else {
             for index in result.indices {
-                // Keep each diagnostic X component visible, but let TURN own the
-                // final sum through an explicit continuity correction. Restore
-                // only a tightly capped part of a supported Micro X impulse;
-                // restoring the whole composed delta breaks the TURN curve.
-                let impulseAuthority = clamp(
-                    result[index].turnOwnedFarFieldXImpulseAuthority,
-                    min: 0.0,
-                    max: 1.0
-                )
-                let transitionPosition = concatenatedTurn.positions[index]
-                let requestedRestoration = (composedX[index] - transitionPosition) * impulseAuthority
-                let restorationLimit = min(
-                    playbackTrajectoryTurnOwnedXTransitionRescueMaximumPixels,
-                    abs(result[index].microPixelOffset.x) * impulseAuthority
-                )
-                let finalPosition = transitionPosition + clamp(
-                    requestedRestoration,
-                    min: -restorationLimit,
-                    max: restorationLimit
-                ) + StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
-                    rigidPixels: result[index].cameraRigidPixelOffset.x,
-                    turnPixels: result[index].turnDetectedPixelOffset.x,
-                    support: result[index].lensFarFieldRigidShakeSupportX,
-                    shapeConsistency: result[index].lensFarFieldRigidShakeShapeConsistencyX,
-                    forwardBackwardConsistency: result[index].lensFarFieldRigidShakeForwardBackwardConsistencyX
-                )
+                let finalPosition = concatenatedTurn.positions[index]
                 result[index].trajectoryContinuityPixelOffset.x += finalPosition - composedX[index]
                 // `turnDetectedPixelOffset` is input evidence and can remain
                 // flat through a concatenated curve.  Preserve the actual
@@ -6276,15 +6144,8 @@ enum AutoStabilizationEstimator {
             )
         }
 
-        let rigidXValues = transforms.map { $0.cameraRigidPixelOffset.x }
         let rigidYValues = transforms.map { $0.cameraRigidPixelOffset.y }
         let rigidRotationValues = transforms.map(\.cameraRigidRotationDegrees)
-        let limitedRigidXValues = playbackTrajectoryShortShockDespikedPath(
-            rigidXValues,
-            frames: frames,
-            minimumThreshold: playbackTrajectoryFarFieldMacroDespikeMinimumPixels,
-            maximumBlend: 1.0
-        )
         let limitedRigidYValues = playbackTrajectoryShortShockDespikedPath(
             rigidYValues,
             frames: frames,
@@ -6306,11 +6167,6 @@ enum AutoStabilizationEstimator {
         for index in result.indices {
             let source = transforms[index]
             var pixelCorrection = vector_float2(0.0, 0.0)
-            if source.lensFarFieldRigidShakeApplied > 0.5,
-               source.lensFarFieldRigidShakeSupportX >= playbackTrajectoryCameraRigidPulseMinimumSupport,
-               source.lensFarFieldRigidShakeForwardBackwardConsistencyX >= playbackTrajectoryCameraRigidPulseMinimumSupport {
-                pixelCorrection.x = limitedRigidXValues[index] - source.cameraRigidPixelOffset.x
-            }
             if source.lensFarFieldRigidShakeApplied > 0.5,
                source.lensFarFieldRigidShakeSupportY >= playbackTrajectoryCameraRigidPulseMinimumSupport,
                source.lensFarFieldRigidShakeForwardBackwardConsistencyY >= playbackTrajectoryCameraRigidPulseMinimumSupport {
@@ -6366,7 +6222,6 @@ enum AutoStabilizationEstimator {
             )
         }
 
-        var pixelXDeviations = Array(repeating: Float(0.0), count: transforms.count)
         var pixelYDeviations = Array(repeating: Float(0.0), count: transforms.count)
         var rotationDeviations = Array(repeating: Float(0.0), count: transforms.count)
         for index in 1..<(transforms.count - 1) {
@@ -6379,7 +6234,6 @@ enum AutoStabilizationEstimator {
                 + ((transforms[index + 1].pixelOffset - transforms[index - 1].pixelOffset) * fraction)
             let predictedRotation = transforms[index - 1].rotationDegrees
                 + ((transforms[index + 1].rotationDegrees - transforms[index - 1].rotationDegrees) * fraction)
-            pixelXDeviations[index] = abs(transforms[index].pixelOffset.x - predictedPixel.x)
             pixelYDeviations[index] = abs(transforms[index].pixelOffset.y - predictedPixel.y)
             rotationDeviations[index] = abs(transforms[index].rotationDegrees - predictedRotation)
         }
@@ -6406,36 +6260,6 @@ enum AutoStabilizationEstimator {
 
             let predictedPixel = transforms[index - 1].pixelOffset
                 + ((transforms[index + 1].pixelOffset - transforms[index - 1].pixelOffset) * fraction)
-            let pixelDeviationX = transforms[index].pixelOffset.x - predictedPixel.x
-            let pixelDeviationLengthX = abs(pixelDeviationX)
-            let localPixelXThreshold = max(
-                minimumPixelThreshold,
-                localMedian(
-                    pixelXDeviations,
-                    centerIndex: index,
-                    radius: radius
-                ) * playbackTrajectoryFrameCadenceDespikeMadMultiplier
-            )
-            if pixelDeviationLengthX > localPixelXThreshold,
-               playbackTrajectoryIsFrameCadenceSpike(
-                   previous: transforms[index - 1].pixelOffset.x,
-                   current: transforms[index].pixelOffset.x,
-                   next: transforms[index + 1].pixelOffset.x
-               ) {
-                let excess = pixelDeviationLengthX - localPixelXThreshold
-                let blend = clamp(
-                    excess / max(localPixelXThreshold * 2.0, Float.ulpOfOne),
-                    min: 0.25,
-                    max: playbackTrajectoryFrameCadenceDespikeMaximumBlend
-                )
-                let correctionDelta = vector_float2(-pixelDeviationX * blend, 0.0)
-                transform.pixelOffset += correctionDelta
-                transform.microPixelOffset += correctionDelta
-                transform.limitedMicroCorrection += correctionDelta
-                transform.temporalSmoothingPixelDelta += correctionDelta
-                maximumPixelDeviation = max(maximumPixelDeviation, pixelDeviationLengthX)
-            }
-
             let pixelDeviationY = transforms[index].pixelOffset.y - predictedPixel.y
             let pixelDeviationLengthY = abs(pixelDeviationY)
             let localPixelYThreshold = max(
@@ -6870,18 +6694,11 @@ enum AutoStabilizationEstimator {
                 stats.candidateFrameCount += 1
                 stats.maximumCandidateHighFrequency = max(stats.maximumCandidateHighFrequency, highFrequencyMagnitude)
                 if axis == .x {
-                    let turnConfidence = clamp(transform.turnConfidence, min: 0.0, max: 1.0)
-                    let turnOwnership = confidenceRamp(
-                        abs(transform.turnDetectedPixelOffset.x),
-                        start: turnMacroOwnershipBandStartPixels,
-                        full: turnMacroOwnershipBandFullPixels
-                    ) * turnConfidence
-                    stats.maximumTurnOwnership = max(stats.maximumTurnOwnership, turnOwnership)
-                    if turnConfidence >= playbackTrajectoryHorizontalMicroJitterTurnHardGateConfidence,
-                       abs(transform.turnDetectedPixelOffset.x) >= turnMacroOwnershipBandStartPixels {
-                        stats.turnRejectedFrameCount += 1
-                        continue
-                    }
+                    let correction = -highFrequency
+                    applyAxisCorrection(index: index, axis: axis, correction: correction)
+                    stats.maximumCorrectionMagnitude = max(stats.maximumCorrectionMagnitude, abs(correction))
+                    stats.appliedFrameCount += 1
+                    continue
                 }
 
                 let trackingSupport = confidenceRamp(
@@ -7213,27 +7030,14 @@ enum AutoStabilizationEstimator {
         }
 
         let diagnostics = diagnosticTransforms.count == transforms.count ? diagnosticTransforms : transforms
-        let microX = transforms.map(\.microPixelOffset.x)
         let microY = transforms.map(\.microPixelOffset.y)
         let microRotation = transforms.map(\.microJitterRotationDegrees)
-        var predictedMicroX = microX
         var predictedMicroY = microY
         var predictedRotation = microRotation
-        var microXDeviation = Array(repeating: Float(0.0), count: transforms.count)
         var microYDeviation = Array(repeating: Float(0.0), count: transforms.count)
         var rotationDeviation = Array(repeating: Float(0.0), count: transforms.count)
 
         for index in transforms.indices {
-            if let prediction = outerLinearPrediction(
-                microX,
-                frames: frames,
-                centerIndex: index,
-                innerWindowSeconds: playbackTrajectoryLandingShockInnerWindowSeconds,
-                outerWindowSeconds: playbackTrajectoryLandingShockOuterWindowSeconds
-            ) {
-                predictedMicroX[index] = prediction
-                microXDeviation[index] = abs(microX[index] - prediction)
-            }
             if let prediction = outerLinearPrediction(
                 microY,
                 frames: frames,
@@ -7293,40 +7097,6 @@ enum AutoStabilizationEstimator {
             )
             let qualityScale = max(0.50, trackingSupport)
             var changedPixel = false
-
-            let xThreshold = min(
-                max(
-                    minimumPixelThreshold,
-                    localMedian(
-                        microXDeviation,
-                        centerIndex: index,
-                        radius: radius
-                    ) * playbackTrajectoryLandingShockMadMultiplier
-                ),
-                maximumPixelThreshold
-            )
-            let xDeviation = microX[index] - predictedMicroX[index]
-            let xCorrection = playbackTrajectoryLandingShockCorrection(
-                deviation: xDeviation,
-                threshold: xThreshold,
-                maximumCorrection: maximumPixelCorrection,
-                evidence: playbackTrajectoryLandingShockPixelEvidence(
-                    deviation: abs(xDeviation),
-                    threshold: xThreshold,
-                    microStrength: diagnostic.effectiveMicroJitterStrength.x,
-                    impulse: diagnostic.microImpulse.x
-                ),
-                qualityScale: qualityScale,
-                turnScale: turnScale
-            )
-            if abs(xCorrection) > Float.ulpOfOne {
-                transform.microPixelOffset.x += xCorrection
-                transform.pixelOffset.x += xCorrection
-                transform.limitedMicroCorrection.x += xCorrection
-                transform.temporalSmoothingPixelDelta.x += xCorrection
-                maximumPixelDeviation = max(maximumPixelDeviation, abs(xDeviation))
-                changedPixel = true
-            }
 
             let yThreshold = min(
                 max(
@@ -7651,13 +7421,6 @@ enum AutoStabilizationEstimator {
             targetIndices: allIndices,
             windowSeconds: macroJitterWindowSeconds
         )
-        let microXTurnGateScales = turnOwnershipGateScales(
-            values: turnMacroJitterSmoothedXPath,
-            analysis: analysis,
-            targetIndices: allIndices,
-            windowSeconds: continuityWindowSeconds,
-            cache: cache
-        )
         let microCleanXPath = confidenceCleanedMicroPath(
             .microX,
             values: analysis.microJitterPathX,
@@ -7665,7 +7428,6 @@ enum AutoStabilizationEstimator {
             analysis: analysis,
             indices: allIndices,
             fullImpulseScale: microImpulseFullScalePixels,
-            confidenceScales: microXTurnGateScales,
             cache: cache
         )
         let microCleanYPath = confidenceCleanedMicroPath(
@@ -7693,7 +7455,6 @@ enum AutoStabilizationEstimator {
             analysis: analysis,
             indices: allIndices,
             fullImpulseScale: microImpulseFullScalePixels,
-            confidenceScales: microXTurnGateScales,
             cache: cache
         )
         let farFieldCleanYPath = confidenceCleanedMicroPath(
@@ -7973,12 +7734,6 @@ enum AutoStabilizationEstimator {
             )
         }
         let zeroPlaybackMicroBandYBaseline = EstimatedPath(values: Array(repeating: Float(0.0), count: frames.count))
-        let microXConfidenceEvidence = microConfidenceEvidenceSeries(
-            values: analysis.microJitterPathX,
-            baselineValues: microBaselineXPath,
-            frames: frames,
-            fullImpulseScale: microImpulseFullScalePixels
-        )
         let microYConfidenceEvidence = microConfidenceEvidenceSeries(
             values: playbackMicroBandYPath,
             baselineValues: zeroPlaybackMicroBandYBaseline,
@@ -8143,11 +7898,6 @@ enum AutoStabilizationEstimator {
                 blend: farFieldBandBlendRoll,
                 hasFarField: analysis.farFieldPathRoll.indices.contains(index)
             )
-            let rawMacroJitterXConfidence = macroJitterConfidence(
-                bandValue: macroJitterBandX,
-                trackingConfidence: macroJitterTrackingConfidence,
-                fullScale: macroJitterFullScalePixels
-            )
             let rawMacroJitterYConfidence = macroJitterConfidence(
                 bandValue: macroJitterBandY,
                 trackingConfidence: macroJitterTrackingConfidence,
@@ -8193,11 +7943,6 @@ enum AutoStabilizationEstimator {
                 turnOwnership: playbackTurnOwnershipX,
                 turnConfidence: playbackTurnOwnershipX
             )
-            let baseMicroXTurnGate = clamp(
-                1.0 - (playbackTurnShakeSuppression * turnOwnershipMicroXSuppression),
-                min: 0.0,
-                max: 1.0
-            )
             let microYTurnGate = clamp(
                 1.0 - (playbackTurnShakeSuppression * turnOwnershipMicroYSuppression),
                 min: 0.0,
@@ -8205,11 +7950,6 @@ enum AutoStabilizationEstimator {
             )
             let microRollTurnGate = clamp(
                 1.0 - (playbackTurnShakeSuppression * turnOwnershipMicroRollSuppression),
-                min: 0.0,
-                max: 1.0
-            )
-            let baseMacroJitterXTurnGate = clamp(
-                1.0 - (playbackTurnShakeSuppression * turnOwnershipMacroJitterXSuppression),
                 min: 0.0,
                 max: 1.0
             )
@@ -8223,11 +7963,6 @@ enum AutoStabilizationEstimator {
                 min: 0.0,
                 max: 1.0
             )
-            let rawMicroXConfidenceBase = microConfidence(
-                trackingConfidence: walkingTrackingConfidence,
-                evidence: microXConfidenceEvidence.instant,
-                index: index
-            )
             let rawMicroYConfidenceBase = microConfidence(
                 trackingConfidence: walkingTrackingConfidence,
                 evidence: microYConfidenceEvidence.instant,
@@ -8238,33 +7973,12 @@ enum AutoStabilizationEstimator {
                 evidence: microRollConfidenceEvidence.instant,
                 index: index
             )
-            let rawMicroXConfidence = rawMicroXConfidenceBase
             let rawMicroYConfidence = rawMicroYConfidenceBase
             let rawMicroRollConfidence = rawMicroRollConfidenceBase
-            let microXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-                rawConfidence: rawMicroXConfidence,
-                bandPixels: microBandX * xScale,
-                turnSuppression: playbackTurnShakeSuppression,
-                turnOwnership: playbackTurnOwnershipX,
-                turnMacroPixels: turnXMacroPixels,
-                farFieldSupport: farFieldWalkingXSupport
-            )
-            let macroJitterXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-                rawConfidence: rawMacroJitterXConfidence,
-                bandPixels: macroJitterBandX * xScale,
-                turnSuppression: playbackTurnShakeSuppression,
-                turnOwnership: playbackTurnOwnershipX,
-                turnMacroPixels: turnXMacroPixels,
-                farFieldSupport: farFieldWalkingXSupport
-            )
-            let microXTurnGate = max(baseMicroXTurnGate, microXRescue.gateFloor)
-            let macroJitterXTurnGate = max(baseMacroJitterXTurnGate, macroJitterXRescue.gateFloor)
-            let unbiasedMicroXConfidence = StabilizerConfidencePolicy.unbiased(rawMicroXConfidence * microXTurnGate)
-            let microXConfidence = max(unbiasedMicroXConfidence, microXRescue.confidenceFloor)
+            let microXConfidence: Float = strengths.microJitterX > 0.0 ? 1.0 : 0.0
             let microYConfidence = StabilizerConfidencePolicy.unbiased(rawMicroYConfidence * microYTurnGate)
             let microRollConfidence = StabilizerConfidencePolicy.unbiased(rawMicroRollConfidence * microRollTurnGate)
-            let unbiasedMacroJitterXConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterXConfidence * macroJitterXTurnGate)
-            let macroJitterXConfidence = max(unbiasedMacroJitterXConfidence, macroJitterXRescue.confidenceFloor)
+            let macroJitterXConfidence: Float = strengths.macroJitterX > 0.0 ? 1.0 : 0.0
             let macroJitterYConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterYConfidence * macroJitterYTurnGate)
             let macroJitterRollConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterRollConfidence * macroJitterRollTurnGate)
             let playbackMicroConfidence = StabilizerConfidencePolicy.unbiasedMean(
@@ -8299,10 +8013,10 @@ enum AutoStabilizationEstimator {
                 strengths.cameraJitterRotation,
                 confidence: cameraJitterMacroRollConfidence
             )
-            let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: microXConfidence, maxStrength: 10.0)
+            let microXCorrectionStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.microJitterX)
             let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: microYConfidence, maxStrength: 10.0)
             let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: microRollConfidence)
-            let macroJitterXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterX, confidence: macroJitterXConfidence, maxStrength: 10.0)
+            let macroJitterXCorrectionStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.macroJitterX)
             let macroJitterYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterY, confidence: macroJitterYConfidence, maxStrength: 10.0)
             let macroJitterRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterRotation, confidence: macroJitterRollConfidence)
 
@@ -8320,37 +8034,11 @@ enum AutoStabilizationEstimator {
                 -panBandY * yScale * positionGain * cameraJitterMacroYCorrectionStrength
             )
             let cameraJitterMacroRotation = -panBandRoll * rotationGain * cameraJitterMacroRollCorrectionStrength
-            let microPixelLimitX = max(2.0, outputSize.x * 0.055)
             let microPixelLimitY = max(2.0, outputSize.y * 0.055)
-            let unattenuatedRawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
-            let lowEvidenceMicroXScale = lowEvidenceLargeMicroXScale(
-                rawConfidence: rawMicroXConfidence,
-                correctionPixels: unattenuatedRawMicroPixelOffsetX,
-                farFieldSupport: farFieldWalkingXSupport
-            )
-            let effectiveMicroXCorrectionStrength = microXCorrectionStrength * lowEvidenceMicroXScale
-            let rawMicroPixelOffsetX = -microBandX * xScale * effectiveMicroXCorrectionStrength
+            let effectiveMicroXCorrectionStrength = microXCorrectionStrength
+            let rawMicroPixelOffsetX = -microBandX * xScale * microXCorrectionStrength
             let rawMicroPixelOffsetY = -microBandY * yScale * microYCorrectionStrength
-            let microXContinuityConfidenceScale = max(microXTurnGate, microXRescue.continuityFloor)
             let microYContinuityConfidenceScale = microYTurnGate
-            let limitedMicroPixelOffsetX = strengths.microJitterX > 0.0
-                ? microContinuityLimitedCorrection(
-                    .microX,
-                    values: analysis.microJitterPathX,
-                    baselineValues: microBaselineXPath,
-                    analysis: analysis,
-                    centerTime: renderSeconds,
-                    rawCorrection: rawMicroPixelOffsetX,
-                    outputScale: xScale,
-                    requestedStrength: strengths.microJitterX,
-                    fullImpulseScale: microImpulseFullScalePixels,
-                    confidenceScale: microXContinuityConfidenceScale,
-                    confidenceFloor: microXRescue.confidenceFloor,
-                    trackingConfidences: walkingTrackingConfidences,
-                    stableConfidenceEvidence: microXConfidenceEvidence.stable,
-                    cache: cache
-                )
-                : MicroContinuityLimitResult(limitedCorrection: rawMicroPixelOffsetX, limitedAmount: 0.0)
             let limitedMicroPixelOffsetY = strengths.microJitterY > 0.0
                 ? microContinuityLimitedCorrection(
                     .microY,
@@ -8369,7 +8057,7 @@ enum AutoStabilizationEstimator {
                 )
                 : MicroContinuityLimitResult(limitedCorrection: rawMicroPixelOffsetY, limitedAmount: 0.0)
             let microPixelOffset = vector_float2(
-                softLimit(limitedMicroPixelOffsetX.limitedCorrection, limit: microPixelLimitX),
+                rawMicroPixelOffsetX,
                 softLimit(limitedMicroPixelOffsetY.limitedCorrection, limit: microPixelLimitY)
             )
             let microRotation = softLimit(
@@ -8377,10 +8065,7 @@ enum AutoStabilizationEstimator {
                 limit: 0.55
             )
             let macroJitterPixelOffset = vector_float2(
-                softLimit(
-                    -macroJitterBandX * xScale * macroJitterXCorrectionStrength,
-                    limit: microPixelLimitX * 1.25
-                ),
+                -macroJitterBandX * xScale * macroJitterXCorrectionStrength,
                 softLimit(
                     -macroJitterBandY * yScale * macroJitterYCorrectionStrength,
                     limit: microPixelLimitY * 1.25
@@ -8648,7 +8333,6 @@ enum AutoStabilizationEstimator {
                     macroJitterYCorrectionStrength,
                     macroJitterRotationCorrectionStrength
                 ),
-                turnOwnedFarFieldXImpulseAuthority: microXRescue.continuityFloor,
                 warpConfidence: appliedWarpConfidence,
                 microConfidence: playbackMicroConfidence,
                 macroJitterConfidence: playbackMacroJitterConfidence,
@@ -8672,7 +8356,7 @@ enum AutoStabilizationEstimator {
                     + trajectoryMicroJitterPixelOffset
                     + trajectoryContinuityPixelOffset,
                 microPulseLimited: vector_float2(
-                    limitedMicroPixelOffsetX.limitedAmount,
+                    0.0,
                     limitedMicroPixelOffsetY.limitedAmount
                 ),
                 searchRadiusHitCount: searchRadiusHitCount,
@@ -9106,22 +8790,13 @@ enum AutoStabilizationEstimator {
             previous: previous.microPixelOffset,
             limit: pixelLimit * microPixelLimitScale
         )
+        limited.microPixelOffset.x = current.microPixelOffset.x
         limited.macroJitterPixelOffset = playbackTrajectoryLimitedVector(
             current.macroJitterPixelOffset,
             previous: previous.macroJitterPixelOffset,
             limit: pixelLimit * 0.65
         )
-        let turnOwnedFarFieldXImpulseAuthority = clamp(
-            current.turnOwnedFarFieldXImpulseAuthority,
-            min: 0.0,
-            max: 1.0
-        )
-        limited.microPixelOffset.x += (
-            current.microPixelOffset.x - limited.microPixelOffset.x
-        ) * turnOwnedFarFieldXImpulseAuthority
-        limited.macroJitterPixelOffset.x += (
-            current.macroJitterPixelOffset.x - limited.macroJitterPixelOffset.x
-        ) * turnOwnedFarFieldXImpulseAuthority
+        limited.macroJitterPixelOffset.x = current.macroJitterPixelOffset.x
         let componentPixelOffset = playbackTrajectoryComposedNonLensPixelOffset(limited)
         let previousNonLensPixelOffset = previous.pixelOffset
             - previous.cameraRigidPixelOffset
@@ -9131,9 +8806,7 @@ enum AutoStabilizationEstimator {
             previous: previousNonLensPixelOffset,
             limit: pixelLimit * finalPixelLimitScale
         )
-        finalPixelOffset.x += (
-            componentPixelOffset.x - finalPixelOffset.x
-        ) * turnOwnedFarFieldXImpulseAuthority
+        finalPixelOffset.x = componentPixelOffset.x
         limited.trajectoryContinuityPixelOffset = finalPixelOffset - componentPixelOffset
         limited.pixelOffset = playbackTrajectoryComposedPixelOffset(limited)
 
@@ -9191,12 +8864,7 @@ enum AutoStabilizationEstimator {
         rawTransform: StabilizerAutoTransform
     ) -> StabilizerAutoTransform {
         var transform = limitedTransform
-        let preserveMicroX = playbackTrajectoryMicroPreservationBlend(
-            magnitude: rawTransform.microPixelOffset.x,
-            confidence: rawTransform.effectiveMicroJitterStrength.x,
-            start: playbackTrajectoryMicroPreservationStartPixels,
-            full: playbackTrajectoryMicroPreservationFullPixels
-        ) * playbackTrajectoryTurnOwnedXPreservationScale(rawTransform)
+        let preserveMicroX: Float = 1.0
         let preserveMicroY = playbackTrajectoryMicroPreservationBlend(
             magnitude: rawTransform.microPixelOffset.y,
             confidence: rawTransform.effectiveMicroJitterStrength.y,
@@ -9210,6 +8878,10 @@ enum AutoStabilizationEstimator {
             full: playbackTrajectoryMicroRotationPreservationFullDegrees
         )
         transform.microPixelOffset.x += (rawTransform.microPixelOffset.x - transform.microPixelOffset.x) * preserveMicroX
+        transform.macroJitterPixelOffset.x = rawTransform.macroJitterPixelOffset.x
+        transform.trajectoryMicroJitterPixelOffset.x = rawTransform.trajectoryMicroJitterPixelOffset.x
+        transform.trajectoryContinuityPixelOffset.x = rawTransform.trajectoryContinuityPixelOffset.x
+        transform.cameraRigidPixelOffset.x = rawTransform.cameraRigidPixelOffset.x
         transform.microPixelOffset.y += (rawTransform.microPixelOffset.y - transform.microPixelOffset.y) * preserveMicroY
         transform.microJitterRotationDegrees += (rawTransform.microJitterRotationDegrees - transform.microJitterRotationDegrees) * preserveRotation
         transform.pixelOffset = transform.macroPixelOffset
@@ -9247,7 +8919,6 @@ enum AutoStabilizationEstimator {
         transform.temporalSmoothingWindowSeconds = Float(windowSeconds)
         transform.effectiveMicroJitterStrength = rawTransform.effectiveMicroJitterStrength
         transform.effectiveMacroJitterStrength = rawTransform.effectiveMacroJitterStrength
-        transform.turnOwnedFarFieldXImpulseAuthority = rawTransform.turnOwnedFarFieldXImpulseAuthority
         transform.warpConfidence = rawTransform.warpConfidence
         transform.microConfidence = rawTransform.microConfidence
         transform.macroJitterConfidence = rawTransform.macroJitterConfidence
@@ -9295,42 +8966,6 @@ enum AutoStabilizationEstimator {
             max: playbackTrajectoryMicroPreservationMaxBlend
         )
     }
-
-    private static func playbackTrajectoryTurnOwnedXPreservationScale(
-        _ rawTransform: StabilizerAutoTransform
-    ) -> Float {
-        let turnOwnershipX = confidenceRamp(
-            abs(rawTransform.turnDetectedPixelOffset.x),
-            start: turnMacroOwnershipBandStartPixels,
-            full: turnMacroOwnershipBandFullPixels
-        ) * clamp(rawTransform.turnConfidence, min: 0.0, max: 1.0)
-        let fineBandGate = turnOwnedMicroXFineBandGate(
-            bandPixels: rawTransform.microPixelOffset.x,
-            turnOwnership: turnOwnershipX
-        )
-        let edgeQuality = searchRadiusEdgeQuality(
-            hitCount: rawTransform.searchRadiusHitCount,
-            totalCount: rawTransform.searchRadiusTotalCount
-        )
-        let farFieldSupport = farFieldTurnOwnedWalkingXSupport(
-            warpConfidence: rawTransform.warpConfidence,
-            trackingConfidence: max(rawTransform.walkingTrackingConfidence, rawTransform.trackingConfidence),
-            edgeQuality: edgeQuality
-        )
-        let farFieldFloor = playbackTrajectoryTurnOwnedXPreservationFarFieldFloorMax
-            * confidenceRamp(
-                farFieldSupport,
-                start: playbackTrajectoryTurnOwnedXPreservationFarFieldStart,
-                full: playbackTrajectoryTurnOwnedXPreservationFarFieldFull
-            )
-            * confidenceRamp(
-                abs(rawTransform.microPixelOffset.x),
-                start: playbackTrajectoryMicroPreservationStartPixels,
-                full: playbackTrajectoryMicroPreservationFullPixels
-            )
-        return clamp(max(fineBandGate, farFieldFloor), min: 0.0, max: 1.0)
-    }
-
 
     private static func playbackTrajectorySmoothedTransform(
         index: Int,
@@ -9434,9 +9069,12 @@ enum AutoStabilizationEstimator {
             transforms: rawTransforms
         )
         smoothedTransform.microPixelOffset = micro.microPixelOffset
+        smoothedTransform.microPixelOffset.x = centerTransform.microPixelOffset.x
+        smoothedTransform.macroJitterPixelOffset.x = centerTransform.macroJitterPixelOffset.x
+        smoothedTransform.trajectoryMicroJitterPixelOffset.x = centerTransform.trajectoryMicroJitterPixelOffset.x
+        smoothedTransform.trajectoryContinuityPixelOffset.x = centerTransform.trajectoryContinuityPixelOffset.x
         smoothedTransform.microJitterRotationDegrees = micro.rotationDegrees
         smoothedTransform.effectiveMicroJitterStrength = centerTransform.effectiveMicroJitterStrength
-        smoothedTransform.turnOwnedFarFieldXImpulseAuthority = centerTransform.turnOwnedFarFieldXImpulseAuthority
         smoothedTransform.microConfidence = centerTransform.microConfidence
         smoothedTransform.microImpulse = centerTransform.microImpulse
         smoothedTransform.rawMicroCorrection = centerTransform.rawMicroCorrection
@@ -10024,11 +9662,6 @@ enum AutoStabilizationEstimator {
             multiplier: 0.6,
             qualityModel: analysis.qualityModel
         )
-        let rawMacroJitterXConfidence = macroJitterConfidence(
-            bandValue: macroJitterBandX,
-            trackingConfidence: macroJitterTrackingConfidence,
-            fullScale: macroJitterFullScalePixels
-        )
         let rawMacroJitterYConfidence = macroJitterConfidence(
             bandValue: macroJitterBandY,
             trackingConfidence: macroJitterTrackingConfidence,
@@ -10082,36 +9715,14 @@ enum AutoStabilizationEstimator {
         )
         let turnXMacroPixels = abs(panBandX * xScale)
         let turnYMacroPixels = abs(panBandY * yScale)
-        let baseMicroXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroXSuppression), min: 0.0, max: 1.0)
         let microYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroYSuppression), min: 0.0, max: 1.0)
         let microRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroRollSuppression), min: 0.0, max: 1.0)
-        let baseMacroJitterXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroJitterXSuppression), min: 0.0, max: 1.0)
         let macroJitterYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroJitterYSuppression), min: 0.0, max: 1.0)
         let macroJitterRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroJitterRollSuppression), min: 0.0, max: 1.0)
-        let microXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: rawMicroXConfidence,
-            bandPixels: microImpulseX * xScale,
-            turnSuppression: turnShakeSuppression,
-            turnOwnership: turnOwnershipX,
-            turnMacroPixels: turnXMacroPixels,
-            farFieldSupport: farFieldTurnOwnedXSupport
-        )
-        let macroJitterXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: rawMacroJitterXConfidence,
-            bandPixels: macroJitterBandX * xScale,
-            turnSuppression: turnShakeSuppression,
-            turnOwnership: turnOwnershipX,
-            turnMacroPixels: turnXMacroPixels,
-            farFieldSupport: farFieldTurnOwnedXSupport
-        )
-        let microXTurnGate = max(baseMicroXTurnGate, microXRescue.gateFloor)
-        let macroJitterXTurnGate = max(baseMacroJitterXTurnGate, macroJitterXRescue.gateFloor)
-        let unbiasedMicroXConfidence = StabilizerConfidencePolicy.unbiased(rawMicroXConfidence * microXTurnGate)
-        let microXConfidence = max(unbiasedMicroXConfidence, microXRescue.confidenceFloor)
+        let microXConfidence: Float = strengths.microJitterX > 0.0 ? 1.0 : 0.0
         let microYConfidence = StabilizerConfidencePolicy.unbiased(rawMicroYConfidence * microYTurnGate)
         let microRollConfidence = StabilizerConfidencePolicy.unbiased(rawMicroRollConfidence * microRollTurnGate)
-        let unbiasedMacroJitterXConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterXConfidence * macroJitterXTurnGate)
-        let macroJitterXConfidence = max(unbiasedMacroJitterXConfidence, macroJitterXRescue.confidenceFloor)
+        let macroJitterXConfidence: Float = strengths.macroJitterX > 0.0 ? 1.0 : 0.0
         let macroJitterYConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterYConfidence * macroJitterYTurnGate)
         let macroJitterRollConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterRollConfidence * macroJitterRollTurnGate)
         let jitterConfidence = StabilizerConfidencePolicy.unbiasedMean(
@@ -10138,10 +9749,10 @@ enum AutoStabilizationEstimator {
             strengths.cameraJitterRotation,
             confidence: turnBandConfidenceRoll
         )
-        let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: microXConfidence, maxStrength: 10.0)
+        let microXCorrectionStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.microJitterX)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: microYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: microRollConfidence)
-        let macroJitterXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterX, confidence: macroJitterXConfidence, maxStrength: 10.0)
+        let macroJitterXCorrectionStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.macroJitterX)
         let macroJitterYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterY, confidence: macroJitterYConfidence, maxStrength: 10.0)
         let macroJitterRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterRotation, confidence: macroJitterRollConfidence)
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrengthX
@@ -10151,33 +9762,10 @@ enum AutoStabilizationEstimator {
             rawMacroCompensationX,
             limit: turnSmoothingOffsetLimit()
         )
-        let unscaledRawMicroCompensationX = -microImpulseX * xScale * microXCorrectionStrength
-        let lowEvidenceMicroXScale = lowEvidenceLargeMicroXScale(
-            rawConfidence: rawMicroXConfidence,
-            correctionPixels: unscaledRawMicroCompensationX,
-            farFieldSupport: farFieldTurnOwnedXSupport
-        )
-        let effectiveMicroXCorrectionStrength = microXCorrectionStrength * lowEvidenceMicroXScale
-        let rawMicroCompensationX = unscaledRawMicroCompensationX * lowEvidenceMicroXScale
+        let effectiveMicroXCorrectionStrength = microXCorrectionStrength
+        let rawMicroCompensationX = -microImpulseX * xScale * microXCorrectionStrength
         let rawMicroCompensationY = -microImpulseY * yScale * microYCorrectionStrength
-        let microXContinuityConfidenceScale = max(microXTurnGate, microXRescue.continuityFloor)
         let microYContinuityConfidenceScale = microYTurnGate
-        let limitedMicroCompensationX = strengths.microJitterX > 0.0
-            ? microContinuityLimitedCorrection(
-                .microX,
-                values: analysis.microJitterPathX,
-                baselineValues: microBaselineXPath,
-                analysis: analysis,
-                centerTime: renderSeconds,
-                rawCorrection: rawMicroCompensationX,
-                outputScale: xScale,
-                requestedStrength: strengths.microJitterX,
-                fullImpulseScale: microImpulseFullScalePixels,
-                confidenceScale: microXContinuityConfidenceScale,
-                confidenceFloor: microXRescue.confidenceFloor,
-                cache: cache
-            )
-            : MicroContinuityLimitResult(limitedCorrection: rawMicroCompensationX, limitedAmount: 0.0)
         let limitedMicroCompensationY = strengths.microJitterY > 0.0
             ? microContinuityLimitedCorrection(
                 .microY,
@@ -10193,7 +9781,7 @@ enum AutoStabilizationEstimator {
                 cache: cache
             )
             : MicroContinuityLimitResult(limitedCorrection: rawMicroCompensationY, limitedAmount: 0.0)
-        let microCompensationX = limitedMicroCompensationX.limitedCorrection
+        let microCompensationX = rawMicroCompensationX
         let microCompensationY = limitedMicroCompensationY.limitedCorrection
         let microCompensationRotation = -microImpulseRoll * microRotationCorrectionStrength
         let macroJitterCompensationX = -macroJitterBandX * xScale * macroJitterXCorrectionStrength
@@ -10477,7 +10065,6 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
-            turnOwnedFarFieldXImpulseAuthority: microXRescue.continuityFloor,
             warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             macroJitterConfidence: macroJitterConfidence,
@@ -10495,7 +10082,7 @@ enum AutoStabilizationEstimator {
             microImpulse: vector_float3(microImpulseX, microImpulseY, microImpulseRoll),
             rawMicroCorrection: vector_float2(rawMicroCompensationX, rawMicroCompensationY),
             limitedMicroCorrection: vector_float2(microCompensationX, microCompensationY),
-            microPulseLimited: vector_float2(limitedMicroCompensationX.limitedAmount, limitedMicroCompensationY.limitedAmount),
+            microPulseLimited: vector_float2(0.0, limitedMicroCompensationY.limitedAmount),
             searchRadiusHitCount: searchRadiusHitCount,
             searchRadiusTotalCount: searchRadiusTotalCount
         )
@@ -10657,7 +10244,6 @@ enum AutoStabilizationEstimator {
             analysis: analysis,
             indices: macroJitterSupportIndices,
             fullImpulseScale: microImpulseFullScalePixels,
-            confidenceScales: microXTurnGateScales,
             cache: cache
         )
         let microCleanYPath = confidenceCleanedMicroPath(
@@ -10709,7 +10295,6 @@ enum AutoStabilizationEstimator {
             analysis: analysis,
             indices: macroJitterSupportIndices,
             fullImpulseScale: microImpulseFullScalePixels,
-            confidenceScales: microXTurnGateScales,
             cache: cache
         )
         let farFieldCleanYPath = confidenceCleanedMicroPath(
@@ -10902,16 +10487,6 @@ enum AutoStabilizationEstimator {
             start: farFieldMacroBlendConfidenceStart,
             full: farFieldMacroBlendConfidenceFull
         )
-        let rawMicroXConfidence = microFrameConfidence(
-            .microX,
-            values: analysis.microJitterPathX,
-            baselineValues: microBaselineXPath,
-            frames: frames,
-            interpolation: frameInterpolation,
-            trackingConfidence: walkingTrackingConfidence,
-            fullImpulseScale: microImpulseFullScalePixels,
-            cache: cache
-        )
         let rawMicroYConfidence = microFrameConfidence(
             .microY,
             values: analysis.microJitterPathY,
@@ -10949,11 +10524,6 @@ enum AutoStabilizationEstimator {
             residual: macroJitterResidual,
             multiplier: 0.6,
             qualityModel: analysis.qualityModel
-        )
-        let rawMacroJitterXConfidence = macroJitterConfidence(
-            bandValue: macroJitterBandX,
-            trackingConfidence: macroJitterTrackingConfidence,
-            fullScale: macroJitterFullScalePixels
         )
         let rawMacroJitterYConfidence = macroJitterConfidence(
             bandValue: macroJitterBandY,
@@ -11015,36 +10585,14 @@ enum AutoStabilizationEstimator {
         let microImpulseX = microJitterPathXAtRender - microImpulseBaselineX
         let turnXMacroPixels = abs(panBandX * xScale)
         let turnYMacroPixels = abs(panBandY * yScale)
-        let baseMicroXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroXSuppression), min: 0.0, max: 1.0)
-        let baseMacroJitterXTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroJitterXSuppression), min: 0.0, max: 1.0)
-        let microXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: rawMicroXConfidence,
-            bandPixels: microImpulseX * xScale,
-            turnSuppression: turnShakeSuppression,
-            turnOwnership: turnOwnershipX,
-            turnMacroPixels: turnXMacroPixels,
-            farFieldSupport: farFieldTurnOwnedXSupport
-        )
-        let macroJitterXRescue = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: rawMacroJitterXConfidence,
-            bandPixels: macroJitterBandX * xScale,
-            turnSuppression: turnShakeSuppression,
-            turnOwnership: turnOwnershipX,
-            turnMacroPixels: turnXMacroPixels,
-            farFieldSupport: farFieldTurnOwnedXSupport
-        )
-        let microXTurnGate = max(baseMicroXTurnGate, microXRescue.gateFloor)
         let microYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroYSuppression), min: 0.0, max: 1.0)
         let microRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMicroRollSuppression), min: 0.0, max: 1.0)
-        let macroJitterXTurnGate = max(baseMacroJitterXTurnGate, macroJitterXRescue.gateFloor)
         let macroJitterYTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroJitterYSuppression), min: 0.0, max: 1.0)
         let macroJitterRollTurnGate = clamp(1.0 - (turnShakeSuppression * turnOwnershipMacroJitterRollSuppression), min: 0.0, max: 1.0)
-        let unbiasedMicroXConfidence = StabilizerConfidencePolicy.unbiased(rawMicroXConfidence * microXTurnGate)
-        let microXConfidence = max(unbiasedMicroXConfidence, microXRescue.confidenceFloor)
+        let microXConfidence: Float = strengths.microJitterX > 0.0 ? 1.0 : 0.0
         let microYConfidence = StabilizerConfidencePolicy.unbiased(rawMicroYConfidence * microYTurnGate)
         let microRollConfidence = StabilizerConfidencePolicy.unbiased(rawMicroRollConfidence * microRollTurnGate)
-        let unbiasedMacroJitterXConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterXConfidence * macroJitterXTurnGate)
-        let macroJitterXConfidence = max(unbiasedMacroJitterXConfidence, macroJitterXRescue.confidenceFloor)
+        let macroJitterXConfidence: Float = strengths.macroJitterX > 0.0 ? 1.0 : 0.0
         let macroJitterYConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterYConfidence * macroJitterYTurnGate)
         let macroJitterRollConfidence = StabilizerConfidencePolicy.unbiased(rawMacroJitterRollConfidence * macroJitterRollTurnGate)
         let jitterConfidence = StabilizerConfidencePolicy.unbiasedMean(
@@ -11071,10 +10619,10 @@ enum AutoStabilizationEstimator {
             strengths.cameraJitterRotation,
             confidence: turnBandConfidenceRoll
         )
-        let microXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterX, confidence: microXConfidence, maxStrength: 10.0)
+        let microXCorrectionStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.microJitterX)
         let microYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.microJitterY, confidence: microYConfidence, maxStrength: 10.0)
         let microRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.microJitterRotation, confidence: microRollConfidence)
-        let macroJitterXCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterX, confidence: macroJitterXConfidence, maxStrength: 10.0)
+        let macroJitterXCorrectionStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.macroJitterX)
         let macroJitterYCorrectionStrength = verticalWalkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterY, confidence: macroJitterYConfidence, maxStrength: 10.0)
         let macroJitterRotationCorrectionStrength = walkingConfidenceCompensatedCorrectionFactor(strengths.macroJitterRotation, confidence: macroJitterRollConfidence)
         let rawMacroCompensationX = -panBandX * xScale * positionGain * panCorrectionStrengthX
@@ -11085,33 +10633,10 @@ enum AutoStabilizationEstimator {
             rawMacroCompensationX,
             limit: turnSmoothingOffsetLimit()
         )
-        let unscaledRawMicroCompensationX = -microImpulseX * xScale * microXCorrectionStrength
-        let lowEvidenceMicroXScale = lowEvidenceLargeMicroXScale(
-            rawConfidence: rawMicroXConfidence,
-            correctionPixels: unscaledRawMicroCompensationX,
-            farFieldSupport: farFieldTurnOwnedXSupport
-        )
-        let effectiveMicroXCorrectionStrength = microXCorrectionStrength * lowEvidenceMicroXScale
-        let rawMicroCompensationX = unscaledRawMicroCompensationX * lowEvidenceMicroXScale
+        let effectiveMicroXCorrectionStrength = microXCorrectionStrength
+        let rawMicroCompensationX = -microImpulseX * xScale * microXCorrectionStrength
         let rawMicroCompensationY = -(microJitterPathYAtRender - microBaselineY) * yScale * microYCorrectionStrength
-        let microXContinuityConfidenceScale = max(microXTurnGate, microXRescue.continuityFloor)
         let microYContinuityConfidenceScale = microYTurnGate
-        let limitedMicroCompensationX = limitMicroContinuity && strengths.microJitterX > 0.0
-            ? microContinuityLimitedCorrection(
-                .microX,
-                values: analysis.microJitterPathX,
-                baselineValues: microBaselineXPath,
-                analysis: analysis,
-                centerTime: renderSeconds,
-                rawCorrection: rawMicroCompensationX,
-                outputScale: xScale,
-                requestedStrength: strengths.microJitterX,
-                fullImpulseScale: microImpulseFullScalePixels,
-                confidenceScale: microXContinuityConfidenceScale,
-                confidenceFloor: microXRescue.confidenceFloor,
-                cache: cache
-            )
-            : MicroContinuityLimitResult(limitedCorrection: rawMicroCompensationX, limitedAmount: 0.0)
         let limitedMicroCompensationY = limitMicroContinuity && strengths.microJitterY > 0.0
             ? microContinuityLimitedCorrection(
                 .microY,
@@ -11127,7 +10652,7 @@ enum AutoStabilizationEstimator {
                 cache: cache
             )
             : MicroContinuityLimitResult(limitedCorrection: rawMicroCompensationY, limitedAmount: 0.0)
-        let microCompensationX = limitedMicroCompensationX.limitedCorrection
+        let microCompensationX = rawMicroCompensationX
         let microCompensationY = limitedMicroCompensationY.limitedCorrection
         let microCompensationRotation = -(microJitterPathRollAtRender - microImpulseBaselineRoll) * microRotationCorrectionStrength
         let microImpulse = vector_float3(
@@ -11459,7 +10984,6 @@ enum AutoStabilizationEstimator {
                 macroJitterYCorrectionStrength,
                 macroJitterRotationCorrectionStrength
             ),
-            turnOwnedFarFieldXImpulseAuthority: microXRescue.continuityFloor,
             warpConfidence: appliedWarpConfidence,
             microConfidence: jitterConfidence,
             macroJitterConfidence: macroJitterConfidence,
@@ -11477,7 +11001,7 @@ enum AutoStabilizationEstimator {
             microImpulse: microImpulse,
             rawMicroCorrection: vector_float2(rawMicroCompensationX, rawMicroCompensationY),
             limitedMicroCorrection: vector_float2(microCompensationX, microCompensationY),
-            microPulseLimited: vector_float2(limitedMicroCompensationX.limitedAmount, limitedMicroCompensationY.limitedAmount),
+            microPulseLimited: vector_float2(0.0, limitedMicroCompensationY.limitedAmount),
             searchRadiusHitCount: searchRadiusHitCount,
             searchRadiusTotalCount: searchRadiusTotalCount
         )
@@ -12367,7 +11891,6 @@ enum AutoStabilizationEstimator {
         var temporalSmoothingRotationDelta: Float = 0.0
         var effectiveMicroJitterStrength = vector_float3(0.0, 0.0, 0.0)
         var effectiveMacroJitterStrength = vector_float3(0.0, 0.0, 0.0)
-        var turnOwnedFarFieldXImpulseAuthority: Float = 0.0
         var warpConfidence: Float = 0.0
         var microConfidence: Float = 0.0
         var macroJitterConfidence: Float = 0.0
@@ -12493,7 +12016,6 @@ enum AutoStabilizationEstimator {
             temporalSmoothingRotationDelta += transform.temporalSmoothingRotationDelta * weight
             effectiveMicroJitterStrength += transform.effectiveMicroJitterStrength * weight
             effectiveMacroJitterStrength += transform.effectiveMacroJitterStrength * weight
-            turnOwnedFarFieldXImpulseAuthority += transform.turnOwnedFarFieldXImpulseAuthority * weight
             warpConfidence += transform.warpConfidence * weight
             microConfidence += transform.microConfidence * weight
             macroJitterConfidence += transform.macroJitterConfidence * weight
@@ -12634,7 +12156,6 @@ enum AutoStabilizationEstimator {
             temporalSmoothingWindowSeconds: 0.0,
             effectiveMicroJitterStrength: effectiveMicroJitterStrength / totalWeight,
             effectiveMacroJitterStrength: effectiveMacroJitterStrength / totalWeight,
-            turnOwnedFarFieldXImpulseAuthority: turnOwnedFarFieldXImpulseAuthority / totalWeight,
             warpConfidence: warpConfidence / totalWeight,
             microConfidence: microConfidence / totalWeight,
             macroJitterConfidence: macroJitterConfidence / totalWeight,
@@ -16343,15 +15864,12 @@ enum AutoStabilizationEstimator {
             result.bandWarpSupport = max(result.bandWarpSupport, result.farFieldRigidSupport)
             let rigidBranchSupport = max(result.farFieldRigidSupport, result.farFieldRigidRollSupport)
             if rigidBranchSupport >= lensShakeMinimumSupport {
-                let outputWidth = Float(max(1, frames[interpolation.lowerIndex].sampleWidth)) * outputScale.x
                 let outputHeight = Float(max(1, frames[interpolation.lowerIndex].sampleHeight)) * outputScale.y
-                let rigidXMaximumCorrection = outputWidth
-                    * Float(min(max(strengths.cameraJitterX, 0.0), 5.0) / 100.0)
                 let rigidYMaximumCorrection = outputHeight
                     * Float(min(max(strengths.cameraJitterY, 0.0), 5.0) / 100.0)
                 let rigidRollMaximumCorrection = Float(min(max(strengths.cameraJitterRotation, 0.0), 2.0))
                 let rigidOffset = vector_float2(
-                    clamp(-rigidResidual.x, min: -rigidXMaximumCorrection, max: rigidXMaximumCorrection),
+                    -rigidResidual.x,
                     clamp(-rigidResidual.y, min: -rigidYMaximumCorrection, max: rigidYMaximumCorrection)
                 )
                 let globalXSupport = confidenceRamp(
@@ -16369,11 +15887,7 @@ enum AutoStabilizationEstimator {
                     min: -rigidYMaximumCorrection,
                     max: rigidYMaximumCorrection
                 )
-                let globalXOffset = clamp(
-                    rigidOffset.x * globalXSupport,
-                    min: -rigidXMaximumCorrection,
-                    max: rigidXMaximumCorrection
-                )
+                let globalXOffset = rigidOffset.x * globalXSupport
                 let rigidRollCorrection = clamp(
                     -rigidRollResidual * rigidRollSupport,
                     min: -rigidRollMaximumCorrection,
@@ -18134,6 +17648,7 @@ enum AutoStabilizationEstimator {
         return clamp(directRemoval + confidenceBoost, min: 0.0, max: 1.0)
     }
 
+
     private static func verticalWalkingConfidenceCompensatedCorrectionFactor(_ strength: Double, confidence: Float, maxStrength: Float = 4.0) -> Float {
         walkingConfidenceCompensatedCorrectionFactor(strength, confidence: confidence, maxStrength: maxStrength)
     }
@@ -18738,7 +18253,7 @@ enum AutoStabilizationEstimator {
                 turnBandValue: turnBand,
                 trackingConfidence: turnTrackingConfidence
             )
-            let gate = clamp(1.0 - (ownership * turnOwnershipMicroXSuppression), min: 0.0, max: 1.0)
+            let gate = clamp(1.0 - ownership, min: 0.0, max: 1.0)
             if gate < 0.9999 {
                 scales[index] = gate
             }

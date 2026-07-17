@@ -124,9 +124,9 @@ output, producing an identity transform.
 
 `Micro Jitter` strengths are direct removal amounts for frame-local X, Y, and
 roll impulses. X and Y default to `4.0` and run up to `10.0`; rotation defaults
-to `1.0` and runs up to `4.0`. Values above `1.0` can compensate when
-tracking confidence makes the correction too weak. The applied correction still
-clamps at full detected-impulse removal so it does not add inverse shake. The
+to `1.0` and runs up to `4.0`. X uses the requested amount directly, without a
+tracking-confidence multiplier, continuity limiter, or correction-amplitude cap.
+Y and roll retain their evidence-qualified response. The
 baseline uses seconds, not frame counts: it skips the center `0.10` second shock
 region and predicts from outer samples up to `1.0` second away. Confidence is
 based on current tracking evidence, local baseline support, and the center
@@ -135,14 +135,12 @@ combined, the same unbiased finite-value check and linear `0...1` clamp used by 
 MAJIT, and WARP is applied. Zero evidence and noisy unsupported frames therefore still
 produce zero correction. The surrounding-noise floor is capped below the full-response point
 so repeated walking motion does not bury a real center-frame landing shock.
-MIJIT and MAJIT use a walking-band tracking gate that slightly eases block coverage only
+MIJIT and MAJIT Y/roll use a walking-band tracking gate that slightly eases block coverage only
 when enough motion blocks were accepted; WARP and TURN keep the stricter tracking gate to
-avoid swimming or false turn smoothing. On X, render-time turn ownership reduces
-MIJIT/MAJIT confidence during monotonic walking turns so broad horizontal motion is
-owned by TURN instead of split into many tiny walking corrections. The same gate
-also limits how much Micro Jitter X is removed before that path feeds Macro Jitter
-Wobble, so Macro Jitter does not inherit a turn that Micro already chopped into
-small X corrections.
+avoid swimming or false turn smoothing. X keeps its full detected Micro and Macro
+Jitter correction during monotonic turns. TURN is built from the low-frequency macro
+path first; the finite high-frequency X residual is then added without clipping, so
+fine shake removal does not weaken the turn distance, direction, or endpoint.
 
 `Macro Jitter` removes step follow-through shake using a fixed internal
 `2.0` second render-time window. The Inspector exposes only X, Y, and rotation
@@ -153,9 +151,8 @@ broad path as its band input. Its residual gate uses robust window percentiles
 instead of letting a single bad frame suppress the whole band. Macro Jitter evidence uses
 the same unbiased finite-value check and linear `0...1` clamp as the other correction
 bands. X and Y default to `4.0` and run
-up to `10.0`; the rotation default is `1.0`. The X band
-uses the same turn ownership gate as Micro Jitter, so medium macro-jitter cleanup
-does not fight broad Turn Smoothing during real horizontal turns.
+up to `10.0`; the rotation default is `1.0`. The X band bypasses the former
+turn-ownership gate; frequency separation keeps it distinct from broad Turn Smoothing.
 Macro confidence can still be lower on a real frame because it measures the smaller
 post-Micro residual, uses `0.75` px / `0.16` degree full-response evidence instead of
 Micro's `0.35` px / `0.08` degree thresholds, and reports the X/Y/roll mean. Those are

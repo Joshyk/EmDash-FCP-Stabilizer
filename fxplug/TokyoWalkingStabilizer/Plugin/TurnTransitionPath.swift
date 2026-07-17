@@ -397,6 +397,36 @@ enum StabilizerTurnTransitionPath {
         )
     }
 
+    static func overlayUnrestrictedHighFrequencyX(
+        _ highFrequencyX: [Float],
+        on turn: StabilizerTurnTransitionResult
+    ) -> StabilizerTurnTransitionResult {
+        guard turn.rejectionReason == nil else {
+            return turn
+        }
+        guard highFrequencyX.count == turn.positions.count else {
+            return StabilizerTurnTransitionResult(
+                positions: turn.positions,
+                events: turn.events,
+                rejectionReason: "TURN high-frequency X array has a different length"
+            )
+        }
+        guard highFrequencyX.allSatisfy(\.isFinite),
+              turn.positions.allSatisfy(\.isFinite)
+        else {
+            return StabilizerTurnTransitionResult(
+                positions: turn.positions,
+                events: turn.events,
+                rejectionReason: "TURN high-frequency X contains a nonfinite value"
+            )
+        }
+        return StabilizerTurnTransitionResult(
+            positions: zip(turn.positions, highFrequencyX).map { $0 + $1 },
+            events: turn.events,
+            rejectionReason: nil
+        )
+    }
+
     private static func integratedQuinticSmootherStep(_ value: Float) -> Float {
         let t = min(max(value, 0.0), 1.0)
         let t2 = t * t

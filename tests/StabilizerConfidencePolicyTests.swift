@@ -31,114 +31,13 @@ struct StabilizerConfidencePolicyTests {
             "nonfinite axis confidence must contribute zero"
         )
 
-        let rescuedImpulse = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: 0.8,
-            bandPixels: 82.0,
-            turnSuppression: 1.0,
-            turnOwnership: 1.0,
-            turnMacroPixels: 28.0,
-            farFieldSupport: 1.0
-        )
-        expect(close(rescuedImpulse.gateFloor, 1.0), "strong far-field X impulse must retain full Camera Jitter gate authority")
-        expect(close(rescuedImpulse.confidenceFloor, 1.0), "strong far-field X impulse must retain full confidence authority")
-        expect(close(rescuedImpulse.continuityFloor, 1.0), "strong far-field X impulse must retain continuity authority")
-
-        let broadTurn = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: 0.8,
-            bandPixels: 82.0,
-            turnSuppression: 1.0,
-            turnOwnership: 1.0,
-            turnMacroPixels: 180.0,
-            farFieldSupport: 1.0
-        )
-        expect(close(broadTurn.gateFloor, 0.0), "broad turn travel must not be rescued as Camera Jitter")
-
-        let weakFarField = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: 0.8,
-            bandPixels: 82.0,
-            turnSuppression: 1.0,
-            turnOwnership: 1.0,
-            turnMacroPixels: 28.0,
-            farFieldSupport: 0.1
-        )
-        expect(close(weakFarField.gateFloor, 0.0), "weak far-field evidence must not bypass Turn ownership")
-
-        let fineImpulse = StabilizerConfidencePolicy.turnOwnedFarFieldXImpulseRescue(
-            rawConfidence: 0.8,
-            bandPixels: 10.0,
-            turnSuppression: 1.0,
-            turnOwnership: 1.0,
-            turnMacroPixels: 28.0,
-            farFieldSupport: 1.0
-        )
-        expect(close(fineImpulse.gateFloor, 0.0), "fine impulse must not reopen the broad Turn gate")
-        expect(close(fineImpulse.confidenceFloor, 1.0), "fine impulse must retain frame-local Camera Jitter confidence")
-
-        expect(
-            close(
-                StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
-                    rigidPixels: -2.66871,
-                    turnPixels: -4.83667,
-                    support: 1.0,
-                    shapeConsistency: 1.0,
-                    forwardBackwardConsistency: 1.0
-                ),
-                -2.66871
-            ),
-            "supported 1:49 far-field rigid correction must survive TURN concatenation"
-        )
-        expect(
-            close(
-                StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
-                    rigidPixels: 38.42,
-                    turnPixels: 4.0,
-                    support: 1.0,
-                    shapeConsistency: 1.0,
-                    forwardBackwardConsistency: 1.0
-                ),
-                3.2
-            ),
-            "far-field rigid restoration must stay below the prior transition regression"
-        )
-        expect(
-            close(
-                StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
-                    rigidPixels: -2.0,
-                    turnPixels: 0.0,
-                    support: 1.0,
-                    shapeConsistency: 1.0,
-                    forwardBackwardConsistency: 1.0
-                ),
-                0.0
-            ),
-            "far-field rigid restoration must stay off without TURN activity"
-        )
-        expect(
-            close(
-                StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
-                    rigidPixels: .nan,
-                    turnPixels: 4.0,
-                    support: 1.0,
-                    shapeConsistency: 1.0,
-                    forwardBackwardConsistency: 1.0
-                ),
-                0.0
-            ),
-            "nonfinite far-field rigid evidence must fail visibly as zero"
-        )
-        expect(
-            close(
-                StabilizerConfidencePolicy.turnOwnedFarFieldRigidXTransitionRestoration(
-                    rigidPixels: -2.0,
-                    turnPixels: 4.0,
-                    support: 0.1,
-                    shapeConsistency: 1.0,
-                    forwardBackwardConsistency: 1.0
-                ),
-                0.0
-            ),
-            "weak far-field support must not perturb a TURN transition"
-        )
+        expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(0.0), 0.0), "zero X strength must disable correction")
+        expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(0.35), 0.35), "subunit X strength must remain direct")
+        expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(1.0), 1.0), "unit X strength must remove the full detected path")
+        expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(12.0), 12.0), "X strength must not be capped")
+        expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(-1.0), 0.0), "negative X strength must disable correction")
+        expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(.nan), 0.0), "NaN X strength must fail visibly as zero")
+        expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(.infinity), 0.0), "infinite X strength must fail visibly as zero")
 
         if failures.isEmpty {
             print("StabilizerConfidencePolicyTests: PASS")

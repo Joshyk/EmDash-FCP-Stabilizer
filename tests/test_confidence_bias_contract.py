@@ -36,20 +36,22 @@ if "StabilizerConfidencePolicy.swift" not in feedback_runner:
     fail("Feedback CLI does not compile the common policy")
 
 required_estimator_contracts = (
-    "StabilizerConfidencePolicy.unbiased(rawMicroXConfidence * microXTurnGate)",
-    "StabilizerConfidencePolicy.unbiased(rawMacroJitterXConfidence * macroJitterXTurnGate)",
+    "StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.microJitterX)",
+    "StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.macroJitterX)",
     "let combinedTurnCorrectionConfidence = StabilizerConfidencePolicy.unbiased(confidence)",
     "StabilizerConfidencePolicy.unbiased(stableWarpConfidence)",
     "private static func turnCorrectionConfidenceResponse(_ confidence: Float) -> Float {\n        StabilizerConfidencePolicy.unbiased(confidence)\n    }",
     "private static func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {\n        StabilizerConfidencePolicy.unbiased(confidence)\n    }",
+    "StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX(",
+    "let finalPosition = concatenatedTurn.positions[index]",
 )
 for contract in required_estimator_contracts:
     if contract not in estimator:
         fail(f"estimator path does not use the common policy: {contract}")
 
 required_feedback_contracts = (
-    "StabilizerConfidencePolicy.unbiased(rawMicroQX * microXTurnGate)",
-    "StabilizerConfidencePolicy.unbiased(rawMacroQX * macroXTurnGate)",
+    "StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(options.strengths.microX)",
+    "StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(options.strengths.macroX)",
     "let turnQ = StabilizerConfidencePolicy.unbiased(rawTurnQ)",
     "StabilizerConfidencePolicy.unbiased(stableWarpConfidence)",
     "private func turnCorrectionConfidenceResponse(_ confidence: Float) -> Float {\n    StabilizerConfidencePolicy.unbiased(confidence)\n}",
@@ -66,6 +68,11 @@ for forbidden in (
     "turnOwnedFarFieldWalkingRescueConfidenceFloor",
     "farFieldMicroConfidenceFloor",
     "turnCorrectionConfidence(",
+    "turnOwnedFarFieldXImpulseRescue",
+    "turnOwnedFarFieldRigidXTransitionRestoration",
+    "playbackTrajectoryTurnOwnedXTransitionRescueMaximumPixels",
+    "playbackTrajectoryHorizontalMicroJitterTurnHardGateConfidence",
+    "let finalPosition = concatenatedTurn.positions[index] + highFrequencyX[index]",
 ):
     if forbidden in estimator or forbidden in feedback:
         fail(f"legacy confidence bias remains: {forbidden}")
