@@ -145,10 +145,15 @@ enum StabilizerAutoCropZoomHandoff {
         }
 
         let handoffDuration = handoff.endSeconds - handoff.startSeconds
-        let progress = constantVelocityProgress(
-            elapsedSeconds: seconds - handoff.startSeconds,
-            durationSeconds: handoffDuration
-        )
+        let progress: Float
+        if handoffDuration <= 1e-9 {
+            progress = 1.0
+        } else {
+            progress = min(
+                max(Float((seconds - handoff.startSeconds) / handoffDuration), 0.0),
+                1.0
+            )
+        }
         let handoffScale = handoff.fromScale
             + ((handoff.toScale - handoff.fromScale) * progress)
         let handoffPosition = handoff.fromPositionPixels
@@ -165,37 +170,4 @@ enum StabilizerAutoCropZoomHandoff {
         )
     }
 
-    private static func integratedQuinticSmootherStep(_ value: Float) -> Float {
-        let t = min(max(value, 0.0), 1.0)
-        let t2 = t * t
-        let t4 = t2 * t2
-        return t4 * ((t2 - (3.0 * t)) + 2.5)
-    }
-
-    private static func constantVelocityProgress(
-        elapsedSeconds: Double,
-        durationSeconds: Double
-    ) -> Float {
-        guard durationSeconds > 1e-9 else {
-            return 1.0
-        }
-        let elapsed = min(max(elapsedSeconds, 0.0), durationSeconds)
-        let ease = min(0.30, durationSeconds * 0.15)
-        guard ease > 1e-9 else {
-            return Float(elapsed / durationSeconds)
-        }
-
-        let travelTime = durationSeconds - ease
-        let distance: Double
-        if elapsed < ease {
-            distance = ease * Double(integratedQuinticSmootherStep(Float(elapsed / ease)))
-        } else if elapsed <= durationSeconds - ease {
-            distance = (ease * 0.5) + (elapsed - ease)
-        } else {
-            let ramp = Float((elapsed - (durationSeconds - ease)) / ease)
-            let decelerationArea = Double(ramp - integratedQuinticSmootherStep(ramp))
-            distance = (durationSeconds - (ease * 1.5)) + (ease * decelerationArea)
-        }
-        return min(max(Float(distance / travelTime), 0.0), 1.0)
-    }
 }

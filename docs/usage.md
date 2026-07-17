@@ -147,8 +147,8 @@ fallbacks.
   recalculated from each render frame's safe-crop scale.
   When a lower protected peak follows an overlapping higher peak, release becomes a
   descending zoom/X handoff over `min(Zoom-Out Time, time to next peak)` and stops at
-  that next protected scale and crop-X reservation. Zoom and X use one constant cruising
-  progress with quintic easing limited to 0.30 seconds at the endpoints. Coverage,
+  that next protected scale and crop-X reservation. Zoom and X use one linear constant-speed
+  progress with no endpoint easing. Coverage,
   planned-position, and final framing-repair floors can only raise this curve; they are
   never bypassed. Equal/higher next peaks keep the existing look-ahead behavior, while
   a final peak keeps the ordinary release.

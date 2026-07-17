@@ -106,7 +106,7 @@ struct AutoCropZoomHandoffTests {
         expect(rising.isEmpty, "equal or larger next peaks must keep existing lookahead behavior")
         expect(close(StabilizerAutoCropZoomHandoff.framing(baseScale: 1.16, basePositionPixels: .zero, at: 3.0, handoffs: rising).scale, 1.16), "no handoff must preserve the current plan")
 
-        let bodySamples = [2.6, 3.0, 3.4, 3.8, 4.2].map {
+        let fullHandoffSamples = [2.0, 2.6, 3.2, 3.8, 4.4, 5.0].map {
             StabilizerAutoCropZoomHandoff.framing(
                 baseScale: 1.20,
                 basePositionPixels: vector_float2(120.0, 0.0),
@@ -114,12 +114,12 @@ struct AutoCropZoomHandoffTests {
                 handoffs: descending
             )
         }
-        let bodyXSteps = zip(bodySamples, bodySamples.dropFirst()).map {
+        let fullHandoffXSteps = zip(fullHandoffSamples, fullHandoffSamples.dropFirst()).map {
             $1.positionPixels.x - $0.positionPixels.x
         }
         expect(
-            bodyXSteps.allSatisfy { close($0, bodyXSteps[0], tolerance: 0.001) },
-            "the middle of a joined zoom/X handoff must keep one constant speed"
+            fullHandoffXSteps.allSatisfy { close($0, fullHandoffXSteps[0], tolerance: 0.001) },
+            "the entire joined zoom/X handoff must keep one constant speed without endpoint easing"
         )
 
         let separate = StabilizerAutoCropZoomHandoff.segments(

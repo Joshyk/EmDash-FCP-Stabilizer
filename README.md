@@ -181,9 +181,9 @@ therefore the direct result of Camera Jitter and TURN only. When on, Auto Crop z
 that same edge according to `Zoom-In Time`, `Hold Time`, and `Zoom-Out Time`.
 For overlapping intervals whose next peak needs less scale, the previous Hold now hands
 zoom and crop X down together over the shorter of `Zoom-Out Time` and the time
-remaining to that next peak. They share one constant cruising progress with quintic easing
-limited to 0.30 seconds at the endpoints, and stop at the next turn's protected scale and
-X reservation instead of returning to `1.0x` and center. Coverage, planned-position, and
+remaining to that next peak. They share one linear constant-speed progress with no endpoint
+easing, and stop at the next turn's protected scale and X reservation instead of returning
+to `1.0x` and center. Coverage, planned-position, and
 final framing-repair floors remain absolute. Equal or higher next peaks retain existing
 look-ahead behavior, and the last peak retains its ordinary release.
 TURN confidence now requires both tracking evidence and a real X turn band, so
