@@ -137,7 +137,7 @@ struct DebugOverlayDiagnosticsTests {
             turnPixelOffset: vector_float2(19.2, 0.0)
         ))
         expect(close(cropOff.crop, 0.0), "crop off must hide CROP activity")
-        expect(close(cropOff.turn, 1.0), "crop off must not hide applied TURN correction")
+        expect(close(cropOff.turn, 1.0), "crop off must not hide the final applied TURN correction")
 
         let cropOn = StabilizerDebugOverlayCalculator.metrics(for: inputs(
             cropEnabled: true,

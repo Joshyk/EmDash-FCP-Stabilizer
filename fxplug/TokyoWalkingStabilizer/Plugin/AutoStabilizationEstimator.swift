@@ -107,6 +107,10 @@ struct StabilizerAutoTransform {
     var macroJitterRotationDegrees: Float
     var rotationDegrees: Float
     var turnDetectedPixelOffset: vector_float2
+    // The final render-space change introduced by TURN concatenation.  Keep
+    // this separate from detection evidence so diagnostics report the curve
+    // Metal actually receives, including its idle release and handoffs.
+    var turnAppliedPixelOffset: vector_float2 = vector_float2(0.0, 0.0)
     var rawPixelOffset: vector_float2
     var rawRotationDegrees: Float
     var temporalSmoothingPixelDelta: vector_float2
@@ -5685,6 +5689,7 @@ enum AutoStabilizationEstimator {
         scaled.lensFarFieldMeshOffset = scalePixelVector(transform.lensFarFieldMeshOffset, xScale: xScale, yScale: yScale)
         scaled.lensFarFieldRigidGlobalYOffset = transform.lensFarFieldRigidGlobalYOffset * yScale
         scaled.turnDetectedPixelOffset = scalePixelVector(transform.turnDetectedPixelOffset, xScale: xScale, yScale: yScale)
+        scaled.turnAppliedPixelOffset = scalePixelVector(transform.turnAppliedPixelOffset, xScale: xScale, yScale: yScale)
         scaled.rawPixelOffset = scalePixelVector(transform.rawPixelOffset, xScale: xScale, yScale: yScale)
         scaled.temporalSmoothingPixelDelta = scalePixelVector(transform.temporalSmoothingPixelDelta, xScale: xScale, yScale: yScale)
         scaled.rawMicroCorrection = scalePixelVector(transform.rawMicroCorrection, xScale: xScale, yScale: yScale)
@@ -6134,6 +6139,10 @@ enum AutoStabilizationEstimator {
                     forwardBackwardConsistency: result[index].lensFarFieldRigidShakeForwardBackwardConsistencyX
                 )
                 result[index].trajectoryContinuityPixelOffset.x += finalPosition - composedX[index]
+                // `turnDetectedPixelOffset` is input evidence and can remain
+                // flat through a concatenated curve.  Preserve the actual
+                // render-space delta independently for the Debug Overlay.
+                result[index].turnAppliedPixelOffset.x = finalPosition - transforms[index].pixelOffset.x
             }
             for (eventID, event) in concatenatedTurn.events.enumerated() {
                 os_log(
@@ -12351,6 +12360,7 @@ enum AutoStabilizationEstimator {
         var macroJitterRotationDegrees: Float = 0.0
         var rotationDegrees: Float = 0.0
         var turnDetectedPixelOffset = vector_float2(0.0, 0.0)
+        var turnAppliedPixelOffset = vector_float2(0.0, 0.0)
         var rawPixelOffset = vector_float2(0.0, 0.0)
         var rawRotationDegrees: Float = 0.0
         var temporalSmoothingPixelDelta = vector_float2(0.0, 0.0)
@@ -12476,6 +12486,7 @@ enum AutoStabilizationEstimator {
             macroJitterRotationDegrees += transform.macroJitterRotationDegrees * weight
             rotationDegrees += transform.rotationDegrees * weight
             turnDetectedPixelOffset += transform.turnDetectedPixelOffset * weight
+            turnAppliedPixelOffset += transform.turnAppliedPixelOffset * weight
             rawPixelOffset += transform.rawPixelOffset * weight
             rawRotationDegrees += transform.rawRotationDegrees * weight
             temporalSmoothingPixelDelta += transform.temporalSmoothingPixelDelta * weight
@@ -12614,6 +12625,7 @@ enum AutoStabilizationEstimator {
             macroJitterRotationDegrees: macroJitterRotationDegrees / totalWeight,
             rotationDegrees: rotationDegrees / totalWeight,
             turnDetectedPixelOffset: turnDetectedPixelOffset / totalWeight,
+            turnAppliedPixelOffset: turnAppliedPixelOffset / totalWeight,
             rawPixelOffset: rawPixelOffset / totalWeight,
             rawRotationDegrees: rawRotationDegrees / totalWeight,
             temporalSmoothingPixelDelta: temporalSmoothingPixelDelta / totalWeight,

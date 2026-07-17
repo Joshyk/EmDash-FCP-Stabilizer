@@ -11034,7 +11034,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                     finalRotationDegrees: renderedAutoTransform.rotationDegrees,
                     cropEnabled: state.autoCropEnabled && !previewWarmupDecision.active,
                     cropScale: renderedAutoCropFraming.scale,
-                    turnPixelOffset: renderedAutoTransform.turnDetectedPixelOffset,
+                    turnPixelOffset: renderedAutoTransform.turnAppliedPixelOffset,
                     macroJitterPixelOffset: renderedAutoTransform.macroJitterPixelOffset,
                     macroJitterRotationDegrees: renderedAutoTransform.macroJitterRotationDegrees,
                     microJitterPixelOffset: microJitterPixelOffset,

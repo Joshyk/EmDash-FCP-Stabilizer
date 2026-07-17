@@ -126,8 +126,8 @@ if "vector_float4(1.0, 2.0, 9.0, 1_016.0)" not in swift:
     fail("Swift runtime version components do not encode version 1.2.9")
 if "result[index].microPixelOffset.x = 0.0" in estimator:
     fail("TURN concatenation must not erase Debug Overlay X component activity")
-if "result[index].trajectoryContinuityPixelOffset.x += concatenatedTurn.positions[index] - composedX[index]" not in estimator:
-    fail("TURN concatenation does not own final X through the continuity correction")
+if "result[index].turnAppliedPixelOffset.x = finalPosition - transforms[index].pixelOffset.x" not in estimator:
+    fail("TURN Debug Overlay does not receive the final concatenated render delta")
 for plist_path in VERSION_PLISTS:
     with plist_path.open("rb") as handle:
         version_info = plistlib.load(handle)
