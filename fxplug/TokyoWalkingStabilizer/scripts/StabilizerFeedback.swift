@@ -757,11 +757,6 @@ private let microXYContinuityWindowSeconds = 0.15
 private let microXYContinuityMaxSamples = 9
 private let microXYContinuityMinimumSpikePixels: Float = 0.75
 private let microXYContinuityMadMultiplier: Float = 3.0
-private let microLowEvidenceLargeXConfidenceStart: Float = 0.10
-private let microLowEvidenceLargeXConfidenceFull: Float = 0.26
-private let microLowEvidenceLargeXCorrectionStartPixels: Float = 1.2
-private let microLowEvidenceLargeXCorrectionFullPixels: Float = 4.5
-private let microLowEvidenceLargeXMinimumScale: Float = 0.30
 private let macroFullScalePixels: Float = 0.75
 private let macroFullScaleDegrees: Float = 0.16
 private let macroFullResponseScale: Float = 0.55
@@ -2890,43 +2885,6 @@ private func microContinuityLimitedCorrection(
     return limitedCorrection
 }
 
-private func lowEvidenceLargeMicroXScale(
-    rawConfidence: Float,
-    correctionPixels: Float,
-    farFieldSupport: Float
-) -> Float {
-    guard rawConfidence.isFinite,
-          correctionPixels.isFinite,
-          farFieldSupport.isFinite
-    else {
-        return 1.0
-    }
-    let magnitudeGate = confidenceRamp(
-        abs(correctionPixels),
-        start: microLowEvidenceLargeXCorrectionStartPixels,
-        full: microLowEvidenceLargeXCorrectionFullPixels
-    )
-    guard magnitudeGate > 0.0 else {
-        return 1.0
-    }
-    let evidenceProtection = confidenceRamp(
-        rawConfidence,
-        start: microLowEvidenceLargeXConfidenceStart,
-        full: microLowEvidenceLargeXConfidenceFull
-    )
-    let farFieldProtection = confidenceRamp(
-        farFieldSupport,
-        start: 0.35,
-        full: 0.75
-    )
-    let attenuation = magnitudeGate * (1.0 - evidenceProtection) * (1.0 - farFieldProtection)
-    return clamp(
-        1.0 - (attenuation * (1.0 - microLowEvidenceLargeXMinimumScale)),
-        min: microLowEvidenceLargeXMinimumScale,
-        max: 1.0
-    )
-}
-
 private func microConfidence(values: [Float], baselineValues: [Float], frames: [AnalysisFrame], index: Int, trackingConfidence: Float, fullImpulseScale: Float) -> Float {
     guard values.indices.contains(index), baselineValues.indices.contains(index) else {
         return 0.0
@@ -4064,16 +4022,14 @@ private func sourceSpaceLensShakeBand(
         let rigidOnlyGuard = rigidOnlyEvidence >= 0.34
             ? max(rigidOnlyEvidence, confidenceRamp(rigidOnlyEvidence, start: 0.34, full: 0.58))
             : rigidOnlyEvidence
-        let xConfidence = rigidSupportX
         let yConfidence = rigidSupportY
         let xStrength = StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(cameraStrengthX)
         let yStrength = verticalWalkingCorrectionFactor(cameraStrengthY, confidence: yConfidence)
         let rotationStrength = walkingCorrectionFactor(cameraStrengthR, confidence: rigidRollSupport)
         let detected = abs(rigidResidualX) + abs(rigidResidualY) + (abs(rigidRollResidual) * 12.0)
-        let rigidXLimit = Float.infinity
         let rigidYLimit = analysis.sampleHeight > 0 ? Float(analysis.sampleHeight) * yScale * Float(min(max(cameraLimitYPercent, 0.0), 5.0) / 100.0) : 0.0
         let rigidRollLimit = Float(min(max(cameraLimitRotationDegrees, 0.0), 2.0))
-        let appliedRigidX = min(abs(rigidResidualX * xStrength), rigidXLimit)
+        let appliedRigidX = abs(rigidResidualX * xStrength)
         let appliedRigidY = min(abs(rigidResidualY * yStrength), rigidYLimit)
         let appliedRigidRoll = min(abs(rigidRollResidual * rotationStrength), rigidRollLimit)
         let applied = appliedRigidX + appliedRigidY + (appliedRigidRoll * 12.0)
@@ -4084,7 +4040,7 @@ private func sourceSpaceLensShakeBand(
             applied: applied,
             remaining: max(0.0, detected - applied),
             confidence: boundedSupport,
-            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f roll %.5f cap %.3f %.3f %.3f applied %.3f %.3f %.3f raw %.3f %.3f rawRoll %.5f support %.2f supportX %.2f supportY %.2f rollSupport %.2f prepared %.2f rollPrepared %.2f shapeX %.2f shapeY %.2f twoWayX %.2f twoWayY %.2f rollTwoWay %.2f deltaRigid %.2f deltaAuthority %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f dominantMeshYBlend %.2f shortYBoost %.2f parallaxDamp %.2f coherentX %.2f coherentY %.2f rolling %.2f meshSupport %.2f meshBlend %.2f meshMaxDelta %.2f meshOpposing %.0f rawReinforceBlend %.2f xQuiver %.2f yQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f yBeforeLimiter %.3f yAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rigidRollResidual, rigidXLimit, rigidYLimit, rigidRollLimit, appliedRigidX, appliedRigidY, appliedRigidRoll, rawRigidResidualX, rawRigidResidualY, rawRigidRollResidual, boundedSupport, rigidSupportX, rigidSupportY, rigidRollSupport, preparedRigidSupport, preparedRigidRollSupport, effectiveShapeConsistencyX, effectiveShapeConsistencyY, effectiveForwardBackwardConsistencyX, effectiveForwardBackwardConsistencyY, rollForwardBackwardConsistency, deltaCoherenceSupport, deltaCoherenceAuthority, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, dominantMeshYBlend, shortWindowRigidYBoost, parallaxWarpDamping, coherentSlabXAuthority, coherentSlabYAuthority, rollingShutterCandidate, meshSupport, meshBlend, meshMaxBinDelta, meshOpposingBins, rawReinforcementBlend, xQuiverScore, yQuiverScore, xBeforeQuiverLimiter, rigidResidualX, yBeforeQuiverLimiter, rigidResidualY, rigidOnlyGuard, reason)
+            note: String(format: "source-space %.3fs farFieldRigid residual %.3f %.3f roll %.5f xUnlimited yRollCap %.3f %.3f applied %.3f %.3f %.3f raw %.3f %.3f rawRoll %.5f support %.2f supportX %.2f supportY %.2f rollSupport %.2f prepared %.2f rollPrepared %.2f shapeX %.2f shapeY %.2f twoWayX %.2f twoWayY %.2f rollTwoWay %.2f deltaRigid %.2f deltaAuthority %.2f dominantSupport %.2f lowFreqPriority %.2f lowFreqDominance %.2f dominantMeshYBlend %.2f shortYBoost %.2f parallaxDamp %.2f coherentX %.2f coherentY %.2f rolling %.2f meshSupport %.2f meshBlend %.2f meshMaxDelta %.2f meshOpposing %.0f rawReinforceBlend %.2f xQuiver %.2f yQuiver %.2f xBeforeLimiter %.3f xAfterLimiter %.3f yBeforeLimiter %.3f yAfterLimiter %.3f localWarpSuppressed %.2f reason %@", targetWindowSeconds, rigidResidualX, rigidResidualY, rigidRollResidual, rigidYLimit, rigidRollLimit, appliedRigidX, appliedRigidY, appliedRigidRoll, rawRigidResidualX, rawRigidResidualY, rawRigidRollResidual, boundedSupport, rigidSupportX, rigidSupportY, rigidRollSupport, preparedRigidSupport, preparedRigidRollSupport, effectiveShapeConsistencyX, effectiveShapeConsistencyY, effectiveForwardBackwardConsistencyX, effectiveForwardBackwardConsistencyY, rollForwardBackwardConsistency, deltaCoherenceSupport, deltaCoherenceAuthority, dominantSupport, lowFrequencyRigidPriority, lowFrequencyDominance, dominantMeshYBlend, shortWindowRigidYBoost, parallaxWarpDamping, coherentSlabXAuthority, coherentSlabYAuthority, rollingShutterCandidate, meshSupport, meshBlend, meshMaxBinDelta, meshOpposingBins, rawReinforcementBlend, xQuiverScore, yQuiverScore, xBeforeQuiverLimiter, rigidResidualX, yBeforeQuiverLimiter, rigidResidualY, rigidOnlyGuard, reason)
         )
     }
 

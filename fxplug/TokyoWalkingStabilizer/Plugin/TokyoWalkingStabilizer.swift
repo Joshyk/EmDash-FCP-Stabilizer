@@ -6930,10 +6930,15 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             sampleSteps: clampedSampleSteps
         )
         guard estimatedScale.isFinite else {
-            return 128.0
+            os_log(
+                "Auto Crop required scale rejected | nonfinite direct estimate",
+                log: stabilizerHostAnalysisLog,
+                type: .error
+            )
+            return .nan
         }
 
-        var scale = min(max(estimatedScale, Float(1.0)), Float(128.0))
+        var scale = max(estimatedScale, Float(1.0))
         let refinementIterations = max(1, iterations)
         for _ in 0..<min(4, refinementIterations) {
             if autoCropScaleContainsSource(
@@ -6944,20 +6949,37 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             ) {
                 return scale
             }
-            scale = min(128.0, (scale * 1.015) + 0.002)
+            let refinedScale = (scale * 1.015) + 0.002
+            guard refinedScale.isFinite else {
+                os_log(
+                    "Auto Crop required scale rejected | nonfinite fine refinement",
+                    log: stabilizerHostAnalysisLog,
+                    type: .error
+                )
+                return .nan
+            }
+            scale = refinedScale
         }
 
         for _ in 0..<max(0, refinementIterations - min(4, refinementIterations)) {
-            guard scale < 128.0,
-                  !autoCropScaleContainsSource(
+            guard !autoCropScaleContainsSource(
                       scale: scale,
                       context: context,
                       cropPositionPixels: cropPositionPixels,
                       sampleSteps: clampedSampleSteps
-                  ) else {
+            ) else {
                 return scale
             }
-            scale = min(128.0, scale * 1.08)
+            let refinedScale = scale * 1.08
+            guard refinedScale.isFinite else {
+                os_log(
+                    "Auto Crop required scale rejected | nonfinite coarse refinement",
+                    log: stabilizerHostAnalysisLog,
+                    type: .error
+                )
+                return .nan
+            }
+            scale = refinedScale
         }
         return scale
     }
@@ -6973,13 +6995,13 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             cropPositionPixels: cropPositionPixels
         )
         guard context.containsSourcePixel(sourceCenter) else {
-            return 128.0
+            return .nan
         }
 
         let availableX = (context.halfSize.x - context.marginPixels) - abs(sourceCenter.x)
         let availableY = (context.halfSize.y - context.marginPixels) - abs(sourceCenter.y)
         guard availableX > 0.0001, availableY > 0.0001 else {
-            return 128.0
+            return .nan
         }
 
         var requiredScale: Float = 1.0
@@ -7004,7 +7026,10 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 )
             }
         }
-        return min(max(requiredScale, Float(1.0)), Float(128.0))
+        guard requiredScale.isFinite else {
+            return .nan
+        }
+        return max(requiredScale, Float(1.0))
     }
 
     private static func autoCropBoundaryScaleContainsSource(

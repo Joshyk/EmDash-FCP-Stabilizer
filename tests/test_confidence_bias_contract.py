@@ -46,7 +46,7 @@ required_estimator_contracts = (
     "StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX(",
     "let finalPosition = concatenatedTurn.positions[index]",
     "StabilizerConfidencePolicy.trackedXOutlierDecision(",
-    "private static let playbackTrajectoryAlgorithmRevision: UInt64 = 104",
+    "private static let playbackTrajectoryAlgorithmRevision: UInt64 = 105",
     "limited.macroPixelOffset = playbackTrajectoryXUnrestrictedLimitedYVector(",
     "limited.lensShakePixelOffset = playbackTrajectoryXUnrestrictedLimitedYVector(",
     "limited.sourceLensShakeLocalRidgeCenterOffset = playbackTrajectoryXUnrestrictedLimitedYVector(",
@@ -92,9 +92,32 @@ for forbidden in (
     "lensShakeRollingGlobalXMaximumCorrection",
     "clamp(-residual.x, min: -lensShakePixelMaximumCorrection",
     "clamp(-0.5 * residual.x, min: -lensShakePixelMaximumCorrection",
+    "lowEvidenceLargeMicroXScale",
+    "playbackTrajectoryVelocityCollapseGuardedTransforms",
+    "playbackTrajectoryVelocityCollapseMinimumPixels",
 ):
     if forbidden in estimator or forbidden in feedback:
         fail(f"legacy confidence bias remains: {forbidden}")
+
+far_field_x_block = estimator.split("let farFieldPanBandXPath =", 1)[1].split(
+    "let farFieldPanBandYPath =", 1
+)[0]
+if "maximumCorrection:" in far_field_x_block:
+    fail("Far-field Pan Band X still has a per-sample correction cap")
+
+macro_filter_block = estimator.split("let broadOffsets =", 1)[1].split(
+    "var smoothedTransform =", 1
+)[0]
+if "medianX" in macro_filter_block or "xLimit" in macro_filter_block:
+    fail("Macro X is still excluded by the local median/MAD smoothing filter")
+
+auto_crop_scale_block = plugin.split("private static func requiredAutoCropScale", 1)[1].split(
+    "private static func autoCropBoundaryScaleContainsSource", 1
+)[0]
+if "128.0" in auto_crop_scale_block:
+    fail("Auto Crop required-scale calculation still has a fixed 128x cap")
+if "Auto Crop required scale rejected | nonfinite" not in auto_crop_scale_block:
+    fail("Auto Crop nonfinite scale failure is not logged explicitly")
 
 if "debugOverlayMicroJitterConfidence" in plugin:
     fail("Debug Overlay still has a display-only Micro/Camera Rigid maximum")
