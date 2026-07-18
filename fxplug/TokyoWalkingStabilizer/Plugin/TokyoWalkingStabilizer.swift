@@ -3776,11 +3776,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 neutralScale: reservedNeutralScale,
                 neutralPositionPixels: reservedNeutralPosition,
                 turnZoomScale: max(sample.turnZoomScale, Float(1.0) + turnOverflowScale),
-                transform: sample.transform,
-                cameraCropScale: reservedXScale,
-                turnOverflowLeftPixels: sample.turnOverflowLeftPixels,
-                turnOverflowRightPixels: sample.turnOverflowRightPixels,
-                turnViewportPositionX: sample.turnViewportPositionX
+                transform: sample.transform
             ))
         }
         os_log(
