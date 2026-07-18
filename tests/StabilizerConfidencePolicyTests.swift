@@ -39,6 +39,30 @@ struct StabilizerConfidencePolicyTests {
         expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(.nan), 0.0), "NaN X strength must fail visibly as zero")
         expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(.infinity), 0.0), "infinite X strength must fail visibly as zero")
 
+        for x in [Float(0.35), 1.0, 6.5, 241.0, -241.0] {
+            let stepLimited = StabilizerAxisLimitPolicy.xUnrestrictedYStepLimited(
+                SIMD2<Float>(x, 8.0),
+                previous: SIMD2<Float>(0.0, 0.0),
+                limit: 3.4
+            )
+            expect(close(stepLimited.x, x), "accepted X must pass the step limiter unchanged at \(x)")
+            expect(close(stepLimited.y, 3.4), "Y step must retain its existing limit at \(x)")
+
+            let amplitudeLimited = StabilizerAxisLimitPolicy.xUnrestrictedYAmplitudeLimited(
+                SIMD2<Float>(x, 8.0),
+                yLimit: 3.4
+            )
+            expect(close(amplitudeLimited.x, x), "accepted X must pass the amplitude limiter unchanged at \(x)")
+            expect(close(amplitudeLimited.y, 3.4), "Y amplitude must retain its existing limit at \(x)")
+        }
+
+        let belowLegacyCap = StabilizerAxisLimitPolicy.xUnrestrictedYAmplitudeLimited(
+            SIMD2<Float>(1.0, 1.0),
+            yLimit: 3.4
+        )
+        expect(close(belowLegacyCap.x, 1.0), "X below the legacy cap must remain numerically unchanged")
+        expect(close(belowLegacyCap.y, 1.0), "Y below its retained cap must remain numerically unchanged")
+
         let strongLargeImpulse = StabilizerConfidencePolicy.trackedXOutlierDecision(
             value: 241.0,
             neighborhood: [0.0, 0.1, 241.0, -0.1, 0.0],

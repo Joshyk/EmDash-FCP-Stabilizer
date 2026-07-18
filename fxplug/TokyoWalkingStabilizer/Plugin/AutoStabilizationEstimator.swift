@@ -1010,10 +1010,7 @@ enum AutoStabilizationEstimator {
     private static let lensShakeGlobalUnsafeSupport: Float = 0.35
     private static let lensShakePixelStartPixels: Float = 0.10
     private static let lensShakePixelFullPixels: Float = 0.85
-    private static let lensShakeRollingGlobalXMaximumCorrection: Float = 1.4
     private static let lensShakeRollingGlobalYMaximumCorrection: Float = 8.0
-    private static let cameraRigidXMaximumOutputFraction: Float = 0.015
-    private static let cameraRigidXMaximumCorrectionCeiling: Float = 48.0
     private static let cameraRigidYMaximumOutputFraction: Float = 0.015
     private static let cameraRigidYMaximumCorrectionCeiling: Float = 48.0
     private static let lensShakeRollingGlobalPixelSupportFull: Float = 0.46
@@ -1219,7 +1216,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryCameraRigidPulseMinimumSupport: Float = 0.72
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 103
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 104
     private enum MotionPathKind: Hashable {
         case microX
         case microY
@@ -8583,6 +8580,18 @@ enum AutoStabilizationEstimator {
         )
     }
 
+    private static func playbackTrajectoryXUnrestrictedLimitedYVector(
+        _ current: vector_float2,
+        previous: vector_float2,
+        limit: Float
+    ) -> vector_float2 {
+        StabilizerAxisLimitPolicy.xUnrestrictedYStepLimited(
+            current,
+            previous: previous,
+            limit: limit
+        )
+    }
+
     private static func playbackTrajectoryComposedPixelOffset(_ transform: StabilizerAutoTransform) -> vector_float2 {
         transform.macroPixelOffset
             + transform.microPixelOffset
@@ -8758,7 +8767,7 @@ enum AutoStabilizationEstimator {
         // spikes have already been rejected by the prepared evidence path.
         limited.cameraRigidPixelOffset = current.cameraRigidPixelOffset
         limited.cameraRigidRotationDegrees = current.cameraRigidRotationDegrees
-        limited.lensShakePixelOffset = playbackTrajectoryLimitedVector(
+        limited.lensShakePixelOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensShakePixelOffset,
             previous: previous.lensShakePixelOffset,
             limit: lensPixelLimit
@@ -8783,47 +8792,47 @@ enum AutoStabilizationEstimator {
             previous: previous.lensShakePerspective,
             limit: warpLimit
         )
-        limited.lensBandTopOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandTopOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandTopOffset,
             previous: previous.lensBandTopOffset,
             limit: lensPixelLimit
         )
-        limited.lensBandRidgeOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandRidgeOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandRidgeOffset,
             previous: previous.lensBandRidgeOffset,
             limit: lensPixelLimit
         )
-        limited.lensBandMidOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandMidOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandMidOffset,
             previous: previous.lensBandMidOffset,
             limit: lensPixelLimit
         )
-        limited.lensBandTopColumnOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandTopColumnOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandTopColumnOffset,
             previous: previous.lensBandTopColumnOffset,
             limit: lensPixelLimit
         )
-        limited.lensBandRidgeColumnOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandRidgeColumnOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandRidgeColumnOffset,
             previous: previous.lensBandRidgeColumnOffset,
             limit: lensPixelLimit
         )
-        limited.lensBandMidColumnOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandMidColumnOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandMidColumnOffset,
             previous: previous.lensBandMidColumnOffset,
             limit: lensPixelLimit
         )
-        limited.lensBandTopRowPhaseOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandTopRowPhaseOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandTopRowPhaseOffset,
             previous: previous.lensBandTopRowPhaseOffset,
             limit: lensPixelLimit
         )
-        limited.lensBandRidgeRowPhaseOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandRidgeRowPhaseOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandRidgeRowPhaseOffset,
             previous: previous.lensBandRidgeRowPhaseOffset,
             limit: lensPixelLimit
         )
-        limited.lensBandMidRowPhaseOffset = playbackTrajectoryLimitedVector(
+        limited.lensBandMidRowPhaseOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.lensBandMidRowPhaseOffset,
             previous: previous.lensBandMidRowPhaseOffset,
             limit: lensPixelLimit
@@ -8843,63 +8852,63 @@ enum AutoStabilizationEstimator {
             previous: previous.lensBandMidLocalRoll,
             limit: lensLocalRollLimit
         )
-        limited.sourceLensShakeRidgeOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeRidgeOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeRidgeOffset,
             previous: previous.sourceLensShakeRidgeOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeRidgeLineOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeRidgeLineOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeRidgeLineOffset,
             previous: previous.sourceLensShakeRidgeLineOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalTopLeftOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalTopLeftOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalTopLeftOffset,
             previous: previous.sourceLensShakeLocalTopLeftOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalTopCenterOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalTopCenterOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalTopCenterOffset,
             previous: previous.sourceLensShakeLocalTopCenterOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalTopRightOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalTopRightOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalTopRightOffset,
             previous: previous.sourceLensShakeLocalTopRightOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalRidgeLeftOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalRidgeLeftOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalRidgeLeftOffset,
             previous: previous.sourceLensShakeLocalRidgeLeftOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalRidgeCenterOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalRidgeCenterOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalRidgeCenterOffset,
             previous: previous.sourceLensShakeLocalRidgeCenterOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalRidgeRightOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalRidgeRightOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalRidgeRightOffset,
             previous: previous.sourceLensShakeLocalRidgeRightOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalMidLeftOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalMidLeftOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalMidLeftOffset,
             previous: previous.sourceLensShakeLocalMidLeftOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalMidCenterOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalMidCenterOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalMidCenterOffset,
             previous: previous.sourceLensShakeLocalMidCenterOffset,
             limit: lensPixelLimit
         )
-        limited.sourceLensShakeLocalMidRightOffset = playbackTrajectoryLimitedVector(
+        limited.sourceLensShakeLocalMidRightOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.sourceLensShakeLocalMidRightOffset,
             previous: previous.sourceLensShakeLocalMidRightOffset,
             limit: lensPixelLimit
         )
 
-        limited.macroPixelOffset = playbackTrajectoryLimitedVector(
+        limited.macroPixelOffset = playbackTrajectoryXUnrestrictedLimitedYVector(
             current.macroPixelOffset,
             previous: previous.macroPixelOffset,
             limit: pixelLimit * 0.85
@@ -16426,9 +16435,9 @@ enum AutoStabilizationEstimator {
                     return vector_float2(0.0, 0.0)
                 }
                 let supportRatio = localWarpSupport > 0.0 ? clamp(support / localWarpSupport, min: 0.0, max: 1.0) : 0.0
-                return vector_float2(
-                    clamp(-residual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
-                    clamp(-residual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                return StabilizerAxisLimitPolicy.xUnrestrictedYAmplitudeLimited(
+                    -residual,
+                    yLimit: lensShakePixelMaximumCorrection
                 ) * supportRatio
             }
             func supportedColumnOffset(_ residual: vector_float2, support: Float) -> vector_float2 {
@@ -16436,9 +16445,9 @@ enum AutoStabilizationEstimator {
                     return vector_float2(0.0, 0.0)
                 }
                 let supportRatio = localWarpSupport > 0.0 ? clamp(support / localWarpSupport, min: 0.0, max: 1.0) : 0.0
-                return vector_float2(
-                    clamp(-0.5 * residual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
-                    clamp(-0.5 * residual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                return StabilizerAxisLimitPolicy.xUnrestrictedYAmplitudeLimited(
+                    -0.5 * residual,
+                    yLimit: lensShakePixelMaximumCorrection
                 ) * supportRatio
             }
             func supportedRowPhaseOffset(_ current: vector_float2, _ neighbor: vector_float2, support: Float) -> vector_float2 {
@@ -16447,9 +16456,9 @@ enum AutoStabilizationEstimator {
                 }
                 let supportRatio = localWarpSupport > 0.0 ? clamp(support / localWarpSupport, min: 0.0, max: 1.0) : 0.0
                 let residualDelta = current - neighbor
-                return vector_float2(
-                    clamp(-0.5 * residualDelta.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
-                    clamp(-0.5 * residualDelta.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                return StabilizerAxisLimitPolicy.xUnrestrictedYAmplitudeLimited(
+                    -0.5 * residualDelta,
+                    yLimit: lensShakePixelMaximumCorrection
                 ) * supportRatio
             }
             func supportedLocalRoll(_ value: Float, support: Float) -> Float {
@@ -16468,9 +16477,9 @@ enum AutoStabilizationEstimator {
                     return vector_float2(0.0, 0.0)
                 }
                 let supportRatio = localWarpSupport > 0.0 ? clamp(support / localWarpSupport, min: 0.0, max: 1.0) : 0.0
-                return vector_float2(
-                    clamp(-residual.x, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection),
-                    clamp(-residual.y, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+                return StabilizerAxisLimitPolicy.xUnrestrictedYAmplitudeLimited(
+                    -residual,
+                    yLimit: lensShakePixelMaximumCorrection
                 ) * supportRatio
             }
             if localWarpSupport >= lensShakeMinimumSupport {
@@ -16775,11 +16784,7 @@ enum AutoStabilizationEstimator {
                 max: 1.0
             )
             if rollingGlobalSupport >= lensShakeMinimumSupport {
-                result.pixelOffset.x = clamp(
-                    -rollingGlobalXEffectiveResidual * rollingGlobalXEffectiveSupport,
-                    min: -lensShakeRollingGlobalXMaximumCorrection,
-                    max: lensShakeRollingGlobalXMaximumCorrection
-                )
+                result.pixelOffset.x = -rollingGlobalXEffectiveResidual * rollingGlobalXEffectiveSupport
                 let localMixedYOffset = rollingGlobalYOffset
                     + ((localGlobalYOffset - rollingGlobalYOffset) * localGlobalYAuthority)
                 result.pixelOffset.y = localMixedYOffset
@@ -16815,7 +16820,7 @@ enum AutoStabilizationEstimator {
         )
 
         if recordSupport(supportX, axisBit: 1) {
-            result.pixelOffset.x = clamp(-smoothedResidualX * supportX, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)
+            result.pixelOffset.x = -smoothedResidualX * supportX
         }
         if recordSupport(supportY, axisBit: 2) {
             result.pixelOffset.y = clamp(-smoothedResidualY * supportY, min: -lensShakePixelMaximumCorrection, max: lensShakePixelMaximumCorrection)

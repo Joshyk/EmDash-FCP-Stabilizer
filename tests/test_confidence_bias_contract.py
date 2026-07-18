@@ -46,7 +46,14 @@ required_estimator_contracts = (
     "StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX(",
     "let finalPosition = concatenatedTurn.positions[index]",
     "StabilizerConfidencePolicy.trackedXOutlierDecision(",
-    "private static let playbackTrajectoryAlgorithmRevision: UInt64 = 103",
+    "private static let playbackTrajectoryAlgorithmRevision: UInt64 = 104",
+    "limited.macroPixelOffset = playbackTrajectoryXUnrestrictedLimitedYVector(",
+    "limited.lensShakePixelOffset = playbackTrajectoryXUnrestrictedLimitedYVector(",
+    "limited.sourceLensShakeLocalRidgeCenterOffset = playbackTrajectoryXUnrestrictedLimitedYVector(",
+    "StabilizerAxisLimitPolicy.xUnrestrictedYStepLimited(",
+    "StabilizerAxisLimitPolicy.xUnrestrictedYAmplitudeLimited(",
+    "result.pixelOffset.x = -rollingGlobalXEffectiveResidual * rollingGlobalXEffectiveSupport",
+    "result.pixelOffset.x = -smoothedResidualX * supportX",
 )
 for contract in required_estimator_contracts:
     if contract not in estimator:
@@ -80,6 +87,11 @@ for forbidden in (
     "var microJitterX: Double { max(cameraJitterX, 0.0) * 2.0 }",
     "options.strengths.microX = value * 2.0",
     "options.strengths.macroX = value * 2.0",
+    "cameraRigidXMaximumOutputFraction",
+    "cameraRigidXMaximumCorrectionCeiling",
+    "lensShakeRollingGlobalXMaximumCorrection",
+    "clamp(-residual.x, min: -lensShakePixelMaximumCorrection",
+    "clamp(-0.5 * residual.x, min: -lensShakePixelMaximumCorrection",
 ):
     if forbidden in estimator or forbidden in feedback:
         fail(f"legacy confidence bias remains: {forbidden}")

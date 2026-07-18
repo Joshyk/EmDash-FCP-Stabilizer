@@ -7,6 +7,43 @@ struct StabilizerXTrackingOutlierDecision {
     let threshold: Float
 }
 
+enum StabilizerAxisLimitPolicy {
+    static func xUnrestrictedYStepLimited(
+        _ current: SIMD2<Float>,
+        previous: SIMD2<Float>,
+        limit: Float
+    ) -> SIMD2<Float> {
+        guard current.y.isFinite,
+              previous.y.isFinite,
+              limit.isFinite,
+              limit >= 0.0
+        else {
+            return current
+        }
+        let deltaY = current.y - previous.y
+        return SIMD2<Float>(
+            current.x,
+            previous.y + max(-limit, min(limit, deltaY))
+        )
+    }
+
+    static func xUnrestrictedYAmplitudeLimited(
+        _ value: SIMD2<Float>,
+        yLimit: Float
+    ) -> SIMD2<Float> {
+        guard value.y.isFinite,
+              yLimit.isFinite,
+              yLimit >= 0.0
+        else {
+            return value
+        }
+        return SIMD2<Float>(
+            value.x,
+            max(-yLimit, min(yLimit, value.y))
+        )
+    }
+}
+
 enum StabilizerConfidencePolicy {
     static func unbiased(_ evidence: Float) -> Float {
         guard evidence.isFinite else {
