@@ -142,9 +142,9 @@ estimators, or Transform-keyframe writers back into this target.
   Pro reports a library temp folder instead of an Event folder, the runtime uses an
   unambiguous top-level Event resolver. If Final Cut Pro reports no media folder for a
   library saved without Collect Media, the runtime can use Final Cut Pro's active library
-  bookmarks, try security-scoped resolution first, log regular-bookmark resolution when
-  needed, start security-scoped access when the resolved URL grants it, and then run that same
-  Event resolver. When multiple libraries are active, existing Final Cut Pro
+  bookmarks, resolve them with security scope, require the resolved URL to grant a
+  security-scoped lease, and then run that same Event resolver. Bookmarks without a lease are
+  rejected instead of relying on a hardcoded volume or fixture path. When multiple libraries are active, existing Final Cut Pro
   `Analysis Files/Stabilization` range names may disambiguate the Event only when the active
   Host Analysis range matches exactly one Event across active libraries. If no range match
   exists, the runtime may use Final Cut Pro's `FFSidebarModuleLibrary` media sidebar selection

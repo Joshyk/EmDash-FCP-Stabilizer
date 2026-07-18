@@ -397,9 +397,10 @@ and only selects a unique match. It starts access to the host-provided media fol
 inspecting the library bundle, then verifies the selected Event by creating the
 `TokyoWalkingStabilizerHostAnalysis` cache root. If the host media folder is unavailable because
 the library was saved without Collect Media, the resolver reads Final Cut Pro's active
-library bookmarks from `FFActiveLibraries`, tries security-scoped bookmark resolution first,
-logs when regular resolution is used, starts security-scoped access when a resolved URL grants
-it, and then applies the same Event selection rules. If multiple libraries are active,
+library bookmarks from `FFActiveLibraries`, resolves each bookmark with security scope, and
+requires the resolved URL to grant a security-scoped lease before inspecting the library.
+Bookmarks without a lease are rejected; the plug-in has no volume-specific or fixture-specific
+read-write exception. It then applies the same Event selection rules. If multiple libraries are active,
 existing Final Cut Pro `Analysis Files/Stabilization` range names may disambiguate the Event
 only when the active Host Analysis range matches exactly one Event across active libraries.
 If no range match exists, the resolver may use Final Cut Pro's `FFSidebarModuleLibrary` media

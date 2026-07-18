@@ -9532,32 +9532,30 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
             )
         }
         let didStartAccess = resolvedURL.startAccessingSecurityScopedResource()
-        if didStartAccess {
+        guard didStartAccess else {
+            let resolutionKind = resolvedWithSecurityScopeOption ? "security-scope option" : "regular"
             os_log(
-                "Active library resolver started security-scoped access for %{public}@.",
+                "Active library resolver rejected bookmark %{public}d because %{public}@ resolution did not grant a security-scoped lease.",
                 log: stabilizerHostAnalysisLog,
-                type: .default,
-                resolvedURL.path
+                type: .error,
+                index,
+                resolutionKind
             )
-        } else if resolvedWithSecurityScopeOption {
-            os_log(
-                "Active library resolver resolved %{public}@ with security-scope option but did not receive a security-scoped lease; filesystem validation will decide writability.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                resolvedURL.path
-            )
-        } else {
-            os_log(
-                "Active library resolver resolved regular active library bookmark %{public}@ without a security-scoped lease; filesystem validation will decide writability.",
-                log: stabilizerHostAnalysisLog,
-                type: .default,
-                resolvedURL.path
+            return (
+                nil,
+                "bookmark \(index) Final Cut library did not grant a security-scoped lease for \(resolvedURL.path)"
             )
         }
+        os_log(
+            "Active library resolver started security-scoped access for %{public}@.",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            resolvedURL.path
+        )
         return (
             FCPActiveLibraryBundleCandidate(
                 bundleRoot: resolvedURL,
-                securityScopedURL: didStartAccess ? resolvedURL : nil
+                securityScopedURL: resolvedURL
             ),
             nil
         )

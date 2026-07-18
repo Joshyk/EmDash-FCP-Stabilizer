@@ -363,9 +363,10 @@ resolver starts access to the host-provided media folder before inspecting the l
 then verifies the selected Event by creating the `TokyoWalkingStabilizerHostAnalysis` cache root.
 If `FxProjectAPI.mediaFolderURL()` reports that the library has no media folder because it
 was saved without Collect Media, the resolver reads Final Cut Pro's active library bookmarks
-from `FFActiveLibraries`, tries security-scoped bookmark resolution first, logs when regular
-resolution is used, starts security-scoped access when a resolved URL grants it, and then
-applies the same Event selection rules. If multiple libraries are active, existing Final Cut
+from `FFActiveLibraries`, resolves each bookmark with security scope, requires that URL to grant
+a security-scoped lease, and then applies the same Event selection rules. A bookmark that does
+not grant a lease is rejected instead of being accessed through a hardcoded volume or fixture
+path. If multiple libraries are active, existing Final Cut
 Pro `Analysis Files/Stabilization` range names may disambiguate the Event only when the
 active Host Analysis range matches exactly one Event across active libraries. If no range
 match exists, the resolver may use Final Cut Pro's `FFSidebarModuleLibrary` media sidebar
@@ -428,8 +429,8 @@ two-slot pipeline.
 
 The installed plug-in bundle is signed with sandbox and security-scoped file
 entitlements so the effect can inspect the Event-scoped cache root that Final Cut Pro exposes
-to the FxPlug runtime. The debug-signed bundle also carries explicit local read-write
-exceptions for the shared test fixture libraries used by Codex-driven FCP tests.
+to the FxPlug runtime. Debug builds use the same security-scoped path and do not embed
+volume-specific or fixture-specific read-write exceptions.
 
 Cache reuse is based on cache schema, exact analyzed source range, sample size, saved frame
 fingerprints, and current source-frame validation, not the visible FxPlug runtime version.
