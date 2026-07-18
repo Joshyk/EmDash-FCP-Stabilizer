@@ -36,6 +36,7 @@ if "StabilizerConfidencePolicy.swift" not in feedback_runner:
     fail("Feedback CLI does not compile the common policy")
 
 required_estimator_contracts = (
+    "var microJitterX: Double { cameraJitterX.isFinite ? max(cameraJitterX, 0.0) : 0.0 }",
     "StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.microJitterX)",
     "StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(strengths.macroJitterX)",
     "let combinedTurnCorrectionConfidence = StabilizerConfidencePolicy.unbiased(confidence)",
@@ -44,12 +45,15 @@ required_estimator_contracts = (
     "private static func walkingCorrectionConfidenceResponse(_ confidence: Float) -> Float {\n        StabilizerConfidencePolicy.unbiased(confidence)\n    }",
     "StabilizerTurnTransitionPath.overlayUnrestrictedHighFrequencyX(",
     "let finalPosition = concatenatedTurn.positions[index]",
+    "StabilizerConfidencePolicy.trackedXOutlierDecision(",
+    "private static let playbackTrajectoryAlgorithmRevision: UInt64 = 103",
 )
 for contract in required_estimator_contracts:
     if contract not in estimator:
         fail(f"estimator path does not use the common policy: {contract}")
 
 required_feedback_contracts = (
+    "options.strengths.microX = value\n            options.strengths.macroX = value",
     "StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(options.strengths.microX)",
     "StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(options.strengths.macroX)",
     "let turnQ = StabilizerConfidencePolicy.unbiased(rawTurnQ)",
@@ -73,6 +77,9 @@ for forbidden in (
     "playbackTrajectoryTurnOwnedXTransitionRescueMaximumPixels",
     "playbackTrajectoryHorizontalMicroJitterTurnHardGateConfidence",
     "let finalPosition = concatenatedTurn.positions[index] + highFrequencyX[index]",
+    "var microJitterX: Double { max(cameraJitterX, 0.0) * 2.0 }",
+    "options.strengths.microX = value * 2.0",
+    "options.strengths.macroX = value * 2.0",
 ):
     if forbidden in estimator or forbidden in feedback:
         fail(f"legacy confidence bias remains: {forbidden}")

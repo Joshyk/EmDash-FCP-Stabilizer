@@ -38,10 +38,10 @@ private struct Strengths {
         cameraX: 2.0,
         cameraY: 2.0,
         cameraR: 0.5,
-        microX: 4.0,
+        microX: 2.0,
         microY: 4.0,
         microR: 1.0,
-        macroX: 4.0,
+        macroX: 2.0,
         macroY: 4.0,
         macroR: 1.0,
         warp: 1.0
@@ -5040,8 +5040,8 @@ private func parseOptions() throws -> Options {
         case "--camera-x":
             let value = max(0.0, try nextDouble(for: arg))
             options.strengths.cameraX = value
-            options.strengths.microX = value * 2.0
-            options.strengths.macroX = value * 2.0
+            options.strengths.microX = value
+            options.strengths.macroX = value
         case "--camera-y":
             let value = min(max(0.0, try nextDouble(for: arg)), 5.0)
             options.strengths.cameraY = value

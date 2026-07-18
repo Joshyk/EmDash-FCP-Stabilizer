@@ -265,7 +265,7 @@ struct StabilizerCorrectionStrengths {
 
     // The estimator still uses its prepared short/medium residual measurements,
     // but they are one Camera Jitter stage with one set of user strengths.
-    var microJitterX: Double { max(cameraJitterX, 0.0) * 2.0 }
+    var microJitterX: Double { cameraJitterX.isFinite ? max(cameraJitterX, 0.0) : 0.0 }
     var microJitterY: Double { min(max(cameraJitterY, 0.0), 5.0) * 2.0 }
     var microJitterRotation: Double { min(max(cameraJitterRotation, 0.0), 2.0) * 2.0 }
     var macroJitterX: Double { microJitterX }
@@ -1219,7 +1219,7 @@ enum AutoStabilizationEstimator {
     private static let playbackTrajectoryFarFieldMacroDespikeMaximumCorrectionDegrees: Float = 0.055
     private static let playbackTrajectoryCameraRigidPulseMinimumSupport: Float = 0.72
     private static let playbackTrajectoryMicroBandYSmoothingHalfWindowSeconds = 0.08
-    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 102
+    private static let playbackTrajectoryAlgorithmRevision: UInt64 = 103
     private enum MotionPathKind: Hashable {
         case microX
         case microY
@@ -5837,9 +5837,13 @@ enum AutoStabilizationEstimator {
                 cameraRigidPulseLimited.maximumRotationDeviation
             )
         }
+        let trackedHighFrequencyXTransforms = playbackTrajectoryTrackedHighFrequencyXTransforms(
+            frames: frames,
+            transforms: cameraRigidPulseLimited.transforms
+        )
         let turnOwnedXTransforms = playbackTrajectoryTurnOwnedXTransforms(
             frames: frames,
-            transforms: cameraRigidPulseLimited.transforms,
+            transforms: trackedHighFrequencyXTransforms,
             strengths: strengths
         )
         let limitingCompletedAt = CFAbsoluteTimeGetCurrent()
@@ -5896,6 +5900,145 @@ enum AutoStabilizationEstimator {
         return trajectory
     }
 
+    private static func playbackTrajectoryTrackedHighFrequencyXTransforms(
+        frames: [StabilizerAnalysisFrame],
+        transforms: [StabilizerAutoTransform]
+    ) -> [StabilizerAutoTransform] {
+        guard frames.count == transforms.count,
+              transforms.count >= 3
+        else {
+            return transforms
+        }
+
+        func localMeanRemoved(_ values: [Float], windowSeconds: Double) -> [Float] {
+            guard values.count == frames.count else {
+                return Array(repeating: 0.0, count: frames.count)
+            }
+            let halfWindow = max(0.0, windowSeconds * 0.5)
+            var prefix = Array(repeating: Double(0.0), count: values.count + 1)
+            for index in values.indices {
+                prefix[index + 1] = prefix[index] + Double(values[index].isFinite ? values[index] : 0.0)
+            }
+            var lower = 0
+            var upper = 0
+            var result = Array(repeating: Float(0.0), count: values.count)
+            for index in values.indices {
+                let center = frames[index].time
+                while lower < values.count, frames[lower].time < center - halfWindow {
+                    lower += 1
+                }
+                if upper < lower { upper = lower }
+                while upper < values.count, frames[upper].time <= center + halfWindow {
+                    upper += 1
+                }
+                let count = max(1, upper - lower)
+                let mean = Float((prefix[upper] - prefix[lower]) / Double(count))
+                result[index] = values[index].isFinite ? values[index] - mean : .nan
+            }
+            return result
+        }
+
+        let microX = localMeanRemoved(
+            transforms.map(\.microPixelOffset.x),
+            windowSeconds: microImpulseOuterWindowSeconds
+        )
+        let macroJitterX = localMeanRemoved(
+            transforms.map(\.macroJitterPixelOffset.x),
+            windowSeconds: macroJitterWindowSeconds
+        )
+        let trajectoryMicroX = localMeanRemoved(
+            transforms.map(\.trajectoryMicroJitterPixelOffset.x),
+            windowSeconds: microImpulseOuterWindowSeconds
+        )
+        let trajectoryContinuityX = localMeanRemoved(
+            transforms.map(\.trajectoryContinuityPixelOffset.x),
+            windowSeconds: macroJitterWindowSeconds
+        )
+        let cameraRigidX = localMeanRemoved(
+            transforms.map(\.cameraRigidPixelOffset.x),
+            windowSeconds: farFieldWarpOuterWindowSeconds
+        )
+        let combinedHighFrequencyX = transforms.indices.map { index in
+            microX[index]
+                + macroJitterX[index]
+                + trajectoryMicroX[index]
+                + trajectoryContinuityX[index]
+                + cameraRigidX[index]
+        }
+
+        var result = transforms
+        var rejectedCount = 0
+        for index in result.indices {
+            let lower = max(0, index - 2)
+            let upper = min(result.count, index + 3)
+            let transform = transforms[index]
+            let edgeQuality = searchRadiusEdgeQuality(
+                hitCount: transform.searchRadiusHitCount,
+                totalCount: transform.searchRadiusTotalCount
+            )
+            let decision = StabilizerConfidencePolicy.trackedXOutlierDecision(
+                value: combinedHighFrequencyX[index],
+                neighborhood: Array(combinedHighFrequencyX[lower..<upper]),
+                trackingConfidence: transform.trackingConfidence,
+                walkingTrackingConfidence: transform.walkingTrackingConfidence,
+                acceptedBlockCount: transform.acceptedBlockCount,
+                edgeQuality: edgeQuality
+            )
+            let oldCameraX = transform.microPixelOffset.x
+                + transform.macroJitterPixelOffset.x
+                + transform.trajectoryMicroJitterPixelOffset.x
+                + transform.trajectoryContinuityPixelOffset.x
+                + transform.cameraRigidPixelOffset.x
+            if decision.reject {
+                result[index].microPixelOffset.x = 0.0
+                result[index].macroJitterPixelOffset.x = 0.0
+                result[index].trajectoryMicroJitterPixelOffset.x = 0.0
+                result[index].trajectoryContinuityPixelOffset.x = 0.0
+                result[index].cameraRigidPixelOffset.x = 0.0
+                rejectedCount += 1
+                os_log(
+                    "Playback X tracking outlier rejected | frame %d time %.5f rawX %.5f deviation %.5f threshold %.5f reason %{public}@",
+                    log: stabilizerHostAnalysisLog,
+                    type: .error,
+                    index,
+                    frames[index].time,
+                    combinedHighFrequencyX[index],
+                    decision.deviation,
+                    decision.threshold,
+                    decision.reason
+                )
+            } else {
+                result[index].microPixelOffset.x = microX[index]
+                result[index].macroJitterPixelOffset.x = macroJitterX[index]
+                result[index].trajectoryMicroJitterPixelOffset.x = trajectoryMicroX[index]
+                result[index].trajectoryContinuityPixelOffset.x = trajectoryContinuityX[index]
+                result[index].cameraRigidPixelOffset.x = cameraRigidX[index]
+            }
+            let newCameraX = result[index].microPixelOffset.x
+                + result[index].macroJitterPixelOffset.x
+                + result[index].trajectoryMicroJitterPixelOffset.x
+                + result[index].trajectoryContinuityPixelOffset.x
+                + result[index].cameraRigidPixelOffset.x
+            let delta = newCameraX - oldCameraX
+            result[index].pixelOffset.x += delta
+            result[index].rawPixelOffset.x += delta
+            result[index].limitedMicroCorrection.x = result[index].microPixelOffset.x
+                + result[index].trajectoryMicroJitterPixelOffset.x
+            result[index].microPulseLimited.x = 0.0
+        }
+        os_log(
+            "Playback X high-frequency path prepared | frames %d rejected %d microWindow %.3f macroWindow %.3f rigidWindow %.3f",
+            log: stabilizerHostAnalysisLog,
+            type: rejectedCount > 0 ? .error : .default,
+            result.count,
+            rejectedCount,
+            microImpulseOuterWindowSeconds,
+            macroJitterWindowSeconds,
+            farFieldWarpOuterWindowSeconds
+        )
+        return result
+    }
+
     private static func playbackTrajectoryTurnOwnedXTransforms(
         frames: [StabilizerAnalysisFrame],
         transforms: [StabilizerAutoTransform],
@@ -5909,7 +6052,6 @@ enum AutoStabilizationEstimator {
         }
 
         let windowSeconds = max(0.5, strengths.turnTransitionWindowSeconds)
-        let halfWindow = windowSeconds * 0.5
         let preRollSeconds = min(windowSeconds * 0.30, 2.4)
         let strength = turnSmoothingZoomNormalized(strengths.turnSmoothingZoom)
         let viewportAuthority = max(0.0, Float(strengths.turnViewportStrength / 12.0))
@@ -5922,31 +6064,8 @@ enum AutoStabilizationEstimator {
             result[index].pixelOffset.x += turnDeltaX
             result[index].rawPixelOffset.x += turnDeltaX
         }
-        let jitterX = result.map { transform in
-            transform.microPixelOffset.x
-                + transform.macroJitterPixelOffset.x
-                + transform.trajectoryMicroJitterPixelOffset.x
-                + transform.trajectoryContinuityPixelOffset.x
-                + transform.cameraRigidPixelOffset.x
-        }
         for index in transforms.indices {
             let time = frames[index].time
-            let lower = lowerBoundFrameIndex(frames, time: time - halfWindow)
-            let upper = upperBoundFrameIndex(frames, time: time + halfWindow)
-            guard lower < upper else {
-                continue
-            }
-
-            // Camera Jitter X owns only the frame-local residual.  Removing the
-            // Window mean prevents its UI strength from translating the same
-            // low-frequency pan already owned by TURN.
-            let localJitter = Array(jitterX[lower..<upper])
-            let localMean = localJitter.reduce(Float(0.0), +) / Float(max(1, localJitter.count))
-            let rawJitter = jitterX[index]
-            let residualJitter = rawJitter - localMean
-
-            result[index].trajectoryContinuityPixelOffset.x += residualJitter - rawJitter
-
             // Before a curve builds, borrow up to 30% of its known TURN macro
             // in the opposite direction.  The forward peak's existing macro
             // sign is the sole authority, avoiding coordinate-sign guesses.

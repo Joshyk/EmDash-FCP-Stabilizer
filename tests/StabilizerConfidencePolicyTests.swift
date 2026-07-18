@@ -39,6 +39,37 @@ struct StabilizerConfidencePolicyTests {
         expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(.nan), 0.0), "NaN X strength must fail visibly as zero")
         expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(.infinity), 0.0), "infinite X strength must fail visibly as zero")
 
+        let strongLargeImpulse = StabilizerConfidencePolicy.trackedXOutlierDecision(
+            value: 241.0,
+            neighborhood: [0.0, 0.1, 241.0, -0.1, 0.0],
+            trackingConfidence: 0.9,
+            walkingTrackingConfidence: 0.8,
+            acceptedBlockCount: 12,
+            edgeQuality: 1.0
+        )
+        expect(!strongLargeImpulse.reject, "strong evidence must retain an unrestricted large X impulse")
+
+        let weakLargeImpulse = StabilizerConfidencePolicy.trackedXOutlierDecision(
+            value: 241.0,
+            neighborhood: [0.0, 0.1, 241.0, -0.1, 0.0],
+            trackingConfidence: 0.45,
+            walkingTrackingConfidence: 0.50,
+            acceptedBlockCount: 2,
+            edgeQuality: 0.5
+        )
+        expect(weakLargeImpulse.reject, "weak tracking evidence must reject an isolated finite X outlier")
+        expect(weakLargeImpulse.reason.contains("tracking"), "rejection must expose the tracking reason")
+
+        let weakValidImpulse = StabilizerConfidencePolicy.trackedXOutlierDecision(
+            value: 0.35,
+            neighborhood: [0.0, 0.1, 0.35, -0.1, 0.0],
+            trackingConfidence: 0.2,
+            walkingTrackingConfidence: 0.2,
+            acceptedBlockCount: 0,
+            edgeQuality: 0.0
+        )
+        expect(!weakValidImpulse.reject, "weak evidence alone must not suppress a temporally consistent X correction")
+
         if failures.isEmpty {
             print("StabilizerConfidencePolicyTests: PASS")
             return
