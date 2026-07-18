@@ -451,6 +451,7 @@
 				PRODUCT_NAME = "TokyoWalkingStabilizer XPC Service";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "Plugin/XPC Service-Bridging-Header.h";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG_EVENT_CACHE_VOLUME_ACCESS;
 				WRAPPER_EXTENSION = pluginkit;
 			};
 			name = Debug;

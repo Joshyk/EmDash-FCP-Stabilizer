@@ -1032,6 +1032,7 @@ func testProductionSourceDoesNotReintroduceFFImportTargetSelectionHints() throws
     try expectContains(sourceText, "configureRelocatedFinalCutLibraryCacheDirectory", "Production source should reconnect a moved library through its saved cache identity")
     try expectContains(sourceText, "recentFinalCutLibraryEventRootMatchingTokyoWalkingCacheIdentity", "Production relocation recovery should inspect recent Final Cut libraries only by saved cache identity")
     try expectContains(sourceText, "did not grant a security-scoped lease", "Production resolver should reject Final Cut bookmarks that do not grant a security-scoped lease")
+    try expectContains(sourceText, "DEBUG_EVENT_CACHE_VOLUME_ACCESS", "Regular-bookmark access must stay confined to the debug build")
     try expect(!entitlementsText.contains("temporary-exception.files.absolute-path.read-write"), "FxPlug entitlements must not grant a hardcoded absolute cache path")
     try expect(!entitlementsText.contains("temporary-exception.files.home-relative-path.read-write"), "FxPlug entitlements must not grant a hardcoded home-relative cache path")
     try expectContains(entitlementsText, "com.apple.security.files.bookmarks.app-scope", "FxPlug entitlements should retain app-scoped security bookmark support")

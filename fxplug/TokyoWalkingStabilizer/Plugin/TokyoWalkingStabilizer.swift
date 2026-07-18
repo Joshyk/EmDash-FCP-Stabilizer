@@ -9533,6 +9533,22 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         }
         let didStartAccess = resolvedURL.startAccessingSecurityScopedResource()
         guard didStartAccess else {
+#if DEBUG_EVENT_CACHE_VOLUME_ACCESS
+            os_log(
+                "Active library resolver accepted regular bookmark %{public}d for debug Event-cache access at %{public}@; filesystem validation will decide writability.",
+                log: stabilizerHostAnalysisLog,
+                type: .default,
+                index,
+                resolvedURL.path
+            )
+            return (
+                FCPActiveLibraryBundleCandidate(
+                    bundleRoot: resolvedURL,
+                    securityScopedURL: nil
+                ),
+                nil
+            )
+#else
             let resolutionKind = resolvedWithSecurityScopeOption ? "security-scope option" : "regular"
             os_log(
                 "Active library resolver rejected bookmark %{public}d because %{public}@ resolution did not grant a security-scoped lease.",
@@ -9545,6 +9561,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 nil,
                 "bookmark \(index) Final Cut library did not grant a security-scoped lease for \(resolvedURL.path)"
             )
+#endif
         }
         os_log(
             "Active library resolver started security-scoped access for %{public}@.",
