@@ -39,7 +39,15 @@ struct StabilizerConfidencePolicyTests {
         expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(.nan), 0.0), "NaN X strength must fail visibly as zero")
         expect(close(StabilizerConfidencePolicy.unrestrictedXCorrectionFactor(.infinity), 0.0), "infinite X strength must fail visibly as zero")
 
-        for x in [Float(0.35), 1.0, 6.5, 241.0, -241.0] {
+        let unrestrictedBoundaryValues = [
+            Float(0.35), 1.0,
+            1.39, 1.40, 1.41,
+            3.39, 3.40, 3.41,
+            6.5,
+            7.19, 7.20, 7.21,
+            241.0,
+        ]
+        for x in unrestrictedBoundaryValues.flatMap({ [$0, -$0] }) {
             let stepLimited = StabilizerAxisLimitPolicy.xUnrestrictedYStepLimited(
                 SIMD2<Float>(x, 8.0),
                 previous: SIMD2<Float>(0.0, 0.0),
