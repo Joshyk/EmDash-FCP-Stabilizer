@@ -3,10 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PARENT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
-FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
+E2E_ENV_SCRIPT="${ROOT_DIR}/scripts/stabilizer_e2e_env.sh"
+# shellcheck source=scripts/stabilizer_e2e_env.sh
+source "$E2E_ENV_SCRIPT"
+stabilizer_load_e2e_env "$ROOT_DIR"
+FCP_HELPER="${STABILIZER_FCP_HELPER:-${FCP_HELPER:-}}"
 FCP_BATCH_HELPER="${ROOT_DIR}/scripts/fcp_batch_stabilizer.applescript"
-TEST_LIBRARY="/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stab-test.fcpbundle"
-CACHE_ROOT="${TEST_LIBRARY}/6-17-26/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
+TEST_LIBRARY="${STABILIZER_UI_TEST_LIBRARY:-}"
+TEST_EVENT="${STABILIZER_UI_TEST_EVENT:-}"
+CACHE_ROOT="${TEST_LIBRARY}/${TEST_EVENT}/Analysis Files/TokyoWalkingStabilizerHostAnalysis"
 FEEDBACK_TOOL="${ROOT_DIR}/fxplug/TokyoWalkingStabilizer/scripts/stabilizer_feedback.sh"
 
 usage() {
@@ -59,6 +64,12 @@ fail() {
 	exit 1
 }
 
+require_environment_value() {
+	local name="$1"
+	local value="${!name:-}"
+	[[ -n "$value" ]] || fail "missing ${name}; copy .env.e2e.example to .env.e2e.local and configure it"
+}
+
 require_file() {
 	local path="$1"
 	[[ -f "$path" ]] || fail "missing required file: $path"
@@ -70,6 +81,7 @@ require_dir() {
 }
 
 run_helper() {
+	require_environment_value STABILIZER_FCP_HELPER
 	require_file "$FCP_HELPER"
 	/usr/bin/osascript "$FCP_HELPER" "$@"
 }
@@ -101,6 +113,9 @@ wait_for_stabilizer_inspector() {
 }
 
 env_check() {
+	require_environment_value STABILIZER_FCP_HELPER
+	require_environment_value STABILIZER_UI_TEST_LIBRARY
+	require_environment_value STABILIZER_UI_TEST_EVENT
 	require_file "$FCP_HELPER"
 	require_file "$FCP_BATCH_HELPER"
 	require_dir "$TEST_LIBRARY"
@@ -120,6 +135,7 @@ env_check() {
 }
 
 open_test_library() {
+	require_environment_value STABILIZER_UI_TEST_LIBRARY
 	require_dir "$TEST_LIBRARY"
 	/usr/bin/open "$TEST_LIBRARY"
 }
@@ -195,6 +211,8 @@ apply_and_analyze_selected() {
 }
 
 list_caches() {
+	require_environment_value STABILIZER_UI_TEST_LIBRARY
+	require_environment_value STABILIZER_UI_TEST_EVENT
 	require_file "$FEEDBACK_TOOL"
 	require_dir "$CACHE_ROOT"
 	"$FEEDBACK_TOOL" --list-caches --cache-root "$CACHE_ROOT"
@@ -206,6 +224,8 @@ feedback_at() {
 	shift || true
 
 	local note="${1:-Codex UI test review note}"
+	require_environment_value STABILIZER_UI_TEST_LIBRARY
+	require_environment_value STABILIZER_UI_TEST_EVENT
 	require_file "$FEEDBACK_TOOL"
 	require_dir "$CACHE_ROOT"
 	"$FEEDBACK_TOOL" --cache-root "$CACHE_ROOT" --time "$time_value" --note "$note"

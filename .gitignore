@@ -1,4 +1,5 @@
 .DS_Store
 *.log
-scripts/__pycache__
+.env.e2e.local
+__pycache__/
 fxplug/TokyoWalkingStabilizer/build/

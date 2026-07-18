@@ -25,6 +25,20 @@ the local machine.
 Run the Final Cut Pro screen-capture E2E for the reported P1000307 00:01:49
 micro/macro shake with:
 
+First create the machine-local path configuration. This file is ignored by Git:
+
+```sh
+cp .env.e2e.example .env.e2e.local
+```
+
+Set `STABILIZER_FCP_HELPER` and `STABILIZER_E2E_LIBRARY` in
+`.env.e2e.local` to absolute paths on the current machine. The checked-in case
+JSON files contain only `${STABILIZER_E2E_LIBRARY}` and library-relative media
+paths. The harness resolves them into a temporary case file and fails explicitly
+when a required variable is missing. Set `STABILIZER_E2E_ENV_FILE` to an absolute
+file path to use a different local environment file. Existing exported environment
+variables take precedence over values loaded from the file.
+
 ```sh
 scripts/stabilizer_fcp_screen_capture_e2e.sh run \
   --case tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json
@@ -43,7 +57,7 @@ Remove Black Edges parameter, seeks to the case start, and checks that the confi
 ROI is recordable. Use `assert-prepared` to re-check the current FCP state, or
 `--assume-prepared-fcp` when capturing from a state that was already prepared.
 
-The case uses `/Users/justadev/Developer/EDT/Command-Post-Em_Dash/test_fcp_project/stabilizer_super_smoother.fcpbundle`,
+The case uses the library configured by `STABILIZER_E2E_LIBRARY`,
 `P1000307 Stabilized Review`, and the `P1000307.mov` `00:01:44` to `00:01:56`
 section in proxy. The default P1000307 case keeps Remove Black Edges off so
 exposed edges remain diagnostic evidence; use

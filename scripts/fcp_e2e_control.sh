@@ -2,9 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+E2E_ENV_SCRIPT="${ROOT_DIR}/scripts/stabilizer_e2e_env.sh"
+# shellcheck source=scripts/stabilizer_e2e_env.sh
+source "$E2E_ENV_SCRIPT"
+stabilizer_load_e2e_env "$ROOT_DIR"
 E2E_SCRIPT="${ROOT_DIR}/scripts/stabilizer_fcp_screen_capture_e2e.sh"
 SOURCE_QUALITY_SCRIPT="${ROOT_DIR}/tests/stabilizer_source_frame_quality.py"
-FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
+FCP_HELPER="${STABILIZER_FCP_HELPER:-${FCP_HELPER:-}}"
 ARTIFACT_ROOT="${STABILIZER_E2E_ARTIFACT_DIR:-/tmp/stabilizer_e2e}"
 P1000307_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json"
 P1000307_CROP_ON_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56_crop_on.json"
@@ -66,6 +70,8 @@ Options:
   --assume-prepared-fcp        Pass through to the E2E harness.
 
 Notes:
+  - Copy .env.e2e.example to .env.e2e.local and configure the current machine's
+    STABILIZER_FCP_HELPER and STABILIZER_E2E_LIBRARY absolute paths.
   - --case accepts full paths and aliases: p1000307, p1000307-crop-on, p1000307-turn, p1000304.
   - Proxy Only, Viewer Green channel, and visible Debug Overlay are required by
     the checked-in E2E cases; Proxy Preferred is not accepted.
@@ -2155,7 +2161,6 @@ while [[ $# -gt 0 ]]; do
 		--case)
 			case_file="$(resolve_case_path "${2:-}")"
 			[[ -n "$case_file" ]] || fail "--case requires a path"
-			harness_args+=("--case" "$case_file")
 			shift 2
 			;;
 		--video|--output-dir|--viewer-roi|--capture-backend|--visual-review)
@@ -2217,6 +2222,18 @@ done
 
 case_file="$(resolve_case_path "$case_file")"
 [[ -f "$case_file" ]] || fail "case file does not exist: ${case_file} (aliases: p1000307, p1000307-crop-on, p1000307-turn, p1000304)"
+
+case "$command_name" in
+	quit|viewer-roi|patterns|-h|--help|help)
+		;;
+	*)
+		resolved_case_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer_e2e_case.XXXXXX")"
+		trap 'rm -f -- "$resolved_case_file"' EXIT
+		stabilizer_resolve_e2e_case "$ROOT_DIR" "$case_file" "$resolved_case_file"
+		case_file="$resolved_case_file"
+		harness_args+=("--case" "$case_file")
+		;;
+esac
 
 if [[ "$capture_backend_explicit" == "0" && -z "${STABILIZER_E2E_CAPTURE_BACKEND:-}" ]]; then
 	case "$command_name" in

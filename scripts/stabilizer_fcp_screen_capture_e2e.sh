@@ -2,9 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+E2E_ENV_SCRIPT="${ROOT_DIR}/scripts/stabilizer_e2e_env.sh"
+# shellcheck source=scripts/stabilizer_e2e_env.sh
+source "$E2E_ENV_SCRIPT"
+stabilizer_load_e2e_env "$ROOT_DIR"
 DEFAULT_CASE="${ROOT_DIR}/tests/stabilizer_e2e_cases/p1000307_micro_macro_1m44_1m56.json"
 ARTIFACT_ROOT="${STABILIZER_E2E_ARTIFACT_DIR:-/tmp/stabilizer_e2e}"
-FCP_HELPER="${FCP_HELPER:-/Users/justadev/Developer/EDT/Command-Post-Em_Dash/scripts/fcp_stabilizer_shortcuts.applescript}"
+FCP_HELPER="${STABILIZER_FCP_HELPER:-${FCP_HELPER:-}}"
 
 usage() {
 	cat <<'USAGE'
@@ -43,6 +47,8 @@ Manual Inspector fallback:
   match the case. This fallback is logged explicitly.
 
 Capture prerequisites:
+  - .env.e2e.local configures STABILIZER_FCP_HELPER and STABILIZER_E2E_LIBRARY
+    for the current machine; copy it from .env.e2e.example before the first run.
   - FCP has Screen Recording and Accessibility permission for the invoking terminal.
   - The case library can be opened from disk.
   - The target project/clip has Tokyo Walking Stabilizer enabled.
@@ -5794,6 +5800,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -f "$case_file" ]] || fail "case file does not exist: $case_file"
+resolved_case_file="$(mktemp "${TMPDIR:-/tmp}/stabilizer_e2e_case.XXXXXX")"
+trap 'rm -f -- "$resolved_case_file"' EXIT
+stabilizer_resolve_e2e_case "$ROOT_DIR" "$case_file" "$resolved_case_file"
+case_file="$resolved_case_file"
 case "$visual_review" in
 	passed|failed|not-reviewed) ;;
 	*) fail "STABILIZER_E2E_VISUAL_REVIEW/--visual-review must be passed, failed, or not-reviewed" ;;
