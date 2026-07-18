@@ -45,6 +45,29 @@ struct AutoCropScalePolicyTests {
         expect(playbackScale >= protectedScale, "playback safety must never reduce active required crop")
         expect(playbackScale <= Float(1.0) + StabilizerAutoCropScalePolicy.playbackMinimumClipScaleDelta + 0.00001, "adaptive safety must respect its maximum floor")
 
+        let reserved = StabilizerAutoCropScalePolicy.reservedDemandScales(
+            times: [0, 1, 2, 3, 4, 5].map(Double.init),
+            demandScales: [1.0, 1.02, 1.0, 1.08, 1.0, 1.0],
+            leadSeconds: 1.0,
+            holdSeconds: 1.0,
+            releaseSeconds: 1.0
+        )
+        expect(reserved != nil, "finite ordered demand must produce a reservation")
+        expect(close(reserved?[0] ?? .nan, 1.02), "lead must reserve the next accepted X demand")
+        expect(close(reserved?[2] ?? .nan, 1.08), "lead must reserve the stronger upcoming demand")
+        expect(close(reserved?[4] ?? .nan, 1.08), "hold and release must retain the interval maximum")
+        expect(close(reserved?[5] ?? .nan, 1.08), "release endpoint must keep the reserved coverage floor")
+        expect(
+            StabilizerAutoCropScalePolicy.reservedDemandScales(
+                times: [0.0, 2.0, 1.0],
+                demandScales: [1.0, 1.1, 1.0],
+                leadSeconds: 1.0,
+                holdSeconds: 1.0,
+                releaseSeconds: 1.0
+            ) == nil,
+            "unordered demand must fail explicitly"
+        )
+
         if failures.isEmpty {
             print("AutoCropScalePolicyTests: PASS")
             return

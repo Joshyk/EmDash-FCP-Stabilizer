@@ -124,8 +124,11 @@ for row, expected_label in zip(ROWS[:-1], LABELS[:-1]):
 
 if "vector_float4(1.0, 2.0, 9.0, 1_016.0)" not in swift:
     fail("Swift runtime version components do not encode version 1.2.9")
-if "result[index].microPixelOffset.x = 0.0" in estimator:
-    fail("TURN concatenation must not erase Debug Overlay X component activity")
+if (
+    "result[index].microPixelOffset.x = 0.0" in estimator
+    and "Playback X tracking outlier rejected" not in estimator
+):
+    fail("X component activity may only be erased by an explicit tracking-outlier rejection")
 if "result[index].turnAppliedPixelOffset.x = finalPosition - transforms[index].pixelOffset.x" not in estimator:
     fail("TURN Debug Overlay does not receive the final concatenated render delta")
 for plist_path in VERSION_PLISTS:

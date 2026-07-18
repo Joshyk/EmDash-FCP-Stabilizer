@@ -1144,6 +1144,7 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
     private let renderTimingLogLock = NSLock()
     private var lastRenderTimingLogWallTime: TimeInterval = 0.0
     private var lastRenderDiagnosticsLogWallTime: TimeInterval = 0.0
+    private var lastRenderComponentLogWallTime: TimeInterval = 0.0
     private var lastRenderMotionDiagnosticLogWallTime: TimeInterval = 0.0
     private var lastRenderDiagnosticStatusWallTime: TimeInterval = 0.0
     private var lastRenderMotionDiagnosticState: RenderMotionDiagnosticState?
@@ -3245,8 +3246,17 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         guard !shouldCancel() else {
             return nil
         }
-        let filteredDemand = autoCropPlaybackFilteredDemandSamples(
+        let reservedDemandSamples = autoCropPlaybackReservedXDemandSamples(
             rawDemandSamples,
+            outputSize: outputSize,
+            masterStrength: masterStrength,
+            leadSeconds: leadTimeSeconds,
+            holdSeconds: holdTimeSeconds,
+            releaseSeconds: transitionDurationSeconds,
+            samplingProfile: samplingProfile
+        )
+        let filteredDemand = autoCropPlaybackFilteredDemandSamples(
+            reservedDemandSamples,
             outputSize: outputSize
         )
         let samples = filteredDemand.samples
@@ -3684,6 +3694,107 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         )
         let cappedDelta = min(proportionalDelta, stabilizerAutoCropPlaybackLookaheadMaximumDelta)
         return safeScale + cappedDelta
+    }
+
+    private static func autoCropPlaybackReservedXDemandSamples(
+        _ samples: [AutoCropZoomDemandSample],
+        outputSize: vector_float2,
+        masterStrength: Float,
+        leadSeconds: Double,
+        holdSeconds: Double,
+        releaseSeconds: Double,
+        samplingProfile: AutoCropSamplingProfile
+    ) -> [AutoCropZoomDemandSample] {
+        guard samplingProfile == .playback,
+              !samples.isEmpty,
+              outputSize.x > 1.0,
+              outputSize.y > 1.0
+        else {
+            return samples
+        }
+
+        let instantaneousXScales = samples.map { sample -> Float in
+            let transform = sample.transform
+            let cameraX = (
+                transform.microPixelOffset.x
+                    + transform.macroJitterPixelOffset.x
+                    + transform.trajectoryMicroJitterPixelOffset.x
+                    + transform.trajectoryContinuityPixelOffset.x
+                    + transform.cameraRigidPixelOffset.x
+            ) * masterStrength
+            var xOnlyTransform = StabilizerAutoTransform.identity
+            xOnlyTransform.pixelOffset.x = cameraX
+            let context = AutoCropTransformContext(
+                transform: xOnlyTransform,
+                outputSize: outputSize,
+                masterStrength: 1.0
+            )
+            return requiredAutoCropScale(
+                context: context,
+                cropPositionPixels: .zero,
+                sampleSteps: samplingProfile.scaleSearchSampleSteps,
+                iterations: samplingProfile.scaleSearchIterations
+            )
+        }
+        guard let reservedXScales = StabilizerAutoCropScalePolicy.reservedDemandScales(
+            times: samples.map(\.seconds),
+            demandScales: instantaneousXScales,
+            leadSeconds: max(0.0, leadSeconds),
+            holdSeconds: max(0.0, holdSeconds),
+            releaseSeconds: max(0.0, releaseSeconds)
+        ) else {
+            os_log(
+                "Auto Crop X reservation rejected | nonfinite or unordered demand",
+                log: stabilizerHostAnalysisLog,
+                type: .error
+            )
+            return samples
+        }
+
+        var changedCount = 0
+        var maximumReservedScale = Float(1.0)
+        var result: [AutoCropZoomDemandSample] = []
+        result.reserveCapacity(samples.count)
+        for (index, sample) in samples.enumerated() {
+            let reservedXScale = reservedXScales[index]
+            let turnOverflowScale = max(Float(0.0), sample.scale - sample.neutralScale)
+            let reservedNeutralScale = max(sample.neutralScale, reservedXScale)
+            let reservedScale = max(sample.scale, reservedNeutralScale + turnOverflowScale)
+            let turnPositionDelta = sample.positionPixels - sample.neutralPositionPixels
+            let reservedNeutralPosition = vector_float2(0.0, sample.neutralPositionPixels.y)
+            let reservedPosition = reservedNeutralPosition + turnPositionDelta
+            if reservedScale > sample.scale + 0.00001
+                || abs(reservedPosition.x - sample.positionPixels.x) > 0.01
+            {
+                changedCount += 1
+            }
+            maximumReservedScale = max(maximumReservedScale, reservedXScale)
+            result.append(AutoCropZoomDemandSample(
+                seconds: sample.seconds,
+                scale: reservedScale,
+                positionPixels: reservedPosition,
+                neutralScale: reservedNeutralScale,
+                neutralPositionPixels: reservedNeutralPosition,
+                turnZoomScale: max(sample.turnZoomScale, Float(1.0) + turnOverflowScale),
+                transform: sample.transform,
+                cameraCropScale: reservedXScale,
+                turnOverflowLeftPixels: sample.turnOverflowLeftPixels,
+                turnOverflowRightPixels: sample.turnOverflowRightPixels,
+                turnViewportPositionX: sample.turnViewportPositionX
+            ))
+        }
+        os_log(
+            "Auto Crop X reservation prepared | samples %d changed %d maximumScale %.5f lead %.3f hold %.3f release %.3f",
+            log: stabilizerHostAnalysisLog,
+            type: .default,
+            result.count,
+            changedCount,
+            maximumReservedScale,
+            max(0.0, leadSeconds),
+            max(0.0, holdSeconds),
+            max(0.0, releaseSeconds)
+        )
+        return result
     }
 
     private static func autoCropPlaybackFilteredDemandSamples(
@@ -7703,7 +7814,19 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
         let repeatedPreparedSample = normalCadence
             && sameIdentity
             && samplePosition <= (previous?.samplePosition ?? -1.0) + 0.05
-        do {
+        let motionAnomaly = irregularRenderCadence
+            || catchUpAfterTinyStep
+            || largeSingleStep
+            || repeatedPreparedSample
+        let shouldLogComponentDetails: Bool
+        renderDiagnosticsLogLock.lock()
+        shouldLogComponentDetails = (now - lastRenderComponentLogWallTime) >= 0.5
+            || (motionAnomaly && (now - lastRenderComponentLogWallTime) >= 0.25)
+        if shouldLogComponentDetails {
+            lastRenderComponentLogWallTime = now
+        }
+        renderDiagnosticsLogLock.unlock()
+        if shouldLogComponentDetails {
             let trackingQuality = max(autoTransform.walkingTrackingConfidence, autoTransform.trackingConfidence)
             let appliedPixelOffset = autoTransform.pixelOffset * masterStrength
             let appliedMacroPixelOffset = autoTransform.macroPixelOffset * masterStrength
@@ -8090,10 +8213,6 @@ final class TokyoWalkingStabilizerPlugIn: NSObject, FxTileableEffect, FxAnalyzer
                 lensLocalMessage
             )
         }
-        let motionAnomaly = irregularRenderCadence
-            || catchUpAfterTinyStep
-            || largeSingleStep
-            || repeatedPreparedSample
         let periodicSampleDue: Bool
         let shouldLogMotionDiagnostic: Bool
 
