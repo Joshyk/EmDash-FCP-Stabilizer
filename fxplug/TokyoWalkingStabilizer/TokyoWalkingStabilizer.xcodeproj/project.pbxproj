@@ -29,8 +29,8 @@
 		00000000000000000000011E /* DebugOverlayDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000221 /* DebugOverlayDiagnostics.swift */; };
 		00000000000000000000011F /* AutoCropScalePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000222 /* AutoCropScalePolicy.swift */; };
 		000000000000000000000120 /* TurnTransitionPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000223 /* TurnTransitionPath.swift */; };
-		000000000000000000000122 /* AutoCropZoomHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000225 /* AutoCropZoomHandoff.swift */; };
 		000000000000000000000121 /* StabilizerConfidencePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000224 /* StabilizerConfidencePolicy.swift */; };
+		000000000000000000000122 /* AutoCropZoomHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000225 /* AutoCropZoomHandoff.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -86,8 +86,8 @@
 		000000000000000000000221 /* DebugOverlayDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugOverlayDiagnostics.swift; sourceTree = "<group>"; };
 		000000000000000000000222 /* AutoCropScalePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCropScalePolicy.swift; sourceTree = "<group>"; };
 		000000000000000000000223 /* TurnTransitionPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnTransitionPath.swift; sourceTree = "<group>"; };
-		000000000000000000000225 /* AutoCropZoomHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCropZoomHandoff.swift; sourceTree = "<group>"; };
 		000000000000000000000224 /* StabilizerConfidencePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilizerConfidencePolicy.swift; sourceTree = "<group>"; };
+		000000000000000000000225 /* AutoCropZoomHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCropZoomHandoff.swift; sourceTree = "<group>"; };
 		000000000000000000000300 /* TokyoWalkingStabilizer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TokyoWalkingStabilizer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000301 /* TokyoWalkingStabilizer XPC Service.pluginkit */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "TokyoWalkingStabilizer XPC Service.pluginkit"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -403,7 +403,8 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WrapperApp/DebugSandboxEntitlements.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Manual;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = MVL44V84KR;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = WrapperApp/Info.plist;
@@ -420,7 +421,8 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Manual;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = MVL44V84KR;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = WrapperApp/Info.plist;
@@ -450,8 +452,8 @@
 				PRODUCT_MODULE_NAME = TokyoWalkingStabilizerPlugin;
 				PRODUCT_NAME = "TokyoWalkingStabilizer XPC Service";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				SWIFT_OBJC_BRIDGING_HEADER = "Plugin/XPC Service-Bridging-Header.h";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG_EVENT_CACHE_VOLUME_ACCESS;
+				SWIFT_OBJC_BRIDGING_HEADER = "Plugin/XPC Service-Bridging-Header.h";
 				WRAPPER_EXTENSION = pluginkit;
 			};
 			name = Debug;
