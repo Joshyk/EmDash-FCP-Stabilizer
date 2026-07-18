@@ -401,7 +401,7 @@
 		000000000000000000000A10 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
+				CODE_SIGN_ENTITLEMENTS = WrapperApp/DebugSandboxEntitlements.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = MVL44V84KR;
@@ -435,7 +435,7 @@
 		000000000000000000000A20 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = WrapperApp/SandboxEntitlements.entitlements;
+				CODE_SIGN_ENTITLEMENTS = WrapperApp/DebugSandboxEntitlements.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = MVL44V84KR;
