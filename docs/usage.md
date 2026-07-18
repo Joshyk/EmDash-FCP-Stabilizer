@@ -12,7 +12,7 @@
 6. Wait for `Host Analysis Status` to show `Persisted Analysis Loaded` or
    `Ready (... frames)`.
 
-Version `1.2.11` is the current review baseline for unrestricted tracked render-space X correction and stable Auto Crop X reservations.
+Version `1.2.12` is the current review baseline for unrestricted tracked render-space X correction and stable Auto Crop X reservations. Far-field Pan Band X has no 5px limiter, Macro X uses only the explicit tracking-outlier rejection, and Auto Crop required scale has no fixed 128x ceiling.
 Use schema 52 analysis so frame-local X/Y/roll targets, scale-aware top/ridge support,
 independent forward/backward checks, and sign-reversing short-period motion are authoritative. A final symmetric
 cadence filter only attenuates sustained alternating non-rigid Y over-correction;

@@ -26,7 +26,7 @@ estimators, or Transform-keyframe writers back into this target.
 - Stores prepared motion paths, frame timing, blur values, search-radius edge-hit counts,
   and fingerprints in new
   persistent cache files instead of embedding every frame's luma sample in JSON.
-- Version `1.2.11` keeps TURN macro travel independent from validated high-frequency X and removes render-space translation X amplitude/step limits from TURN, Camera Jitter, Camera Rigid, and Lens/Far-field paths. Statistical X outliers are still rejected only when tracking evidence is insufficient. Y, Roll, mesh deformation, UI ranges, and Auto Crop safety bounds retain their existing limits. Schema 52 caches remain reusable.
+- Version `1.2.12` keeps TURN macro travel independent from validated high-frequency X and removes render-space translation X amplitude/step limits from TURN, Camera Jitter, Camera Rigid, and Lens/Far-field paths. Far-field Pan Band X has no 5px limiter, and Macro X is rejected only by the explicit tracking-outlier decision. Auto Crop required scale has no fixed 128x ceiling. Y, Roll, mesh deformation, and UI ranges retain their existing limits. Schema 52 caches remain reusable.
   Schema 52 stores direct frame-local X/Y/roll targets, scale-aware top/ridge
   agreement, independent forward/backward neighbor evidence, and frame-local
   dominant-mesh residuals. The playback

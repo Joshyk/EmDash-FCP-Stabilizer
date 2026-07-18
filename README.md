@@ -18,20 +18,21 @@ The effect is designed for outdoor walking shots where the camera is already on
 a gimbal but still has step shock, short wobble, segmented turns, and distant
 ridge-line shake.
 
-Version `1.2.11` reuses schema 52 all-axis Camera Jitter analysis. It applies
+Version `1.2.12` reuses schema 52 all-axis Camera Jitter analysis. It applies
 validated high-frequency X after TURN concatenation and reserves accepted X crop
 coverage across the configured zoom interval. Accepted render-space translation X
-is not amplitude- or step-limited in TURN, Camera Jitter, Camera Rigid, or Lens/Far-field paths. It stores
+is not amplitude- or step-limited in TURN, Camera Jitter, Camera Rigid, or Lens/Far-field paths.
+Far-field Pan Band X no longer uses the 5px limiter, Macro X is excluded only by the
+explicit tracking-outlier decision, and Auto Crop required scale has no fixed 128x ceiling. It stores
 frame-local Camera Rigid X/Y/roll targets, scale-aware top/ridge agreement,
 independent forward/backward evidence, and frame-local dominant-mesh residuals.
 The render trajectory uses each axis support once, keeps coherent
 fine X/Y/roll outside the 2.2-second Turn/Macro Jitter smoother, and records validated
 original-media provenance. Turn owns only broad X; Camera Jitter owns short
 whole-frame X/Y/roll correction.
-Camera Rigid X/Y limits are explicit Inspector percentages (0...5% of the
-render output); roll is an explicit 0...2 degree limit. These final limits are
-also enforced after Overall Strength, so proxy and original use the same
-screen-space proportion without a cache migration or reanalysis.
+Camera Rigid Y remains limited by its explicit Inspector percentage (0...5% of the
+render output), and roll remains limited to 0...2 degrees. Camera Rigid X uses its
+Inspector strength without a render-space amplitude cap.
 Schema 52 removes a centered one-second quadratic X baseline before storing the
 Camera Rigid X target, so sustained pan curvature remains Turn-owned without
 suppressing two-to-five-frame X reversals.

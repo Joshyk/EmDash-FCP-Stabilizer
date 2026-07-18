@@ -122,8 +122,8 @@ for row, expected_label in zip(ROWS[:-1], LABELS[:-1]):
             f"expected {expected_label!r}, found {decoded_label!r}"
         )
 
-if "vector_float4(1.0, 2.0, 11.0, 1_018.0)" not in swift:
-    fail("Swift runtime version components do not encode version 1.2.11")
+if "vector_float4(1.0, 2.0, 12.0, 1_019.0)" not in swift:
+    fail("Swift runtime version components do not encode version 1.2.12")
 if (
     "result[index].microPixelOffset.x = 0.0" in estimator
     and "Playback X tracking outlier rejected" not in estimator
@@ -134,10 +134,10 @@ if "result[index].turnAppliedPixelOffset.x = finalPosition - transforms[index].p
 for plist_path in VERSION_PLISTS:
     with plist_path.open("rb") as handle:
         version_info = plistlib.load(handle)
-    if version_info.get("CFBundleShortVersionString") != "1.2.11":
-        fail(f"bundle version is not 1.2.11: {plist_path}")
-    if version_info.get("CFBundleVersion") != "1018":
-        fail(f"bundle build does not match runtime build 1018: {plist_path}")
+    if version_info.get("CFBundleShortVersionString") != "1.2.12":
+        fail(f"bundle version is not 1.2.12: {plist_path}")
+    if version_info.get("CFBundleVersion") != "1019":
+        fail(f"bundle build does not match runtime build 1019: {plist_path}")
 if "patch >= 10 ? debugDigitChar(patch / 10)" not in metal:
     fail("Metal runtime label does not suppress patch-version leading zeroes")
 if "// PROXY" not in metal or "// ORIGINAL" not in metal:
